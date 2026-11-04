@@ -1,7 +1,7 @@
-name: Packaged Legend native selection performance pair (WIP experiment)
+name: Packaged virtual Send and daily Copy acceptance (WIP)
 on:
   push:
-    branches: [diagnostic/send-legend-ui-quality-20261103]
+    branches: [diagnostic/virtual-send-daily-copy-20261104]
     paths:
       - .github/workflows/send-information-layout-ab.yml
       - apps/zenx/scripts/capture-send-feedback-verified-frame.cjs
@@ -18,12 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 3005aa82f567fb021ebd0ab1058d16beb04e13e4
-          persist-credentials: false
-          path: baseline
-      - uses: actions/checkout@v4
-        with:
-          ref: 572fe27e806950a6f7d1f78cbe809bf64c8d48c6
+          ref: d4c642aecf731294cd415a2a3d11654cef908e87
           persist-credentials: false
           path: candidate
       - uses: actions/checkout@v4
@@ -33,50 +28,48 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Copy existing bounded diagnostic into both exact source checkouts
+      - name: Copy bounded diagnostic into the exact product checkout
         run: |
-          for source in baseline candidate; do
+          for source in candidate; do
             cp diagnostic/apps/zenx/scripts/capture-send-feedback-verified-frame.cjs "$source/apps/zenx/scripts/capture-send-feedback.cjs"
             cp diagnostic/apps/zenx/scripts/launch-send-focus-paired.mjs "$source/apps/zenx/scripts/launch-send-feedback.mjs"
             cp diagnostic/apps/zenx/scripts/long-thread-domain-seed.mjs "$source/apps/zenx/scripts/"
             cp diagnostic/apps/zenx/scripts/summarize-send-timeline.cjs "$source/apps/zenx/scripts/"
           done
-      - name: Build both exact Legend selection performance sources identically
+      - name: Build the exact simplified product once
         timeout-minutes: 16
         run: |
-          for source in baseline candidate; do
+          for source in candidate; do
             (cd "$source" && npm ci && npm run build && npm run build --workspace @zen/zenx)
           done
-      # Reuse unchanged full observer contracts passed in run 41743199059 (e8cd152).
-      # Capture, seed, observer body and dependency lock bytes are unchanged.
-      - name: Verify changed source identity guards and existing timing contracts
+      - name: Verify affected observer and existing timing contracts
         working-directory: candidate
         run: |
-          node --test --test-name-pattern='selection performance pair|source identity guards|timeline integration' ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs
+          node --test ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs
           node --test ../diagnostic/apps/zenx/scripts/test-recall-profile-review.cjs ../diagnostic/apps/zenx/scripts/test-send-native-phase-summary.cjs ../diagnostic/apps/zenx/scripts/test-send-timeline-summary.cjs
       # Reviewed visible coverage permits offscreen retained rows, never visible gaps.
-      - name: Native dock Enter and post-timing Find/Selection/Copy quality, default remains off
+      - name: Native wide/narrow Enter and daily selection/Copy, with independent durable reopen
         timeout-minutes: 20
         run: |
           failed=0
-          for case_spec in "1280 enter control baseline" "1280 enter control candidate"; do
+          for case_spec in "1280 enter wide candidate" "1120 enter narrow candidate"; do
             read -r width activation prefix source <<< "$case_spec"
             case="$prefix-$source"
             mkdir -p "results/$case"
-            echo "NATIVE_AB_CASE_BEGIN $case $source $width"
+            echo "NATIVE_CASE_BEGIN $case $source $width"
             set +e
             (cd "$source" && node apps/zenx/scripts/launch-send-feedback.mjs "../results/$case" 5000 "$source" "$case" "$width" "$activation")
             status=$?
             set -e
             printf '%s\n' "$status" > "results/$case/launcher-exit-code.txt"
             if [ "$status" -ne 0 ]; then failed=1; fi
-            echo "NATIVE_AB_CASE_END $case $source $width exit=$status"
+            echo "NATIVE_CASE_END $case $source $width exit=$status"
           done
           exit "$failed"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-legend-find-reader-quality-5000
+          name: native-virtual-send-daily-copy-5000
           # Owned synthetic PNGs survive a later diagnostic assertion failure.
           path: |
             results/*/send-information-layout.summary.json

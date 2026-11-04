@@ -591,7 +591,7 @@ test("timeline integration remains single source, bounded and private", () => {
     ),
     "utf8",
   );
-  assert.ok(workflow.includes('"1280 enter control candidate"'));
+  assert.ok(workflow.includes('"1280 enter wide candidate"'));
   assert.equal(
     workflow.includes('"1120 click narrow candidate baseline"'),
     false,
@@ -602,53 +602,7 @@ test("timeline integration remains single source, bounded and private", () => {
   );
 });
 
-test("selection performance pair locks each exact Legend source and keeps reader regression outside timing", () => {
-  // Reuse run 41743199059 only while every unchanged observer/dependency byte matches.
-  const digest = (bytes) =>
-    require("node:crypto").createHash("sha256").update(bytes).digest("hex");
-  for (const [file, expectedHash] of Object.entries({
-    "capture-send-feedback-verified-frame.cjs":
-      "056f7314b019b3bdfe27262c8a6775367dd69e5ab1b690ba05527114a8bf4cce",
-    "long-thread-domain-seed.mjs":
-      "b535d48f6fc94ebe0039271438213cd5d91a4a72fbab010ef8d8a77d044e0054",
-    "summarize-send-timeline.cjs":
-      "9a947307797d277d2d480e97174d711e1546fffe9533d1c933ea580e50d4074b",
-    "../../../package-lock.json":
-      "d1d5633673931da6b4a8e9b5881930669ac070b05d3197997189a3c84c8a4ea8",
-    "../../../package.json":
-      "73d3b8ba4a68a827f7b6dd35ae0a394d195162888c9c76c1ee7cb380b2f47c4c",
-    "../package.json":
-      "4e9e407d940eb3743ddd62124c19e4abb6b7a5996691a78850e5998d6fde0511",
-  }))
-    assert.equal(
-      digest(readFileSync(path.join(__dirname, file))),
-      expectedHash,
-      file,
-    );
-  // JSDOM resolves from the product checkout cwd, not the diagnostic directory.
-  for (const [file, expectedHash] of Object.entries({
-    "package-lock.json":
-      "308b3d642cf1dd9e25a2d8ebf849da0a7584e5aa1825f445977cdca026c5d2cb",
-    "package.json":
-      "44c7a345a7c51e4c0b829225ace3d1a54540b65ca3aff11256c5b9e521320eb6",
-    "apps/zenx/package.json":
-      "9317909d3954416db0258b37583a9307cb241750171c66a332c84c5ef87e72ee",
-  }))
-    assert.equal(digest(readFileSync(path.resolve(file))), expectedHash, file);
-  const observerTest = readFileSync(__filename, "utf8");
-  assert.equal(
-    digest(
-      observerTest.slice(
-        0,
-        observerTest.indexOf('\ntest("selection performance pair'),
-      ) +
-        observerTest.slice(
-          observerTest.indexOf('\ntest("Selection getter probes'),
-        ),
-    ),
-    "405fa2f8e728ffbe5fa37b382dea83287698ac856fa26c4b6b558d85e6c40d71",
-    "Unchanged observer contracts must match the completed full-preflight run",
-  );
+test("daily Copy acceptance locks one exact product and keeps reader regression outside timing", () => {
   const launch = readFileSync(
     path.join(__dirname, "launch-send-focus-paired.mjs"),
     "utf8",
@@ -662,18 +616,11 @@ test("selection performance pair locks each exact Legend source and keeps reader
       ")",
   )();
   assert.deepEqual(snapshots, {
-    baseline: {
-      commit: "3005aa82f567fb021ebd0ab1058d16beb04e13e4",
-      tree: "9663d3a988cd463bbe4b82268f9e36e705f9084e",
-      frontendSourceTree: "5feb43dba2ab9ca60d9aa8191e9d28b48397a1d2",
-      rendererSourceTree: "d76aaff53d99ce140ad8ebf714719060cdd12db9",
-      expectedVirtualTranscript: true,
-    },
     candidate: {
-      commit: "572fe27e806950a6f7d1f78cbe809bf64c8d48c6",
-      tree: "bbe3befd1a3408135bb72f754a0429e3f7900ec7",
-      frontendSourceTree: "6d45e24fa68e152b0c7b5eca873b1d577dcc40d8",
-      rendererSourceTree: "edf4c9e8227fdf046ef7b0acfb1ed3aa9ca2cc2c",
+      commit: "d4c642aecf731294cd415a2a3d11654cef908e87",
+      tree: "db349a545c3f6502a6babb291314224c1708e5f6",
+      frontendSourceTree: "9c2080522aee57233df935ea648c71511007e2e7",
+      rendererSourceTree: "d87f7b3daaab80291468512751f6f1eb3fd42496",
       expectedVirtualTranscript: true,
     },
   });
@@ -693,7 +640,7 @@ test("selection performance pair locks each exact Legend source and keeps reader
     ),
     "utf8",
   );
-  assert.ok(workflow.includes("diagnostic/send-legend-ui-quality-20261103"));
+  assert.ok(workflow.includes("diagnostic/virtual-send-daily-copy-20261104"));
   assert.equal(
     workflow.includes("assert.deepEqual(builds[0], builds[1]"),
     false,
@@ -706,17 +653,14 @@ test("selection performance pair locks each exact Legend source and keeps reader
     );
   assert.ok(
     workflow.includes(
-      'for case_spec in "1280 enter control baseline" "1280 enter control candidate"; do',
+      'for case_spec in "1280 enter wide candidate" "1120 enter narrow candidate"; do',
     ),
   );
-  assert.equal(
-    workflow.match(/for source in baseline candidate; do/g).length,
-    2,
-  );
+  assert.equal(workflow.match(/for source in candidate; do/g).length, 2);
   assert.equal(workflow.match(/node --test/g).length, 2);
   assert.ok(
     workflow.includes(
-      "--test-name-pattern='selection performance pair|source identity guards|timeline integration' ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs",
+      "node --test ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs",
     ),
   );
   assert.ok(workflow.includes("timeout-minutes: 35"));
@@ -1155,7 +1099,7 @@ test("real Legend experiment keeps full canonical data and natural buffer replac
   assert.ok(
     reload >
       source.indexOf(
-        "sessionStorage.setItem('zenx.experimental.virtualTranscript','1')",
+        "sessionStorage.removeItem('zenx.experimental.virtualTranscript')",
       ),
   );
   assert.ok(reload < source.indexOf("Select seeded production Thread"));
@@ -1993,13 +1937,13 @@ test("native Selection oracle rejects no movement, wrong row, onscreen retention
     assert.throws(() => validate({ ...good, ...bad }));
 });
 
-test("native startup opt-in is executable inside the real diagnostic expression wrapper", async () => {
+test("native startup default reset is executable inside the real diagnostic expression wrapper", async () => {
   const start = source.indexOf("function diagnosticEvaluation(");
   const makeExpression = new Function(
     source.slice(start, source.indexOf("\nconst evaluate =", start)) +
       "; return diagnosticEvaluation;",
   )();
-  const preparation = source.indexOf("// Test-only opt-in");
+  const preparation = source.indexOf("// Verify product defaults");
   const call =
     source.indexOf("await evaluate(", preparation) + "await evaluate(".length;
   const literal = source
@@ -2016,13 +1960,13 @@ test("native startup opt-in is executable inside the real diagnostic expression 
     assert.equal(reply.ok, true);
     assert.equal(
       dom.window.sessionStorage.getItem("zenx.experimental.virtualTranscript"),
-      "1",
+      null,
     );
     assert.equal(
       dom.window.sessionStorage.getItem(
         "zenx.experimental.virtualTranscriptFind",
       ),
-      "1",
+      null,
     );
   } finally {
     dom.window.close();
@@ -2174,6 +2118,10 @@ test("failed native quality exports fixed finite evidence without text or DOM id
       },
     },
     nativeSelectionQuality: {
+      nativeCopyMatchesSelection: true,
+      nativeCopyPreservesSelection: "NEVER_EXPORT",
+      singleMessageCopyMatchesData: false,
+      editableNativeCopyMatchesInput: "NEVER_EXPORT",
       selectionOwnedByTarget: false,
       preservedAfterNativeWheel: false,
       selectedCharacterCount: 0,
@@ -2238,6 +2186,10 @@ test("failed native quality exports fixed finite evidence without text or DOM id
   );
   assert.equal(result.fullDomControl.copiedMessageCount, 10006);
   assert.equal(result.fullDomControl.selectedUTF16Length, null);
+  assert.equal(result.selection.nativeCopyMatchesSelection, true);
+  assert.equal(result.selection.nativeCopyPreservesSelection, null);
+  assert.equal(result.selection.singleMessageCopyMatchesData, false);
+  assert.equal(result.selection.editableNativeCopyMatchesInput, null);
   assert.equal(result.selection.selectionOwnedByTarget, false);
   assert.equal(result.selection.beforeScrollTop, 10000);
   assert.equal(result.selection.bottomDistance, null);
@@ -3141,11 +3093,12 @@ test("raw native clipboard mismatch remains a final failure after restoration an
   } finally {
     sharedDom.window.close();
   }
-  assert.ok(
-    source.indexOf(
-      "  assertNativeClipboardMatch();",
-      source.indexOf("async function run()"),
-    ) > source.indexOf("await screenshot(`responsive-history-${width}.png`)"),
+  assert.equal(
+    source
+      .slice(source.indexOf("async function run()"))
+      .includes("assertNativeClipboardMatch();"),
+    false,
+    "The retired whole-history Copy oracle is not a daily acceptance gate",
   );
 });
 
@@ -3215,12 +3168,10 @@ test("same-session default full DOM Copy executes native actions, reuses attribu
     true,
   );
   assert.deepEqual(run.images, ["native-select-all.png"]);
-  assert.ok(
-    source.indexOf(
-      "  await checkFullDomNativeCopy(",
-      source.indexOf("async function run()"),
-    ) > source.indexOf("await screenshot(`responsive-history-${width}.png`)"),
-  );
+  const mainRun = source.slice(source.indexOf("async function run()"));
+  assert.equal(mainRun.includes("await checkFullDomNativeCopy("), false);
+  assert.equal(mainRun.includes("await checkNativeSelectAll("), false);
+  assert.ok(mainRun.includes("await checkNativeDailyCopy("));
 });
 
 test("full DOM control fails closed for bridge substitution, canonical reorder and copy endpoint loss without hiding virtual raw failure", async () => {
@@ -3473,4 +3424,329 @@ test("capture and exporter accept only the same fixed 19-image bound including n
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+async function dailyCopyFixture(fault) {
+  const dom = new JSDOM(
+    '<div class="messages"><article class="user-row" data-sent-message-id="latest"><span>Synthetic latest message</span><button class="message-copy">Copy</button></article></div><button class="back-live">Live</button><textarea id="thread-composer"></textarea>',
+    { runScripts: "outside-only" },
+  );
+  const w = dom.window,
+    d = w.document,
+    editor = d.querySelector("textarea");
+  const range = d.createRange();
+  range.selectNodeContents(d.querySelector("span"));
+  w.getSelection().addRange(range);
+  const selection = w.getSelection();
+  w.__qualitySelection = {
+    text: selection.toString(),
+    anchor: selection.anchorNode,
+    focus: selection.focusNode,
+    anchorOffset: selection.anchorOffset,
+    focusOffset: selection.focusOffset,
+  };
+  if (fault === "empty-selection") selection.removeAllRanges();
+  let clipboardText = "",
+    cleared = 0,
+    writes = 0,
+    nativeCopy = 0,
+    localSelectAll = 0,
+    messageClicks = 0;
+  const result = { nativeSelectionQuality: {} };
+  const until = async (predicate, label) => {
+    assert.equal(Boolean(await predicate()), true, label);
+  };
+  let lostFocus = false,
+    reads = 0;
+  const evaluate = async (script) => {
+    const value = w.eval(script);
+    if (
+      fault === "lost-focus-before-copy" &&
+      script === "getSelection()?.toString() ?? ''"
+    )
+      lostFocus = true;
+    return value;
+  };
+  const click = async (script) => {
+    const target = w.eval(script);
+    assert.ok(target, "Real selector resolves");
+    if (target === editor) {
+      selection.removeAllRanges();
+      editor.focus();
+    } else if (target.matches(".message-copy")) {
+      messageClicks++;
+      if (fault === "lost-focus-after-button") lostFocus = true;
+      clipboardText =
+        fault === "wrong-message"
+          ? "Synthetic mismatch"
+          : d.querySelector("span").textContent;
+    }
+  };
+  const mainFrame = {};
+  const window = {
+    isFocused: () => !lostFocus && fault !== "wrong-window-focus",
+    webContents: {
+      isFocused: () => fault !== "wrong-renderer-focus",
+      mainFrame,
+      focusedFrame: fault === "wrong-frame" ? {} : mainFrame,
+      insertText: (text) => {
+        editor.value = fault === "wrong-input" ? "" : text;
+      },
+      sendInputEvent: (event) => {
+        if (event.type === "keyDown" && fault !== "cleanup-failure")
+          editor.value = "";
+      },
+    },
+  };
+  const clipboard = {
+    availableFormats: () =>
+      fault === "occupied-clipboard" ? ["text/plain"] : [],
+    writeText: (value) => {
+      writes++;
+      clipboardText = value;
+    },
+    readText: () => {
+      reads++;
+      if (fault === "lost-focus-between-reads") lostFocus = true;
+      return clipboardText;
+    },
+    clear: () => {
+      cleared++;
+      clipboardText = "";
+    },
+  };
+  const Menu = {
+    sendActionToFirstResponder: (action) => {
+      if (action === "selectAll:") {
+        localSelectAll++;
+        assert.equal(d.activeElement, editor);
+        if (fault !== "nonlocal-select-all") editor.select();
+        return;
+      }
+      assert.equal(action, "copy:");
+      nativeCopy++;
+      if (fault === "copy-noop") return;
+      clipboardText =
+        d.activeElement === editor
+          ? editor.value.slice(editor.selectionStart, editor.selectionEnd)
+          : selection.toString();
+      if (
+        fault === "wrong-selection-copy" ||
+        (fault === "wrong-editor-copy" && d.activeElement === editor)
+      )
+        clipboardText = "Synthetic mismatch";
+      if (fault === "lost-selection") selection.removeAllRanges();
+      if (fault === "changed-endpoint") w.__qualitySelection.anchorOffset++;
+    },
+  };
+  const start = source.indexOf("async function checkNativeDailyCopy("),
+    end = source.indexOf("\nasync function checkNativeSelectAll(", start);
+  const run = new Function(
+    "assert",
+    "result",
+    "window",
+    "clipboard",
+    "evaluate",
+    "Menu",
+    "until",
+    "click",
+    source.slice(start, end) + "; return checkNativeDailyCopy;",
+  )(assert, result, window, clipboard, evaluate, Menu, until, click);
+  let error;
+  try {
+    await run({
+      id: "latest",
+      content: [{ type: "text", text: "Synthetic latest message" }],
+    });
+  } catch (caught) {
+    error = caught;
+  }
+  dom.window.close();
+  return {
+    result,
+    error,
+    cleared,
+    writes,
+    nativeCopy,
+    localSelectAll,
+    messageClicks,
+    clipboardEmpty: clipboardText === "",
+    reads,
+  };
+}
+
+test("daily Copy executes exact native helper for dragged text, existing message button and local editor", async () => {
+  const run = await dailyCopyFixture();
+  assert.equal(run.error, undefined);
+  assert.deepEqual(run.result.nativeSelectionQuality, {
+    nativeCopyMatchesSelection: true,
+    nativeCopyPreservesSelection: true,
+    singleMessageCopyMatchesData: true,
+    editableNativeCopyMatchesInput: true,
+  });
+  assert.equal(run.nativeCopy, 2);
+  assert.equal(run.localSelectAll, 1);
+  assert.equal(run.messageClicks, 1);
+  assert.equal(run.cleared, 3);
+  assert.equal(run.clipboardEmpty, true);
+  assert.equal(JSON.stringify(run.result).includes("Synthetic"), false);
+  const mainRun = source.slice(source.indexOf("async function run()"));
+  assert.ok(
+    mainRun.indexOf("await checkNativeDailyCopy(") >
+      mainRun.indexOf(
+        "assertNativeSelectionQuality(result.nativeSelectionQuality)",
+      ),
+  );
+  assert.equal(
+    mainRun
+      .slice(
+        mainRun.indexOf(
+          "assertNativeSelectionQuality(result.nativeSelectionQuality)",
+        ),
+        mainRun.indexOf("await checkNativeDailyCopy("),
+      )
+      .includes("await click("),
+    false,
+  );
+  const helper = source.slice(
+    source.indexOf("async function checkNativeDailyCopy("),
+    source.indexOf("async function checkNativeSelectAll("),
+  );
+  assert.equal(
+    /setSelectionRange|addRange|selectNodeContents|writeText\(expected/.test(
+      helper,
+    ),
+    false,
+  );
+});
+
+test("daily Copy rejects lost selection, wrong clipboard, wrong focus, local input failures and cleans owned clipboard", async () => {
+  for (const fault of [
+    "empty-selection",
+    "lost-focus-before-copy",
+    "lost-focus-after-button",
+    "lost-focus-between-reads",
+    "wrong-window-focus",
+    "wrong-renderer-focus",
+    "wrong-frame",
+    "occupied-clipboard",
+    "copy-noop",
+    "wrong-selection-copy",
+    "lost-selection",
+    "changed-endpoint",
+    "wrong-message",
+    "wrong-input",
+    "nonlocal-select-all",
+    "wrong-editor-copy",
+    "cleanup-failure",
+  ]) {
+    const run = await dailyCopyFixture(fault);
+    assert.ok(run.error, fault);
+    assert.equal(run.clipboardEmpty, true, fault);
+    if (run.writes) assert.ok(run.cleared > 0, fault);
+    else
+      assert.equal(run.cleared, 0, "Never clear an unowned occupied clipboard");
+    if (fault === "lost-focus-before-copy") {
+      assert.equal(run.nativeCopy, 0);
+      assert.equal(run.reads, 0);
+    }
+    if (fault === "lost-focus-between-reads") assert.equal(run.reads, 1);
+    if (fault === "lost-focus-after-button") assert.equal(run.reads, 2);
+  }
+});
+
+test("default activation clears only owned overrides, reloads and records actual viewport and Find", async () => {
+  const dom = new JSDOM('<div class="app-shell"></div>', {
+    runScripts: "outside-only",
+    url: "https://owned.invalid",
+  });
+  const w = dom.window;
+  w.zenx = { protocol: {} };
+  for (const key of [
+    "zenx.experimental.virtualTranscript",
+    "zenx.experimental.virtualTranscriptFind",
+    "unrelated",
+  ])
+    w.sessionStorage.setItem(key, "0");
+  const start = source.indexOf("  // Verify product defaults"),
+    end = source.indexOf(
+      "  await until(",
+      source.indexOf("  result.experimentalSession =", start),
+    );
+  let reloads = 0;
+  const result = {};
+  await new Function(
+    "evaluate",
+    "reloadOwnedRenderer",
+    "until",
+    "result",
+    "return (async()=>{" + source.slice(start, end) + "})()",
+  )(
+    async (code) => w.eval(code),
+    async () => {
+      reloads++;
+    },
+    async (fn) => assert.equal(await fn(), true),
+    result,
+  );
+  assert.equal(reloads, 1);
+  assert.deepEqual(result.experimentalSession, {
+    activation: "default",
+    reloadedBeforeSelection: true,
+  });
+  assert.equal(w.sessionStorage.getItem("unrelated"), "0");
+  for (const key of [
+    "zenx.experimental.virtualTranscript",
+    "zenx.experimental.virtualTranscriptFind",
+  ])
+    assert.equal(w.sessionStorage.getItem(key), null);
+  const run = source.slice(source.indexOf("async function run()"));
+  assert.equal(run.includes("sessionStorage.setItem("), false);
+  for (const [field, selector] of [
+    ["virtualTranscript", ".messages.experimental-transcript-viewport"],
+    ["virtualTranscriptFind", ".virtual-transcript-find input"],
+  ]) {
+    const assignment = run.slice(
+      run.indexOf(`result.experimentalSession.${field} = await evaluate(`),
+    );
+    const expression = assignment.slice(
+      assignment.indexOf('"Boolean(') + 1,
+      assignment.indexOf('\",\n'),
+    );
+    assert.equal(w.eval(expression), false);
+    w.document.body.innerHTML +=
+      field === "virtualTranscript"
+        ? '<div class="messages experimental-transcript-viewport"></div>'
+        : '<div class="virtual-transcript-find"><input></div>';
+    assert.equal(w.eval(expression), true);
+  }
+  dom.window.close();
+});
+
+test("daily viewport case guards execute and reject old pair labels or width substitutions", () => {
+  const vm = require("node:vm");
+  const launch = readFileSync(
+    path.join(__dirname, "launch-send-focus-paired.mjs"),
+    "utf8",
+  );
+  const code = launch.slice(
+    launch.indexOf("const sourceLabel ="),
+    launch.indexOf("const hostSnapshot ="),
+  );
+  const check = (label, pairCase, width) =>
+    vm.runInNewContext(code, {
+      assert,
+      process: {
+        argv: ["", "", "", "", label, pairCase, String(width), "enter"],
+      },
+    });
+  check("candidate", "wide-candidate", 1280);
+  check("candidate", "narrow-candidate", 1120);
+  for (const args of [
+    ["candidate", "control-candidate", 1280],
+    ["baseline", "wide-baseline", 1280],
+    ["candidate", "wide-candidate", 1120],
+    ["candidate", "narrow-candidate", 1280],
+  ])
+    assert.throws(() => check(...args));
 });

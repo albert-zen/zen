@@ -1852,6 +1852,141 @@ async function prepareNativeSelectAll(
   return prepared;
 }
 
+// Ordinary owned text selection and the existing one-message Copy button.
+// No full-history Select All, DOM expansion, or clipboard normalization.
+async function checkNativeDailyCopy(latestUser) {
+  const quality = result.nativeSelectionQuality;
+  const focused = () =>
+    window.isFocused() &&
+    window.webContents.isFocused() &&
+    window.webContents.focusedFrame === window.webContents.mainFrame;
+  assert.equal(focused(), true);
+  assert.deepEqual(
+    clipboard.availableFormats(),
+    [],
+    "Owned CI clipboard must start empty",
+  );
+  const selected = await evaluate("getSelection()?.toString() ?? ''");
+  assert.ok(
+    selected.length > 0 && Buffer.byteLength(selected, "utf8") <= 1024 * 1024,
+  );
+  const readOwnedClipboard = () => {
+    assert.equal(
+      focused(),
+      true,
+      "Owned responder focus before clipboard read",
+    );
+    return clipboard.readText();
+  };
+  let ownsClipboard = false;
+  const writeOwnedClipboard = (text) => {
+    clipboard.writeText(text);
+    ownsClipboard = true;
+  };
+  const clearOwnedClipboard = () => {
+    if (ownsClipboard) {
+      clipboard.clear();
+      ownsClipboard = false;
+    }
+  };
+  const copyNative = async (expected) => {
+    assert.equal(focused(), true, "Owned responder focus before native Copy");
+    const sentinel = "Synthetic daily Copy pending";
+    writeOwnedClipboard(sentinel);
+    Menu.sendActionToFirstResponder("copy:");
+    await until(
+      async () => readOwnedClipboard() !== sentinel,
+      "ordinary native Copy updates owned clipboard",
+    );
+    return readOwnedClipboard() === expected;
+  };
+  try {
+    quality.nativeCopyMatchesSelection = await copyNative(selected);
+    quality.nativeCopyPreservesSelection = await evaluate(`(()=>{
+      const s=getSelection(),b=window.__qualitySelection;
+      return Boolean(s&&!s.isCollapsed&&b&&s.toString()===b.text&&
+        s.anchorNode===b.anchor&&s.focusNode===b.focus&&
+        s.anchorOffset===b.anchorOffset&&s.focusOffset===b.focusOffset&&
+        b.anchor.isConnected&&b.focus.isConnected);
+    })()`);
+    assert.equal(quality.nativeCopyMatchesSelection, true);
+    assert.equal(quality.nativeCopyPreservesSelection, true);
+  } finally {
+    clearOwnedClipboard();
+  }
+  await click(
+    "document.querySelector('#thread-composer')",
+    "Clear ordinary transcript Selection with Composer",
+  );
+  await click(
+    "document.querySelector('.back-live')",
+    "Return to latest message for the existing Copy button",
+  );
+  await until(
+    async () =>
+      evaluate(
+        "(()=>{const s=document.querySelector('.messages');return s.scrollHeight-s.clientHeight-s.scrollTop<=1})()",
+      ),
+    "daily Copy reaches latest rows",
+  );
+  const expected = latestUser.content.map((part) => part.text).join("\n");
+  assert.ok(
+    expected.length > 0 && Buffer.byteLength(expected, "utf8") <= 1024 * 1024,
+  );
+  try {
+    assert.equal(focused(), true, "Owned responder focus before message Copy");
+    const sentinel = "Synthetic message Copy pending";
+    writeOwnedClipboard(sentinel);
+    await click(
+      `Array.from(document.querySelectorAll('article.user-row')).find(n=>n.dataset.sentMessageId===${JSON.stringify(latestUser.id)})?.querySelector('button.message-copy')`,
+      "Existing latest user message Copy button",
+    );
+    await until(
+      async () => readOwnedClipboard() !== sentinel,
+      "one-message Copy updates owned clipboard",
+    );
+    quality.singleMessageCopyMatchesData = readOwnedClipboard() === expected;
+    assert.equal(quality.singleMessageCopyMatchesData, true);
+  } finally {
+    clearOwnedClipboard();
+  }
+  await click(
+    "document.querySelector('#thread-composer')",
+    "Focus ordinary editor for local Select All and Copy",
+  );
+  const local = "Synthetic editable Copy check";
+  window.webContents.insertText(local);
+  await until(
+    async () =>
+      evaluate(
+        `document.querySelector('#thread-composer').value===${JSON.stringify(local)}`,
+      ),
+    "native input reaches local editor",
+  );
+  assert.equal(focused(), true);
+  Menu.sendActionToFirstResponder("selectAll:");
+  await until(
+    async () =>
+      evaluate(
+        `(()=>{const e=document.querySelector('#thread-composer');return document.activeElement===e&&e.value===${JSON.stringify(local)}&&e.selectionStart===0&&e.selectionEnd===e.value.length})()`,
+      ),
+    "native editor Select All remains local",
+  );
+  try {
+    quality.editableNativeCopyMatchesInput = await copyNative(local);
+    assert.equal(quality.editableNativeCopyMatchesInput, true);
+  } finally {
+    clearOwnedClipboard();
+  }
+  window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Backspace" });
+  window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Backspace" });
+  await until(
+    async () =>
+      evaluate("document.querySelector('#thread-composer').value===''"),
+    "native editor cleanup preserves no draft",
+  );
+}
+
 async function checkNativeSelectAll(canonicalTurns, samples) {
   const prepared = await prepareNativeSelectAll(canonicalTurns, samples);
   result.nativeSelectAllQuality = { ...prepared, afterTiming: true };
@@ -2210,21 +2345,20 @@ async function run() {
       ),
     "App mounted",
   );
-  // Test-only opt-in on this exact owned App, before thread selection.
+  // Verify product defaults with only the two owned session overrides removed.
   await evaluate(
-    "(()=>{sessionStorage.setItem('zenx.experimental.virtualTranscript','1');sessionStorage.setItem('zenx.experimental.virtualTranscriptFind','1');return true})()",
+    "(()=>{sessionStorage.removeItem('zenx.experimental.virtualTranscript');sessionStorage.removeItem('zenx.experimental.virtualTranscriptFind');return true})()",
   );
   await reloadOwnedRenderer();
   await until(
     async () =>
       await evaluate(
-        "Boolean(document.querySelector('.app-shell') && window.zenx?.protocol && sessionStorage.getItem('zenx.experimental.virtualTranscript')==='1' && sessionStorage.getItem('zenx.experimental.virtualTranscriptFind')==='1')",
+        "Boolean(document.querySelector('.app-shell') && window.zenx?.protocol && sessionStorage.getItem('zenx.experimental.virtualTranscript')===null && sessionStorage.getItem('zenx.experimental.virtualTranscriptFind')===null)",
       ),
-    "App remounted after experimental viewport and Find opt-in",
+    "App remounted with owned overrides absent",
   );
   result.experimentalSession = {
-    virtualTranscript: true,
-    virtualTranscriptFind: true,
+    activation: "default",
     reloadedBeforeSelection: true,
   };
   await until(
@@ -2285,6 +2419,14 @@ async function run() {
         "Boolean(document.querySelector('#thread-composer:not(:disabled)'))",
       ),
     "idle Thread composer",
+  );
+  result.experimentalSession.virtualTranscript = await evaluate(
+    "Boolean(document.querySelector('.messages.experimental-transcript-viewport'))",
+  );
+  assert.equal(
+    result.experimentalSession.virtualTranscript,
+    true,
+    "Default product viewport is virtual",
   );
   const before = await evaluate(
     "window.zenx.protocol.request('thread/read',{threadId:" +
@@ -2949,6 +3091,10 @@ async function run() {
       ),
     "native Cmd-F opens and focuses real Find input",
   );
+  result.experimentalSession.virtualTranscriptFind = await evaluate(
+    "Boolean(document.querySelector('.virtual-transcript-find input'))",
+  );
+  assert.equal(result.experimentalSession.virtualTranscriptFind, true);
   await window.webContents.insertText("Synthetic user 42.");
   let oldHistory;
   await until(async () => {
@@ -3078,11 +3224,9 @@ async function run() {
     "(()=>{const s=getSelection(),b=window.__qualitySelection,scroll=document.querySelector('.messages'),bounds=scroll.getBoundingClientRect(),target=b.target.getBoundingClientRect(),bottom=Math.min(bounds.bottom,document.querySelector('.bottom-zone').getBoundingClientRect().top);return {selectionOwnedByTarget:b.owned&&b.target.contains(s.anchorNode)&&b.target.contains(s.focusNode),preservedAfterNativeWheel:!s.isCollapsed&&s.toString()===b.text&&s.anchorNode===b.anchor&&s.focusNode===b.focus&&s.anchorOffset===b.anchorOffset&&s.focusOffset===b.focusOffset&&b.anchor.isConnected&&b.focus.isConnected,selectedCharacterCount:s.toString().length,beforeScrollTop:b.scrollTop,afterScrollTop:scroll.scrollTop,beforeViewportHeight:b.viewportHeight,targetOffscreenAfterWheel:target.top>=bottom||target.bottom<=bounds.top,mountedRows:document.querySelectorAll('section.turn').length,pausedReader:Boolean(document.querySelector('.back-live')),bottomDistance:scroll.scrollHeight-scroll.clientHeight-scroll.scrollTop,nativeMouseDrag:true,afterTiming:true}})()",
   );
   assertNativeSelectionQuality(result.nativeSelectionQuality);
-  await click(
-    "document.querySelector('#thread-composer')",
-    "Clear native Selection by focusing Composer",
+  await checkNativeDailyCopy(
+    finalItems.filter((item) => item.type === "userMessage").at(-1),
   );
-  await checkNativeSelectAll(finalRead.thread.turns, result.samples);
   const readerPoint = await evaluate(
     `(()=>{const s=document.querySelector('.messages'),r=s.getBoundingClientRect();return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+80)}})()`,
   );
@@ -3224,17 +3368,6 @@ async function run() {
     );
     await screenshot(`responsive-history-${width}.png`);
   }
-  await checkFullDomNativeCopy(
-    finalRead.thread.turns,
-    result.samples,
-    threadTarget,
-  );
-  assertNativeClipboardMatch();
-  assert.equal(
-    result.nativeFullDomCopyControl.completed,
-    true,
-    "Full DOM native Copy control must complete",
-  );
   result.ok = true;
 }
 async function verifyPackagedRuntime() {

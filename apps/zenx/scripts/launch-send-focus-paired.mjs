@@ -32,17 +32,10 @@ const sourceLabel = process.argv[4];
 const pairCase = process.argv[5];
 const viewportWidth = Number(process.argv[6]);
 assert.ok([1120, 1280].includes(viewportWidth));
-assert.ok(
-  [
-    "control-baseline",
-    "control-candidate",
-    "narrow-baseline",
-    "narrow-candidate",
-  ].includes(pairCase),
-);
+assert.ok(["wide-candidate", "narrow-candidate"].includes(pairCase));
 assert.equal(
   pairCase,
-  (viewportWidth === 1120 ? "narrow" : "control") + "-" + sourceLabel,
+  (viewportWidth === 1120 ? "narrow" : "wide") + "-" + sourceLabel,
 );
 const activationKind = process.argv[7] ?? "click";
 assert.ok(["click", "enter"].includes(activationKind));
@@ -60,22 +53,15 @@ const hostSnapshot = () => ({
 });
 const hostBefore = hostSnapshot();
 const snapshots = {
-  baseline: {
-    commit: "3005aa82f567fb021ebd0ab1058d16beb04e13e4",
-    tree: "9663d3a988cd463bbe4b82268f9e36e705f9084e",
-    frontendSourceTree: "5feb43dba2ab9ca60d9aa8191e9d28b48397a1d2",
-    rendererSourceTree: "d76aaff53d99ce140ad8ebf714719060cdd12db9",
-    expectedVirtualTranscript: true,
-  },
   candidate: {
-    commit: "572fe27e806950a6f7d1f78cbe809bf64c8d48c6",
-    tree: "bbe3befd1a3408135bb72f754a0429e3f7900ec7",
-    frontendSourceTree: "6d45e24fa68e152b0c7b5eca873b1d577dcc40d8",
-    rendererSourceTree: "edf4c9e8227fdf046ef7b0acfb1ed3aa9ca2cc2c",
+    commit: "d4c642aecf731294cd415a2a3d11654cef908e87",
+    tree: "db349a545c3f6502a6babb291314224c1708e5f6",
+    frontendSourceTree: "9c2080522aee57233df935ea648c71511007e2e7",
+    rendererSourceTree: "d87f7b3daaab80291468512751f6f1eb3fd42496",
     expectedVirtualTranscript: true,
   },
 };
-// One baseline-to-candidate screening pair, not robust performance acceptance.
+// Two viewport cases of one exact product; not a performance A/B or T3 comparison.
 const snapshot = snapshots[sourceLabel];
 const expected = snapshot?.commit;
 assert.ok(
@@ -350,7 +336,7 @@ await writeFile(
       expectedVirtualTranscript: snapshot.expectedVirtualTranscript,
       packagedHashes,
       comparisonRole:
-        "Legend selection performance screening pair, default-off and not production acceptance: " +
+        "Single-product default virtual Send and daily Copy acceptance; no performance comparison: " +
         activationKind,
       priorUserMessages: count,
       priorCompletedTurns: count,
@@ -719,6 +705,10 @@ function projectFailureTranscriptQuality(capture) {
       ? Object.fromEntries([
           ...[
             "selectionOwnedByTarget",
+            "nativeCopyMatchesSelection",
+            "nativeCopyPreservesSelection",
+            "singleMessageCopyMatchesData",
+            "editableNativeCopyMatchesInput",
             "preservedAfterNativeWheel",
             "targetOffscreenAfterWheel",
             "pausedReader",
@@ -1010,6 +1000,7 @@ try {
     "clickToCanonicalNotificationMs",
   ];
   assert.deepEqual(result.experimentalSession, {
+    activation: "default",
     virtualTranscript: true,
     virtualTranscriptFind: true,
     reloadedBeforeSelection: true,
@@ -1024,60 +1015,17 @@ try {
   );
   assert.equal(result.virtualFindQuality?.wrappedTail?.stableFrameCount, 2);
   assert.deepEqual(result.virtualFindQuality.wrappedTail.counts, [5000, 5000]);
-  const selectAll = projectFailureTranscriptQuality(result).selectAll;
   for (const field of [
-    "boundedBefore",
-    "pausedBefore",
-    "anchorCaptured",
-    "afterTiming",
-    "fullDom",
-    "canonicalOrder",
-    "canonicalMessageOrder",
-    "fullLastAssistantSelected",
-    "fullLastAssistantCopied",
-    "earliestMarkerSelected",
-    "latestMarkerSelected",
-    "selectionActive",
-    "readerAnchorPreserved",
-    "clipboardMatchesSelection",
-    "selectionSurvivesCopy",
-    "selectionCleared",
-    "virtualRestored",
-    "restoredReaderAnchor",
-    "pausedAfterClear",
-    "editableSelectionPreserved",
+    "nativeCopyMatchesSelection",
+    "nativeCopyPreservesSelection",
+    "singleMessageCopyMatchesData",
+    "editableNativeCopyMatchesInput",
   ])
     assert.equal(
-      selectAll?.[field],
+      result.nativeSelectionQuality?.[field],
       true,
-      `Native Select All quality: ${field}`,
+      `Daily native Copy: ${field}`,
     );
-  for (const field of [
-    "mountedUserRows",
-    "selectedMarkerCount",
-    "copiedMarkerCount",
-  ])
-    assert.equal(
-      selectAll?.[field],
-      5003,
-      `Native Select All quality: ${field}`,
-    );
-  for (const field of [
-    "mountedMessageRows",
-    "selectedMessageCount",
-    "copiedMessageCount",
-  ])
-    assert.equal(
-      selectAll?.[field],
-      10006,
-      `Native Select All quality: ${field}`,
-    );
-  assert.ok(
-    selectAll.restoredMountedRows > 0 && selectAll.restoredMountedRows < 200,
-  );
-  for (const field of ["menuToSelectionMs", "clearToRestoreMs"])
-    assert.ok(Number.isFinite(selectAll[field]) && selectAll[field] >= 0);
-
   assert.equal(result.emptyFooterGeometry?.reserveMatchesFullDom, true);
   assert.equal(result.before.turns, count);
   assert.equal(result.before.messages, count * 2);
@@ -1246,7 +1194,7 @@ try {
     virtualHistoryVisual: result.virtualHistoryVisual,
     virtualFindQuality: result.virtualFindQuality,
     nativeSelectionQuality: result.nativeSelectionQuality,
-    nativeSelectAllQuality: selectAll,
+    nativeSelectAllQuality: null,
     nativeFullDomCopyControl:
       projectFailureTranscriptQuality(result).fullDomControl,
     emptyFooterGeometry: result.emptyFooterGeometry,
