@@ -72,10 +72,35 @@ async function launch(){
  await until(()=>page.evaluate(`Boolean(window.desktopBridge?.getLocalEnvironmentBootstraps?.().some(b=>b.httpBaseUrl&&b.wsBaseUrl))`),'official local environment');
  lifecycle.push({phase:'launched',pid:child.pid,host:host()});
 }
+async function openOfficialRpcInOwnedRenderer(budgetMs=25000){
+ const d=window.__ownedRpcSetupDiagnostic={stage:'bootstrap',descriptorHttpStatus:null,ticketHttpStatus:null,socketState:null};
+ const deadline=performance.now()+budgetMs;let socket;
+ const wait=async(stage,cap,action)=>{d.stage=stage;const remaining=deadline-performance.now();if(remaining<=0){d.failureCode='timeout';throw Error('Owned setup budget exhausted');}let timer;const controller=new AbortController();try{return await Promise.race([Promise.resolve().then(()=>action(controller.signal)),new Promise((_,reject)=>{timer=setTimeout(()=>{d.failureCode='timeout';controller.abort();reject(Error('Owned setup timeout'));},Math.max(1,Math.min(cap,remaining)));})]);}finally{clearTimeout(timer);}};
+ const fail=code=>{d.failureCode=code;throw Error('Owned setup rejected');};
+ try{
+  window.__ownedOfficialRpcClose?.();
+  const bootstraps=window.desktopBridge.getLocalEnvironmentBootstraps();d.bootstrapCount=bootstraps.length;const b=bootstraps.find(b=>b.id==='primary'&&b.httpBaseUrl);if(!b)fail('no-primary-backend');
+  const h=new URL(b.httpBaseUrl),wsBase=new URL(b.wsBaseUrl);if(!['http:','https:'].includes(h.protocol)||!['localhost','127.0.0.1','[::1]'].includes(h.hostname)||!['ws:','wss:'].includes(wsBase.protocol)||!['localhost','127.0.0.1','[::1]'].includes(wsBase.hostname))fail('non-loopback-backend');
+  // Official toWebSocketBaseUrl clones the HTTP URL and changes only protocol.
+  if(wsBase.port!==h.port||wsBase.protocol!==(h.protocol==='https:'?'wss:':'ws:'))fail('backend-url-mismatch');
+  // Configured endpoint presence is not backend readiness. The official bearer
+  // bridge waits for ready indefinitely, so verify its public descriptor first.
+  const descriptorResponse=await wait('descriptor-http',8000,signal=>fetch(new URL('/.well-known/t3/environment',h),{credentials:'omit',signal}));d.descriptorHttpStatus=descriptorResponse.status;if(!descriptorResponse.ok)fail('descriptor-http-status');
+  const descriptor=await wait('descriptor-json',1000,()=>descriptorResponse.json());d.orchestrationProtocolVersion=Number.isSafeInteger(descriptor.orchestrationProtocolVersion)?descriptor.orchestrationProtocolVersion:null;if(descriptor.orchestrationProtocolVersion!==2)fail('incompatible-protocol');
+  const token=await wait('bearer-ipc',18000,()=>window.desktopBridge.getLocalEnvironmentBearerToken());if(typeof token!=='string'||!token)fail('missing-bearer');
+  const response=await wait('ticket-http',8000,signal=>fetch(new URL('/api/auth/websocket-ticket/rpc',h),{method:'POST',credentials:'omit',headers:{authorization:'Bearer '+token},signal}));d.ticketHttpStatus=response.status;if(!response.ok)fail('ticket-http-status');
+  const ticket=await wait('ticket-json',1000,()=>response.json());if(typeof ticket.ticket!=='string'||!ticket.ticket)fail('missing-ticket');
+  const u=new URL('/ws',wsBase);u.searchParams.set('orchestrationProtocol','2');u.searchParams.set('wsTicket',ticket.ticket);socket=new WebSocket(u);
+  await wait('socket-open',8000,()=>new Promise((resolve,reject)=>{socket.addEventListener('open',resolve,{once:true});socket.addEventListener('error',()=>{d.socketError=true;reject(Error('Owned socket error'));},{once:true});socket.addEventListener('close',event=>{d.socketCloseCode=event.code;reject(Error('Owned socket closed before open'));},{once:true});}));d.socketState=socket.readyState;
+  let id=0;const pending=new Map();socket.addEventListener('message',event=>{for(const m of [].concat(JSON.parse(event.data))){if(m._tag==='Ping'){socket.send(JSON.stringify({_tag:'Pong'}));continue;}if(m._tag==='Exit'&&pending.has(String(m.requestId))){const p=pending.get(String(m.requestId));clearTimeout(p.timer);pending.delete(String(m.requestId));m.exit._tag==='Success'?p.resolve(m.exit.value):p.reject(Error('Official RPC rejected '+p.tag+' '+m.exit._tag));}}});
+  window.__ownedOfficialRpc=(tag,payload)=>new Promise((resolve,reject)=>{const n=String(++id),timer=setTimeout(()=>{pending.delete(n);reject(Error('Official RPC timeout '+tag));},30000);pending.set(n,{resolve,reject,timer,tag});socket.send(JSON.stringify({_tag:'Request',id:n,tag,payload,headers:[]}));});window.__ownedOfficialRpcClose=()=>socket.close();d.stage='ready';return {ok:true,diagnostic:d};
+ }catch(error){d.failureCode??='rejected';d.failureName=String(error?.name??'Error').slice(0,80);if(socket){d.socketState=socket.readyState;socket.close();}return {ok:false,diagnostic:d};}
+}
 async function rpcSetup(){
  phase='rpc.setup';rpcTag=null;
- // Credentials stay entirely inside this owned renderer and are never returned or logged.
- await page.evaluate(`(async()=>{const b=window.desktopBridge.getLocalEnvironmentBootstraps().find(b=>b.id==='primary'&&b.httpBaseUrl);if(!b)throw Error('No primary local backend');const h=new URL(b.httpBaseUrl);if(!['localhost','127.0.0.1','[::1]'].includes(h.hostname))throw Error('Non-loopback backend refused');const token=await window.desktopBridge.getLocalEnvironmentBearerToken();const response=await fetch(new URL('/api/auth/websocket-ticket/rpc',h),{method:'POST',headers:{authorization:'Bearer '+token}});if(!response.ok)throw Error('Official ticket request status '+response.status);const ticket=await response.json(),u=new URL('/ws',b.wsBaseUrl);u.searchParams.set('orchestrationProtocol','2');u.searchParams.set('wsTicket',ticket.ticket);const socket=new WebSocket(u);await new Promise((r,j)=>{socket.addEventListener('open',r,{once:true});socket.addEventListener('error',()=>j(Error('Owned RPC open failed')),{once:true});});let id=0;const pending=new Map();socket.addEventListener('message',event=>{for(const m of [].concat(JSON.parse(event.data))){if(m._tag==='Ping'){socket.send(JSON.stringify({_tag:'Pong'}));continue;}if(m._tag==='Exit'&&pending.has(String(m.requestId))){const p=pending.get(String(m.requestId));clearTimeout(p.timer);pending.delete(String(m.requestId));m.exit._tag==='Success'?p.resolve(m.exit.value):p.reject(Error('Official RPC rejected '+p.tag+' '+m.exit._tag));}}});window.__ownedOfficialRpc=(tag,payload)=>new Promise((resolve,reject)=>{const n=String(++id),timer=setTimeout(()=>{pending.delete(n);reject(Error('Official RPC timeout '+tag));},30000);pending.set(n,{resolve,reject,timer,tag});socket.send(JSON.stringify({_tag:'Request',id:n,tag,payload,headers:[]}));});window.__ownedOfficialRpcClose=()=>socket.close();return true;})()`);
+ // Credentials remain in this owned renderer closure and never enter reports.
+ const result=await page.evaluate(`(${openOfficialRpcInOwnedRenderer.toString()})()`);diagnostics.rpcSetups??=[];if(diagnostics.rpcSetups.length<4)diagnostics.rpcSetups.push(result.diagnostic);
+ phase='rpc.setup.'+result.diagnostic.stage;assert.equal(result.ok,true,'Official RPC setup failed at '+result.diagnostic.stage+'; '+(result.diagnostic.failureCode??'unknown'));
 }
 async function rpc(tag,payload){phase='rpc.request';rpcTag=tag;return page.evaluate(`window.__ownedOfficialRpc(${JSON.stringify(tag)},${JSON.stringify(payload)})`);}
 async function quit(){
