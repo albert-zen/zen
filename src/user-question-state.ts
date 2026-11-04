@@ -8,7 +8,8 @@ import {
   parseUserQuestionSpecification,
   parseUserQuestionReply,
   normalizeUserQuestionReply,
-  renderUserQuestionReply,
+  matchesUserQuestionReplyBody,
+  parseUserQuestionPublication,
   type QuestionIdentity,
   type UserQuestionReply,
   type UserQuestionSpecification,
@@ -17,6 +18,8 @@ import {
 export interface UserQuestionState {
   request: QuestionIdentity;
   resultItemId: string;
+  /** Legacy v2 display identity, never native addressing authority. */
+  requestRef?: string;
   createdAt: string;
   specification: UserQuestionSpecification;
   state:
@@ -396,40 +399,31 @@ export function readUserQuestions(
       continue;
     }
     const request = { threadId, callItemId: call.id };
-    const accepted = results.filter((result) => {
+    const accepted = results.flatMap((result) => {
       if (
         result.turnId !== call.turnId ||
         result.content.callId !== call.content.callId
       )
-        return false;
+        return [];
       const offset = result.source.metadata?.bodyStart;
       if (
         typeof offset !== "number" ||
         !Number.isSafeInteger(offset) ||
         offset < 0
       )
-        return false;
-      try {
-        const envelope = JSON.parse(result.content.text.slice(offset)) as {
-          kind?: unknown;
-          version?: unknown;
-          request?: QuestionIdentity;
-        };
-        return (
-          envelope.kind === USER_QUESTION_PUBLICATION_KIND &&
-          envelope.version === 1 &&
-          envelope.request?.threadId === threadId &&
-          envelope.request.callItemId === call.id &&
-          Object.keys(envelope).length === 3
-        );
-      } catch {
-        return false;
-      }
+        return [];
+      const publication = parseUserQuestionPublication(
+        result.content.text.slice(offset),
+        request,
+        call.source.sequence,
+      );
+      return publication === undefined ? [] : [{ result, publication }];
     });
     if (accepted.length === 0) continue;
-    const result = accepted[0]!;
+    const { result, publication } = accepted[0]!;
     const question: UserQuestionState = {
       request,
+      ...publication,
       resultItemId: result.id,
       createdAt: result.createdAt,
       specification,
@@ -454,7 +448,12 @@ export function readUserQuestions(
         const reply = normalizeUserQuestionReply(specification, candidate);
         if (
           typeof clientId !== "string" ||
-          body !== renderUserQuestionReply(specification, reply)
+          !matchesUserQuestionReplyBody(
+            specification,
+            reply,
+            body,
+            publication.requestRef,
+          )
         )
           throw new Error("Question response provenance/body mismatch");
         responses.push({ clientId, itemId, reply, pending: isPending });

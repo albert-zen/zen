@@ -1,9 +1,9 @@
 # Proposed system-assigned question numbers
 
-Status: contract draft only. No production implementation is included in this
-checkpoint. The existing requirement to commit every model-visible string before
-adapter dispatch remains in force. The representation decision below must be
-resolved before changing that boundary.
+Status: implementation contract. System question numbers use the explicitly
+documented deterministic compiler display projection below. All original
+semantic content remains append-only; this exception does not authorize late
+instruction generation, arbitrary text rewriting or new native addressing.
 
 ## Observable contract
 
@@ -64,19 +64,14 @@ expression over text:
 4. Keep old canonical receipt/reply bytes readable without reopening completed
    questions or rewriting history. Exact retries retain their original bytes.
 
-Two representations are under review:
+The selected representation is a pure, deterministic final-compiler display
+projection of already committed, structurally verified question facts. This is
+an explicit exception to the previous selection-only display wording, documented
+in AGENTS.md and ARCHITECTURE.md. It does not append replacement history, create a
+question registry, retain a counter, or manufacture instructions. Every label is
+reconstructed from the complete append-only semantic prefix before context
+selection. Native routing and replay continue using exact original provenance.
 
-- Persist typed display overlays in the existing semantic ItemList, analogous to
-  image preparation. They contain the exact model-facing strings and links to
-  their original sources. The compiler selects them at the original positions;
-  originals and native authority remain unchanged. This preserves the current
-  commit-before-dispatch invariant and introduces no question store or mutable
-  counter authority.
-- A pure final-compiler display projection would be smaller, but it is an explicit
-  change to today's selection-only compiler contract. It must not be introduced
-  silently or described as already authorized by the current architecture.
-
-The first representation is the default proposal while that decision is pending.
 Do not create a separate durable registry, allocate by generic source sequence,
 reconstruct execution capability from display labels, or modify unrelated image
 preparation behavior.

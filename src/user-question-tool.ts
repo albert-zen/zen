@@ -52,7 +52,7 @@ export class AskUserQuestionToolRuntime implements ToolRuntime {
   readonly specification = {
     name: ASK_USER_QUESTION_NAME,
     description:
-      "Ask the user one or more questions with optional choices and free-text answers. This publishes a question card and returns immediately; it does not wait for an answer. Answers or explicit cancellation arrive later as ordinary user messages linked to this request. Continue independent work, or finish your turn if the next step requires the answer. Do not poll or treat defaults as user approval. Do not request secrets or use this tool instead of a permission approval flow. Questions are immutable: use a new call for a new request. You may omit answerTemplate to receive answers labelled by question ID in question order. An explicit answerTemplate must contain each question ID exactly once as {{id}}; no expressions are evaluated. Free-text answers are always supported.",
+      "Ask the user one or more questions with optional choices and free-text answers. This publishes a question card and returns immediately; it does not wait for an answer. Answers or explicit cancellation arrive later as ordinary user messages linked to this request. Continue independent work, or finish your turn if the next step requires the answer. Do not poll or treat defaults as user approval. Do not request secrets or use this tool instead of a permission approval flow. Questions are immutable: use a new call for a new request. The system assigns consecutive Thread question numbers Q1, Q2 and so on in publication order and uses them in the returned receipt and later answers. You need only supply question text and option labels; optional IDs are local template/answer bindings, not question numbers. You may omit answerTemplate to receive answers labelled by the assigned question number. An explicit answerTemplate must contain each question ID exactly once as {{id}}; no expressions are evaluated. Free-text answers are always supported.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -65,7 +65,7 @@ export class AskUserQuestionToolRuntime implements ToolRuntime {
           items: {
             type: "object",
             additionalProperties: false,
-            required: ["id", "prompt"],
+            required: ["prompt"],
             properties: {
               id: { type: "string", pattern: "^[a-zA-Z0-9_-]{1,64}$" },
               prompt: { type: "string", minLength: 1, maxLength: 4096 },
@@ -76,7 +76,7 @@ export class AskUserQuestionToolRuntime implements ToolRuntime {
                 items: {
                   type: "object",
                   additionalProperties: false,
-                  required: ["id", "label"],
+                  required: ["label"],
                   properties: {
                     id: { type: "string", pattern: "^[a-zA-Z0-9_-]{1,64}$" },
                     label: { type: "string", minLength: 1, maxLength: 256 },
