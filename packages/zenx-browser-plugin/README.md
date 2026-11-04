@@ -1,6 +1,6 @@
 # ZenX Browser
 
-First-party Browser package. Workspace and Connected browsers have separate tool names and approvals. Browser actions target a page in the background; native dialogs and pickers still need a human.
+First-party Browser package. Workspace and Connected browsers have separate tool names and approvals. Browser actions target a page in the background; native OS dialogs require a matching provider capability and permission. Opening an HTML picker does not complete its OS dialog.
 
 ## Five-step model flow
 
@@ -14,7 +14,7 @@ First-party Browser package. Workspace and Connected browsers have separate tool
 
 The Host resolves `rN` refs from trusted result provenance, prepares the exact backend and connection approval scope, claims resources, and dispatches to native providers. The package's pure model vocabulary and observation helpers do not grant authority or own durable conversation state. Existing tool names keep separate read, navigate, and interaction permissions; Workspace and Connected remain separate.
 
-Pointer input uses CSS viewport coordinates and the real returned screenshot/`inputViewport`; it does not fall back to OS input. Key presses require an already focused observed element. File pickers, browser-native dialogs, frames, dragging, and arbitrary shortcuts are unsupported here. Site-triggered popups may still occur. A reported unknown held input needs human resolution before further automation.
+Pointer input uses CSS viewport coordinates and the real returned screenshot/`inputViewport`; it does not fall back to OS input. Key presses require an already focused observed element. Observed same-origin iframe targets and tracked author shadow roots are supported within explicit observation bounds. A previously unobserved closed root requires trusted discovery and a fresh inspection before input. Cross-origin/out-of-process frames, unmappable frame geometry, dragging and arbitrary shortcuts remain unsupported on this coordinate/key path. HTML file/date/color/select controls accept targeted input; native OS dialogs require their own capability and permission. Site-triggered popups may still occur. A reported unknown held input needs human resolution before further automation.
 
 ## Programmable extensions
 

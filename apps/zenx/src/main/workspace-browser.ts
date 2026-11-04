@@ -26,6 +26,7 @@ import {
   assertBrowserObservation,
   browserActionScript,
   browserInspectScript,
+  browserInputLifecycleEventInvalidates,
   browserDocumentGuardScript,
   browserDomCapture,
   evaluateBrowserDocument,
@@ -93,6 +94,7 @@ interface Tab {
   agentActionOutcomeUnknown: boolean;
   inputQuarantine?: string;
   inputInFlight?: boolean;
+  inputLifecycleRevision: number;
   programmableInFlight?: boolean;
   mainExecutionContexts: Map<string, { id: number; uniqueId: string }>;
   nativeDialogOpen?: boolean;
@@ -429,6 +431,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       agentActionsInFlight: 0,
       agentActionOutcomeUnknown: false,
       documentVersion: 0,
+      inputLifecycleRevision: 0,
       navigationGeneration: 0,
       renderRevision: 0,
       mainExecutionContexts: new Map(),
@@ -437,6 +440,8 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     view.setVisible(false);
     const web = view.webContents;
     web.debugger.on("message", (_event, method, params, childSessionId) => {
+      if (browserInputLifecycleEventInvalidates(method, params))
+        tab.inputLifecycleRevision += 1;
       if (!childSessionId) {
         if (method === "Runtime.executionContextsCleared")
           tab.mainExecutionContexts.clear();
@@ -469,7 +474,10 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       if (method === "Page.javascriptDialogClosed")
         tab.nativeDialogOpen = false;
     });
-    web.debugger.on("detach", () => tab.mainExecutionContexts.clear());
+    web.debugger.on("detach", () => {
+      tab.inputLifecycleRevision += 1;
+      tab.mainExecutionContexts.clear();
+    });
     web.session.setPermissionRequestHandler(
       (_contents, _permission, callback) => callback(false),
     );
@@ -481,6 +489,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     web.on("did-start-loading", publish);
     web.on("did-stop-loading", publish);
     web.on("did-start-navigation", (_event, _url, _isInPlace, isMainFrame) => {
+      tab.inputLifecycleRevision += 1;
       if (isMainFrame) {
         if (!_isInPlace) tab.mainExecutionContexts.clear();
         tab.documentVersion += 1;
@@ -1159,6 +1168,13 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
           const navigation = tab.navigationGeneration;
           const render = tab.renderRevision;
           const control = tab.controlRevision;
+          const inputLifecycleRevision = tab.inputLifecycleRevision;
+          const assertInputLifecycle = () => {
+            if (tab.inputLifecycleRevision !== inputLifecycleRevision)
+              throw new Error(
+                "Browser frame lifecycle changed during targeted input; inspect again",
+              );
+          };
           const incarnation = this.#sessionIncarnations.get(sessionId);
           let dispatched = false;
           tab.inputInFlight = true;
@@ -1166,6 +1182,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
             await dispatchBrowserTargetedInput(
               {
                 assertCurrent: () => {
+                  assertInputLifecycle();
                   if (tab.nativeDialogOpen)
                     throw new Error(
                       "Browser targeted input cannot operate this open native dialog; use an available dialog or Computer capability",
@@ -1201,6 +1218,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
                   dispatch();
                 },
                 dispatch: async (method, params, onDispatched) => {
+                  assertInputLifecycle();
                   const pending = tab.view.webContents.debugger.sendCommand(
                     method,
                     params,

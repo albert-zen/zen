@@ -52,16 +52,22 @@ not replayed. Middle-button posting does not guarantee that an app handles it.
 ## Actual boundaries that remain
 
 A capability missing an implementation is not a policy that only a human may
-operate that class of UI. The current Browser coordinate/focus helper does not
-resolve iframe inner targets or closed shadow roots. Removing its identity checks
-would send input to an unverified inner document; a frame-aware executor is needed.
-Open shadow roots are supported within the existing tracked observation bounds.
-Frame support needs per-frame document identity, lifecycle tracking and coordinate
-mapping, including cross-origin/out-of-process frames. Closed roots need trusted
-inner-node identity and change observation that the current open-root registry does
-not supply. Neither gap is fixed by accepting the outer host's screenshot/focus as
-proof of the inner target. The top-level semantic inspector still reports
-iframe/shadow coverage omissions.
+operate that class of UI. The coordinate/focus path supports observed same-origin
+iframe documents through the existing page-local registry, with inner focus/hit
+identity, child mutation/scroll observation, document-generation fences and
+border-aware coordinate mapping. Mapping that cannot be proved, including
+unsupported transforms, remains unavailable instead of guessing coordinates.
+Cross-origin/out-of-process frames still need child-target transport and execution
+context support and are not covered by same-origin support.
+
+Closed author shadow roots use trusted CDP handles to join the same transient
+observer registry. Discovering a previously unobserved root does not authorize
+input from an older screenshot: it invalidates that observation, and a fresh
+inspection is required before input. Newly attached or nested roots are subject
+to the same rule. User-agent roots remain native-control surfaces, not author-root
+traversal. No page attachShadow hook, main-world registry or OS fallback is used.
+The top-level semantic inspector still reports iframe/shadow coverage omissions;
+coordinate/focus targeting is not a claim of complete semantic DOM coverage.
 The experimental Playwright path is evaluated separately for these capabilities;
 it must not silently replace the default provider or move a user's page.
 

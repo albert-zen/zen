@@ -213,6 +213,27 @@ test("a keydown's own scroll and focus change does not strand its keyup", async 
   assert.equal(f.quarantined, false);
 });
 
+test("keydown cannot release into newly unresolved focus", async () => {
+  for (const reason of ["native-surface", "shadow-surface"] as const) {
+    const f = fixture();
+    const send = f.port.dispatch;
+    f.port.dispatch = async (method, params, onDispatched) => {
+      await send(method, params, onDispatched);
+      f.current.focusId = null;
+      f.current.focusUnsupported = reason;
+    };
+    await assert.rejects(
+      dispatchBrowserTargetedInput(f.port, snapshot(), {
+        kind: "key",
+        key: "Tab",
+      }),
+      BrowserInputOutcomeUnknownError,
+    );
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.quarantined, true);
+  }
+});
+
 test("a fence change after acknowledged release is unknown but does not quarantine held input", async () => {
   const f = fixture();
   const send = f.port.dispatch;
@@ -522,19 +543,18 @@ test("open-shadow HTML controls and labels retain observed native input", async 
   }
 });
 
-test("closed or indeterminate shadow surfaces reject locally while DOM snapshot stays available", async () => {
+test("closed roots require fresh observation and indeterminate shadow surfaces reject locally", async () => {
   const f = shadowFixture("closed");
   try {
     const evidence = domEvidence(f.dom, new Map([[f.host, f.root]]));
     (f.root.getElementById("a") as HTMLElement).focus();
+    await assert.rejects(evidence.read(), /inspect again/);
     const inspected = await evidence.read();
-    assert.equal(inspected.focusId, null);
-    assert.equal(inspected.focusUnsupported, "shadow-surface");
-    await assert.rejects(
-      evidence.read({ kind: "click", x: 5, y: 5 }),
-      (error) =>
-        error instanceof BrowserInputUnsupportedError &&
-        error.reason === "shadow-surface",
+    assert.ok(inspected.focusId);
+    assert.equal(inspected.focusUnsupported, undefined);
+    f.root.elementFromPoint = () => f.root.getElementById("canvas");
+    assert.ok(
+      (await evidence.read({ kind: "click", x: 5, y: 5 })).pointerHitId,
     );
     assert.equal(f.read().viewport.width, 1024);
     assert.equal(evidence.liveObjects.size, 0);
@@ -560,8 +580,10 @@ test("closed or indeterminate shadow surfaces reject locally while DOM snapshot 
 
 function domEvidence(dom: JSDOM, closedRoots = new Map<Element, ShadowRoot>()) {
   let sequence = 0;
-  const liveObjects = new Map<string, Element>();
+  const liveObjects = new Map<string, Element | ShadowRoot>();
   const backendNodes = new Map<number, Element>();
+  const shadowBackendNodes = new Map<number, ShadowRoot>();
+  const shadowIds = new WeakMap<ShadowRoot, number>();
   const nodeIds = new WeakMap<Element, number>();
   const calls: { method: string; params: Record<string, unknown> }[] = [];
   const fixture: {
@@ -584,6 +606,29 @@ function domEvidence(dom: JSDOM, closedRoots = new Map<Element, ShadowRoot>()) {
       assert.ok(liveObjects.delete(String(params.objectId)));
       return {};
     }
+    if (method === "DOM.resolveNode") {
+      const root = shadowBackendNodes.get(Number(params.backendNodeId));
+      assert.ok(root, "Resolve only a root described by this exact session");
+      const objectId = `owned:${++sequence}`;
+      liveObjects.set(objectId, root);
+      return { object: { subtype: "node", objectId } };
+    }
+    if (method === "Runtime.callFunctionOn") {
+      const root = liveObjects.get(String(params.objectId));
+      assert.ok(
+        root instanceof dom.window.ShadowRoot,
+        "Invoke an owned shadow wrapper",
+      );
+      const fn = dom.window.eval(`(${String(params.functionDeclaration)})`);
+      assert.ok(
+        typeof fn === "function",
+        "Evaluate the trusted registration function",
+      );
+      const args = params.arguments as { value: unknown }[];
+      return {
+        result: { value: fn.call(root, ...args.map((arg) => arg.value)) },
+      };
+    }
     assert.equal(method, "DOM.describeNode");
     assert.equal(params.depth, 0);
     assert.equal(params.pierce, false);
@@ -591,7 +636,7 @@ function domEvidence(dom: JSDOM, closedRoots = new Map<Element, ShadowRoot>()) {
       ? liveObjects.get(String(params.objectId))
       : backendNodes.get(Number(params.backendNodeId));
     assert.ok(
-      node,
+      node instanceof dom.window.Element,
       "Only a node allocated by this exact fixture session may be described",
     );
     if (fixture.malformed) return { node: {} };
@@ -602,6 +647,12 @@ function domEvidence(dom: JSDOM, closedRoots = new Map<Element, ShadowRoot>()) {
       backendNodes.set(backendNodeId, node);
     }
     const shadow = node.shadowRoot ?? closedRoots.get(node);
+    let shadowId = shadow && shadowIds.get(shadow);
+    if (shadow && !shadowId) {
+      shadowId = ++sequence;
+      shadowIds.set(shadow, shadowId);
+      shadowBackendNodes.set(shadowId, shadow);
+    }
     return {
       node: {
         backendNodeId,
@@ -611,7 +662,17 @@ function domEvidence(dom: JSDOM, closedRoots = new Map<Element, ShadowRoot>()) {
           attribute.name,
           attribute.value,
         ]),
-        ...(shadow ? { shadowRoots: [{ shadowRootType: shadow.mode }] } : {}),
+        ...(shadow
+          ? {
+              shadowRoots: [
+                {
+                  nodeType: 11,
+                  backendNodeId: shadowId,
+                  shadowRootType: shadow.mode,
+                },
+              ],
+            }
+          : {}),
       },
     };
   };
