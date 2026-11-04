@@ -746,13 +746,53 @@ async function collectImageThumbnailDiagnostics(originals) {
   );
 }
 
+// Accept only independently proven browser terminal states for a model-unavailable original.
+function unavailableImageBrowserOutcome(thumbnail, original) {
+  assert.deepEqual([original.width, original.height], [1, 1]);
+  if (thumbnail.image === null && thumbnail.placeholder?.role === "alert")
+    return "browser-unavailable/model-unavailable";
+  assert.equal(
+    thumbnail.placeholder,
+    null,
+    "browser original cannot still be a placeholder",
+  );
+  assert.equal(
+    thumbnail.image?.complete,
+    true,
+    "browser image must be complete",
+  );
+  assert.deepEqual(
+    [thumbnail.image.naturalWidth, thumbnail.image.naturalHeight],
+    [1, 1],
+    "exact original browser dimensions",
+  );
+  assert.equal(
+    thumbnail.decode?.status,
+    "resolved",
+    "browser decode must actually succeed, not merely leave a blank box",
+  );
+  assert.equal(thumbnail.disabled, false, "decoded original remains available");
+  assert.notEqual(thumbnail.busy, "true");
+  assert.equal(thumbnail.sourceProtocol, "blob");
+  assert.equal(
+    thumbnail.blob?.sha256,
+    original.sha256,
+    "mounted browser bytes must match the exact original SHA",
+  );
+  assert.equal(
+    thumbnail.blob?.byteLength,
+    original.byteLength,
+    "mounted browser bytes must match the exact original length",
+  );
+  return "browser-original-visible/model-unavailable";
+}
+
 // Image-only read/preview acceptance. No alternate App, bridge, DOM or model.
 async function runImage() {
   window.setSize(1100, 820);
   const row = (entry) =>
     `.thread-row-shell[data-thread-id="${entry.threadId}"] > button.thread-row`;
   const goodImage = ".thread-view .image-thumbnail img";
-  const placeholder = '.thread-view .image-placeholder[role="alert"]';
   const observe = () =>
     evaluate(`(()=>{
     const view=document.querySelector('.thread-view'), rect=e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}};
@@ -772,13 +812,32 @@ async function runImage() {
           key: entry.key,
           state,
         };
+        const good = state.images[0];
         return (
-          state.images.length === 1 &&
-          state.images[0].complete &&
-          state.images[0].width === 2048 &&
-          state.failures.length === (entry.key === "unavailable" ? 1 : 0)
+          good?.complete &&
+          good.width === 2048 &&
+          good.height === 2048 &&
+          (entry.key === "prepared"
+            ? state.images.length === 1 && state.failures.length === 0
+            : (state.images.length === 1 && state.failures.length === 1) ||
+              (state.images.length === 2 &&
+                state.images[1].complete &&
+                state.failures.length === 0))
         );
-      }, "original image and genuine codec failure rendered");
+      }, "original thumbnails reach independently observable browser states");
+      const thumbnails = await evaluate(
+        `(${collectImageThumbnailDiagnostics.toString()})(${JSON.stringify(entry.originals)})`,
+      );
+      result.imageReadiness.thumbnails = thumbnails;
+      assert.equal(
+        thumbnails.length,
+        entry.originals.length,
+        "one original thumbnail per admitted image",
+      );
+      result.imageReadiness.browserOutcome =
+        entry.key === "unavailable"
+          ? unavailableImageBrowserOutcome(thumbnails[1], entry.originals[1])
+          : "browser-original-visible/model-prepared";
     } catch (error) {
       try {
         result.imageFailureDiagnostics = {
@@ -801,9 +860,10 @@ async function runImage() {
       `document.querySelector(${JSON.stringify(goodImage)}).scrollIntoView({block:'center'})`,
     );
     await pause(250);
+    return result.imageReadiness;
   }
   async function captureImage(name, entry, language, appearance) {
-    await ready(entry);
+    const readiness = await ready(entry);
     const state = await observe();
     assert.equal(state.noticeCount, 0);
     assert.equal(state.app, true);
@@ -825,11 +885,22 @@ async function runImage() {
         image.rect.y >= 0 && image.rect.y + image.rect.height <= state.height,
       );
     }
-    if (entry.key === "unavailable")
+    if (readiness.browserOutcome === "browser-unavailable/model-unavailable") {
+      assert.equal(state.images.length, 1);
+      assert.equal(state.failures.length, 1);
       assert.match(
         state.failures[0].text,
         language === "en" ? /Image unavailable/ : /图片不可用/,
       );
+    } else {
+      assert.equal(state.failures.length, 0);
+      assert.equal(state.images.length, entry.originals.length);
+      if (entry.key === "unavailable")
+        assert.deepEqual(
+          [state.images[1].width, state.images[1].height],
+          [1, 1],
+        );
+    }
     assert.equal(
       await evaluate("Boolean(document.querySelector('.image-preview-layer'))"),
       false,
@@ -838,6 +909,8 @@ async function runImage() {
     result.cases.push({
       name,
       threadId: entry.threadId,
+      browserOutcome: readiness.browserOutcome,
+      thumbnails: readiness.thumbnails,
       ...state,
       windowContentBounds: window.getContentBounds(),
     });
@@ -880,11 +953,6 @@ async function runImage() {
     "en",
     "light",
   );
-  assert.ok(
-    await evaluate(
-      `Boolean(document.querySelector(${JSON.stringify(placeholder)}))`,
-    ),
-  );
   // Change language using the real product settings, before shrinking the App.
   await click(".settings-nav-row", "Open production settings for language");
   await click(
@@ -921,13 +989,21 @@ async function runImage() {
     "dark",
   );
   result.scope =
-    "Full production Electron App and child Host cold history; real synthetic image preparation, original preview and codec-failure placeholder. Fake provider, model-adapter-input only, not HTTP transport.";
+    "Full production Electron App and child Host cold history; real synthetic image preparation, original preview and independently verified browser original/alert states for a model-unavailable image. Fake provider, model-adapter-input only, not HTTP transport.";
   result.notCovered = [
     "live Desktop upload/preparation",
     "real provider image understanding",
     "HTTP transport",
     "Windows",
     "packaged distribution",
+    ...(result.cases.some(
+      (entry) =>
+        entry.browserOutcome === "browser-original-visible/model-unavailable",
+    )
+      ? [
+          "browser error-placeholder coverage for originals which Chromium successfully decodes",
+        ]
+      : []),
   ];
   result.ok = true;
 }

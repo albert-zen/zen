@@ -186,7 +186,10 @@ test("thumbnail diagnostics report browser decode and exact blob identity withou
   const start = capture.indexOf(
     "async function collectImageThumbnailDiagnostics(",
   );
-  const end = capture.indexOf("// Image-only read/preview acceptance.", start);
+  const end = capture.indexOf(
+    "// Accept only independently proven browser terminal states",
+    start,
+  );
   assert.ok(start >= 0 && end > start);
   const payloads = [
     Buffer.from("synthetic-good"),
@@ -262,4 +265,78 @@ test("thumbnail diagnostics report browser decode and exact blob identity withou
     ["blob:owned-0"],
     "diagnostics never fetch external images",
   );
+});
+
+test("model-unavailable browser acceptance rejects blank, pending, substituted and CSP-blocked originals", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const capture = await readFile(
+    new URL("capture-user-question.cjs", scripts),
+    "utf8",
+  );
+  const start = capture.indexOf("function unavailableImageBrowserOutcome(");
+  const end = capture.indexOf("// Image-only read/preview acceptance.", start);
+  assert.ok(start >= 0 && end > start);
+  const classify = runInNewContext(`(${capture.slice(start, end).trim()})`, {
+    assert,
+  });
+  const original = {
+    width: 1,
+    height: 1,
+    sha256: "1".repeat(64),
+    byteLength: 90,
+  };
+  const valid = {
+    image: { complete: true, naturalWidth: 1, naturalHeight: 1 },
+    placeholder: null,
+    decode: { status: "resolved" },
+    disabled: false,
+    busy: "false",
+    sourceProtocol: "blob",
+    blob: { sha256: original.sha256, byteLength: original.byteLength },
+  };
+  assert.equal(
+    classify(valid, original),
+    "browser-original-visible/model-unavailable",
+  );
+  assert.equal(
+    classify({ image: null, placeholder: { role: "alert" } }, original),
+    "browser-unavailable/model-unavailable",
+  );
+  for (const mutate of [
+    (value) => {
+      value.decode.status = "rejected";
+    },
+    (value) => {
+      value.decode.status = "timeout";
+    },
+    (value) => {
+      value.image.complete = false;
+    },
+    (value) => {
+      value.image.naturalWidth = 0;
+    },
+    (value) => {
+      value.image.naturalWidth = 1600;
+    },
+    (value) => {
+      value.blob.sha256 = "2".repeat(64);
+    },
+    (value) => {
+      value.blob.byteLength++;
+    },
+    (value) => {
+      value.blob = { error: "Blocked by existing CSP" };
+    },
+    (value) => {
+      value.sourceProtocol = "https";
+    },
+    (value) => {
+      value.image = null;
+      value.placeholder = { role: "status" };
+    },
+  ]) {
+    const invalid = structuredClone(valid);
+    mutate(invalid);
+    assert.throws(() => classify(invalid, original));
+  }
 });
