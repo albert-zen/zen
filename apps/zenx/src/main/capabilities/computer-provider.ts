@@ -11,7 +11,6 @@ import {
 import {
   ComputerTargetSession,
   COMPUTER_BASIC_KEYS,
-  COMPUTER_NATIVE_KEY_CODES,
   type ComputerCaptureImage,
 } from "./computer-target-session.js";
 import { NativeComputerTargetTransport } from "./computer-target-transport.js";
@@ -4805,9 +4804,44 @@ func unicodeChunks(_ text: String) throws -> [[UniChar]] {
   return chunks
 }
 
-let keyCodes: [String: CGKeyCode] = [${Object.entries(COMPUTER_NATIVE_KEY_CODES)
-  .map(([key, code]) => `"${key}":${code}`)
-  .join(", ")}]
+// Keep this literal extractable by the packaged helper builder. A parity test
+// checks every entry against COMPUTER_NATIVE_KEY_CODES in the Host.
+let keyCodes: [String: CGKeyCode] = [
+  "enter": 36,
+  "escape": 53,
+  "tab": 48,
+  "backspace": 51,
+  "space": 49,
+  "arrowUp": 126,
+  "arrowDown": 125,
+  "arrowLeft": 123,
+  "arrowRight": 124,
+  "delete": 117,
+  "home": 115,
+  "end": 119,
+  "pageUp": 116,
+  "pageDown": 121,
+  "f1": 122,
+  "f2": 120,
+  "f3": 99,
+  "f4": 118,
+  "f5": 96,
+  "f6": 97,
+  "f7": 98,
+  "f8": 100,
+  "f9": 101,
+  "f10": 109,
+  "f11": 103,
+  "f12": 111,
+  "f13": 105,
+  "f14": 107,
+  "f15": 113,
+  "f16": 106,
+  "f17": 64,
+  "f18": 79,
+  "f19": 80,
+  "f20": 90
+]
 var bindings: [String: Binding] = [:]
 while let line = readLine() {
   var posted = 0

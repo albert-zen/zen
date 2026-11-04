@@ -271,10 +271,15 @@ test("navigation retains its two-second mutation deadline after successful setup
     gate.resolve();
     await delay(20);
     assert.equal(cdp.count("Page.navigate"), 1);
-    await assert.rejects(
-      Promise.resolve(connection.backend.close()),
-      /unknown|tainted/u,
+    const observed = await connection.backend.inspect("work", "target-1");
+    assert.ok(observed.observationId);
+    assert.equal(
+      cdp.count("Page.navigate"),
+      1,
+      "inspection never replays navigation",
     );
+    await connection.backend.close();
+    assert.equal(cdp.count("Target.detachFromTarget"), 1);
   } finally {
     gate.resolve();
     await Promise.resolve(connection.backend.close()).catch(() => undefined);

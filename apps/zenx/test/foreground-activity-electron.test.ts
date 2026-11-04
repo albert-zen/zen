@@ -400,14 +400,10 @@ for (const event of [
   "display-removed",
   "display-metrics-changed",
 ] as const) {
-  for (const phase of ["pending paint", "cancellation notice"] as const) {
+  for (const phase of ["pending paint", "paint ACK"] as const) {
     test(`${event} during ${phase} cancels the old foreground admission before input`, async () => {
       let activity!: ForegroundActivity;
-      const f = fixture(
-        false,
-        (error) => activity.unavailable(error),
-        phase !== "pending paint",
-      );
+      const f = fixture(false, (error) => activity.unavailable(error), false);
       const diagnostics = observeForegroundDisplaySmoke(
         f.screen as unknown as Screen,
       );
@@ -437,6 +433,11 @@ for (const event of [
       });
       const rejected = assert.rejects(running, /Displays changed/);
       await tick();
+      if (phase === "paint ACK") {
+        // Resolve every renderer ACK, then cancel in the same turn before the
+        // admission continuation can dispatch native input. No notice timer exists.
+        for (const window of f.windows) acknowledge(window);
+      }
       f.replaceDisplays(
         event === "display-added"
           ? [display(1), display(2), display(3)]
@@ -448,7 +449,7 @@ for (const event of [
       assert.equal(
         activity.snapshot.activities[0]?.stopping,
         true,
-        "topology cancellation is synchronous, before the old ACK",
+        "topology cancellation is synchronous, before native dispatch",
       );
       for (const window of f.windows) {
         window.webContents.acknowledge = true;

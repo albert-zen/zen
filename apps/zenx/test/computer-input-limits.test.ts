@@ -7,7 +7,10 @@ import {
   selectComputerWindows,
   type ZenXComputerBackend,
 } from "../src/main/capabilities/computer-provider.js";
-import { ComputerTargetSession } from "../src/main/capabilities/computer-target-session.js";
+import {
+  ComputerTargetSession,
+  COMPUTER_NATIVE_KEY_CODES,
+} from "../src/main/capabilities/computer-target-session.js";
 
 const navigationKeys = ["delete", "home", "end", "pageUp", "pageDown"];
 const functionKeys = Array.from({ length: 20 }, (_, index) => `f${index + 1}`);
@@ -240,6 +243,7 @@ test("bound helper exposes the same native keycodes as the advertised schema", a
   );
   for (const [key, code] of Object.entries(expected))
     assert.equal(codes[key], code, key);
+  assert.deepEqual(codes, COMPUTER_NATIVE_KEY_CODES);
 });
 
 // The current native layout resolver decides whether a printable logical key has
