@@ -1,16 +1,16 @@
 {
-  "publicHead": "96c2edd6cdd2a1d5df6049c1a72c1a3f6251e2ef",
-  "testedSourceCommit": "ee830ee2b62c26ed40fed9c1df7e2d9d973fb6bb",
-  "tree": "c18c6718cb6927ea3a5988671405e115d232ef21",
+  "publicHead": "02a5a4679d847331a32bafbf555433effc8a82dc",
+  "testedSourceCommit": "ae2d5d2d9a35a1d5cb8477177dde5cfa0f97feb6",
+  "tree": "157f94fa4b0489dc6eeffa49030f0d99328a8754",
   "sameTreeVerifiedByGitDiff": true,
-  "run": "https://github.com/albert-zen/zen/actions/runs/41793240446",
+  "run": "https://github.com/albert-zen/zen/actions/runs/41807368159",
   "synthetic": true,
   "artifacts": {
-    "macosApp": 13304730647,
-    "macosShelf": 13304595944,
-    "windowsApp": 13304302945,
-    "windowsShelf": 13304198130,
-    "imageCardRemoval": 13304287525
+    "macosApp": 13310841294,
+    "macosShelf": 13310981003,
+    "windowsApp": 13309579730,
+    "windowsShelf": 13311061271,
+    "imageCardRemoval": 13311166049
   },
   "results": {
     "macosApp": true,
@@ -45,13 +45,14 @@
     "The preceding 449de source-navigation screenshot captured a pre-navigation compositor frame and is rejected as visual evidence. These new source images were inspected after exact DOM source assertions and paint settlement; the actual pixels show the synthetic source Thread and body.",
     "Combined source integrates main PR683 linear selection-source deduplication and PR687 image-preparation card removal. Core preparation/fallback facts and original attachments remain preserved; no replacement notice UI is introduced.",
     "The three image-card-removal captures use production ThreadView/CSS in Linux Chromium with synthetic ItemList snapshots. They do not run native Host, attachment loading or model dispatch, and do not prove physical macOS/Windows or packaged behavior.",
-    "All images were freshly produced by the stated 96c2/ee830 source. Exact duplicate regenerated PNGs may reuse existing Git blobs."
+    "All images were freshly produced by the stated 02a5/ae2d source. Exact duplicate regenerated PNGs may reuse existing Git blobs.",
+    "Integrated main PR691 replaces the vulnerable Windows native toolchain with SDK10.0.403/runtime and compiler10.0.14. Seven exact-main blobs are preserved, with no audit suppression, ABI relaxation or renderer/capture change."
   ],
   "images": [
     {
       "file": "steer-wide-light.png",
       "platform": "darwin",
-      "sha256": "674202e40ce5f5db4d5eb1580cc49722687b62acab53768243d59c11218e3edb"
+      "sha256": "23eb4d963c8a3f09e872cb9a679461328cc2f4339a5911c80f61411e4b4c02fa"
     },
     {
       "file": "steer-wide-dark.png",
@@ -86,17 +87,17 @@
     {
       "file": "04-maximized-main-dock.png",
       "platform": "darwin",
-      "sha256": "453958144b41d05116485a383e037f62d9697bc972b99742e7c58d3d32adbf09"
+      "sha256": "2e1513521d02f974bf17343035f843d88092756a8cfd56803ed59abe7580ac5c"
     },
     {
       "file": "15-macos-system-sidebar-click.png",
       "platform": "darwin",
-      "sha256": "cb81add473f1fac6c90ae1917048f94810d7a370fc9f6e20c91771522588ace6"
+      "sha256": "7cfeeb54e5f5a924c06a72991877dcb64525cb76c8198dff47a778216d5e367a"
     },
     {
       "file": "17-reference-dark-Chinese-question-full-App.png",
       "platform": "darwin",
-      "sha256": "7091fe33588700754534b99920e7e9778411322ce02d3c4ef015a4608496177e"
+      "sha256": "a4f47539f670d281109035cdccb9e3b32fb99d7ff93c15f1da29871a12221d5e"
     },
     {
       "file": "windows-queue-human-edit-open.png",
@@ -111,37 +112,35 @@
     {
       "file": "windows-04-maximized-main-dock.png",
       "platform": "win32",
-      "sha256": "af5e720aef10a01e58e36a7523b675ac17f9ae57008e036b1791a202094475ca"
+      "sha256": "b921229f9db198cfd91f68293bdc1a8288715bbeaaccc53106688085b98873db"
     },
     {
       "file": "windows-17-reference-dark-Chinese-question-full-App.png",
       "platform": "win32",
-      "sha256": "20f4fbac4df180bac2ceb3166abe3630280275dce9607ca0f12978e255518f7a"
+      "sha256": "99e44a3cdc7d2f321d7d707ea7d3149a834d01ecf44bc95970c942505a5315b7"
     },
     {
       "file": "image-card-removed-light.png",
       "platform": "Linux Chromium synthetic production ThreadView component",
-      "sha256": "982d1d94a0b29406536a3558d41d65610ea9f98f81c26937fee5ec3b8798586f"
+      "sha256": "f67a4f897ee6ad5802087c201dd044f1b24f36ff1d36d7ff26cebce067ea9034"
     },
     {
       "file": "image-card-removed-dark.png",
       "platform": "Linux Chromium synthetic production ThreadView component",
-      "sha256": "bc0240fc857614b68fc0d1e29cf21fff916ae5d3ff32c42af3a9204cd6256728"
+      "sha256": "29fe6110557f3c6f881d328cae7b4b69c809bdaa2a0400585d458b63a6356b7d"
     },
     {
       "file": "image-card-removed-narrow.png",
       "platform": "Linux Chromium synthetic production ThreadView component",
-      "sha256": "f571c8418ead28218f087b7dc6fafe948a52f6fb246a4c9d1f95e8966f99a06d"
+      "sha256": "4639892fa6f326cfbde3575a95b8c1080160e27e30308d267074ef6ee00f5981"
     }
   ],
-  "integratedMain": "0b0048eae22f1b05db9e713852957eaf716c1793",
+  "integratedMain": "d4a793146db892d4f5b0d5e2dfd31bae08222860",
   "completeCi": {
-    "statusAsOfPublication": "Not complete: Windows package blocked by a high-severity ILCompiler 10.0.12 NuGet audit. Other running jobs still pending; no audit bypass or retry.",
-    "run": "https://github.com/albert-zen/zen/actions/runs/41793240478",
-    "failedJob": 126451247742,
-    "diagnostic": "NU1903: Microsoft.DotNet.ILCompiler 10.0.12; GHSA-p3jp-9v83-76w9"
+    "statusAsOfPublication": "In progress: native Mac and Windows accepted on first attempt; Windows secure native build, package and RuntimeId ABI steps passed. Complete CI and native file end-navigation are not yet terminal.",
+    "run": "https://github.com/albert-zen/zen/actions/runs/41807368263"
   },
-  "verifiedAtUtc": "2026-11-04T07:43:19.944132+00:00",
+  "verifiedAtUtc": "2026-11-04T09:37:19.583835+00:00",
   "nativeCurrentAttempts": {
     "macos": 1,
     "windows": 1,
@@ -158,5 +157,13 @@
     "oldSessionReplayed": false,
     "guardsOrTimeoutsChanged": false,
     "publicHead": "aeaa0332c0d6a6a520c47f226b316a3a79bee438"
+  },
+  "previousSecurityFailure": {
+    "publicHead": "96c2edd6cdd2a1d5df6049c1a72c1a3f6251e2ef",
+    "run": 41793240478,
+    "failedJob": 126451247742,
+    "diagnostic": "NU1903 Microsoft.DotNet.ILCompiler10.0.12 GHSA-p3jp-9v83-76w9",
+    "oldRunRetried": false,
+    "auditSuppressed": false
   }
 }
