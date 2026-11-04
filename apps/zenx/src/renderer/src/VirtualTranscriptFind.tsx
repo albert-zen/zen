@@ -43,7 +43,7 @@ interface Props {
   pauseFollowing(): void;
 }
 
-/** Separate default-off WIP. Like T3, data matches precede row materialization and DOM Range paint. */
+/** Like T3, data matches precede row materialization and DOM Range paint. */
 export function VirtualTranscriptFind({
   threadId,
   turns,

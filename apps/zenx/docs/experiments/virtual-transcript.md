@@ -1,4 +1,4 @@
-# Virtual transcript prototype (WIP, disabled by default)
+# Virtual transcript (default-on candidate, acceptance pending)
 
 This experiment replaces the real ThreadView viewport, including ordinary Send,
 with `@legendapp/list/react` 3.3.5. It keeps the full canonical row array, stable
@@ -6,14 +6,19 @@ Thread/Turn keys, ordinary upward/downward scrolling and one scroll owner. It
 does not require a Load earlier action. Pending sends stay inside the measured
 footer. ZenX continues to own following and user disclosure state.
 
-Enable only in a disposable test tab before mounting ThreadView:
-`sessionStorage.setItem("zenx.experimental.virtualTranscript", "1")`, then reload.
-Remove that sessionStorage entry and reload to return to the unchanged full-DOM
-path. The virtual path displays an explicit experimental warning.
+The candidate enables the virtual viewport and in-app Find by default. For an
+explicit per-tab fallback, set
+`sessionStorage.setItem("zenx.experimental.virtualTranscript", "0")` and reload.
+Remove that entry to restore the default. The independent Find override uses
+`zenx.experimental.virtualTranscriptFind` with the same `0` fallback. A missing
+or inaccessible browser environment, or missing ResizeObserver support, keeps the
+safe full-DOM fallback. This is a
+release candidate; default activation is not evidence that native acceptance has
+already passed.
 
 ## Not production-ready
 
-- Browser-native Find cannot search unmounted DOM. The adjacent opt-in in-app
+- Browser-native Find cannot search unmounted DOM. The in-app
   Find indexes only its documented presentation-text scope.
 - Native page-wide Select All remains the browser/Electron operation over mounted
   DOM. It does not expand every historical row. Ordinary selected-text and

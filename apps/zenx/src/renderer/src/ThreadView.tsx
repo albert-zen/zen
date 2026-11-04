@@ -851,9 +851,10 @@ function ThreadViewContent({
   const virtualViewport = useRef<VirtualTranscriptHandle | null>(null);
   const [virtualTranscript] = useState(() => {
     try {
+      if (typeof window.ResizeObserver !== "function") return false;
       return (
-        window.sessionStorage.getItem("zenx.experimental.virtualTranscript") ===
-        "1"
+        window.sessionStorage.getItem("zenx.experimental.virtualTranscript") !==
+        "0"
       );
     } catch {
       return false;
@@ -864,7 +865,7 @@ function ThreadViewContent({
       return (
         window.sessionStorage.getItem(
           "zenx.experimental.virtualTranscriptFind",
-        ) === "1"
+        ) !== "0"
       );
     } catch {
       return false;

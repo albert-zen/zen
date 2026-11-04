@@ -58,7 +58,7 @@ interface Props extends Omit<
   onContentSettled(): void;
 }
 
-/** WIP, opt-in viewport. Legend owns the only scroll node; ZenX owns follow intent. */
+/** Legend owns the only scroll node; ZenX owns follow intent. */
 export function ExperimentalTranscriptViewport({
   rows,
   header,
@@ -390,13 +390,7 @@ export function ExperimentalTranscriptViewport({
         initial.current.index >= 0 ? initial.current.index : undefined
       }
       ListHeaderComponent={
-        <div className="virtual-transcript-header">
-          <p className="virtual-transcript-warning" role="status">
-            Experimental virtual transcript. Native operations remain under
-            validation.
-          </p>
-          {header}
-        </div>
+        <div className="virtual-transcript-header">{header}</div>
       }
       ListFooterComponent={
         <div className="virtual-transcript-footer">{footer}</div>
@@ -406,7 +400,7 @@ export function ExperimentalTranscriptViewport({
   );
 }
 
-/** Preserve the standard DOM path unless this WIP is explicitly enabled for the tab. */
+/** Keep the original DOM path available as an explicit per-tab fallback. */
 export function TranscriptViewport({
   experimental,
   children,

@@ -214,13 +214,16 @@ function enableVirtualGeometry() {
     this.dispatchEvent(new window.Event("scroll"));
   };
   const previous = globalThis.ResizeObserver;
+  const previousWindow = window.ResizeObserver;
   globalThis.ResizeObserver = class {
     observe() {}
     unobserve() {}
     disconnect() {}
   } as unknown as typeof ResizeObserver;
+  window.ResizeObserver = globalThis.ResizeObserver;
   return () => {
     globalThis.ResizeObserver = previous;
+    window.ResizeObserver = previousWindow;
     if (callbackFailure) throw callbackFailure;
   };
 }

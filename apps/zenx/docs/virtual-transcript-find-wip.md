@@ -1,9 +1,12 @@
 # Virtual transcript Find WIP
 
-This renderer-only experiment is **default off**. Enable both tab-local sessionStorage keys before mounting a Thread:
+This renderer-only default-on candidate keeps independent per-tab fallbacks:
 
-- `zenx.experimental.virtualTranscript` = `1`
-- `zenx.experimental.virtualTranscriptFind` = `1`
+- `zenx.experimental.virtualTranscript` = `0` restores the full-DOM viewport.
+- `zenx.experimental.virtualTranscriptFind` = `0` disables the in-app Find bar.
+
+Missing overrides enable both features in a browser with ResizeObserver; missing
+layout support or inaccessible storage safely retains the full-DOM path.
 
 Cmd/Ctrl+F opens the scoped in-app Find bar; Enter/F3/Cmd/Ctrl+G move forward, Shift moves backward, and Escape in the bar closes it. Existing editors and already-handled shortcuts retain priority. Closing restores the opening control only while the bar still owns focus. Results never replace the user's Selection or focus a historical result.
 

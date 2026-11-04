@@ -12694,11 +12694,6 @@ button:disabled {
     max(38px, calc(var(--bottom-zone-height, 0px) + 24px)) - 24px
   );
 }
-.virtual-transcript-warning {
-  color: var(--text-secondary);
-  font-size: 11px;
-  padding-bottom: 16px;
-}
 @media (max-width: 640px) {
   .virtual-transcript-row {
     padding-bottom: 20px;

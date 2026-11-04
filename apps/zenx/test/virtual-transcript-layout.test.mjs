@@ -33,13 +33,20 @@ test("virtual rows and pending footer inherit the existing narrow 20px contract"
     /\.virtual-transcript-footer\s*\{\s*gap:\s*20px;\s*padding-bottom:\s*max\(28px,/,
   );
 });
-test("experimental warning color refers to the defined current theme alias", () => {
-  assert.match(
-    wide,
-    /\.virtual-transcript-warning\s*\{\s*color:\s*var\(--text-secondary\);/,
+test("default virtual transcript has no experimental warning UI", () => {
+  assert.equal(css.includes(".virtual-transcript-warning"), false);
+  const component = readFileSync(
+    new URL(
+      "../src/renderer/src/ExperimentalTranscriptViewport.tsx",
+      import.meta.url,
+    ),
+    "utf8",
   );
-  assert.match(theme, /--text-secondary:\s*var\(--color-text-secondary\);/);
-  assert.match(theme, /--color-text-secondary:\s*#[0-9a-f]{6};/i);
+  assert.equal(
+    component.includes('className="virtual-transcript-warning"'),
+    false,
+  );
+  assert.equal(component.includes("Experimental virtual transcript."), false);
 });
 
 test("empty virtual footer compensates only the final row gap at each breakpoint", () => {
