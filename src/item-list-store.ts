@@ -25,18 +25,18 @@ export interface ItemListAppendSnapshot {
   read(): Promise<readonly ContextItem[]>;
   append(items: readonly ContextItem[]): Promise<void>;
 }
+interface VerifiedAppendPrefix {
+  threadId: string;
+  bytes: Buffer;
+  items: ContextItem[];
+  ids: Set<string>;
+}
 export class FileItemListStore {
   readonly #directory: string;
   readonly #phase:
     ((phase: PublicationPhase) => void | Promise<void>) | undefined;
-  #verifiedAppend:
-    | {
-        threadId: string;
-        bytes: Buffer;
-        items: ContextItem[];
-        ids: Set<string>;
-      }
-    | undefined;
+  #verifiedAppend: VerifiedAppendPrefix | undefined;
+  #prefixEpoch = {};
   #chain: Promise<unknown> = Promise.resolve();
   constructor(
     directory: string,
@@ -51,6 +51,10 @@ export class FileItemListStore {
     if (!/^[A-Za-z0-9_-]+$/.test(threadId))
       throw new Error("Invalid Thread identity");
     return path.join(this.#directory, `${threadId}.jsonl`);
+  }
+  #retainPrefix(prefix: VerifiedAppendPrefix | undefined): void {
+    this.#prefixEpoch = {};
+    this.#verifiedAppend = prefix;
   }
   async exists(threadId: string): Promise<boolean> {
     try {
@@ -122,10 +126,30 @@ export class FileItemListStore {
     return seen;
   }
   async read(threadId: string): Promise<ContextItem[]> {
+    const epoch = (this.#prefixEpoch = {});
     try {
-      return this.#decode(threadId, await this.#bytes(threadId)).items;
+      const bytes = await this.#bytes(threadId);
+      const known = this.#verifiedAppend;
+      if (known?.threadId === threadId && bytes.equals(known.bytes))
+        return structuredClone(known.items);
+      const decoded = this.#decode(threadId, bytes);
+      // Public reads never join the write lane. An older completion cannot
+      // replace a prefix selected by a later read, append, or failed operation.
+      if (epoch !== this.#prefixEpoch) return decoded.items;
+      if (bytes.length > MAX_VERIFIED_PREFIX_BYTES) {
+        this.#retainPrefix(undefined);
+        return decoded.items;
+      }
+      const result = structuredClone(decoded.items);
+      this.#retainPrefix({
+        threadId,
+        bytes,
+        items: freezeSnapshot(decoded.items),
+        ids: decoded.ids,
+      });
+      return result;
     } catch (error) {
-      this.#verifiedAppend = undefined;
+      if (epoch === this.#prefixEpoch) this.#retainPrefix(undefined);
       if (isMissing(error)) return [];
       throw error;
     }
@@ -179,7 +203,9 @@ export class FileItemListStore {
     threadId: string,
     use: (snapshot: ItemListAppendSnapshot) => Promise<T>,
   ): Promise<T> {
+    this.#prefixEpoch = {};
     const write = this.#chain.then(async () => {
+      this.#prefixEpoch = {};
       let active = true;
       let retained:
         { bytes: Buffer; items: ContextItem[]; ids: Set<string> } | undefined;
@@ -193,7 +219,7 @@ export class FileItemListStore {
         const operation = action().catch((error: unknown) => {
           active = false;
           retained = undefined;
-          this.#verifiedAppend = undefined;
+          this.#retainPrefix(undefined);
           failure = { error };
           throw error;
         });
@@ -213,7 +239,7 @@ export class FileItemListStore {
           try {
             bytes = await this.#bytes(threadId);
           } catch (error) {
-            this.#verifiedAppend = undefined;
+            this.#retainPrefix(undefined);
             throw error;
           }
           const known = this.#verifiedAppend;
@@ -229,10 +255,11 @@ export class FileItemListStore {
           }
           // The owned file is still read in full for every operation. Only exact
           // byte equality can reuse a private immutable decoded prefix.
-          this.#verifiedAppend =
+          this.#retainPrefix(
             bytes.length <= MAX_VERIFIED_PREFIX_BYTES
               ? { threadId, ...retained }
-              : undefined;
+              : undefined,
+          );
         }
         return retained;
       };
@@ -274,10 +301,11 @@ export class FileItemListStore {
             }
             for (const id of addedIds) prior.ids.add(id);
             retained = { bytes, items: combined, ids: prior.ids };
-            this.#verifiedAppend =
+            this.#retainPrefix(
               bytes.length <= MAX_VERIFIED_PREFIX_BYTES
                 ? { threadId, ...retained }
-                : undefined;
+                : undefined,
+            );
           });
         },
       };
@@ -289,7 +317,7 @@ export class FileItemListStore {
         if (failure !== undefined) throw failure.error;
         return result;
       } catch (error) {
-        this.#verifiedAppend = undefined;
+        this.#retainPrefix(undefined);
         throw error;
       } finally {
         active = false;
