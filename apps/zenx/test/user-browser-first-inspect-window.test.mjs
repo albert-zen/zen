@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
+import { BrowserFrameEvidence } from "../src/main/capabilities/browser-frame-evidence.ts";
 import {
   browserInputLifecycleEventInvalidates,
   browserInspectScript,
@@ -102,6 +103,7 @@ function fixture(options = {}) {
     WebSocket: { OPEN: 1 },
     performance: { now: () => now },
     browserInputLifecycleEventInvalidates,
+    BrowserFrameEvidence,
     browserInspectScript,
     browserInputSnapshotScript,
     includesBrowserInputSnapshot,
@@ -211,14 +213,18 @@ function fixture(options = {}) {
         signal,
       ),
     complete: (request) => reply(request, { result: { value } }),
-    event: (method, params = {}) =>
+    event: (
+      method,
+      params = {},
+      sourceSessionId = client.testEpoch()?.cdpSessionId,
+    ) =>
       socket.emit(
         "message",
         Buffer.from(
           JSON.stringify({
             method,
             params,
-            sessionId: client.testEpoch()?.cdpSessionId,
+            sessionId: sourceSessionId,
           }),
         ),
       ),
@@ -1466,4 +1472,68 @@ test("joint setup readiness crossing its deadline cannot grant a fresh inspectio
   assert.equal(epoch.runtimeEnable, "known-success");
   assert.equal(f.client.closureProblem(["target-1"], owner), undefined);
   assertSingleSetup(f);
+});
+
+test("child route lifecycle keeps root ownership but invalidates the original input capture", async () => {
+  const f = fixture();
+  const started = await start(f);
+  f.complete(started.request);
+  const result = await started.result;
+  assert.equal(typeof result.assertInputCapture, "function");
+  result.assertInputCapture();
+  const epoch = f.client.testEpoch();
+  f.event("Target.attachedToTarget", {
+    sessionId: "child-route",
+    targetInfo: { targetId: "child-target", type: "iframe" },
+    waitingForDebugger: false,
+  });
+  assert.throws(() => result.assertInputCapture(), /child lifecycle/);
+  assert.ok(f.client.testEpoch() === epoch);
+  const revision = epoch.inputLifecycleRevision;
+  f.event(
+    "Page.frameStartedNavigating",
+    { frameId: "child-frame" },
+    "child-route",
+  );
+  assert.equal(epoch.inputLifecycleRevision, revision + 1);
+  f.event("Target.detachedFromTarget", { sessionId: "child-route" });
+  assert.ok(f.client.testEpoch() === epoch);
+  assert.equal(epoch.detach, "known-failure");
+  assert.equal(epoch.frameEvidence.hasSession("child-route"), false);
+  assert.equal(f.client.closureProblem(["target-1"], owner), undefined);
+});
+
+test("child insertion after evaluation cannot authorize the retained screenshot", async () => {
+  const f = fixture();
+  const started = await start(f);
+  f.complete(started.request);
+  const result = await started.result;
+  result.assertInputCapture();
+  f.event("Page.frameAttached", {
+    frameId: "new-frame",
+    parentFrameId: "frame-1",
+  });
+  assert.throws(() => result.assertInputCapture(), /child lifecycle/);
+  assert.equal(
+    f.sends.filter((request) => request.method.startsWith("Input.")).length,
+    0,
+  );
+});
+
+test("admitted child dialog prevents root input without poisoning root ownership", async () => {
+  const f = fixture();
+  await f.client.testFence();
+  const epoch = f.client.testEpoch();
+  f.event("Target.attachedToTarget", {
+    sessionId: "child-dialog",
+    targetInfo: { type: "iframe", targetId: "child-target" },
+    waitingForDebugger: false,
+  });
+  f.event("Page.javascriptDialogOpening", {}, "child-dialog");
+  assert.equal(epoch.nativeDialogOpen, true);
+  f.event("Page.javascriptDialogClosed", {});
+  assert.equal(epoch.nativeDialogOpen, true);
+  f.event("Page.javascriptDialogClosed", {}, "child-dialog");
+  assert.equal(epoch.nativeDialogOpen, false);
+  assert.ok(f.client.testEpoch() === epoch);
 });

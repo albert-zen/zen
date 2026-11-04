@@ -63,6 +63,7 @@ const server = createServer((request, response) => {
   if (request.url?.startsWith("/input-contract")) {
     response.setHeader("content-type", "text/html; charset=utf-8");
     response.setHeader("cache-control", "no-store");
+    response.setHeader("Origin-Agent-Cluster", "?0");
     response.end(targetedInputContractPage(request.url));
     return;
   }
@@ -111,6 +112,8 @@ try {
     [
       `--user-data-dir=${directory}`,
       "--remote-debugging-port=0",
+      "--site-per-process",
+      "--host-resolver-rules=MAP localhost 127.0.0.1",
       "--no-first-run",
       "--no-default-browser-check",
       "--enable-logging=stderr",

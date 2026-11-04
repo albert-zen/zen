@@ -5,6 +5,7 @@ import test from "node:test";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import { browserInputLifecycleEventInvalidates } from "../src/main/capabilities/browser-provider.ts";
+import { BrowserFrameEvidence } from "../src/main/capabilities/browser-frame-evidence.ts";
 import { UserBrowserCdpDiagnosticObserver } from "../src/main/capabilities/user-browser-cdp-diagnostics.ts";
 import { UserBrowserCdpOutcomeUnknownError } from "../src/main/capabilities/user-browser-provider.ts";
 
@@ -63,6 +64,7 @@ function fixture(mode = "enabled") {
     Promise,
     AbortSignal,
     browserInputLifecycleEventInvalidates,
+    BrowserFrameEvidence,
     UserBrowserCdpOutcomeUnknownError,
     USER_BROWSER_MAX_PENDING_CDP_REQUESTS: 128,
     USER_BROWSER_MAX_TARGET_EVIDENCE: 128,

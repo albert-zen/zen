@@ -22,6 +22,7 @@ import {
 
 import { ipcChannels } from "../preload/ipc.js";
 import { observeElectronPage } from "./capabilities/browser-electron-observation.js";
+import { BrowserFrameEvidence } from "./capabilities/browser-frame-evidence.js";
 import {
   assertBrowserObservation,
   browserActionScript,
@@ -95,6 +96,7 @@ interface Tab {
   inputQuarantine?: string;
   inputInFlight?: boolean;
   inputLifecycleRevision: number;
+  frameEvidence: BrowserFrameEvidence;
   programmableInFlight?: boolean;
   mainExecutionContexts: Map<string, { id: number; uniqueId: string }>;
   nativeDialogOpen?: boolean;
@@ -432,6 +434,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       agentActionOutcomeUnknown: false,
       documentVersion: 0,
       inputLifecycleRevision: 0,
+      frameEvidence: new BrowserFrameEvidence(""),
       navigationGeneration: 0,
       renderRevision: 0,
       mainExecutionContexts: new Map(),
@@ -440,7 +443,13 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     view.setVisible(false);
     const web = view.webContents;
     web.debugger.on("message", (_event, method, params, childSessionId) => {
-      if (browserInputLifecycleEventInvalidates(method, params))
+      const frameRevision = tab.frameEvidence.revision;
+      tab.frameEvidence.acceptEvent(childSessionId ?? "", method, params);
+      if (
+        browserInputLifecycleEventInvalidates(method, params) ||
+        (method.startsWith("Target.") &&
+          tab.frameEvidence.revision !== frameRevision)
+      )
         tab.inputLifecycleRevision += 1;
       if (!childSessionId) {
         if (method === "Runtime.executionContextsCleared")
@@ -472,10 +481,11 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       if (method === "Page.javascriptDialogOpening")
         tab.nativeDialogOpen = true;
       if (method === "Page.javascriptDialogClosed")
-        tab.nativeDialogOpen = false;
+        tab.nativeDialogOpen = tab.frameEvidence.hasOpenDialog;
     });
     web.debugger.on("detach", () => {
       tab.inputLifecycleRevision += 1;
+      tab.frameEvidence.close();
       tab.mainExecutionContexts.clear();
     });
     web.session.setPermissionRequestHandler(
@@ -922,6 +932,16 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
         const documentVersion = tab.documentVersion;
         const navigationGeneration = tab.navigationGeneration;
         const renderRevision = tab.renderRevision;
+        const inputLifecycleRevision = tab.inputLifecycleRevision;
+        const assertInputCapture = () => {
+          if (
+            tab.inputLifecycleRevision !== inputLifecycleRevision ||
+            tab.frameEvidence.failure
+          )
+            throw new Error(
+              "Browser child lifecycle changed after screenshot capture; inspect again",
+            );
+        };
         const inspected = await this.#evaluate<BrowserDomInspection>(
           tab,
           browserInspectScript,
@@ -994,6 +1014,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
               await this.#evaluate(tab, browserInputSnapshotScript),
             );
             assertBrowserInputSnapshot(snapshot, after);
+            assertInputCapture();
             input = { snapshot, screenshotId: observationId };
           } catch {
             // Targeted input is optional. Unsupported zoom or changing layout must
@@ -1040,7 +1061,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
             ? undefined
             : {
                 id: observationId,
-                ...(input === undefined ? {} : { input }),
+                ...(input === undefined ? {} : { input, assertInputCapture }),
                 documentVersion,
                 targets,
                 ...(inspected.documentIdentity === undefined
@@ -1159,6 +1180,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
             observationId,
           );
           const observation = tab.observation;
+          observation.assertInputCapture?.();
           const input = observation.input;
           if (input === undefined || input.screenshotId !== observationId)
             throw new Error(

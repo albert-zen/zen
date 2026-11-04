@@ -25,6 +25,7 @@ import {
   type BrowserInputViewport,
 } from "./browser-targeted-input.js";
 import { observeElectronPage } from "./browser-electron-observation.js";
+import { BrowserFrameEvidence } from "./browser-frame-evidence.js";
 import {
   ObservationPresentation,
   observationReadOptions,
@@ -1305,6 +1306,7 @@ interface BrowserTab {
   inputQuarantine?: string;
   inputInFlight?: boolean;
   inputLifecycleRevision: number;
+  frameEvidence: BrowserFrameEvidence;
   nativeDialogOpen?: boolean;
 }
 
@@ -1401,6 +1403,7 @@ export function browserInputLifecycleEventInvalidates(
   if (method === "Runtime.executionContextCreated")
     return params.context?.auxData?.isDefault === true;
   return (
+    method === "Page.frameAttached" ||
     method === "Page.frameNavigated" ||
     method === "Page.documentOpened" ||
     method === "Page.frameDetached" ||
@@ -1415,6 +1418,8 @@ export function browserInputLifecycleEventInvalidates(
 
 export interface BrowserObservation {
   input?: BrowserInputObservation;
+  /** Exact Host capture epoch, retained only for this disposable observation. */
+  assertInputCapture?: () => void;
   id: string;
   documentVersion: number;
   documentIdentity?: string;
@@ -1832,18 +1837,29 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
         incarnation,
         documentVersion: 0,
         inputLifecycleRevision: 0,
+        frameEvidence: new BrowserFrameEvidence(""),
       };
       this.#tabs.set(tabId, tab);
-      window.webContents.debugger.on("message", (_event, method, params) => {
-        if (browserInputLifecycleEventInvalidates(method, params))
-          tab.inputLifecycleRevision += 1;
-        if (method === "Page.javascriptDialogOpening")
-          tab.nativeDialogOpen = true;
-        if (method === "Page.javascriptDialogClosed")
-          tab.nativeDialogOpen = false;
-      });
+      window.webContents.debugger.on(
+        "message",
+        (_event, method, params, childSessionId) => {
+          const frameRevision = tab.frameEvidence.revision;
+          tab.frameEvidence.acceptEvent(childSessionId ?? "", method, params);
+          if (
+            browserInputLifecycleEventInvalidates(method, params) ||
+            (method.startsWith("Target.") &&
+              tab.frameEvidence.revision !== frameRevision)
+          )
+            tab.inputLifecycleRevision += 1;
+          if (method === "Page.javascriptDialogOpening")
+            tab.nativeDialogOpen = true;
+          if (method === "Page.javascriptDialogClosed")
+            tab.nativeDialogOpen = tab.frameEvidence.hasOpenDialog;
+        },
+      );
       window.webContents.debugger.on("detach", () => {
         tab.inputLifecycleRevision += 1;
+        tab.frameEvidence.close();
       });
       window.webContents.on(
         "did-start-navigation",
@@ -1894,6 +1910,16 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
   async inspect(sessionId: string, tabId: string): Promise<BrowserInspection> {
     const tab = this.#requireTab(sessionId, tabId);
     const documentVersion = tab.documentVersion;
+    const inputLifecycleRevision = tab.inputLifecycleRevision;
+    const assertInputCapture = () => {
+      if (
+        tab.inputLifecycleRevision !== inputLifecycleRevision ||
+        tab.frameEvidence.failure
+      )
+        throw new Error(
+          "Browser child lifecycle changed after screenshot capture; inspect again",
+        );
+    };
     const inspected = await evaluateInTab<BrowserDomInspection>(
       tab,
       browserInspectScript,
@@ -1913,6 +1939,7 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
           await evaluateInTab(tab, browserInputSnapshotScript),
         );
         assertBrowserInputSnapshot(snapshot, after);
+        assertInputCapture();
         input = { snapshot, screenshotId: observationId };
       } catch {
         // DOM observations remain usable when the optional input snapshot cannot
@@ -1953,7 +1980,7 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
         };
       });
     tab.observation = {
-      ...(input === undefined ? {} : { input }),
+      ...(input === undefined ? {} : { input, assertInputCapture }),
       id: observationId,
       documentVersion: tab.documentVersion,
       ...(inspected.documentIdentity === undefined
@@ -2045,6 +2072,7 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
       observationId,
     );
     const observation = tab.observation;
+    observation.assertInputCapture?.();
     const input = observation.input;
     if (input === undefined || input.screenshotId !== observationId)
       throw new Error(

@@ -83,7 +83,18 @@ interface Target {
   type: string;
 }
 
+interface FixtureCdpEvent {
+  method?: string;
+  sessionId?: string;
+  params?: Record<string, unknown>;
+}
+
 class Rpc {
+  #listeners = new Set<(event: FixtureCdpEvent) => void>();
+  onEvent(listener: (event: FixtureCdpEvent) => void): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
   #id = 0;
   #pending = new Map<
     number,
@@ -98,8 +109,11 @@ class Rpc {
         id?: number;
         result?: Record<string, unknown>;
         error?: unknown;
-      };
-      if (message.id === undefined) return;
+      } & FixtureCdpEvent;
+      if (message.id === undefined) {
+        for (const listener of this.#listeners) listener(message);
+        return;
+      }
       const pending = this.#pending.get(message.id);
       if (!pending) return;
       this.#pending.delete(message.id);
@@ -127,6 +141,7 @@ class Rpc {
   async send(
     method: string,
     params: Record<string, unknown> = {},
+    sessionId?: string,
   ): Promise<Record<string, unknown>> {
     const id = ++this.#id;
     return await new Promise((resolve, reject) => {
@@ -145,7 +160,14 @@ class Rpc {
         },
       });
       try {
-        this.socket.send(JSON.stringify({ id, method, params }));
+        this.socket.send(
+          JSON.stringify({
+            id,
+            method,
+            params,
+            ...(sessionId ? { sessionId } : {}),
+          }),
+        );
       } catch (error) {
         clearTimeout(timer);
         this.#pending.delete(id);
@@ -300,9 +322,113 @@ async function settleMacFixtureInput(options: {
   }
 }
 
+type RemoteFrameMode = "cross-origin-same-process" | "cross-origin-oopif";
+interface RemoteFrameFixture {
+  mode: RemoteFrameMode;
+  parentOrigin: string;
+  childOrigin: string;
+  nonce: string;
+}
+
+/** Fixed synthetic commands only; neither side accepts code from postMessage. */
+export function remoteFrameContractPage(
+  role: "parent" | "child",
+  fixture: RemoteFrameFixture,
+): string {
+  for (const origin of [fixture.parentOrigin, fixture.childOrigin]) {
+    const url = new URL(origin);
+    assert.ok(
+      url.protocol === "http:" &&
+        ["127.0.0.1", "localhost"].includes(url.hostname) &&
+        url.origin === origin,
+      "Remote frame fixtures must use exact disposable loopback origins",
+    );
+  }
+  assert.notEqual(fixture.parentOrigin, fixture.childOrigin);
+  assert.match(fixture.nonce, /^[a-f0-9-]{36}$/u);
+  assert.ok(
+    ["cross-origin-same-process", "cross-origin-oopif"].includes(fixture.mode),
+  );
+  const config = JSON.stringify(fixture).replaceAll("<", "\\u003c");
+  if (role === "child")
+    return `<!doctype html><meta charset="utf-8"><title>ZenX remote child fixture</title>
+<style>body{margin:0;min-height:900px}canvas,input{position:absolute;box-sizing:border-box;left:0}canvas{top:0;background:#acf}input{width:190px;height:32px}#text-a{top:90px}#text-b{top:140px}</style>
+<canvas id="canvas" tabindex="0" width="200" height="60"></canvas><input id="text-a"><input id="text-b">
+<script>
+const config=${config},events=[];let clicks=0;
+const documentId=crypto.randomUUID();
+const node=id=>['canvas','text-a','text-b'].includes(id)?document.getElementById(id):null;
+for(const type of ['pointerdown','pointerup','keydown','keyup'])window.addEventListener(type,event=>events.push({type:event.type,trusted:event.isTrusted,target:event.target.id}),true);
+node('canvas').onclick=event=>{if(!event.isTrusted)throw Error('Untrusted fixture click');clicks++;event.currentTarget.focus()};
+const state=()=>({mode:config.mode,documentId,events:[...events],clicks,widgets:{},values:{'text-a':node('text-a').value,'text-b':node('text-b').value},inner:document.activeElement?.id,visibility:document.visibilityState});
+window.addEventListener('message',event=>{
+  const message=event.data;
+  if(event.source!==parent||event.origin!==config.parentOrigin||!message||message.nonce!==config.nonce||message.kind!=='request'||!Number.isSafeInteger(message.id)||message.id<1)return;
+  let result;
+  if(message.method==='state')result=state();
+  else if(message.method==='focus'&&node(message.argument)){node(message.argument).focus();result={inner:document.activeElement?.id}}
+  else if(message.method==='point'&&node(message.argument)){const r=node(message.argument).getBoundingClientRect();result={x:r.left+r.width/2,y:r.top+r.height/2}}
+  else if(message.method==='mutate'){node('text-a').style.marginLeft='8px';result=state()}
+  else return;
+  parent.postMessage({kind:'reply',nonce:config.nonce,id:message.id,result},config.parentOrigin);
+});
+node('text-a').focus();
+parent.postMessage({kind:'ready',nonce:config.nonce,documentId},config.parentOrigin);
+</script>`;
+  const childUrl = new URL("/remote-frame-child", fixture.childOrigin);
+  for (const [key, value] of Object.entries(fixture))
+    childUrl.searchParams.set(key, value);
+  return `<!doctype html><meta charset="utf-8"><title>ZenX remote frame contract</title>
+<style>body{margin:0}iframe{position:absolute;display:block;left:20px;top:20px;width:620px;height:480px;border:5px solid #345;padding:11px 7px}</style>
+<script>
+const config=${config},childUrl=${JSON.stringify(childUrl.href)},pending=new Map();
+const frame=document.createElement('iframe');frame.id='contract-frame';
+let sequence=0,revision=0,ready=false;
+window.addEventListener('message',event=>{
+  const message=event.data;
+  if(event.source!==frame.contentWindow||event.origin!==config.childOrigin||!message||message.nonce!==config.nonce)return;
+  if(message.kind==='ready'){ready=true;return}
+  if(message.kind!=='reply'||!Number.isSafeInteger(message.id))return;
+  const request=pending.get(message.id);if(!request)return;pending.delete(message.id);clearTimeout(request.timer);request.resolve(message.result);
+});
+const request=(method,argument)=>new Promise((resolve,reject)=>{
+  if(!ready){reject(Error('Remote fixture not ready'));return}
+  const id=++sequence,timer=setTimeout(()=>{pending.delete(id);reject(Error('Remote fixture response deadline'))},5000);
+  pending.set(id,{resolve,reject,timer});frame.contentWindow.postMessage({kind:'request',nonce:config.nonce,id,method,argument},config.childOrigin);
+});
+window.contract={mode:config.mode,get ready(){return ready},
+  async state(){return {...await request('state'),visibility:document.visibilityState,outer:document.activeElement?.id}},
+  async focus(id){return {...await request('focus',id),outer:document.activeElement?.id}},
+  async point(id){const point=await request('point',id);return {x:point.x+20+5+7,y:point.y+20+5+11}},
+  mutate(){return request('mutate')},
+  reopenFrame(){ready=false;frame.src=childUrl+'&revision='+(++revision)}
+};
+frame.src=childUrl;document.documentElement.append(frame);
+</script>`;
+}
+
+function remoteFrameFixtureFromUrl(requestUrl: string): RemoteFrameFixture {
+  const query = new URL(requestUrl, "http://127.0.0.1").searchParams;
+  const mode = query.get("mode");
+  assert.ok(
+    mode === "cross-origin-same-process" || mode === "cross-origin-oopif",
+  );
+  return {
+    mode,
+    parentOrigin: query.get("parentOrigin") ?? "",
+    childOrigin: query.get("childOrigin") ?? "",
+    nonce: query.get("nonce") ?? "",
+  };
+}
+
 /** Served only by the disposable local smoke servers, before any tracker exists. */
 export function targetedInputContractPage(requestUrl: string): string {
   const mode = new URL(requestUrl, "http://127.0.0.1").searchParams.get("mode");
+  if (mode === "cross-origin-same-process" || mode === "cross-origin-oopif")
+    return remoteFrameContractPage(
+      "parent",
+      remoteFrameFixtureFromUrl(requestUrl),
+    );
   return `<!doctype html><meta charset="utf-8"><title>ZenX targeted input contract</title>
 <style>body{margin:0;font:16px system-ui}#contract-host{position:absolute;left:20px;top:20px;width:620px;height:480px}#status{position:absolute;top:530px}</style>
 <div id="contract-host"></div><p id="status">Disposable targeted input contract</p>
@@ -311,10 +437,14 @@ const mode=${JSON.stringify(mode)};
 const host=document.querySelector('#contract-host');
 let root=host;
 let contractFrame;
-if(mode==='same-origin-frame'||mode==='same-origin-closed-shadow'){
+let reflected=false;
+const cosine=0.9659258262890683,sine=0.25881904510252074;
+const applyAffine=()=>{contractFrame.style.transform='matrix('+[cosine,reflected?-sine:sine,reflected?sine:-sine,cosine,0,0].join(',')+')'};
+if(mode==='same-origin-frame'||mode==='same-origin-closed-shadow'||mode==='affine-frame'){
   contractFrame=document.createElement('iframe');contractFrame.id='contract-frame';
   contractFrame.style.cssText='width:620px;height:480px;border:5px solid #345;padding:11px 7px';
   host.append(contractFrame);root=contractFrame.contentDocument.body;root.style.margin='0';
+  if(mode==='affine-frame'){host.style.left='100px';host.style.top='90px';contractFrame.style.display='block';contractFrame.style.transformOrigin='322px 256px';applyAffine()}
   // Main-world poison is a witness that provider probes stay in isolated wrappers.
   const child=contractFrame.contentWindow;child.mainWorldProbeCalls=0;
   child.getComputedStyle=()=>{child.mainWorldProbeCalls++;throw Error('Main-world style probe used')};
@@ -365,7 +495,12 @@ for(const element of root.querySelectorAll('input:not([type]),input[type=file],i
 }
 window.contract={mode,events,clicks:0,widgets:{},
   reopenFrame(){if(!contractFrame)throw Error('Frame fixture required');const html=root.innerHTML;const doc=contractFrame.contentDocument;doc.open();doc.write('<!doctype html><body style="margin:0;min-height:900px">'+html+'</body>');doc.close();root=doc.body;for(const type of eventTypes)doc.defaultView.addEventListener(type,witnessEvent,true);node('text-a').focus()},
-  point(id){const element=node(id);if(!element)throw Error('Missing fixture node '+id);const hit=id.startsWith('label-')?element.querySelector('span'):element;const r=hit.getBoundingClientRect();const frame=contractFrame?.getBoundingClientRect();return {x:r.left+r.width/2+(frame?frame.left+contractFrame.clientLeft+7:0),y:r.top+r.height/2+(frame?frame.top+contractFrame.clientTop+11:0)}},
+  flipTransform(){if(mode!=='affine-frame')throw Error('Affine fixture required');const before=contractFrame.getBoundingClientRect().toJSON();reflected=!reflected;applyAffine();return {before,after:contractFrame.getBoundingClientRect().toJSON()}},
+  point(id){const element=node(id);if(!element)throw Error('Missing fixture node '+id);const hit=id.startsWith('label-')?element.querySelector('span'):element;const r=hit.getBoundingClientRect();
+    // Independent forward oracle: fixed fixture layout + authored CSS matrix,
+    // never provider inverse mapping, CDP quads or transformed bounding boxes.
+    if(mode==='affine-frame'){const x=r.left+r.width/2+12-322,y=r.top+r.height/2+16-256,angle=reflected?-sine:sine;return {x:100+322+cosine*x-angle*y,y:90+256+angle*x+cosine*y}}
+    const frame=contractFrame?.getBoundingClientRect();return {x:r.left+r.width/2+(frame?frame.left+contractFrame.clientLeft+7:0),y:r.top+r.height/2+(frame?frame.top+contractFrame.clientTop+11:0)}},
   focus(id){const element=node(id);element.focus();if(element.isContentEditable){const range=element.ownerDocument.createRange();range.selectNodeContents(element);range.collapse(false);const selection=element.ownerDocument.defaultView.getSelection();selection.removeAllRanges();selection.addRange(range)}return {outer:document.activeElement?.id,inner:element.getRootNode().activeElement?.id||document.activeElement?.id}},
   state(){return {mode,events:[...events],clicks:this.clicks,widgets:{...this.widgets},values:{'text-a':node('text-a')?.value,'text-b':node('text-b')?.value,editor:node('editor')?.textContent.replaceAll(String.fromCharCode(160),' ')},a:node('text-a')?.value,b:node('text-b')?.value,visibility:document.visibilityState,outer:document.activeElement?.id}},
 };
@@ -392,6 +527,210 @@ interface ContractInput {
   sessionId: string;
 }
 
+interface FixtureExecutionContext {
+  id: number;
+  uniqueId: string;
+  auxData: { frameId: string; isDefault: boolean };
+}
+interface FramePlacementEvidence {
+  mode: RemoteFrameMode;
+  rootFrameId: string;
+  childFrameId: string;
+  rootContexts: FixtureExecutionContext[];
+  targets: { targetId: string; type: string; url: string }[];
+  childUrl: string;
+  childSessionId?: string;
+  childSessionTargetId?: string;
+  childSessionFrameId?: string;
+  childContexts?: FixtureExecutionContext[];
+  childAttachedEvent?: {
+    sessionId: string;
+    targetInfo: { targetId: string; type: string; url: string };
+  };
+  ownerBackendNodeId: number;
+}
+
+/** Process placement is observed, never inferred from cross-origin URLs. */
+export function assertRemoteFramePlacement(
+  evidence: FramePlacementEvidence,
+): void {
+  assert.notEqual(evidence.rootFrameId, evidence.childFrameId);
+  const root = evidence.rootContexts.filter(
+    (context) =>
+      context.auxData?.isDefault &&
+      context.auxData.frameId === evidence.rootFrameId &&
+      context.uniqueId,
+  );
+  const local = evidence.rootContexts.filter(
+    (context) =>
+      context.auxData?.isDefault &&
+      context.auxData.frameId === evidence.childFrameId &&
+      context.uniqueId,
+  );
+  const targets = evidence.targets.filter(
+    (target) => target.type === "iframe" && target.url === evidence.childUrl,
+  );
+  assert.equal(root.length, 1, "Need the exact live root default context");
+  assert.ok(
+    Number.isSafeInteger(evidence.ownerBackendNodeId) &&
+      evidence.ownerBackendNodeId > 0,
+    "Need the exact parent DOM frame owner",
+  );
+  if (evidence.mode === "cross-origin-same-process") {
+    assert.equal(
+      local.length,
+      1,
+      "Same-process fixture requires a real child default context in the root session",
+    );
+    assert.equal(
+      targets.length,
+      0,
+      "Same-process fixture must not actually be an OOPIF",
+    );
+  } else {
+    assert.equal(
+      local.length,
+      0,
+      "OOPIF default context must not be in the parent session",
+    );
+    assert.equal(
+      targets.length,
+      1,
+      "OOPIF fixture requires a real iframe target",
+    );
+    assert.equal(targets[0]!.url, evidence.childUrl);
+    assert.ok(
+      evidence.childSessionId,
+      "OOPIF fixture requires an attached child session",
+    );
+    assert.equal(evidence.childSessionTargetId, targets[0]!.targetId);
+    assert.equal(
+      evidence.childAttachedEvent?.sessionId,
+      evidence.childSessionId,
+    );
+    assert.equal(
+      evidence.childAttachedEvent?.targetInfo.targetId,
+      evidence.childSessionTargetId,
+    );
+    assert.equal(evidence.childAttachedEvent?.targetInfo.type, "iframe");
+    assert.equal(
+      evidence.childAttachedEvent?.targetInfo.url,
+      evidence.childUrl,
+    );
+    assert.equal(evidence.childSessionFrameId, evidence.childFrameId);
+    const child = evidence.childContexts?.filter(
+      (context) =>
+        context.auxData?.isDefault &&
+        context.auxData.frameId === evidence.childFrameId &&
+        context.uniqueId,
+    );
+    assert.equal(
+      child?.length,
+      1,
+      "OOPIF fixture requires its child-session default context",
+    );
+  }
+}
+
+async function observeRemoteFramePlacement(
+  rpc: Rpc,
+  browserRpc: Rpc,
+  mode: RemoteFrameMode,
+  rootUrl: string,
+): Promise<FramePlacementEvidence> {
+  const rootContexts: FixtureExecutionContext[] = [];
+  const removeRoot = rpc.onEvent((event) => {
+    if (event.method === "Runtime.executionContextCreated")
+      rootContexts.push(event.params?.context as FixtureExecutionContext);
+  });
+  let childSessionId: string | undefined;
+  let removeChild: (() => void) | undefined;
+  try {
+    // Re-enabling this independent observer session enumerates its current
+    // contexts without consulting provider caches or changing page state.
+    await rpc.send("Runtime.disable");
+    await rpc.send("Runtime.enable");
+    const tree = (await rpc.send("Page.getFrameTree")).frameTree as {
+      frame: { id: string; url: string };
+      childFrames?: { frame: { id: string; url: string } }[];
+    };
+    assert.equal(tree.frame.url, rootUrl);
+    assert.equal(tree.childFrames?.length, 1);
+    const child = tree.childFrames![0]!.frame;
+    const targets = (await browserRpc.send("Target.getTargets"))
+      .targetInfos as FramePlacementEvidence["targets"];
+    const owner = await rpc.send("DOM.getFrameOwner", { frameId: child.id });
+    const ownerNode = (
+      await rpc.send("DOM.describeNode", { backendNodeId: owner.backendNodeId })
+    ).node as { localName: string; frameId: string };
+    assert.equal(ownerNode.localName, "iframe");
+    assert.equal(ownerNode.frameId, child.id);
+    const evidence: FramePlacementEvidence = {
+      mode,
+      rootFrameId: tree.frame.id,
+      childFrameId: child.id,
+      rootContexts,
+      targets,
+      childUrl: child.url,
+      ownerBackendNodeId: owner.backendNodeId as number,
+    };
+    if (mode === "cross-origin-oopif") {
+      const candidates = targets.filter(
+        (target) => target.type === "iframe" && target.url === child.url,
+      );
+      assert.equal(
+        candidates.length,
+        1,
+        "Need one exact nonce-bound OOPIF target before attaching",
+      );
+      const childTargetId = candidates[0]!.targetId;
+      const childContexts: FixtureExecutionContext[] = [];
+      let childAttachedEvent: FramePlacementEvidence["childAttachedEvent"];
+      removeChild = browserRpc.onEvent((event) => {
+        if (event.method === "Target.attachedToTarget") {
+          const params = event.params as unknown as NonNullable<
+            FramePlacementEvidence["childAttachedEvent"]
+          >;
+          if (params.targetInfo.targetId === childTargetId)
+            childAttachedEvent = params;
+        }
+        if (
+          event.sessionId === childSessionId &&
+          event.method === "Runtime.executionContextCreated"
+        )
+          childContexts.push(event.params?.context as FixtureExecutionContext);
+      });
+      const attached = await browserRpc.send("Target.attachToTarget", {
+        targetId: childTargetId,
+        flatten: true,
+      });
+      assert.equal(typeof attached.sessionId, "string");
+      childSessionId = attached.sessionId as string;
+      await browserRpc.send("Runtime.enable", {}, childSessionId);
+      const childTree = (
+        await browserRpc.send("Page.getFrameTree", {}, childSessionId)
+      ).frameTree as { frame: { id: string; url: string } };
+      assert.equal(childTree.frame.url, child.url);
+      Object.assign(evidence, {
+        childSessionId,
+        childSessionTargetId: childTargetId,
+        childAttachedEvent,
+        childSessionFrameId: childTree.frame.id,
+        childContexts,
+      });
+    }
+    assertRemoteFramePlacement(evidence);
+    return evidence;
+  } finally {
+    removeRoot();
+    removeChild?.();
+    if (childSessionId)
+      await browserRpc.send("Target.detachFromTarget", {
+        sessionId: childSessionId,
+      });
+  }
+}
+
 /** Real protocol acceptance, shared by both headed smoke entry points. */
 export async function runTargetedInputContractSmoke(options: {
   backend: ZenXBrowserBackend;
@@ -401,6 +740,7 @@ export async function runTargetedInputContractSmoke(options: {
   origin: string;
   guard(): Promise<void>;
   onPhase?(phase: string): void;
+  remoteFrameInput?: "supported" | "unsupported";
 }): Promise<Record<string, unknown>[]> {
   const { backend, sessionId, tabId, endpoint, origin, guard } = options;
   assert.ok(backend.pointerClick && backend.keyPress);
@@ -419,6 +759,27 @@ export async function runTargetedInputContractSmoke(options: {
     })
   ).json()) as { webSocketDebuggerUrl: string };
   const rpc = await Rpc.connect(target.webSocketDebuggerUrl);
+  const placementRpc = await Rpc.connect(version.webSocketDebuggerUrl);
+  const remoteServer = createServer((request, response) => {
+    response.setHeader("content-type", "text/html; charset=utf-8");
+    response.setHeader("cache-control", "no-store");
+    response.setHeader("Origin-Agent-Cluster", "?0");
+    try {
+      assert.equal(
+        new URL(request.url ?? "", origin).pathname,
+        "/remote-frame-child",
+      );
+      response.end(
+        remoteFrameContractPage(
+          "child",
+          remoteFrameFixtureFromUrl(request.url!),
+        ),
+      );
+    } catch {
+      response.statusCode = 400;
+      response.end("Invalid disposable fixture request");
+    }
+  });
   const inputs: ContractInput[] = [];
   const reports: Record<string, unknown>[] = [];
   // A passive, scoped tap on actual outgoing ws messages. No mock transport,
@@ -579,28 +940,45 @@ export async function runTargetedInputContractSmoke(options: {
     return { case: label, inputDispatches: 0, reason };
   };
   try {
+    await new Promise<void>((resolve, reject) => {
+      remoteServer.once("error", reject);
+      remoteServer.listen(0, "127.0.0.1", resolve);
+    });
+    const remoteAddress = remoteServer.address();
+    assert.ok(remoteAddress && typeof remoteAddress !== "string");
     for (const mode of [
       "stop-propagation",
       "stop-immediate",
       "shadow",
       "light-native",
       "same-origin-frame",
+      "affine-frame",
       "same-origin-closed-shadow",
       "closed-shadow",
       "deep-shadow",
       "ordinary-dom",
+      "cross-origin-same-process",
+      "cross-origin-oopif",
     ]) {
       const withheldBefore = withheldCaptures;
       options.onPhase?.(`input-contracts:${mode}:navigate`);
       await guard();
-      await backend.navigate(
-        sessionId,
-        tabId,
-        `${origin}/input-contract?mode=${mode}`,
-      );
+      const remoteMode =
+        mode === "cross-origin-same-process" || mode === "cross-origin-oopif";
+      const contractUrl = new URL("/input-contract", origin);
+      contractUrl.searchParams.set("mode", mode);
+      if (remoteMode) {
+        contractUrl.searchParams.set("parentOrigin", origin);
+        contractUrl.searchParams.set(
+          "childOrigin",
+          `http://${mode === "cross-origin-oopif" ? "localhost" : "127.0.0.1"}:${remoteAddress.port}`,
+        );
+        contractUrl.searchParams.set("nonce", randomUUID());
+      }
+      await backend.navigate(sessionId, tabId, contractUrl.href);
       await poll(async () => {
         const ready = await rpc.evaluate<boolean>(
-          `window.contract?.mode === ${JSON.stringify(mode)}`,
+          `window.contract?.mode === ${JSON.stringify(mode)} && ${remoteMode ? "window.contract.ready === true" : "true"}`,
         );
         assert.equal(
           typeof ready,
@@ -625,7 +1003,189 @@ export async function runTargetedInputContractSmoke(options: {
           screenshot: discovery.screenshot.status,
         });
       }
-      if (mode === "stop-propagation" || mode === "stop-immediate") {
+      if (remoteMode) {
+        const placement = await observeRemoteFramePlacement(
+          rpc,
+          placementRpc,
+          mode,
+          contractUrl.href,
+        );
+        cases.push({ case: "observed-frame-process-placement", ...placement });
+        // Validate the synthetic child witness independently of provider support.
+        // This is direct root CDP input, explicitly NOT extension/provider proof.
+        for (const kind of ["click", "key"] as const) {
+          const id = kind === "click" ? "canvas" : "text-a";
+          if (kind === "key") assert.equal((await focus(id)).inner, id);
+          const before = await state();
+          if (kind === "click") {
+            const position = await point(id);
+            for (const type of ["mousePressed", "mouseReleased"])
+              await rpc.send("Input.dispatchMouseEvent", {
+                type,
+                ...position,
+                button: "left",
+                clickCount: 1,
+              });
+          } else {
+            for (const type of ["keyDown", "keyUp"])
+              await rpc.send("Input.dispatchKeyEvent", {
+                type,
+                key: " ",
+                code: "Space",
+                windowsVirtualKeyCode: 32,
+                ...(type === "keyDown" ? { text: " " } : {}),
+              });
+          }
+          const after = await state();
+          assert.deepEqual(
+            after.events.slice(before.events.length).map((event) => ({
+              type: event.type,
+              trusted: event.trusted,
+              target: event.target,
+            })),
+            (kind === "click"
+              ? ["pointerdown", "pointerup"]
+              : ["keydown", "keyup"]
+            ).map((type) => ({ type, trusted: true, target: id })),
+          );
+          if (kind === "click") assert.equal(after.clicks, before.clicks + 1);
+          else assert.equal(after.values[id], before.values[id] + " ");
+          assert.equal(after.visibility, "hidden");
+          await guard();
+          cases.push({
+            case: `child-${kind}-witness`,
+            layer: "direct-root-cdp-fixture-oracle",
+            trustedPair: true,
+            effect: true,
+          });
+        }
+        if (options.remoteFrameInput === "supported") {
+          cases.push({
+            case: "provider-remote-canvas",
+            pair: await paired("click", "canvas"),
+          });
+          cases.push({
+            case: "provider-remote-text",
+            pair: await paired("key", "text-a"),
+          });
+        } else {
+          const position = await point("canvas");
+          const observed = await inspect();
+          cases.push(
+            await rejected(
+              "provider-remote-pointer-not-yet-supported",
+              () =>
+                backend.pointerClick!(
+                  sessionId,
+                  tabId,
+                  observed.observationId,
+                  position.x,
+                  position.y,
+                ),
+              /surface|frame|embedded|unsupported/iu,
+            ),
+          );
+          cases.push(
+            await rejected(
+              "provider-remote-key-not-yet-supported",
+              () =>
+                backend.keyPress!(
+                  sessionId,
+                  tabId,
+                  observed.observationId,
+                  "Space",
+                ),
+              /surface|frame|embedded|unsupported|focused/iu,
+            ),
+          );
+        }
+        const focusA = await focus("text-a");
+        const focused = await inspect();
+        const focusB = await focus("text-b");
+        assert.equal(focusA.outer, focusB.outer);
+        assert.equal(focusA.inner, "text-a");
+        assert.equal(focusB.inner, "text-b");
+        const staleReason =
+          options.remoteFrameInput === "supported"
+            ? /changed|stale|inspect again/iu
+            : /surface|frame|embedded|unsupported|focused|changed|stale|inspect again/iu;
+        cases.push(
+          await rejected(
+            "remote-inner-focus-replaced-before-key",
+            () =>
+              backend.keyPress!(
+                sessionId,
+                tabId,
+                focused.observationId,
+                "Space",
+              ),
+            staleReason,
+          ),
+        );
+        const mutated = await inspect();
+        await rpc.evaluate("window.contract.mutate()");
+        const position = await point("canvas");
+        cases.push(
+          await rejected(
+            "remote-document-mutation-before-pointer",
+            () =>
+              backend.pointerClick!(
+                sessionId,
+                tabId,
+                mutated.observationId,
+                position.x,
+                position.y,
+              ),
+            staleReason,
+          ),
+        );
+        const oldDocument = await rpc.evaluate<string>(
+          "window.contract.state().then(state => state.documentId)",
+        );
+        const captured = await inspect();
+        await rpc.evaluate("window.contract.reopenFrame()");
+        await poll(
+          async () =>
+            (await rpc.evaluate<boolean>("window.contract.ready"))
+              ? true
+              : undefined,
+          "replacement remote child document",
+        );
+        assert.notEqual(
+          await rpc.evaluate<string>(
+            "window.contract.state().then(state => state.documentId)",
+          ),
+          oldDocument,
+        );
+        cases.push(
+          await rejected(
+            "remote-child-navigation-before-pointer",
+            () =>
+              backend.pointerClick!(
+                sessionId,
+                tabId,
+                captured.observationId,
+                position.x,
+                position.y,
+              ),
+            staleReason,
+          ),
+        );
+        cases.push({
+          case: "replacement-child-placement",
+          ...(await observeRemoteFramePlacement(
+            rpc,
+            placementRpc,
+            mode,
+            contractUrl.href,
+          )),
+        });
+        if (options.remoteFrameInput === "supported")
+          cases.push({
+            case: "fresh-replacement-remote-text",
+            pair: await paired("key", "text-a"),
+          });
+      } else if (mode === "stop-propagation" || mode === "stop-immediate") {
         // Repeat actions on the SAME attachment to prove no held-input quarantine.
         for (let iteration = 0; iteration < 2; iteration++) {
           cases.push({
@@ -641,6 +1201,7 @@ export async function runTargetedInputContractSmoke(options: {
         mode === "shadow" ||
         mode === "light-native" ||
         mode === "same-origin-frame" ||
+        mode === "affine-frame" ||
         mode === "closed-shadow" ||
         mode === "same-origin-closed-shadow"
       ) {
@@ -659,6 +1220,7 @@ export async function runTargetedInputContractSmoke(options: {
         if (
           mode === "shadow" ||
           mode === "same-origin-frame" ||
+          mode === "affine-frame" ||
           mode === "closed-shadow" ||
           mode === "same-origin-closed-shadow"
         ) {
@@ -750,7 +1312,42 @@ export async function runTargetedInputContractSmoke(options: {
           ),
         );
       }
-      if (mode === "same-origin-frame") {
+      if (mode === "affine-frame") {
+        const position = await point("canvas");
+        const captured = await inspect();
+        const changed = await rpc.evaluate<{
+          before: { x: number; y: number; width: number; height: number };
+          after: { x: number; y: number; width: number; height: number };
+        }>("window.contract.flipTransform()");
+        for (const key of ["x", "y", "width", "height"] as const)
+          assert.ok(
+            Math.abs(changed.before[key] - changed.after[key]) < 0.01,
+            "Opposite rotation must preserve the iframe bounding box",
+          );
+        cases.push(
+          await rejected(
+            "same-bounds-changed-affine-quad-stales-capture",
+            () =>
+              backend.pointerClick!(
+                sessionId,
+                tabId,
+                captured.observationId,
+                position.x,
+                position.y,
+              ),
+            /changed|stale|inspect again/iu,
+          ),
+        );
+        cases.push({
+          case: "fresh-opposite-affine-quad",
+          pair: await paired("key", "text-a"),
+        });
+        cases.push({
+          case: "fresh-opposite-affine-canvas",
+          pair: await paired("click", "canvas"),
+        });
+      }
+      if (mode === "same-origin-frame" || mode === "affine-frame") {
         assert.equal(
           await rpc.evaluate(
             "document.querySelector('#contract-frame').contentWindow.mainWorldProbeCalls",
@@ -814,6 +1411,17 @@ export async function runTargetedInputContractSmoke(options: {
         scenario: mode,
         withheldCaptures: withheldCaptures - withheldBefore,
         layer: "headed-real-cdp-contract",
+        nativeExtensionRouting: "not-exercised",
+        ...(remoteMode
+          ? {
+              frameDepth: 1,
+              recursiveRouting: "not-exercised",
+              providerInput:
+                options.remoteFrameInput === "supported"
+                  ? "supported"
+                  : "unsupported-zero-dispatch",
+            }
+          : {}),
         status: "passed",
         cases,
       });
@@ -822,6 +1430,14 @@ export async function runTargetedInputContractSmoke(options: {
   } finally {
     WebSocket.prototype.send = originalSend;
     rpc.close();
+    placementRpc.close();
+    if (remoteServer.listening) {
+      const closed = new Promise<void>((resolve) =>
+        remoteServer.close(() => resolve()),
+      );
+      remoteServer.closeAllConnections();
+      await closed;
+    }
   }
 }
 
@@ -1006,6 +1622,7 @@ async function main(): Promise<void> {
     }
     response.setHeader("content-type", "text/html; charset=utf-8");
     response.setHeader("cache-control", "no-store");
+    response.setHeader("Origin-Agent-Cluster", "?0");
     if (request.url?.startsWith("/input-contract")) {
       response.end(targetedInputContractPage(request.url));
       return;
@@ -1034,6 +1651,8 @@ async function main(): Promise<void> {
       [
         `--user-data-dir=${profile}`,
         "--remote-debugging-port=0",
+        "--site-per-process",
+        "--host-resolver-rules=MAP localhost 127.0.0.1",
         // Renderer AX metadata is required by this owned Mac fixture's strict
         // native focused-element/value preflight. This grants no OS permission.
         ...(process.platform === "darwin"

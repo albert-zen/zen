@@ -4,6 +4,12 @@ const READY_TIMEOUT_MS = 5000;
 const GROUPING_RESPONSE_BUDGET_MS = 500;
 const AUTO_CONNECT_KEY = "zenxBrowserAutoConnect";
 const RECONNECT_ALARM = "zenx-browser-reconnect";
+const IFRAME_SESSIONS =
+  Number(/(?:Chrome|Chromium|Edg)\/(\d+)/u.exec(navigator.userAgent)?.[1]) >=
+  125;
+const MAX_CHILD_SESSIONS = 64;
+const MAX_CHILD_SESSION_HISTORY = 256;
+const MAX_CHILD_DEPTH = 8;
 let connection;
 let actionChain = Promise.resolve();
 let autoConnect = false;
@@ -102,6 +108,10 @@ async function connectBrowser() {
     groupingChain: Promise.resolve(),
     attachments: new Map(),
     detaching: new Map(),
+    childOwners: new Map(),
+    childUnavailable: new Set(),
+    childSessionsSeen: new Map(),
+    childCommandChains: new Map(),
     published: false,
   };
   connection = session;
@@ -152,6 +162,7 @@ async function connectBrowser() {
         protocolVersion: PROTOCOL_VERSION,
         scope: "browser",
         extensionVersion: chrome.runtime.getManifest().version,
+        capabilities: { iframeSessions: IFRAME_SESSIONS },
         ...identity,
       });
     });
@@ -206,19 +217,63 @@ chrome.tabGroups?.onRemoved.addListener((group) => {
     if (groupId === group.id) session.groups.delete(windowId);
   }
 });
-chrome.debugger.onEvent.addListener((source, method, params) => {
+chrome.debugger.onEvent.addListener((source, method, params = {}) => {
   const session = connection;
   if (
-    session?.tabs.has(source.tabId) &&
-    session.attachments.has(source.tabId)
-  ) {
-    session.port.postMessage({
-      type: "cdp-event",
-      tabId: source.tabId,
-      method,
-      params: params ?? {},
+    !session?.tabs.has(source.tabId) ||
+    !session.attachments.has(source.tabId)
+  )
+    return;
+  const owner = session.childOwners.get(source.tabId);
+  const sourceId = source.sessionId;
+  if (
+    sourceId !== undefined &&
+    (typeof sourceId !== "string" || !owner?.routes.has(sourceId))
+  )
+    return;
+  const parent = sourceId === undefined ? owner : owner.routes.get(sourceId);
+  if (method === "Target.attachedToTarget") {
+    const seen = session.childSessionsSeen.get(source.tabId) ?? new Set();
+    if (
+      !IFRAME_SESSIONS ||
+      seen.has(params.sessionId) ||
+      seen.size >= MAX_CHILD_SESSION_HISTORY ||
+      !parent?.autoAttach ||
+      params.targetInfo?.type !== "iframe" ||
+      !validRouteId(params.sessionId) ||
+      !validRouteId(params.targetInfo?.targetId) ||
+      owner.routes.has(params.sessionId) ||
+      owner.routes.size >= MAX_CHILD_SESSIONS ||
+      parent.depth >= MAX_CHILD_DEPTH
+    )
+      return;
+    seen.add(params.sessionId);
+    session.childSessionsSeen.set(source.tabId, seen);
+    owner.routes.set(params.sessionId, {
+      parentId: sourceId,
+      autoAttach: false,
+      depth: parent.depth + 1,
     });
+  } else if (method === "Target.detachedFromTarget") {
+    if (
+      !owner?.routes.has(params.sessionId) ||
+      owner.routes.get(params.sessionId).parentId !== sourceId
+    )
+      return;
+    retireChildRoute(owner, params.sessionId);
   }
+  session.port.postMessage({
+    type: "cdp-event",
+    tabId: source.tabId,
+    ...(sourceId === undefined ? {} : { sessionId: sourceId }),
+    ...(sourceId !== undefined || method.startsWith("Target.")
+      ? { rootSessionId: owner?.rootSessionId }
+      : {}),
+    method,
+    params,
+  });
+  if (sourceId !== undefined && method === "Inspector.detached")
+    retireChildRoute(owner, sourceId);
 });
 chrome.debugger.onDetach.addListener((source, reason) => {
   const session = connection;
@@ -228,7 +283,24 @@ chrome.debugger.onDetach.addListener((source, reason) => {
     !session.attachments.has(source.tabId)
   )
     return;
+  if (source.sessionId !== undefined) {
+    const owner = session.childOwners.get(source.tabId);
+    const route = owner?.routes.get(source.sessionId);
+    if (route === undefined) return;
+    session.port.postMessage({
+      type: "cdp-event",
+      tabId: source.tabId,
+      ...(route.parentId === undefined ? {} : { sessionId: route.parentId }),
+      rootSessionId: owner.rootSessionId,
+      method: "Target.detachedFromTarget",
+      params: { sessionId: source.sessionId, reason },
+    });
+    retireChildRoute(owner, source.sessionId);
+    return;
+  }
   if (reason === "target_closed") {
+    session.childUnavailable.delete(source.tabId);
+    session.childSessionsSeen.delete(source.tabId);
     session.attachments.delete(source.tabId);
     session.removed.add(source.tabId);
     session.recentUrls.delete(source.tabId);
@@ -313,6 +385,7 @@ async function attach(session, tabId) {
 }
 
 function detach(session, tabId) {
+  session.childOwners.delete(tabId);
   const existing = session.detaching.get(tabId);
   if (existing !== undefined) return existing;
   const operation = session.attachments.get(tabId);
@@ -321,8 +394,11 @@ function detach(session, tabId) {
     try {
       await operation;
       await chrome.debugger.detach({ tabId });
+      session.childUnavailable.delete(tabId);
+      session.childSessionsSeen.delete(tabId);
     } catch {
-      // Closed tabs and failed attaches already have no debugger connection.
+      // Failed native detach is not proof that the old child lifetime ended.
+      session.childUnavailable.add(tabId);
     } finally {
       session.attachments.delete(tabId);
       session.detaching.delete(tabId);
@@ -332,13 +408,40 @@ function detach(session, tabId) {
   return cleanup;
 }
 
-async function runCommand(session, message) {
+function runCommand(session, message) {
+  if (
+    message.method === "Target.setAutoAttach" ||
+    message.method === "Target.detachFromTarget"
+  ) {
+    const previous =
+      session.childCommandChains.get(message.tabId) ?? Promise.resolve();
+    const operation = previous.then(() => runCommandNow(session, message));
+    session.childCommandChains.set(message.tabId, operation);
+    void operation.finally(() => {
+      if (session.childCommandChains.get(message.tabId) === operation)
+        session.childCommandChains.delete(message.tabId);
+    });
+    return operation;
+  }
+  return runCommandNow(session, message);
+}
+
+async function runCommandNow(session, message) {
   if (
     typeof message.requestId !== "string" ||
     typeof message.method !== "string"
   )
     return;
   try {
+    if (connection !== session) return;
+    if (message.sessionId !== undefined && !validRouteId(message.sessionId))
+      throw new Error("Invalid Chrome child session route");
+    if (
+      (message.method === "Target.createTarget" ||
+        message.method === "Target.closeTarget") &&
+      message.sessionId !== undefined
+    )
+      throw new Error("Browser command requires the root route");
     let result;
     if (message.method === "Target.createTarget") {
       const url = message.params?.url;
@@ -378,11 +481,46 @@ async function runCommand(session, message) {
       if (connection !== session || !supported(tab, session))
         throw new Error("Chrome tab is unavailable");
       await attach(session, tabId);
-      result = await chrome.debugger.sendCommand(
-        { tabId },
-        message.method,
-        message.params ?? {},
-      );
+      const owner = session.childOwners.get(tabId);
+      if (
+        message.sessionId !== undefined &&
+        (!IFRAME_SESSIONS ||
+          owner?.rootSessionId !== message.rootSessionId ||
+          !owner.routes.has(message.sessionId))
+      )
+        throw new Error("Unknown or retired Chrome child session");
+      if (
+        message.sessionId !== undefined &&
+        message.method.startsWith("Input.")
+      )
+        throw new Error("Browser input requires the root tab route");
+      if (message.method === "Target.setAutoAttach") {
+        result = await setIframeAutoAttach(session, message);
+      } else if (message.method === "Target.detachFromTarget") {
+        const childId = message.params?.sessionId;
+        if (
+          owner?.rootSessionId !== message.rootSessionId ||
+          !owner?.routes.has(childId) ||
+          owner.routes.get(childId).parentId !== message.sessionId
+        )
+          throw new Error("Unknown Chrome iframe child or parent");
+        retireChildRoute(owner, childId);
+        result = await chrome.debugger.sendCommand(
+          debuggerRoute(message),
+          message.method,
+          { sessionId: childId },
+        );
+      } else {
+        if (message.method.startsWith("Target."))
+          throw new Error(
+            "Target discovery is outside the Chrome iframe surface",
+          );
+        result = await chrome.debugger.sendCommand(
+          debuggerRoute(message),
+          message.method,
+          message.params ?? {},
+        );
+      }
       if (!session.tabs.has(tabId)) throw new Error("Chrome tab was removed");
     }
     if (connection === session)
@@ -598,4 +736,107 @@ async function browserIdentity() {
     instanceId,
     browser: /\bEdg\//.test(navigator.userAgent) ? "edge" : "chrome",
   };
+}
+
+function validRouteId(value) {
+  return typeof value === "string" && value.length > 0 && value.length <= 512;
+}
+
+function debuggerRoute(message) {
+  return {
+    tabId: message.tabId,
+    ...(message.sessionId === undefined
+      ? {}
+      : { sessionId: message.sessionId }),
+  };
+}
+
+function retireChildRoute(owner, id) {
+  for (const [childId, route] of [...owner.routes])
+    if (route.parentId === id) retireChildRoute(owner, childId);
+  owner.routes.delete(id);
+}
+
+function retireChildDescendants(owner, parentId) {
+  for (const [id, route] of [...owner.routes])
+    if (route.parentId === parentId) retireChildRoute(owner, id);
+}
+
+async function setIframeAutoAttach(session, message) {
+  if (!IFRAME_SESSIONS)
+    throw new Error(
+      "Chrome 125 or newer is required for child iframe sessions",
+    );
+  const params = message.params;
+  if (
+    !validRouteId(message.rootSessionId) ||
+    !params ||
+    typeof params.autoAttach !== "boolean" ||
+    params.flatten !== true ||
+    params.waitForDebuggerOnStart !== false ||
+    Object.keys(params).some(
+      (key) =>
+        !["autoAttach", "flatten", "waitForDebuggerOnStart", "filter"].includes(
+          key,
+        ),
+    ) ||
+    !Array.isArray(params.filter) ||
+    params.filter.length !== 2 ||
+    params.filter[0]?.type !== "iframe" ||
+    ![undefined, false].includes(params.filter[0].exclude) ||
+    Object.keys(params.filter[0]).some(
+      (key) => key !== "type" && key !== "exclude",
+    ) ||
+    params.filter[1]?.exclude !== true ||
+    Object.keys(params.filter[1]).length !== 1
+  )
+    throw new Error(
+      "Only flattened, non-pausing iframe auto-attach is supported",
+    );
+  if (params.autoAttach && session.childUnavailable.has(message.tabId))
+    throw new Error(
+      "Chrome iframe cleanup is unconfirmed; reconnect this browser before enabling child sessions",
+    );
+  let owner = session.childOwners.get(message.tabId);
+  if (
+    owner === undefined &&
+    message.sessionId === undefined &&
+    params.autoAttach
+  ) {
+    owner = {
+      rootSessionId: message.rootSessionId,
+      routes: new Map(),
+      autoAttach: false,
+      depth: 0,
+    };
+    session.childOwners.set(message.tabId, owner);
+  }
+  if (owner?.rootSessionId !== message.rootSessionId)
+    throw new Error(
+      "Chrome iframe routing is pinned to another root lease until native tab retirement or browser reconnect",
+    );
+  const route =
+    message.sessionId === undefined
+      ? owner
+      : owner.routes.get(message.sessionId);
+  if (route === undefined)
+    throw new Error("Unknown Chrome iframe parent session");
+  route.autoAttach = params.autoAttach;
+  if (!params.autoAttach) retireChildDescendants(owner, message.sessionId);
+  try {
+    const result = await chrome.debugger.sendCommand(
+      debuggerRoute(message),
+      message.method,
+      params,
+    );
+    // The root lease remains pinned to this physical debugger attachment even
+    // after disable. A later root must not inherit a delayed old attachment event.
+    return result;
+  } catch (error) {
+    session.childUnavailable.add(message.tabId);
+    route.autoAttach = false;
+    retireChildDescendants(owner, message.sessionId);
+    // A failed native response does not prove cleanup: ownership remains reserved.
+    throw error;
+  }
 }

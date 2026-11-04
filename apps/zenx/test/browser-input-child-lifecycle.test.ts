@@ -113,6 +113,7 @@ interface Fixture {
   backend: ZenXBrowserBackend;
   tabId: string;
   commands(): Command[];
+  emit?(event: LifecycleEvent): void;
   hook(
     callback?: (
       command: Command,
@@ -321,6 +322,9 @@ async function workspaceFixture(): Promise<Fixture> {
     backend,
     tabId: tab.tabId,
     commands: () => contents.debugger.commands,
+    emit: (event) => {
+      contents.debugger.emit("message", {}, event.method, event.params);
+    },
     hook(callback) {
       contents.debugger.hook = callback;
     },
@@ -384,6 +388,9 @@ async function electronFixture(): Promise<Fixture> {
     backend,
     tabId: tab.tabId,
     commands: () => debuggerApi.commands,
+    emit: (event) => {
+      debuggerApi.emit("message", {}, event.method, event.params);
+    },
     hook(callback) {
       debuggerApi.hook = callback;
     },
@@ -651,3 +658,62 @@ test("Chrome bridge still accepts authoritative tab-updated URL metadata", async
     await f.close();
   }
 });
+
+for (const [provider, create] of [
+  ["Workspace", workspaceFixture],
+  ["Electron", electronFixture],
+] as const) {
+  test(`${provider} retains the screenshot child epoch until action admission`, async () => {
+    const f = await create();
+    try {
+      const observed = await f.backend.inspect("work", f.tabId);
+      assert.ok(observed.inputViewport);
+      f.emit!({
+        method: "Page.frameAttached",
+        params: { frameId: "new-child", parentFrameId: "main" },
+      });
+      const start = f.commands().length;
+      await assert.rejects(
+        input(f, observed.observationId, "click"),
+        /child lifecycle/,
+      );
+      assert.equal(
+        f
+          .commands()
+          .slice(start)
+          .filter((command) => command.method.startsWith("Input.")).length,
+        0,
+      );
+      const fresh = await f.backend.inspect("work", f.tabId);
+      assert.ok(fresh.inputViewport);
+    } finally {
+      await f.close();
+    }
+  });
+
+  test(`${provider} cannot publish input from a capture crossed by child insertion`, async () => {
+    const f = await create();
+    try {
+      let inserted = false;
+      f.hook((command, emit) => {
+        if (
+          !inserted &&
+          command.method === "Runtime.evaluate" &&
+          String(command.params.expression).includes("visibleText:")
+        ) {
+          inserted = true;
+          emit({
+            method: "Page.frameAttached",
+            params: { frameId: "new-child", parentFrameId: "main" },
+          });
+        }
+      });
+      const observed = await f.backend.inspect("work", f.tabId);
+      assert.equal(inserted, true);
+      assert.equal(observed.inputViewport, undefined);
+      assert.equal(typeof observed.visibleText, "string");
+    } finally {
+      await f.close();
+    }
+  });
+}
