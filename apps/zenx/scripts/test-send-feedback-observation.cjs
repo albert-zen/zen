@@ -602,18 +602,11 @@ test("timeline integration remains single source, bounded and private", () => {
   );
 });
 
-test("single-source UI quality locks exact latest Legend frontend and keeps reader regression outside timing", () => {
+test("selection performance pair locks each exact Legend source and keeps reader regression outside timing", () => {
   const launch = readFileSync(
     path.join(__dirname, "launch-send-focus-paired.mjs"),
     "utf8",
   );
-  for (const identity of [
-    "3005aa82f567fb021ebd0ab1058d16beb04e13e4",
-    "9663d3a988cd463bbe4b82268f9e36e705f9084e",
-    "5feb43dba2ab9ca60d9aa8191e9d28b48397a1d2",
-    "d76aaff53d99ce140ad8ebf714719060cdd12db9",
-  ])
-    assert.ok(launch.includes(identity));
   const snapshots = new Function(
     "return (" +
       launch.slice(
@@ -622,8 +615,27 @@ test("single-source UI quality locks exact latest Legend frontend and keeps read
       ) +
       ")",
   )();
-  assert.equal(snapshots.baseline, undefined);
-  assert.equal(snapshots.candidate.expectedVirtualTranscript, true);
+  assert.deepEqual(snapshots, {
+    baseline: {
+      commit: "3005aa82f567fb021ebd0ab1058d16beb04e13e4",
+      tree: "9663d3a988cd463bbe4b82268f9e36e705f9084e",
+      frontendSourceTree: "5feb43dba2ab9ca60d9aa8191e9d28b48397a1d2",
+      rendererSourceTree: "d76aaff53d99ce140ad8ebf714719060cdd12db9",
+      expectedVirtualTranscript: true,
+    },
+    candidate: {
+      commit: "572fe27e806950a6f7d1f78cbe809bf64c8d48c6",
+      tree: "bbe3befd1a3408135bb72f754a0429e3f7900ec7",
+      frontendSourceTree: "6d45e24fa68e152b0c7b5eca873b1d577dcc40d8",
+      rendererSourceTree: "edf4c9e8227fdf046ef7b0acfb1ed3aa9ca2cc2c",
+      expectedVirtualTranscript: true,
+    },
+  });
+  assert.ok(
+    launch.includes(
+      "const { frontendSourceTree, rendererSourceTree } = snapshot",
+    ),
+  );
   assert.ok(
     launch.includes("const virtual = snapshot.expectedVirtualTranscript"),
   );
@@ -640,7 +652,23 @@ test("single-source UI quality locks exact latest Legend frontend and keeps read
     workflow.includes("assert.deepEqual(builds[0], builds[1]"),
     false,
   );
-  assert.equal(workflow.includes("path: baseline"), false);
+  for (const [label, snapshot] of Object.entries(snapshots))
+    assert.ok(
+      workflow.includes(
+        `ref: ${snapshot.commit}\n          persist-credentials: false\n          path: ${label}`,
+      ),
+    );
+  assert.ok(
+    workflow.includes(
+      'for case_spec in "1280 enter control baseline" "1280 enter control candidate"; do',
+    ),
+  );
+  assert.equal(
+    workflow.match(/for source in baseline candidate; do/g).length,
+    2,
+  );
+  assert.equal(workflow.match(/run: node --test/g).length, 1);
+  assert.ok(workflow.includes("timeout-minutes: 35"));
   for (const contract of [
     "pendingHosts",
     "historyGroups",

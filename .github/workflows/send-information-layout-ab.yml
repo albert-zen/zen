@@ -1,4 +1,4 @@
-name: Packaged Legend native editing and reader quality (WIP experiment)
+name: Packaged Legend native selection performance pair (WIP experiment)
 on:
   push:
     branches: [diagnostic/send-legend-ui-quality-20261103]
@@ -20,6 +20,11 @@ jobs:
         with:
           ref: 3005aa82f567fb021ebd0ab1058d16beb04e13e4
           persist-credentials: false
+          path: baseline
+      - uses: actions/checkout@v4
+        with:
+          ref: 572fe27e806950a6f7d1f78cbe809bf64c8d48c6
+          persist-credentials: false
           path: candidate
       - uses: actions/checkout@v4
         with:
@@ -28,18 +33,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Copy existing bounded diagnostic into the exact source checkout
+      - name: Copy existing bounded diagnostic into both exact source checkouts
         run: |
-          for source in candidate; do
+          for source in baseline candidate; do
             cp diagnostic/apps/zenx/scripts/capture-send-feedback-verified-frame.cjs "$source/apps/zenx/scripts/capture-send-feedback.cjs"
             cp diagnostic/apps/zenx/scripts/launch-send-focus-paired.mjs "$source/apps/zenx/scripts/launch-send-feedback.mjs"
             cp diagnostic/apps/zenx/scripts/long-thread-domain-seed.mjs "$source/apps/zenx/scripts/"
             cp diagnostic/apps/zenx/scripts/summarize-send-timeline.cjs "$source/apps/zenx/scripts/"
           done
-      - name: Build the exact latest single-source Legend quality candidate
+      - name: Build both exact Legend selection performance sources identically
         timeout-minutes: 16
         run: |
-          for source in candidate; do
+          for source in baseline candidate; do
             (cd "$source" && npm ci && npm run build && npm run build --workspace @zen/zenx)
           done
       - name: Verify existing observer identity and post-geometry timing contracts
@@ -50,7 +55,7 @@ jobs:
         timeout-minutes: 20
         run: |
           failed=0
-          for case_spec in "1280 enter control candidate"; do
+          for case_spec in "1280 enter control baseline" "1280 enter control candidate"; do
             read -r width activation prefix source <<< "$case_spec"
             case="$prefix-$source"
             mkdir -p "results/$case"

@@ -60,15 +60,29 @@ const hostSnapshot = () => ({
 });
 const hostBefore = hostSnapshot();
 const snapshots = {
-  candidate: {
+  baseline: {
     commit: "3005aa82f567fb021ebd0ab1058d16beb04e13e4",
     tree: "9663d3a988cd463bbe4b82268f9e36e705f9084e",
+    frontendSourceTree: "5feb43dba2ab9ca60d9aa8191e9d28b48397a1d2",
+    rendererSourceTree: "d76aaff53d99ce140ad8ebf714719060cdd12db9",
+    expectedVirtualTranscript: true,
+  },
+  candidate: {
+    commit: "572fe27e806950a6f7d1f78cbe809bf64c8d48c6",
+    tree: "bbe3befd1a3408135bb72f754a0429e3f7900ec7",
+    frontendSourceTree: "6d45e24fa68e152b0c7b5eca873b1d577dcc40d8",
+    rendererSourceTree: "edf4c9e8227fdf046ef7b0acfb1ed3aa9ca2cc2c",
     expectedVirtualTranscript: true,
   },
 };
-// One exact latest UI quality source. This is not a new latency A/B.
-const frontendSourceTree = "5feb43dba2ab9ca60d9aa8191e9d28b48397a1d2";
-const rendererSourceTree = "d76aaff53d99ce140ad8ebf714719060cdd12db9";
+// One baseline-to-candidate screening pair, not robust performance acceptance.
+const snapshot = snapshots[sourceLabel];
+const expected = snapshot?.commit;
+assert.ok(
+  expected,
+  "Only independently identified source snapshots are allowed",
+);
+const { frontendSourceTree, rendererSourceTree } = snapshot;
 for (const [subtree, expectedTree] of [
   ["apps/zenx", frontendSourceTree],
   ["apps/zenx/src/renderer", rendererSourceTree],
@@ -80,12 +94,6 @@ for (const [subtree, expectedTree] of [
     expectedTree,
     "Native quality source must preserve its exact frontend subtree",
   );
-const snapshot = snapshots[sourceLabel];
-const expected = snapshot?.commit;
-assert.ok(
-  expected,
-  "Only independently identified source snapshots are allowed",
-);
 assert.equal(
   execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
   expected,
@@ -342,7 +350,7 @@ await writeFile(
       expectedVirtualTranscript: snapshot.expectedVirtualTranscript,
       packagedHashes,
       comparisonRole:
-        "single latest Legend/Find quality source, default-off and not production acceptance: " +
+        "Legend selection performance screening pair, default-off and not production acceptance: " +
         activationKind,
       priorUserMessages: count,
       priorCompletedTurns: count,
