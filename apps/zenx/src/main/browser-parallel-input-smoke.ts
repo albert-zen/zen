@@ -451,14 +451,29 @@ export async function runTargetedInputContractSmoke(options: {
   };
   const state = async () =>
     await rpc.evaluate<ContractState>("window.contract.state()");
+  let withheldCaptures = 0;
   const inspect = async () => {
-    const observation = await backend.inspect(sessionId, tabId);
-    assert.equal(observation.screenshot.status, "captured");
-    assert.ok(
-      observation.inputViewport,
-      "Contract requires a real coherent screenshot",
-    );
-    return observation;
+    const inputIndex = inputs.length;
+    // A frame's first layout may invalidate a captured image. Wait only through
+    // fresh read-only inspections; never replay input or loosen provider fences.
+    return await poll(async () => {
+      const observation = await backend.inspect(sessionId, tabId);
+      assert.equal(observation.screenshot.status, "captured");
+      assert.equal(
+        inputs.length,
+        inputIndex,
+        "Inspection must not dispatch input",
+      );
+      await guard();
+      if (!observation.inputViewport) {
+        withheldCaptures++;
+        options.onPhase?.(
+          `input-contracts:withheld-capture:${withheldCaptures}`,
+        );
+        return undefined;
+      }
+      return observation;
+    }, "contract coherent screenshot (read-only capture settlement)");
   };
   const focus = async (id: string) =>
     await rpc.evaluate<{ outer: string; inner: string }>(
@@ -575,6 +590,7 @@ export async function runTargetedInputContractSmoke(options: {
       "deep-shadow",
       "ordinary-dom",
     ]) {
+      const withheldBefore = withheldCaptures;
       options.onPhase?.(`input-contracts:${mode}:navigate`);
       await guard();
       await backend.navigate(
@@ -791,6 +807,7 @@ export async function runTargetedInputContractSmoke(options: {
       await guard();
       reports.push({
         scenario: mode,
+        withheldCaptures: withheldCaptures - withheldBefore,
         layer: "headed-real-cdp-contract",
         status: "passed",
         cases,
