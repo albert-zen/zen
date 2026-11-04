@@ -17,12 +17,14 @@ import electron from "electron";
 import {
   seedUserQuestionAcceptance,
   verifyUserQuestionAcceptance,
+  seedImagePreparationAcceptance,
+  verifyImagePreparationAcceptance,
 } from "./seed-user-question-acceptance.mjs";
 assert.equal(process.env.GITHUB_ACTIONS, "true");
 assert.ok(["win32", "darwin"].includes(process.platform));
 const directory = path.resolve(process.argv[2]);
 const scenario = process.argv[3] ?? "cards";
-assert.ok(["cards", "origin"].includes(scenario));
+assert.ok(["cards", "origin", "image"].includes(scenario));
 const root = fileURLToPath(new URL("../", import.meta.url));
 const sourceCommit = execFileSync("git", ["rev-parse", "HEAD"], {
   encoding: "utf8",
@@ -66,7 +68,7 @@ await writeFile(
             supportedReasoningEfforts: ["medium"],
             defaultReasoningEffort: "medium",
             inputModalities:
-              scenario === "origin" ? ["text", "image"] : ["text"],
+              scenario === "cards" ? ["text"] : ["text", "image"],
             contextWindow: 1000000,
           },
         ],
@@ -80,7 +82,10 @@ await writeFile(
     approvalPolicy: "never",
   }),
 );
-const fixture = await seedUserQuestionAcceptance({ data, workspace, scenario });
+const fixture =
+  scenario === "image"
+    ? await seedImagePreparationAcceptance({ data, workspace })
+    : await seedUserQuestionAcceptance({ data, workspace, scenario });
 if (scenario === "origin") {
   const profilePath = path.join(profile, "host-profile.json");
   const syntheticProfile = JSON.parse(await readFile(profilePath, "utf8"));
@@ -124,6 +129,25 @@ for (const file of [
   "src/renderer/src/ConversationInformationCards.tsx",
   "scripts/capture-user-question.cjs",
   "scripts/launch-user-question-acceptance.mjs",
+  ...(scenario === "image"
+    ? [
+        "src/renderer/src/ThreadView.tsx",
+        "src/renderer/src/ImagePresentation.tsx",
+        "src/preload/index.ts",
+        "src/main/index.ts",
+        "src/main/image-attachments.ts",
+        "src/main/app-server-manager.ts",
+        "src/thread-attachment-projection.ts",
+        "../../src/attachment.ts",
+        "src/renderer/src/styles.css",
+        "src/renderer/src/theme.css",
+        "scripts/image-preparation-native-contract.test.mjs",
+        "../../.github/workflows/user-question-ui.yml",
+        ...(await readdir(path.join(root, "../../dist"), { recursive: true }))
+          .filter((file) => file.endsWith(".js"))
+          .map((file) => "../../dist/" + file),
+      ]
+    : []),
 ])
   hashes[file] = createHash("sha256")
     .update(await readFile(path.join(root, file)))
@@ -141,7 +165,9 @@ await writeFile(
       synthetic: true,
       scenario,
       scope:
-        "Full production Electron App, preload, child Host, native input, production DomainThreadJournal. Private fake provider only. Questions genuinely published through the default-on asynchronous Host capability; that Host completes its Turns and closes before a normal default-on Desktop Host restores the same pending questions. Driver-only transport faults: cards loses one actual reply; origin delays one exact withdrawn read during native navigation; no injected UI, no user data, no user device.",
+        scenario === "image"
+          ? "Full production Electron App, preload and child Host cold-load real DomainThreadJournal image preparations from a closed owned seed Host. Synthetic originals, real codec resize/decode failure, real shell output and fake provider only. Trace is model-adapter-input, not HTTP transport. Native navigation and original-image preview; no injected UI, user profile or user device."
+          : "Full production Electron App, preload, child Host, native input, production DomainThreadJournal. Private fake provider only. Questions genuinely published through the default-on asynchronous Host capability; that Host completes its Turns and closes before a normal default-on Desktop Host restores the same pending questions. Driver-only transport faults: cards loses one actual reply; origin delays one exact withdrawn read during native navigation; no injected UI, no user data, no user device.",
     },
     null,
     2,
@@ -321,14 +347,36 @@ try {
     await readFile(path.join(directory, "acceptance.json"), "utf8"),
   );
   assert.equal(result.ok, true);
-  assert.ok(result.cases.length >= (scenario === "origin" ? 3 : 5));
-  assert.equal(result.receipts.length, scenario === "origin" ? 2 : 3);
-  result.coldModelInputVerification = await verifyUserQuestionAcceptance({
-    data,
-    workspace,
-    receipts: result.receipts,
-    origin: result.origin,
-  });
+  if (scenario === "image") {
+    assert.equal(result.cases.length, 3);
+    const evidence = await verifyImagePreparationAcceptance({
+      data,
+      workspace,
+      fixture,
+    });
+    assert.deepEqual(
+      evidence,
+      fixture.seedVerification,
+      "Desktop read/preview must not change original bytes or model history",
+    );
+    await writeFile(
+      path.join(directory, "image-evidence.json"),
+      JSON.stringify(evidence, null, 2),
+    );
+    result.coldModelInputVerification = {
+      verified: true,
+      scope: evidence.scope,
+    };
+  } else {
+    assert.ok(result.cases.length >= (scenario === "origin" ? 3 : 5));
+    assert.equal(result.receipts.length, scenario === "origin" ? 2 : 3);
+    result.coldModelInputVerification = await verifyUserQuestionAcceptance({
+      data,
+      workspace,
+      receipts: result.receipts,
+      origin: result.origin,
+    });
+  }
   await writeFile(
     path.join(directory, "acceptance.json"),
     JSON.stringify(result, null, 2),

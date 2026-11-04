@@ -1,5 +1,7 @@
 /** Synthetic real Host publication; no manually authored tool/result journal. */
 import assert from "node:assert/strict";
+import path from "node:path";
+import { createHash } from "node:crypto";
 import {
   pendingSteerMessages,
   recoverSteerRecall,
@@ -236,4 +238,346 @@ export async function verifyUserQuestionAcceptance({
   } finally {
     await host.closeHostResources();
   }
+}
+
+/** Real image preparation in an owned offline Host; no authored overlays. */
+export async function seedImagePreparationAcceptance({ data, workspace }) {
+  const { default: sharp } = await import("sharp");
+  const { FileAttachmentStore } =
+    await import("../../../dist/src/attachment.js");
+  const attachments = new FileAttachmentStore(path.join(data, "attachments"));
+  const goodBytes = await sharp({
+    create: { width: 2048, height: 2048, channels: 3, background: "#87aacc" },
+  })
+    .png()
+    .toBuffer();
+  const badBytes = await sharp({
+    create: { width: 1, height: 1, channels: 3, background: "red" },
+  })
+    .png()
+    .toBuffer();
+  // Existing image-preparation.test.ts codec fixture: valid PNG admission/CRC,
+  // genuinely undecodable pixels. Do not fake storage failure or codec output.
+  for (let offset = 8; offset + 12 <= badBytes.length;) {
+    const length = badBytes.readUInt32BE(offset);
+    if (badBytes.toString("ascii", offset + 4, offset + 8) === "IDAT") {
+      badBytes.fill(0, offset + 8, offset + 8 + length);
+      let crc = 0xffffffff;
+      for (const byte of badBytes.subarray(offset + 4, offset + 8 + length)) {
+        crc ^= byte;
+        for (let bit = 0; bit < 8; bit++)
+          crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+      }
+      badBytes.writeUInt32BE((crc ^ 0xffffffff) >>> 0, offset + 8 + length);
+    }
+    offset += length + 12;
+  }
+  const good = await attachments.importBytes(goodBytes);
+  const bad = await attachments.importBytes(badBytes);
+  const fixture = {
+    synthetic: true,
+    scenario: "image",
+    threads: [],
+    originals: [good, bad],
+  };
+  const host = createHostedAppServer(imageHostOptions(data, workspace));
+  try {
+    for (const [key, originals] of [
+      ["prepared", [good]],
+      ["unavailable", [good, bad]],
+    ]) {
+      const thread = await host.startThread();
+      // FakeModel recognizes this original command part before any model-only
+      // image notice. Its second sample returns the real shell result, not Echo.
+      await (
+        await host.startTurn(thread.id, [
+          {
+            type: "text",
+            text: "!shell printf 'Synthetic image review complete.\\n'",
+          },
+          ...originals.map((attachment) => ({ type: "image", attachment })),
+        ])
+      ).done;
+      await host.setThreadName(thread.id, `Synthetic · Image ${key}`);
+      fixture.threads.push({ key, threadId: thread.id, originals });
+    }
+  } finally {
+    await host.closeHostResources();
+  }
+  fixture.seedVerification = await verifyImagePreparationAcceptance({
+    data,
+    workspace,
+    fixture,
+  });
+  return fixture;
+}
+
+function imageHostOptions(data, workspace) {
+  return {
+    cwd: workspace,
+    dataDirectory: data,
+    provider: { type: "fake" },
+    model: "fake",
+    approvalPolicy: "never",
+    toolPresentation: "direct",
+    modelCatalog: [
+      {
+        id: "fake",
+        inputModalities: ["text", "image"],
+        supportedReasoningEfforts: ["medium"],
+        defaultReasoningEffort: "medium",
+        contextWindow: 1000000,
+        source: "manual",
+      },
+    ],
+  };
+}
+
+/** Bounded cold reads after the seed/Desktop Host has closed. */
+export async function verifyImagePreparationAcceptance({
+  data,
+  workspace,
+  fixture,
+}) {
+  const { FileAttachmentStore } =
+    await import("../../../dist/src/attachment.js");
+  const { FileTraceStore } = await import("../../../dist/src/trace.js");
+  const { compileItemList } = await import("../../../dist/src/item-list.js");
+  const attachments = new FileAttachmentStore(path.join(data, "attachments"));
+  const trace = new FileTraceStore(path.join(data, "trace"));
+  const host = createHostedAppServer(imageHostOptions(data, workspace));
+  const threads = [];
+  try {
+    for (const entry of fixture.threads) {
+      const snapshot = await host.readThread(entry.threadId);
+      assert.ok(
+        snapshot.items.some(
+          (item) =>
+            item.type === "turn_completed" && item.status === "completed",
+        ),
+      );
+      assert.ok(
+        snapshot.items.some(
+          (item) =>
+            item.type === "tool_result" &&
+            item.exitCode === 0 &&
+            item.output.includes("Synthetic image review complete."),
+        ),
+      );
+      const agentText = snapshot.items
+        .filter((item) => item.type === "agent_message")
+        .map((item) => item.text)
+        .join("\n");
+      assert.match(agentText, /Synthetic image review complete\./);
+      assert.doesNotMatch(
+        agentText,
+        /Echo:|Image input prepared with|Image input unavailable \(/,
+      );
+      const user = snapshot.items.find((item) => item.type === "user_message");
+      assert.deepEqual(
+        user.content
+          .filter((part) => part.type === "image")
+          .map((part) => part.attachment),
+        entry.originals,
+      );
+      for (const original of entry.originals) {
+        const bytes = await attachments.read(original);
+        assert.equal(
+          createHash("sha256").update(bytes).digest("hex"),
+          original.sha256,
+        );
+        assert.equal(bytes.byteLength, original.byteLength);
+      }
+      const overlays = snapshot.itemList.filter(
+        (item) => item.source.kind === "image_preparation",
+      );
+      const prepared = overlays.filter(
+        (item) => item.source.metadata.imagePreparation.outcome === "prepared",
+      );
+      const unavailable = overlays.filter(
+        (item) =>
+          item.source.metadata.imagePreparation.outcome === "unavailable",
+      );
+      assert.ok(prepared.length >= 2);
+      assert.equal(
+        unavailable.length,
+        entry.key === "unavailable" ? prepared.length : 0,
+      );
+      for (const item of prepared) {
+        const ref = item.content.parts.find(
+          (part) => part.type === "image",
+        ).attachment;
+        assert.deepEqual([ref.width, ref.height], [1600, 1600]);
+        assert.notEqual(ref.sha256, entry.originals[0].sha256);
+        await attachments.read(ref);
+        assert.match(
+          item.content.text,
+          /Image input prepared with codex-high-v1/,
+        );
+      }
+      for (const item of unavailable) {
+        assert.equal(
+          item.source.metadata.imagePreparation.reason,
+          "image_decode_failed",
+        );
+        assert.equal(item.content.parts.length, 1);
+        assert.equal(item.content.parts[0].type, "text");
+      }
+      const sampleIds = new Set(
+        overlays.map((item) => item.source.metadata.onlySampleId),
+      );
+      const observed = await trace.read(entry.threadId, {
+        verifyArtifacts: true,
+      });
+      assert.equal(observed.completeness, "complete");
+      assert.equal(observed.artifactVerification, "verified");
+      const inputRecords = observed.records.filter(
+        (record) => record.type === "model_input",
+      );
+      assert.deepEqual(
+        inputRecords.map((record) => record.sampleId).sort(),
+        [...sampleIds].sort(),
+        "exactly one model input for each prepared sample, without extra or duplicate samples",
+      );
+      const modelInputs = [];
+      for (const record of inputRecords) {
+        assert.equal(record.data.exactTransport, false);
+        assert.equal(record.data.captureLayer, "model-adapter-input");
+        const artifact = record.artifacts.find(
+          (artifact) => artifact.name === "model_input",
+        );
+        assert.ok(artifact);
+        const input = JSON.parse(
+          Buffer.from(await trace.readArtifact(artifact.ref)).toString("utf8"),
+        );
+        const replay = compileItemList(snapshot.itemList, {
+          sampleId: record.sampleId,
+          inputModalities: ["text", "image"],
+        });
+        for (const messages of [input.messages, replay.messages])
+          assertImagePreparationSample({
+            sampleId: record.sampleId,
+            user,
+            originals: entry.originals,
+            overlays,
+            messages,
+          });
+        modelInputs.push({
+          sampleId: record.sampleId,
+          recordId: record.id,
+          artifact: artifact.ref,
+          captureLayer: record.data.captureLayer,
+          exactTransport: false,
+        });
+      }
+      assert.equal(modelInputs.length, sampleIds.size);
+      threads.push({
+        ...entry,
+        originalBytesUnchanged: true,
+        semanticItemListSha256: createHash("sha256")
+          .update(JSON.stringify(snapshot.itemList))
+          .digest("hex"),
+        agentNoticeEcho: false,
+        prepared: prepared.map((item) => ({
+          itemId: item.id,
+          sampleId: item.source.metadata.onlySampleId,
+          preparation: item.source.metadata.imagePreparation,
+          attachment: item.content.parts.find((part) => part.type === "image")
+            .attachment,
+        })),
+        unavailable: unavailable.map((item) => ({
+          itemId: item.id,
+          sampleId: item.source.metadata.onlySampleId,
+          preparation: item.source.metadata.imagePreparation,
+        })),
+        modelInputs,
+      });
+    }
+    return {
+      synthetic: true,
+      scope: "synthetic-real-Host-model-adapter-input-not-HTTP",
+      threads,
+    };
+  } finally {
+    await host.closeHostResources();
+    await trace.flush();
+  }
+}
+
+/** Fixture assertion shared by real readback and mutation-negative controls. */
+export function assertImagePreparationSample({
+  sampleId,
+  user,
+  originals,
+  overlays,
+  messages,
+}) {
+  const selected = overlays.filter(
+    (item) => item.source.metadata.onlySampleId === sampleId,
+  );
+  assert.equal(
+    selected.length,
+    originals.length,
+    "one overlay per exact image occurrence",
+  );
+  const preparedRefs = [];
+  const parts = messages.flatMap(
+    (message) => message.content ?? message.modelContent ?? [],
+  );
+  for (const [index, original] of originals.entries()) {
+    const item = selected[index];
+    const preparation = item.source.metadata.imagePreparation;
+    assert.deepEqual(user.content[index + 1], {
+      type: "image",
+      attachment: original,
+    });
+    assert.deepEqual(
+      preparation.occurrence,
+      {
+        itemId: user.id,
+        field: "content",
+        partIndex: index + 1,
+        sha256: original.sha256,
+      },
+      "overlay must belong to the exact original user image occurrence",
+    );
+    assert.deepEqual(
+      preparation.originalAttachment,
+      original,
+      "exact original receipt",
+    );
+    assert.equal(preparation.profile, "codex-high-v1");
+    assert.equal(preparation.requestedDetail, "high");
+    assert.ok(
+      parts.some(
+        (part) => part.type === "text" && part.text === item.content.text,
+      ),
+      "exact persisted model notice reaches this sample",
+    );
+    if (index === 0) {
+      assert.equal(preparation.outcome, "prepared");
+      const images = item.content.parts.filter((part) => part.type === "image");
+      assert.equal(images.length, 1);
+      preparedRefs.push(images[0].attachment);
+    } else {
+      assert.equal(preparation.outcome, "unavailable");
+      assert.equal(preparation.reason, "image_decode_failed");
+      assert.deepEqual(item.content.parts, [
+        { type: "text", text: item.content.text },
+      ]);
+    }
+  }
+  const imageRefs = parts
+    .filter((part) => part.type === "image")
+    .map((part) => part.attachment);
+  assert.deepEqual(
+    imageRefs,
+    preparedRefs,
+    "model input/replay must use this sample's exact prepared attachment",
+  );
+  for (const unavailable of originals.slice(1))
+    assert.ok(
+      !imageRefs.some((ref) => ref.sha256 === unavailable.sha256),
+      "unavailable original must have no model pixels",
+    );
 }
