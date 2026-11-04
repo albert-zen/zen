@@ -50,8 +50,19 @@ const provenance = {
     .digest("hex"),
 };
 
-test("public Responses opts into summaries only on verified OpenAI models and routes", async (t) => {
+test("public Responses requests summaries by official route without model-name gating", async (t) => {
   const cases = [
+    ...[
+      "gpt-6.1-terra",
+      "future-reasoner",
+      "reasoning-alias",
+      "gpt-5.4-2026-03-05",
+    ].map((model) => ({
+      baseUrl: "https://api.openai.com/v1",
+      model,
+      effort: "medium",
+      expected: "auto",
+    })),
     {
       baseUrl: "https://api.openai.com/v1",
       model: "gpt-5.6-terra",
@@ -86,19 +97,19 @@ test("public Responses opts into summaries only on verified OpenAI models and ro
       baseUrl: "https://api.openai.com/v1",
       model: "gpt-5.3-codex-spark",
       effort: "medium",
-      expected: undefined,
+      expected: "auto",
     },
     {
       baseUrl: "https://api.openai.com/v1",
       model: "unknown-model",
       effort: "medium",
-      expected: undefined,
+      expected: "auto",
     },
     {
       baseUrl: "https://api.openai.com/v1",
       model: "openai/gpt-5.6-terra",
       effort: "medium",
-      expected: undefined,
+      expected: "auto",
     },
     {
       baseUrl: "https://api.openai.com/v1/proxy",

@@ -1,4 +1,4 @@
-import { supportsOpenAiReasoningSummary } from "./reasoning-summary.js";
+import { shouldRequestOpenAiReasoningSummary } from "./reasoning-summary.js";
 import {
   responsesToolPresentation,
   supportsHostedToolSearch,
@@ -257,7 +257,7 @@ export class OpenAiResponsesModel implements ModelAdapter {
             reasoning: {
               effort: request.reasoningEffort,
               ...(request.reasoningEffort !== "none" &&
-              supportsOpenAiReasoningSummary(this.#endpoint, request.model)
+              shouldRequestOpenAiReasoningSummary(this.#endpoint)
                 ? { summary: "auto" }
                 : {}),
             },
