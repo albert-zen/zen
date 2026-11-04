@@ -1490,6 +1490,8 @@ The Chrome/Edge extension remembers only explicit browser connection intent in t
 
 ### Browser targeted input
 
+Static two-dimensional transformed iframe geometry is disposable exact-node CDP content-quad evidence in the existing isolated observer; first registration or changed geometry retires the prior input observation, every input probe rechecks native geometry, and inverse mapping never substitutes for the parent and inner native DOM hit identities. Perspective, three-dimensional transforms, zoom and ambiguous coordinate mappings remain unsupported.
+
 Same-origin embedded input reuses the same transient document observer: child document identity, inner focus/hit and untransformed border-aware geometry are part of the authorizing observation, while a Host child-lifecycle epoch fences each input send without becoming attachment or programmatic-execution authority. Cross-origin/OOPIF needs explicit child-target transport and is not implied by this support.
 
 Closed shadow roots enter the same bounded, disposable isolated-world observation registry only through an exact candidate's CDP-described and context-resolved identity; root-local mutation and scroll observation precede any authorizing screenshot, newly discovered roots invalidate older observations and require fresh inspection, and no page hook, main-world registry, durable state or automatic input retry is introduced.
