@@ -184,6 +184,20 @@ jobs:
           path: ${{ runner.temp }}/zenx-approved-ui-preview
           if-no-files-found: warn
           retention-days: 14
+      - name: Verify every reasoning item remains visible (synthetic production ThreadView)
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
+        timeout-minutes: 3
+        run: |
+          node apps/zenx/scripts/build-thinking-presence-preview.mjs "${{ runner.temp }}/zenx-thinking-presence"
+          node apps/zenx/scripts/capture-thinking-presence-preview.mjs "${{ runner.temp }}/zenx-thinking-presence"
+      - name: Retain synthetic reasoning presence screenshots and provenance
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-thinking-presence-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-thinking-presence
+          if-no-files-found: warn
+          retention-days: 14
       - name: Build and capture synthetic process-style preview
         run: |
           node apps/zenx/scripts/build-process-style-preview.mjs "${{ runner.temp }}/zenx-process-style-preview"
