@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import {spawn,execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {stopOwnedProcess,delay} from './short-run-common.mjs';
+import {stopOwnedProcess,delay,ownedProcessMetadata} from './short-run-common.mjs';
 
 // Minimal Linux containers may not reap orphans. This test-only supervisor
 // adopts and reaps the sleep child, matching launchd's role on the Mac runner.
@@ -19,13 +19,15 @@ while True:
  process.exit(0);
 }
 assert.notEqual(process.platform,'win32');
-const alive=pid=>{try{process.kill(-pid,0);return true;}catch(e){if(e.code==='ESRCH')return false;throw e;}};
+let permissionDenied=false;
+const alive=pid=>{try{process.kill(-pid,0);return true;}catch(e){if(e.code==='ESRCH')return false;if(e.code==='EPERM'){permissionDenied=true;e.ownedProcess={operation:'test-probe-owned-group',signal:0,...ownedProcessMetadata(pid)};}throw e;}};
 const start=command=>{const child=spawn('/bin/sh',['-c',command],{detached:true,stdio:'ignore'});const closed=new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',(code,signal)=>resolve({code,signal}));});return {child,closed};};
 const owned=[];
 try{
  const orphan=start('sleep 60 >/dev/null 2>&1 & exit 0');owned.push(orphan);
  assert.deepEqual(await orphan.closed,{code:0,signal:null});
  assert.equal(orphan.child.exitCode,0);
+ console.log(JSON.stringify({phase:'owned-shell-group-preflight',...ownedProcessMetadata(orphan.child.pid)}));
  assert.equal(alive(orphan.child.pid),true,'Negative fixture requires a live group after leader exit');
  await assert.rejects(stopOwnedProcess(orphan.child,orphan.closed,null,null,null,{normalCloseOnly:true}),/Normal close left owned POSIX group alive/);
  assert.equal(alive(orphan.child.pid),true,'Rejected normal close must not disguise forced cleanup as normal exit');
@@ -38,6 +40,13 @@ try{
  const confirmed=await stopOwnedProcess(normal.child,normal.closed,null,null,null,{normalCloseOnly:true});
  assert.deepEqual(confirmed,{processGroupDead:true,cleanupSignals:[]});
  console.log('PASS: normal close succeeds only with an already absent owned group.');
+ const originalKill=process.kill;let probes=0;
+ try{
+  process.kill=(pid,signal)=>{assert.equal(pid,-2147483000);assert.equal(signal,0);probes++;throw Object.assign(new Error('Simulated EPERM'),{code:'EPERM'});};
+  await assert.rejects(stopOwnedProcess({pid:2147483000,exitCode:0,signalCode:null},Promise.resolve(),null,null,null),error=>error.code==='EPERM'&&error.ownedProcess?.operation==='probe-owned-group'&&error.ownedProcess.signal===0);
+  assert.equal(probes,1,'Permission denial must not retry probe or escalate to any signal');
+ }finally{process.kill=originalKill;}
+ console.log('PASS: simulated EPERM is preserved with bounded target/operation metadata; no retry or signal follows.');
 }finally{
- for(const {child,closed} of owned){if(alive(child.pid)){try{process.kill(-child.pid,'SIGKILL');}catch(e){if(e.code!=='ESRCH')throw e;}const end=Date.now()+5000;while(alive(child.pid)&&Date.now()<end)await delay(25);assert.equal(alive(child.pid),false,'Test cleanup failed');}await closed;}
+ for(const {child,closed} of owned){if(permissionDenied)break;if(alive(child.pid)){try{process.kill(-child.pid,'SIGKILL');}catch(e){if(e.code!=='ESRCH')throw e;}const end=Date.now()+5000;while(alive(child.pid)&&Date.now()<end)await delay(25);assert.equal(alive(child.pid),false,'Test cleanup failed');}await closed;}
 }

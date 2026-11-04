@@ -6,7 +6,7 @@ import {pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import {Wire,delay,until,loadFixture,installObservation,assertOwnedInput,requireLiveBottom,stopOwnedProcess} from './short-run-common.mjs';
+import {Wire,delay,until,loadFixture,installObservation,assertOwnedInput,requireLiveBottom,stopOwnedProcess,ownedProcessMetadata} from './short-run-common.mjs';
 assert.equal(process.env.GITHUB_ACTIONS,'true');assert.equal(process.platform,'darwin');assert.equal(process.arch,'arm64');
 const [checkoutArg,outArg,workspaceArg,fixtureArg]=process.argv.slice(2);assert(checkoutArg&&outArg&&workspaceArg&&fixtureArg);assert.equal(process.argv.length,6);
 const checkout=await realpath(checkoutArg),out=path.resolve(outArg),workspace=await realpath(workspaceArg),fixture=await loadFixture(fixtureArg);
@@ -44,25 +44,29 @@ const oldIdentity=process.env.ZENX_CODESIGN_IDENTITY;process.env.ZENX_CODESIGN_I
 try{packaged=await packageZenX(['--app'],{buildDirectory:path.join(checkout,'apps/zenx/out'),artifactDirectory:path.join(owned,'package')});}finally{if(oldIdentity===undefined)delete process.env.ZENX_CODESIGN_IDENTITY;else process.env.ZENX_CODESIGN_IDENTITY=oldIdentity;}
 const executable=packaged.executable;execFileSync('/usr/bin/codesign',['--verify','--deep','--strict',path.join(packaged.packagedArtifact,'ZenX.app')]);
 const host=()=>({platform:os.platform(),arch:os.arch(),release:os.release(),cpu:os.cpus()[0]?.model,cpuCount:os.cpus().length,load:os.loadavg(),freeMemory:os.freemem()});
-const results=[],lifecycle=[];let child,closed,main,page,privateLog;
+const results=[],lifecycle=[],diagnostics={processIdentities:[]};let child,closed,main,page,privateLog,phase='prepared',rpcTag=null;
 const env=Object.fromEntries(Object.entries(process.env).filter(([k])=>/^(PATH|LANG|LC_ALL|TMPDIR|GITHUB_ACTIONS|CI|DISPLAY)$/.test(k)));
 Object.assign(env,{HOME:home,USER_HOME:home,XDG_CONFIG_HOME:path.join(home,'.config'),XDG_CACHE_HOME:path.join(home,'.cache'),ZENX_DATA_DIR:data});
 async function launch(){
+ phase='launch.spawn';rpcTag=null;
  let logs='';privateLog=await open(path.join(owned,'process-'+lifecycle.length+'.log'),'wx',0o600);
  child=spawn(executable,['--inspect=127.0.0.1:0','--remote-debugging-address=127.0.0.1','--remote-debugging-port=0','--user-data-dir='+profile],{env,cwd:workspace,stdio:['ignore','pipe','pipe'],detached:true});
  closed=new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',(code,signal)=>resolve({code,signal}));});
  for(const stream of [child.stdout,child.stderr])stream.on('data',b=>{logs=(logs+String(b)).slice(-131072);void privateLog.write(b).catch(()=>{});});
+ phase='launch.inspectors';
  const endpoints=await until(()=>{const a=/Debugger listening on (ws:\/\/127\.0\.0\.1:[^\s]+)/.exec(logs)?.[1],b=/DevTools listening on (ws:\/\/127\.0\.0\.1:[^\s]+)/.exec(logs)?.[1];return a&&b?{a,b}:null;},'Zen inspector and Chromium startup');
- main=new Wire(endpoints.a);await main.ready;const browser=new Wire(endpoints.b);await browser.ready;
+ main=new Wire(endpoints.a);await main.ready;const inspector=await main.evaluate(`({pid:process.pid,uid:process.getuid?.()??null,node:process.versions.node,electron:process.versions.electron??null})`);diagnostics.processIdentities.push({...ownedProcessMetadata(child.pid,inspector.pid),inspectorRuntime:inspector});phase='launch.target';const browser=new Wire(endpoints.b);await browser.ready;
  const target=await until(async()=>{const x=await browser.send('Target.getTargets');const matches=x.targetInfos.filter(t=>t.type==='page'&&/^file:/.test(t.url)&&/\/renderer\/index\.html$/.test(t.url));assert(matches.length<=1);return matches[0];},'exact Zen main renderer');
  const targets=await (await fetch('http://127.0.0.1:'+new URL(endpoints.b).port+'/json/list')).json(),exact=targets.find(t=>t.id===target.targetId);assert(exact?.webSocketDebuggerUrl);page=new Wire(exact.webSocketDebuggerUrl);await page.ready;browser.close();
+ phase='launch.window-binding';
  await main.evaluate(`globalThis.__ownedComparisonElectron=(typeof require==='function'?require:process.mainModule.require.bind(process.mainModule))('electron');const matches=__ownedComparisonElectron.BrowserWindow.getAllWindows().filter(w=>w.webContents.getURL()===${JSON.stringify(target.url)});if(matches.length!==1)throw Error('No unique exact Zen main Window');globalThis.__ownedComparisonWindow=matches[0];__ownedComparisonWindow.setSize(1280,820);__ownedComparisonWindow.show();__ownedComparisonWindow.focus();true`);
+ phase='launch.host-ready';
  await until(()=>page.evaluate(`window.zenx?.protocol?.getStatus().then(s=>s.type==='ready')`),'Zen Host ready');
  await page.evaluate(`window.__ownedDocumentIdentity=crypto.randomUUID();true`);
  lifecycle.push({phase:'launched',pid:child.pid,host:host()});
 }
-async function quit(){page?.close();if(main){await main.evaluate(`setImmediate(()=>__ownedComparisonElectron.app.quit());true`);main.close();}const result=await Promise.race([closed,delay(20000).then(()=>{throw Error('Zen normal close timed out');})]);try{assert.equal(result.code,0);assert.equal(result.signal,null);const group=await stopOwnedProcess(child,closed,main,page,privateLog,{normalCloseOnly:true});lifecycle.push({phase:'normal-close',...result,...group});}catch(error){lifecycle.push({phase:'normal-close-failed',...result,processGroupAbsentUnconfirmed:true});throw error;}}
-const report={status:'not-started',sourceCommit:execFileSync('git',['rev-parse','HEAD'],{cwd:checkout,encoding:'utf8'}).trim(),sourceTree:tree,fixtureContentSha256:fixture.contentSha256,hostBefore:host(),history:{priorCompletedTurns:100,priorMessages:200,textLength:256,seed:'existing seedLongThread zero + production DomainThreadJournal append; original seeder count guards unchanged'},results,lifecycle,durability:'Production Zen journal/Trace, normal process close and independent read-only reopen. Not equal to T3 WAL NORMAL power-loss durability.',presentationEvidence:'Same shared IntersectionObserver+scrollport/composer clipping+distinct later-rAF predicate as T3. No screenshot or pixel-presented claim.',admissionTiming:'Real main-process protocol request-to-response duration, own monotonic clock. No renderer/main clock subtraction; unlike T3 renderer response time this is not Enter-to-response.'};
+async function quit(){phase='lifecycle.quit-request';rpcTag=null;page?.close();if(main){await main.evaluate(`setImmediate(()=>__ownedComparisonElectron.app.quit());true`);main.close();}phase='lifecycle.wait-close';const result=await Promise.race([closed,delay(20000).then(()=>{throw Error('Zen normal close timed out');})]);try{assert.equal(result.code,0);assert.equal(result.signal,null);const group=await stopOwnedProcess(child,closed,main,page,privateLog,{normalCloseOnly:true});lifecycle.push({phase:'normal-close',...result,...group});}catch(error){lifecycle.push({phase:'normal-close-failed',...result,processGroupAbsentUnconfirmed:true});throw error;}}
+const report={status:'not-started',sourceCommit:execFileSync('git',['rev-parse','HEAD'],{cwd:checkout,encoding:'utf8'}).trim(),sourceTree:tree,fixtureContentSha256:fixture.contentSha256,hostBefore:host(),history:{priorCompletedTurns:100,priorMessages:200,textLength:256,seed:'existing seedLongThread zero + production DomainThreadJournal append; original seeder count guards unchanged'},results,lifecycle,diagnostics,durability:'Production Zen journal/Trace, normal process close and independent read-only reopen. Not equal to T3 WAL NORMAL power-loss durability.',presentationEvidence:'Same shared IntersectionObserver+scrollport/composer clipping+distinct later-rAF predicate as T3. No screenshot or pixel-presented claim.',admissionTiming:'Real main-process protocol request-to-response duration, own monotonic clock. No renderer/main clock subtraction; unlike T3 renderer response time this is not Enter-to-response.'};
 try{
  await launch();
  const settings=await page.evaluate('window.zenx.settings.get()');assert.equal(settings.hasApiKey,false);assert.equal(settings.subscription.authenticated,false);assert.equal(settings.profile.defaultModel.providerProfileId,'fake');
@@ -76,7 +80,7 @@ try{
  await main.evaluate(`(()=>{const handlers=__ownedComparisonElectron.ipcMain._invokeHandlers;if(!(handlers instanceof Map))throw Error('Unsupported Electron IPC handler observation seam');const original=handlers.get('zenx:protocol:request');if(typeof original!=='function')throw Error('Missing actual protocol request handler');globalThis.__ownedZenReceipts=[];handlers.set('zenx:protocol:request',async(event,method,params)=>{if(method!=='zen/turn/send')return original(event,method,params);const r={clientUserMessageId:params.clientUserMessageId,threadId:params.threadId,receivedAt:performance.now()};__ownedZenReceipts.push(r);try{const receipt=await original(event,method,params);r.responseAt=performance.now();r.receipt=structuredClone(receipt);return receipt;}catch(error){r.responseAt=performance.now();r.failed=true;throw error;}});return true;})()`);
  await page.evaluate(`window.__ownedZenEvents=[];window.zenx.protocol.onNotification((method,params)=>{if(method==='zen/thread/event'&&params.threadId===${JSON.stringify(threadId)}){const e=params.event;window.__ownedZenEvents.push({at:performance.now(),type:e?.type,itemType:e?.item?.type,itemId:e?.item?.id,turnId:e?.turnId??params.turnId,clientId:e?.item?.clientId});}});true`);
  for(let i=0;i<3;i++){
-  const nonce=fixture.sends[i];
+  const nonce=fixture.sends[i];phase='send.prepare.'+i;rpcTag=null;
   await requireLiveBottom(page,'.messages');
   await until(()=>page.evaluate(`window.zenx.protocol.request('thread/read',{threadId:${JSON.stringify(threadId)},includeTurns:true}).then(r=>r.thread.turns.every(t=>t.status!=='inProgress'))`),'previous Zen turn terminal');
   await page.evaluate(`document.querySelector('#thread-composer').focus();true`);const beforeInput=await assertOwnedInput(main,page,'#thread-composer');
@@ -85,8 +89,10 @@ try{
   await installObservation(page,{rootSelector:'.messages',rowSelector:'.user-row',composerSelector:'#thread-composer',idAttribute:'data-sent-message-id'},nonce);
   const beforeEnter=await assertOwnedInput(main,page,'#thread-composer');assert.deepEqual(beforeEnter,beforeInput);
   await main.evaluate(`__ownedComparisonWindow.webContents.sendInputEvent({type:'keyDown',keyCode:'Return'});__ownedComparisonWindow.webContents.sendInputEvent({type:'keyUp',keyCode:'Return'});true`);
+  phase='send.await-visible-frame';rpcTag='zen/turn/send';
   const frame=await until(()=>page.evaluate(`window.__ownedFrame?.laterEligibleRafAt!==undefined?window.__ownedFrame:null`),'Zen real visible bubble and later frame',20000);assert.equal(frame.enterTrusted,true);
   const receipt=await until(async()=>{const rows=await main.evaluate('__ownedZenReceipts');return rows[i]?.responseAt!==undefined?rows[i]:null;},'real Zen admission response');assert.equal(receipt.failed,undefined);assert(receipt.receipt?.turnId);if(frame.ownerClientId)assert.equal(frame.ownerClientId,receipt.clientUserMessageId);
+  phase='send.canonical-readback';rpcTag='thread/read';
   const canonical=await until(async()=>{const r=await page.evaluate(`window.zenx.protocol.request('thread/read',{threadId:${JSON.stringify(threadId)},includeTurns:true})`);const matches=r.thread.turns.flatMap(t=>t.items).filter(x=>x.type==='userMessage'&&x.clientId===receipt.clientUserMessageId);return matches.length===1?matches[0]:null;},'Zen matching canonical user message');assert(canonical.content.some(p=>p.text===nonce));
   const canonicalEvent=await until(()=>page.evaluate(`window.__ownedZenEvents.find(e=>e.type==='item_completed'&&e.itemType==='user_message'&&e.itemId===${JSON.stringify(canonical.id)}&&e.clientId===${JSON.stringify(receipt.clientUserMessageId)})??null`),'matching committed canonical Zen user event');
   results.push({...frame,messageId:canonical.id,ipc:[receipt],canonicalProjectionConfirmed:true,canonicalEchoAt:canonicalEvent.at,enterToCanonicalUserEventMs:canonicalEvent.at-frame.enterAt,enterToFirstEligibleRafMs:frame.firstEligibleRafAt-frame.enterAt,enterToLaterEligibleRafMs:frame.laterEligibleRafAt-frame.enterAt,mainAdmissionRequestToResponseMs:receipt.responseAt-receipt.receivedAt});
@@ -95,5 +101,5 @@ try{
  await launch();const reopened=await page.evaluate(`window.zenx.protocol.request('thread/read',{threadId:${JSON.stringify(threadId)},includeTurns:true})`);
  let prior=-1;for(const s of results){const messages=reopened.thread.turns.flatMap(t=>t.items).filter(x=>x.type==='userMessage'),matches=messages.filter(x=>x.id===s.messageId&&x.clientId===s.ipc[0].clientUserMessageId);assert.equal(matches.length,1);assert(matches[0].content.some(p=>p.text===s.nonce));const index=messages.findIndex(x=>x.id===s.messageId);assert(index>prior);prior=index;}
  report.coldReopen={matchedMessages:3,duplicateMatches:0,ordered:true};await quit();report.status='completed';report.hostAfter=host();
-}catch(error){report.status='failed';report.error={name:error.name,message:error.message.slice(0,350)};try{if(child?.exitCode===null&&child?.signalCode===null)await quit();}catch{}process.exitCode=1;}
-finally{try{await stopOwnedProcess(child,closed,main,page,privateLog);}catch(error){report.status='failed';report.cleanupError=error.message;process.exitCode=1;}await writeFile(path.join(out,'zen-short-summary.json'),JSON.stringify(report,null,2)+'\n');if(!report.cleanupError)await rm(owned,{recursive:true,force:true});}
+}catch(error){report.status='failed';report.error={name:error.name,message:error.message.slice(0,350),phase,rpcTag};try{if(child?.exitCode===null&&child?.signalCode===null)await quit();}catch{}process.exitCode=1;}
+finally{try{await stopOwnedProcess(child,closed,main,page,privateLog);}catch(error){report.status='failed';report.cleanupError=error.message;report.cleanupDiagnostic=error.ownedProcess??null;process.exitCode=1;}await writeFile(path.join(out,'zen-short-summary.json'),JSON.stringify(report,null,2)+'\n');if(!report.cleanupError)await rm(owned,{recursive:true,force:true});}

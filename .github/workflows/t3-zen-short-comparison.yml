@@ -34,6 +34,8 @@ jobs:
           test -z "$(git -C product diff --name-only HEAD)"
           node --check diagnostic/apps/zenx/scripts/t3-comparison/launch-official-t3.mjs
           node --check diagnostic/apps/zenx/scripts/t3-comparison/launch-short-zen.mjs
+      - name: Verify owned shell process-group cleanup on this Mac before app startup
+        run: node diagnostic/apps/zenx/scripts/t3-comparison/test-owned-process-group.mjs
       - name: Build Zen product once, without modifying the old 5000 driver
         working-directory: product
         timeout-minutes: 12

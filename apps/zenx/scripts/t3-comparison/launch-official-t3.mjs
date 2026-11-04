@@ -9,7 +9,7 @@ import {mkdir,mkdtemp,writeFile,readFile,rm,open,realpath} from 'node:fs/promise
 import {createHash,randomUUID} from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import {Wire,delay,until,loadFixture,installObservation,assertOwnedInput,requireLiveBottom,stopOwnedProcess} from './short-run-common.mjs';
+import {Wire,delay,until,loadFixture,installObservation,assertOwnedInput,requireLiveBottom,stopOwnedProcess,ownedProcessMetadata} from './short-run-common.mjs';
 assert.equal(process.env.GITHUB_ACTIONS,'true');
 assert.equal(process.platform,'darwin');
 assert.equal(process.arch,'arm64');
@@ -36,38 +36,56 @@ const sessions=path.join(codex,'sessions','2026','11','04');await mkdir(sessions
 await writeFile(path.join(sessions,'rollout-'+session+'.jsonl'),transcript.map(x=>JSON.stringify(x)).join('\n')+'\n',{mode:0o600});
 const env=Object.fromEntries(Object.entries(process.env).filter(([k])=>/^(PATH|LANG|LC_ALL|TMPDIR|GITHUB_ACTIONS|CI|DISPLAY)$/.test(k)));
 Object.assign(env,{HOME:home,USER_HOME:home,XDG_CONFIG_HOME:path.join(home,'.config'),XDG_CACHE_HOME:path.join(home,'.cache'),T3CODE_HOME:base,CODEX_HOME:codex,CLAUDE_CONFIG_DIR:path.join(home,'.claude'),T3CODE_DISABLE_AUTO_UPDATE:'true',T3CODE_TELEMETRY_ENABLED:'false',T3CODE_OTEL_SDK_DISABLED:'true',OTEL_SDK_DISABLED:'true'});
-let child,closed,main,page,privateLog;
+let child,closed,main,page,privateLog,phase='prepare',rpcTag=null;
+const diagnostics={bindingAttempts:0,bindings:[],processIdentities:[]};
 const lifecycle=[];const results=[];
 async function launch(){
+ phase='launch.spawn';
  privateLog=await open(path.join(owned,'process-'+lifecycle.length+'.log'),'wx',0o600);
  let logs='';
  child=spawn(executable,['--inspect=127.0.0.1:0','--remote-debugging-address=127.0.0.1','--remote-debugging-port=0'],{env,cwd:workspace,stdio:['ignore','pipe','pipe'],detached:true});
  closed=new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',(code,signal)=>resolve({code,signal}));});
  for(const stream of [child.stdout,child.stderr])stream.on('data',b=>{logs=(logs+String(b)).slice(-131072);void privateLog.write(b).catch(()=>{});});
+ phase='launch.inspectors';
  const endpoints=await until(()=>{const a=/Debugger listening on (ws:\/\/127\.0\.0\.1:[^\s]+)/.exec(logs)?.[1],b=/DevTools listening on (ws:\/\/127\.0\.0\.1:[^\s]+)/.exec(logs)?.[1];return a&&b?{a,b}:null;},'official inspector and Chromium startup');
  main=new Wire(endpoints.a);await main.ready;
+ const inspector=await main.evaluate(`({pid:process.pid,uid:process.getuid?.()??null,node:process.versions.node,electron:process.versions.electron??null})`);diagnostics.processIdentities.push({...ownedProcessMetadata(child.pid,inspector.pid),inspectorRuntime:inspector});
  const browser=new Wire(endpoints.b);await browser.ready;
+ phase='launch.target';
  const target=await until(async()=>{const x=await browser.send('Target.getTargets'),matches=x.targetInfos.filter(t=>t.type==='page'&&/^t3code:\/\/app\//.test(t.url));assert(matches.length<=1);return matches[0];},'official main page');
  const port=new URL(endpoints.b).port;
  const targets=await (await fetch('http://127.0.0.1:'+port+'/json/list')).json();
  const exact=targets.find(t=>t.id===target.targetId);assert(exact?.webSocketDebuggerUrl);
  page=new Wire(exact.webSocketDebuggerUrl);await page.ready;browser.close();
- await main.evaluate(`globalThis.__ownedComparisonElectron=(typeof require==='function'?require:process.mainModule.require.bind(process.mainModule))('electron');const ownedMatches=__ownedComparisonElectron.BrowserWindow.getAllWindows().filter(w=>w.webContents.getURL()===${JSON.stringify(target.url)});if(ownedMatches.length!==1)throw Error('No unique exact official main Window');globalThis.__ownedComparisonWindow=ownedMatches[0];__ownedComparisonWindow.setSize(1280,820);__ownedComparisonWindow.show();__ownedComparisonWindow.focus();true`);
+ phase='launch.exact-target-binding';
+ await until(async()=>{
+  const before=(await page.send('Page.getFrameTree')).frameTree.frame;
+  const doc=await page.evaluate(`({url:location.href,epoch:(window.__ownedDocumentIdentity??=crypto.randomUUID())})`);if(before.url!==doc.url)return false;
+  const probe=await main.evaluate(`(()=>{const e=globalThis.__ownedComparisonElectron??=(typeof require==='function'?require:process.mainModule.require.bind(process.mainModule))('electron');const available=typeof e.webContents.fromDevToolsTargetId==='function';const wc=available?e.webContents.fromDevToolsTargetId(${JSON.stringify(target.targetId)}):undefined,w=wc?e.BrowserWindow.fromWebContents(wc):undefined;const bound=Boolean(w&&!w.isDestroyed()&&w.webContents===wc&&wc.getType()==='window'&&wc.getURL()===${JSON.stringify(doc.url)}&&wc.mainFrame.url===${JSON.stringify(doc.url)}&&wc.getURL().startsWith('t3code://app/'));if(bound){globalThis.__ownedComparisonWindow=w;w.setSize(1280,820);w.show();w.focus();}return {apiAvailable:available,exactTargetMapped:Boolean(wc),windowMapped:Boolean(w),ownedWindowCount:e.BrowserWindow.getAllWindows().length,targetId:${JSON.stringify(target.targetId)},windowId:w?.id??null,webContentsId:wc?.id??null,bound,inspectorPid:process.pid,inspectorUid:process.getuid?.()??null,node:process.versions.node,electron:process.versions.electron};})()`);
+  diagnostics.bindingAttempts++;const record={...probe,frameId:before.id,documentEpoch:doc.epoch,officialPath:new URL(doc.url).pathname.slice(0,256)};if(diagnostics.bindings.length<8)diagnostics.bindings.push(record);else diagnostics.bindings[7]=record;
+  assert.equal(probe.apiAvailable,true,'Official Electron lacks exact TargetID mapping API');if(!probe.bound)return false;
+  const after=(await page.send('Page.getFrameTree')).frameTree.frame,identity=await page.evaluate(`({url:location.href,epoch:window.__ownedDocumentIdentity})`);
+  return after.id===before.id&&after.url===before.url&&identity.url===doc.url&&identity.epoch===doc.epoch;
+ },'stable official TargetID/main frame/owned Window binding');
  await page.evaluate(`window.__ownedDocumentIdentity=crypto.randomUUID();true`);
+ phase='launch.local-environment';
  await until(()=>page.evaluate(`Boolean(window.desktopBridge?.getLocalEnvironmentBootstraps?.().some(b=>b.httpBaseUrl&&b.wsBaseUrl))`),'official local environment');
  lifecycle.push({phase:'launched',pid:child.pid,host:host()});
 }
 async function rpcSetup(){
+ phase='rpc.setup';rpcTag=null;
  // Credentials stay entirely inside this owned renderer and are never returned or logged.
- await page.evaluate(`(async()=>{const b=window.desktopBridge.getLocalEnvironmentBootstraps().find(b=>b.id==='primary'&&b.httpBaseUrl);if(!b)throw Error('No primary local backend');const h=new URL(b.httpBaseUrl);if(!['localhost','127.0.0.1','[::1]'].includes(h.hostname))throw Error('Non-loopback backend refused');const token=await window.desktopBridge.getLocalEnvironmentBearerToken();const response=await fetch(new URL('/api/auth/websocket-ticket/rpc',h),{method:'POST',headers:{authorization:'Bearer '+token}});if(!response.ok)throw Error('Official ticket request status '+response.status);const ticket=await response.json(),u=new URL('/ws',b.wsBaseUrl);u.searchParams.set('orchestrationProtocol','2');u.searchParams.set('wsTicket',ticket.ticket);const socket=new WebSocket(u);await new Promise((r,j)=>{socket.addEventListener('open',r,{once:true});socket.addEventListener('error',()=>j(Error('Owned RPC open failed')),{once:true});});let id=0;const pending=new Map();socket.addEventListener('message',event=>{for(const m of [].concat(JSON.parse(event.data))){if(m._tag==='Ping'){socket.send(JSON.stringify({_tag:'Pong'}));continue;}if(m._tag==='Exit'&&pending.has(String(m.requestId))){const p=pending.get(String(m.requestId));clearTimeout(p.timer);pending.delete(String(m.requestId));m.exit._tag==='Success'?p.resolve(m.exit.value):p.reject(Error('Official RPC rejected '+m.exit._tag));}}});window.__ownedOfficialRpc=(tag,payload)=>new Promise((resolve,reject)=>{const n=String(++id),timer=setTimeout(()=>{pending.delete(n);reject(Error('Official RPC timeout '+tag));},30000);pending.set(n,{resolve,reject,timer});socket.send(JSON.stringify({_tag:'Request',id:n,tag,payload,headers:[]}));});window.__ownedOfficialRpcClose=()=>socket.close();return true;})()`);
+ await page.evaluate(`(async()=>{const b=window.desktopBridge.getLocalEnvironmentBootstraps().find(b=>b.id==='primary'&&b.httpBaseUrl);if(!b)throw Error('No primary local backend');const h=new URL(b.httpBaseUrl);if(!['localhost','127.0.0.1','[::1]'].includes(h.hostname))throw Error('Non-loopback backend refused');const token=await window.desktopBridge.getLocalEnvironmentBearerToken();const response=await fetch(new URL('/api/auth/websocket-ticket/rpc',h),{method:'POST',headers:{authorization:'Bearer '+token}});if(!response.ok)throw Error('Official ticket request status '+response.status);const ticket=await response.json(),u=new URL('/ws',b.wsBaseUrl);u.searchParams.set('orchestrationProtocol','2');u.searchParams.set('wsTicket',ticket.ticket);const socket=new WebSocket(u);await new Promise((r,j)=>{socket.addEventListener('open',r,{once:true});socket.addEventListener('error',()=>j(Error('Owned RPC open failed')),{once:true});});let id=0;const pending=new Map();socket.addEventListener('message',event=>{for(const m of [].concat(JSON.parse(event.data))){if(m._tag==='Ping'){socket.send(JSON.stringify({_tag:'Pong'}));continue;}if(m._tag==='Exit'&&pending.has(String(m.requestId))){const p=pending.get(String(m.requestId));clearTimeout(p.timer);pending.delete(String(m.requestId));m.exit._tag==='Success'?p.resolve(m.exit.value):p.reject(Error('Official RPC rejected '+p.tag+' '+m.exit._tag));}}});window.__ownedOfficialRpc=(tag,payload)=>new Promise((resolve,reject)=>{const n=String(++id),timer=setTimeout(()=>{pending.delete(n);reject(Error('Official RPC timeout '+tag));},30000);pending.set(n,{resolve,reject,timer,tag});socket.send(JSON.stringify({_tag:'Request',id:n,tag,payload,headers:[]}));});window.__ownedOfficialRpcClose=()=>socket.close();return true;})()`);
 }
-async function rpc(tag,payload){return page.evaluate(`window.__ownedOfficialRpc(${JSON.stringify(tag)},${JSON.stringify(payload)})`);}
+async function rpc(tag,payload){phase='rpc.request';rpcTag=tag;return page.evaluate(`window.__ownedOfficialRpc(${JSON.stringify(tag)},${JSON.stringify(payload)})`);}
 async function quit(){
+ phase='lifecycle.quit-request';rpcTag=null;
  page?.close();if(main){await main.evaluate(`setImmediate(()=>__ownedComparisonElectron.app.quit());true`);main.close();}
+ phase='lifecycle.wait-close';
  const result=await Promise.race([closed,delay(20000).then(()=>{throw Error('Official normal app quit did not finish');})]);
  try{assert.equal(result.code,0);assert.equal(result.signal,null);const group=await stopOwnedProcess(child,closed,main,page,privateLog,{normalCloseOnly:true});lifecycle.push({phase:'normal-close',...result,...group});}catch(error){lifecycle.push({phase:'normal-close-failed',...result,processGroupAbsentUnconfirmed:true});throw error;}
 }
-const report={status:'not-started',officialVersion:'0.1.7-nightly.20261103.4119',sourceCommit:'cefb544af3c98224874419198c0359b652ca3c94',assetBytes:186437562,assetSha256:'3a65c0355a08a8d32e0df04d7719f545551d76be5e7b4662b7f26335f06f0c95',fixtureContentSha256:fixture.contentSha256,history:{priorConversationPairs:count,priorCompletedTurnItems:count*2,priorProviderRuns:0,priorMessages:count*2,textLength:256,seed:'official AgentSessionScanner + AgentSessionImporter + EventSink; no raw SQLite writes'},hostBefore,results,lifecycle,durability:'SQLite WAL synchronous=NORMAL; normal process close/cold reopen only. Not equivalent to per-send fsync or power-loss durability.',modelSelection:{instanceId:'codex',model:'gpt-6-astra',source:'Official packages/contracts/src/model.ts DEFAULT_MODEL and codex default; no model credentials supplied'},presentationEvidence:'Shared native IO + transcript/composer clipping + distinct later rAF, not screenshot/pixel-presented proof. Do not pool with existing Zen strict later-frame results.'};
+const report={status:'not-started',officialVersion:'0.1.7-nightly.20261103.4119',sourceCommit:'cefb544af3c98224874419198c0359b652ca3c94',assetBytes:186437562,assetSha256:'3a65c0355a08a8d32e0df04d7719f545551d76be5e7b4662b7f26335f06f0c95',fixtureContentSha256:fixture.contentSha256,history:{priorConversationPairs:count,priorCompletedTurnItems:count*2,priorProviderRuns:0,priorMessages:count*2,textLength:256,seed:'official AgentSessionScanner + AgentSessionImporter + EventSink; no raw SQLite writes'},hostBefore,results,lifecycle,diagnostics,durability:'SQLite WAL synchronous=NORMAL; normal process close/cold reopen only. Not equivalent to per-send fsync or power-loss durability.',modelSelection:{instanceId:'codex',model:'gpt-6-astra',source:'Official packages/contracts/src/model.ts DEFAULT_MODEL and codex default; no model credentials supplied'},presentationEvidence:'Shared native IO + transcript/composer clipping + distinct later rAF, not screenshot/pixel-presented proof. Do not pool with existing Zen strict later-frame results.'};
 try{
  await launch();await rpcSetup();
  await rpc('projects.mutate',{type:'project.create',commandId:randomUUID(),projectId,title:'Owned ordinary Send comparison',workspaceRoot:workspace,defaultModelSelection:{instanceId:'codex',model:'gpt-6-astra'}});
@@ -85,7 +103,7 @@ try{
  // Install observational hooks after preparation, never inject a bubble or ACK.
  await page.evaluate(`(()=>{window.__ownedSends=[];const original=WebSocket.prototype.send;const listening=new WeakSet();WebSocket.prototype.send=function(data){if(!listening.has(this)){listening.add(this);this.addEventListener('message',e=>{let all;try{all=[].concat(JSON.parse(e.data));}catch{return;}for(const m of all){const t=performance.now();for(const s of window.__ownedSends){if(m._tag==='Exit'&&String(m.requestId)===s.requestId){s.responseAt=t;s.responseSuccess=m.exit._tag==='Success';s.sequence=m.exit.value?.sequence??null;}const visit=(x)=>{if(!x||typeof x!=='object')return;if(x.type==='message.updated'&&x.payload?.id===s.messageId&&x.payload.role==='user'&&x.payload.text===s.nonce){s.canonicalEchoAt??=t;}for(const v of Object.values(x))if(v&&typeof v==='object')Array.isArray(v)?v.forEach(visit):visit(v);};visit(m);}}});}try{for(const m of [].concat(JSON.parse(data))){if(m._tag==='Request'&&m.tag==='orchestration.dispatchCommand'&&m.payload?.type==='message.dispatch'){const s=window.__ownedSends.find(s=>s.nonce===m.payload.text);if(s){s.requestId=String(m.id);s.messageId=m.payload.messageId;s.commandId=m.payload.commandId;s.requestAt=performance.now();}}}}catch{}return original.call(this,data);};return true;})()`);
  for(let i=0;i<3;i++){
-  const nonce=fixture.sends[i];
+  const nonce=fixture.sends[i];phase='send.prepare.'+i;rpcTag=null;
   await requireLiveBottom(page,'.messages-timeline-scroll');
   await until(async()=>{const p=await rpc('orchestration.getThreadProjection',{threadId});return p.runs.every(r=>['completed','failed','interrupted'].includes(r.status));},'previous provider run terminal before ordinary Send',90000);
   await page.evaluate(`document.querySelector('[data-testid="composer-editor"]').focus();window.__ownedSends.push({nonce:${JSON.stringify(nonce)}});true`);
@@ -95,6 +113,7 @@ try{
   await installObservation(page,{rootSelector:'.messages-timeline-scroll',rowSelector:'[data-message-role="user"]',composerSelector:'[data-testid="composer-editor"]',idAttribute:'data-message-id'},nonce);
   const beforeEnter=await assertOwnedInput(main,page,'[data-testid="composer-editor"]');assert.deepEqual(beforeEnter,beforeInput);
   await main.evaluate(`__ownedComparisonWindow.webContents.sendInputEvent({type:'keyDown',keyCode:'Return'});__ownedComparisonWindow.webContents.sendInputEvent({type:'keyUp',keyCode:'Return'});true`);
+  phase='send.frame-and-canonical';rpcTag='orchestration.dispatchCommand';
   const sample=await until(()=>page.evaluate(`(()=>{const s=window.__ownedSends.at(-1);return s?.responseAt!==undefined&&s.canonicalEchoAt!==undefined&&window.__ownedFrame?.laterEligibleRafAt!==undefined?{...s,...window.__ownedFrame}:null;})()`),'real Send response and later eligible frame',20000);
   assert.equal(sample.enterTrusted,true);assert.equal(sample.responseSuccess,true);assert(Number.isSafeInteger(sample.sequence));
   results.push({...sample,enterToFirstEligibleRafMs:sample.firstEligibleRafAt-sample.enterAt,enterToLaterEligibleRafMs:sample.laterEligibleRafAt-sample.enterAt,enterToCanonicalUserEventMs:sample.canonicalEchoAt-sample.enterAt,enterToAdmissionResponseMs:sample.responseAt-sample.enterAt});
@@ -110,5 +129,5 @@ try{
  let prior=-1;for(const sample of results){assert.equal(reopened.messages.filter(m=>m.id===sample.messageId&&m.text===sample.nonce).length,1);const index=reopened.messages.findIndex(m=>m.id===sample.messageId);assert(index>prior);prior=index;}
  report.coldReopen={matchedMessages:results.length,duplicateMatches:0,ordered:true,normalCloseObserved:true};
  await quit();report.status='completed';report.hostAfter=host();
-}catch(error){report.status='failed';report.error={name:error.name,message:error.message.slice(0,350)};try{if(child?.exitCode===null&&child?.signalCode===null)await quit();}catch{}process.exitCode=1;}
-finally{try{await stopOwnedProcess(child,closed,main,page,privateLog);}catch(error){report.status='failed';report.cleanupError=error.message;process.exitCode=1;}await writeFile(path.join(out,'official-t3-summary.json'),JSON.stringify(report,null,2)+'\n');if(!report.cleanupError)await rm(owned,{recursive:true,force:true});}
+}catch(error){report.status='failed';report.error={name:error.name,message:error.message.slice(0,350),phase,rpcTag};try{if(child?.exitCode===null&&child?.signalCode===null)await quit();}catch{}process.exitCode=1;}
+finally{try{await stopOwnedProcess(child,closed,main,page,privateLog);}catch(error){report.status='failed';report.cleanupError=error.message;report.cleanupDiagnostic=error.ownedProcess??null;process.exitCode=1;}await writeFile(path.join(out,'official-t3-summary.json'),JSON.stringify(report,null,2)+'\n');if(!report.cleanupError)await rm(owned,{recursive:true,force:true});}

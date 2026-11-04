@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import {writeFile,readFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
+import {execFileSync} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
 export class Wire{
  constructor(url){this.socket=new WebSocket(url);this.next=0;this.pending=new Map();this.listeners=[];this.ready=new Promise((resolve,reject)=>{this.socket.addEventListener('open',resolve,{once:true});this.socket.addEventListener('error',reject,{once:true});});this.socket.addEventListener('message',e=>{for(const x of [].concat(JSON.parse(String(e.data)))){if(x.id&&this.pending.has(x.id)){const {resolve,reject,t}=this.pending.get(x.id);clearTimeout(t);this.pending.delete(x.id);x.error?reject(new Error(JSON.stringify(x.error))):resolve(x.result);}for(const f of this.listeners)f(x);}});}
@@ -53,18 +54,29 @@ export async function installObservation(page,selectors,text){return page.evalua
 export async function requireLiveBottom(page,rootSelector){
  return until(()=>page.evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(rootSelector)});if(!e)return null;const distance=e.scrollHeight-e.clientHeight-e.scrollTop;return distance<=4?{distance,clientHeight:e.clientHeight}:null;})()`),'actual transcript at live bottom before Send');
 }
+export function ownedProcessMetadata(pid,inspectorPid=null){
+ assert(Number.isSafeInteger(pid)&&pid>1,'Invalid owned spawned PID');
+ const value={spawnedPid:pid,inspectorPid,runnerPid:process.pid,runnerUid:process.getuid?.()??null};
+ try{
+  const rows=execFileSync('/bin/ps',['-axo','pid=,ppid=,pgid=,uid=,stat='],{encoding:'utf8',maxBuffer:1024*1024,stdio:['ignore','pipe','pipe']}).trim().split('\n').map(line=>{const [p,pp,g,u,stat]=line.trim().split(/\s+/);return {pid:Number(p),ppid:Number(pp),pgid:Number(g),uid:Number(u),stat};});
+  const owned=rows.filter(r=>r.pgid===pid);value.ownedGroupCount=owned.length;value.ownedGroup=owned.slice(0,16);value.leader=rows.find(r=>r.pid===pid)??null;value.inspector=rows.find(r=>r.pid===inspectorPid)??null;
+ }catch(error){value.metadataError={name:error.name,code:error.code??null,status:error.status??null};}
+ return value;
+}
 export async function stopOwnedProcess(child,closed,main,page,log,{normalCloseOnly=false}={}){
  page?.close();main?.close();
  const result={processGroupDead:true,cleanupSignals:[]};
  if(child?.pid!==undefined){
   assert.notEqual(process.platform,'win32','Owned group cleanup requires POSIX');
-  const groupAlive=()=>{try{process.kill(-child.pid,0);return true;}catch(error){if(error.code==='ESRCH')return false;throw error;}};
+  assert(Number.isSafeInteger(child.pid)&&child.pid>1,'Invalid owned spawned PID');
+  const annotate=(error,operation,signal)=>{error.ownedProcess={operation,signal,code:error.code??null,...ownedProcessMetadata(child.pid)};return error;};
+  const groupAlive=()=>{try{process.kill(-child.pid,0);return true;}catch(error){if(error.code==='ESRCH')return false;throw annotate(error,'probe-owned-group',0);}};
   // A zero-exit leader is not proof its detached descendants have exited.
   // Normal close must fail before forced cleanup, preventing cold reopen.
   if(normalCloseOnly)assert.equal(groupAlive(),false,'Normal close left owned POSIX group alive');
   else for(const signal of ['SIGTERM','SIGKILL']){
    if(!groupAlive())break;
-   try{process.kill(-child.pid,signal);result.cleanupSignals.push(signal);}catch(error){if(error.code!=='ESRCH')throw error;}
+   try{process.kill(-child.pid,signal);result.cleanupSignals.push(signal);}catch(error){if(error.code!=='ESRCH')throw annotate(error,'signal-owned-group',signal);}
    const deadline=Date.now()+5000;while(groupAlive()&&Date.now()<deadline)await delay(25);
   }
   assert.equal(groupAlive(),false,'Owned POSIX group still present; keep profile for safe cleanup');
