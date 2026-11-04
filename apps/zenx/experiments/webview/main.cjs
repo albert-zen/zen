@@ -339,6 +339,30 @@ async function finish(error) {
       await ui("document.querySelector('#overlay').style.display='none'");
     },
   );
+  await check("visible guest CDP screenshot baseline is fresh", async () => {
+    a.debugger.attach("1.3");
+    try {
+      const shot = await bounded(
+        a.debugger.sendCommand("Page.captureScreenshot", {
+          format: "png",
+          captureBeyondViewport: false,
+        }),
+        "Visible Page.captureScreenshot",
+      );
+      const image = nativeImage.createFromBuffer(
+        Buffer.from(shot.data, "base64"),
+      );
+      const pixel = image
+        .crop({ x: 20, y: 150, width: 1, height: 1 })
+        .toBitmap();
+      assert.ok(
+        pixel[0] > 180 && pixel[1] < 100 && pixel[2] < 60,
+        `Visible CDP pixel: ${[...pixel]}`,
+      );
+    } finally {
+      a.debugger.detach();
+    }
+  });
   await show("b");
   const focusedBefore = BrowserWindow.getFocusedWindow()?.id;
   a.debugger.attach("1.3");
