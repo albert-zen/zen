@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { parse } from "yaml";
 
-const scripts = new URL("../scripts/", import.meta.url);
+const scripts = new URL("./", import.meta.url);
 
 test("image acceptance uses real Host preparation and cold verification without Electron", async () => {
   const seed = await import(
@@ -78,9 +78,9 @@ test("native image branch preserves existing question guards, limits and artifac
   const job = workflow.jobs["native-question"];
   assert.equal(job["runs-on"], "macos-14");
   assert.equal(job["timeout-minutes"], 18);
-  const origin = job.steps.find((s) => s.run?.endsWith('" origin'));
+  const origin = job.steps.find((s) => s.run?.trim().endsWith('" origin'));
   assert.equal(origin["timeout-minutes"], 6);
-  const image = job.steps.find((s) => s.run?.endsWith('" image'));
+  const image = job.steps.find((s) => s.run?.trim().endsWith('" image'));
   assert.equal(image["timeout-minutes"], 6);
   const upload = job.steps.find(
     (s) => s.with?.name === "image-preparation-ui-macos-${{ github.sha }}",

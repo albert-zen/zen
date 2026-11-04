@@ -657,6 +657,168 @@ async function runOrigin() {
   result.ok = true;
 }
 
+// Image-only read/preview acceptance. No alternate App, bridge, DOM or model.
+async function runImage() {
+  window.setSize(1100, 820);
+  const row = (entry) =>
+    `.thread-row-shell[data-thread-id="${entry.threadId}"] > button.thread-row`;
+  const goodImage = ".thread-view .image-thumbnail img";
+  const placeholder = '.thread-view .image-placeholder[role="alert"]';
+  const observe = () =>
+    evaluate(`(()=>{
+    const view=document.querySelector('.thread-view'), rect=e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}};
+    return {noticeCount:document.querySelectorAll('.image-preparation-notice').length,
+      text:view?.innerText, images:[...view.querySelectorAll('.image-thumbnail img')].map(e=>({complete:e.complete,width:e.naturalWidth,height:e.naturalHeight,rect:rect(e)})),
+      failures:[...view.querySelectorAll('.image-placeholder[role="alert"]')].map(e=>({text:e.textContent,rect:rect(e)})),
+      composer:!!document.querySelector('#thread-composer'), app:!!document.querySelector('.app-shell'),
+      overflow:document.documentElement.scrollWidth>innerWidth, width:innerWidth,height:innerHeight,
+      language:document.documentElement.lang,appearance:document.documentElement.dataset.appearance};
+  })()`);
+  async function ready(entry) {
+    await until(async () => {
+      const state = await observe();
+      return (
+        state.images.length === 1 &&
+        state.images[0].complete &&
+        state.images[0].width === 2048 &&
+        state.failures.length === (entry.key === "unavailable" ? 1 : 0)
+      );
+    }, "original image and genuine codec failure rendered");
+    await evaluate(
+      `document.querySelector(${JSON.stringify(goodImage)}).scrollIntoView({block:'center'})`,
+    );
+    await pause(250);
+  }
+  async function captureImage(name, entry, language, appearance) {
+    await ready(entry);
+    const state = await observe();
+    assert.equal(state.noticeCount, 0);
+    assert.equal(state.app, true);
+    assert.equal(state.composer, true);
+    assert.equal(state.overflow, false);
+    assert.equal(state.language, language);
+    assert.equal(state.appearance, appearance);
+    assert.doesNotMatch(
+      state.text,
+      /Echo:|Image input prepared with|Image input unavailable \(/,
+    );
+    assert.deepEqual(
+      [state.images[0].width, state.images[0].height],
+      [2048, 2048],
+    );
+    for (const image of [...state.images, ...state.failures]) {
+      assert.ok(image.rect.width > 0 && image.rect.height > 0);
+      assert.ok(
+        image.rect.y >= 0 && image.rect.y + image.rect.height <= state.height,
+      );
+    }
+    if (entry.key === "unavailable")
+      assert.match(
+        state.failures[0].text,
+        language === "en" ? /Image unavailable/ : /图片不可用/,
+      );
+    assert.equal(
+      await evaluate("Boolean(document.querySelector('.image-preview-layer'))"),
+      false,
+    );
+    await screenshot(name + ".png");
+    result.cases.push({
+      name,
+      threadId: entry.threadId,
+      ...state,
+      windowContentBounds: window.getContentBounds(),
+    });
+  }
+  const [prepared, unavailable] = fixture.threads;
+  await selectThread(row(prepared), "Read real prepared-image history");
+  await ready(prepared);
+  await click(
+    ".thread-view .image-thumbnail",
+    "Open original image through production preview",
+  );
+  await until(
+    () =>
+      evaluate(
+        "(()=>{const e=document.querySelector('.image-preview-content img');return !!e&&e.complete&&e.naturalWidth===2048&&e.naturalHeight===2048})()",
+      ),
+    "original 2048px preview",
+  );
+  await click(".image-preview-close", "Close original-image preview");
+  await until(
+    () =>
+      evaluate(
+        "!document.querySelector('.image-preview-layer') && document.activeElement?.matches('.thread-view .image-thumbnail')",
+      ),
+    "preview focus restored to original thumbnail",
+  );
+  result.originalPreview = {
+    naturalWidth: 2048,
+    naturalHeight: 2048,
+    focusRestored: true,
+  };
+  await captureImage("01-prepared-desktop-en-light", prepared, "en", "light");
+  await selectThread(
+    row(unavailable),
+    "Read real prepared and unavailable image history",
+  );
+  await captureImage(
+    "02-unavailable-desktop-en-light",
+    unavailable,
+    "en",
+    "light",
+  );
+  assert.ok(
+    await evaluate(
+      `Boolean(document.querySelector(${JSON.stringify(placeholder)}))`,
+    ),
+  );
+  // Change language using the real product settings, before shrinking the App.
+  await click(".settings-nav-row", "Open production settings for language");
+  await click(
+    '.settings-nav button[data-tab="general"]',
+    "Open General settings",
+  );
+  const languageSelector =
+    '.settings-view:not([hidden]) [role="combobox"][aria-label="Language"]';
+  await until(
+    () => evaluate(`Boolean(${query(languageSelector)})`),
+    "language preference control",
+  );
+  await evaluate(`${query(languageSelector)}.scrollIntoView({block:'center'})`);
+  await click(languageSelector, "Open language preference");
+  await click(
+    '.ui-select-option[data-value="zh-CN"]',
+    "Choose Simplified Chinese",
+  );
+  await until(
+    () => evaluate("document.documentElement.lang==='zh-CN'"),
+    "production Chinese language applied",
+  );
+  await selectThread(row(unavailable), "Return to the same image owner");
+  nativeTheme.themeSource = "dark";
+  await until(
+    () => evaluate("document.documentElement.dataset.appearance==='dark'"),
+    "production dark appearance applied",
+  );
+  window.setSize(390, 600);
+  await captureImage(
+    "03-unavailable-narrow-zh-dark",
+    unavailable,
+    "zh-CN",
+    "dark",
+  );
+  result.scope =
+    "Full production Electron App and child Host cold history; real synthetic image preparation, original preview and codec-failure placeholder. Fake provider, model-adapter-input only, not HTTP transport.";
+  result.notCovered = [
+    "live Desktop upload/preparation",
+    "real provider image understanding",
+    "HTTP transport",
+    "Windows",
+    "packaged distribution",
+  ];
+  result.ok = true;
+}
+
 async function run() {
   fixture = JSON.parse(
     await fs.readFile(path.join(temporary, "fixture.json"), "utf8"),
@@ -690,6 +852,7 @@ async function run() {
   const settings = await evaluate("window.zenx.settings.get()");
   assert.equal(settings.profile.defaultModel.providerProfileId, "fake");
   assert.equal(settings.hasApiKey, false);
+  if (fixture.scenario === "image") return runImage();
   if (fixture.scenario === "origin") return runOrigin();
   const mainRow = `.thread-row-shell[data-thread-id="${fixture.main}"] > button.thread-row`;
   const otherRow = `.thread-row-shell[data-thread-id="${fixture.other}"] > button.thread-row`;
