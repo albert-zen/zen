@@ -478,16 +478,20 @@ try {
     targetsBeforeOpen.activeTargetId,
     "Registry background open/inspect must preserve the actual Chrome active tab",
   );
-  const detached = await backend.closeSession("windows-smoke");
-  await retry(async () =>
-    liveEvents.some(
-      (event) =>
-        event.type === "status" &&
-        event.status === "unavailable" &&
-        event.message === "The observed browser tab is no longer attached.",
-    )
-      ? true
-      : undefined,
+  const closing = backend.closeSession("windows-smoke");
+  assert.deepEqual(liveEvents.at(-1), {
+    type: "status",
+    status: "unavailable",
+    message:
+      "Live observation stopped because browser session cleanup was requested.",
+  });
+  const eventsAfterStop = liveEvents.length;
+  const detached = await closing;
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(
+    liveEvents.length,
+    eventsAfterStop,
+    "Cleanup must stop live metadata and frames, even before detach settles",
   );
   stopLive();
   await backend.close();
