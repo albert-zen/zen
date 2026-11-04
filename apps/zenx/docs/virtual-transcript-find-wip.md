@@ -15,7 +15,7 @@ The closed bar performs no history text reads or parsing. Once open, immutable T
 
 Pending work must not be described as completed acceptance:
 
-- This is equivalent in-app Find for the stated text scope, **not transparent browser-native Find over unmounted DOM**. Native Select All has a separate on-demand full-DOM compatibility prototype; these Find tests do not establish its native keyboard/menu/copy acceptance.
+- This is equivalent in-app Find for the stated text scope, **not transparent browser-native Find over unmounted DOM**. Native Select All operates on mounted DOM without full-history materialization; these Find tests do not establish native keyboard/menu/copy acceptance.
 - Actual component tests use real npm Legend web runtime with deterministic JSDOM geometry. They are not native layout, complete selection/focus acceptance, or Send performance measurements.
 - The Find UI needs screenshots and interrupted-flow checks from the exact final packaged app source. Earlier virtual-only native fixture screenshots and measurements do not certify this feature.
 - Default-on rollout and merging are blocked on complete product coverage and native acceptance, including the remaining unsupported content categories.

@@ -15,14 +15,11 @@ path. The virtual path displays an explicit experimental warning.
 
 - Browser-native Find cannot search unmounted DOM. The adjacent opt-in in-app
   Find indexes only its documented presentation-text scope.
-- Native Select All now has a separate compatibility prototype: explicit keyboard
-  or menu intent temporarily mounts the same canonical presentation in full DOM
-  order, then native selection/copy actions remain responsible for their result.
-  It does not replace Select All with a new copy command or serialized transcript.
-  Selection clearance restores the keyed reading anchor and bounded viewport.
-  Long-session native operations, copy order and screenshots still need acceptance.
-  A 30-second preparation watchdog is distinct from the 1.5-second post-preparation
-  missing-Selection cleanup; neither is a user latency requirement or improvement.
+- Native page-wide Select All remains the browser/Electron operation over mounted
+  DOM. It does not expand every historical row. Ordinary selected-text and
+  per-message copy retain their existing behavior; full-history Select All and
+  its stress latency are not the Send acceptance contract. This scope matches
+  the inspected T3 design, whose actual App behavior has not yet been measured.
 - Exact message-target navigation now resolves a canonical turn key and materializes
   it before focusing/consuming the target. Reader input, newer requests and unmount
   cancel the pending reveal. Same-thread inline quote source jumps now materialize

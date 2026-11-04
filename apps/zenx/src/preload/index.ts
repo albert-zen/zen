@@ -1,4 +1,3 @@
-import { createNativeEditingApi } from "./native-editing.js";
 import type {
   NativeInformationApi,
   NativeInformationUpdate,
@@ -96,12 +95,6 @@ import {
 } from "../native-room-questions.js";
 
 contextBridge.exposeInMainWorld("zenx", {
-  // Capture the preload's document now; non-DOM IPC consumers have none.
-  nativeEditing: createNativeEditingApi(
-    ipcRenderer,
-    undefined,
-    globalThis.document,
-  ),
   threadQuestionAttention: {
     onChanged: (listener: () => void) => {
       const receive = () => listener();

@@ -68,10 +68,6 @@ import type {
 declare global {
   interface Window {
     zenx: {
-      nativeEditing?: {
-        onPrepareSelectAll(listener: () => boolean): () => void;
-        onSelectAllCancelled(listener: () => void): () => void;
-      };
       threadQuestionAttention?: { onChanged(listener: () => void): () => void };
       information?: import("../../native-information.js").NativeInformationApi;
       roomQuestions?: import("../../native-room-questions.js").NativeRoomQuestionApi;

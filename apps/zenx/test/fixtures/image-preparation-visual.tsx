@@ -41,6 +41,7 @@ function notice(
   itemId: string,
   supports: boolean | null,
   dimensions = [4000, 3000, 1600, 1200],
+  requestedDetail: "high" | "original" = "original",
 ): ContextItem {
   const [width, height, preparedWidth, preparedHeight] = dimensions;
   const attachment = { ...original, width, height };
@@ -53,7 +54,7 @@ function notice(
         onlySampleId: sampleId,
         imagePreparation: {
           profile: "codex-high-v1",
-          requestedDetail: "original",
+          requestedDetail,
           supportsImageDetailOriginal: supports,
           occurrence: {
             itemId,
@@ -152,6 +153,18 @@ function codecUnavailable(
 }
 const scenarios: Record<string, readonly ContextItem[]> = {
   Current: current,
+  "Ordinary prepared": [
+    input("input-ordinary", 0),
+    notice(
+      "notice-ordinary",
+      1,
+      "ordinary",
+      "input-ordinary",
+      true,
+      undefined,
+      "high",
+    ),
+  ],
   "Codec unavailable": [
     input("input-codec", 0),
     codecUnavailable(

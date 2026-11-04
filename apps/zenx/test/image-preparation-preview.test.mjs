@@ -54,21 +54,35 @@ test("image capture resolves installed Chrome and keeps Chromium sandbox enabled
   assert.match(capture, /chromiumSandboxDisabled: false/);
 });
 
-test("capture waits for painted details and verifies keyboard focus before activation", () => {
+test("capture verifies no card across prepared, unavailable, selected and navigated histories", () => {
   assert.match(
     capture,
     /requestAnimationFrame\(\(\) => requestAnimationFrame\(resolve\)\)/,
   );
-  assert.match(
-    capture,
-    /last\.getBoundingClientRect\(\)\.bottom <= details\.getBoundingClientRect\(\)\.bottom/,
-  );
-  assert.match(capture, /getAnimations\(\{subtree:true\}\)/);
-  assert.match(capture, /summary'\)\.focus\(\)/);
-  assert.match(capture, /Enter did not close image details/);
-  assert.match(capture, /await key\("Enter", "Enter"\)/);
-  assert.match(capture, /await key\(" ", "Space"\)/);
+  for (const label of [
+    "Current",
+    "Ordinary prepared",
+    "Codec unavailable",
+    "Mixed outcome",
+    "Codec cold selected",
+    "Compacted",
+    "Later unavailable",
+    "Retained only",
+    "Other thread",
+  ])
+    assert.ok(capture.includes(`"${label}"`));
+  assert.match(capture, /assert\.equal\(state\.noticeCount, 0\)/);
+  assert.match(capture, /assert\.equal\(state\.composerCount, 1\)/);
+  assert.match(capture, /assert\.doesNotMatch\(\s+state\.threadText,/);
   assert.match(capture, /Synthetic snapshot: \$\{label\}/);
+  assert.doesNotMatch(
+    capture,
+    /waitExpandedNotice|Enter did not close image details/,
+  );
+  assert.doesNotMatch(
+    build,
+    /ImagePreparationNotice|image-preparation-projection/,
+  );
 });
 
 test("Ubuntu image capture is bounded and retains artifacts on failure without replacing prior coverage", () => {

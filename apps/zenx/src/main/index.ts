@@ -144,7 +144,6 @@ import {
 } from "./native-locale.js";
 import { resolveLanguage } from "../locale.js";
 import { installApplicationMenu } from "./application-menu.js";
-import { installNativeEditing } from "./native-editing.js";
 import { ZenXDirectoryBrowser } from "./directory-browser.js";
 import {
   startConfiguredProjectThread,
@@ -642,22 +641,14 @@ async function bootstrapZenX(): Promise<void> {
   setNativeLanguage(
     resolveLanguage("system", app.getPreferredSystemLanguages()),
   );
-  const nativeEditing = installNativeEditing({
-    rendererUrl:
-      process.env["ELECTRON_RENDERER_URL"] ??
-      pathToFileURL(join(__dirname, "../renderer/index.html")).href,
-    ownsWindow: (id) => ownedAppWindowIds.has(id),
-    menuChanged: () => installApplicationMenu(process.platform, nativeEditing),
-  });
-  installApplicationMenu(process.platform, nativeEditing);
+  installApplicationMenu();
   ipcMain.handle(ipcChannels.localeSystemLanguages, () =>
     app.getPreferredSystemLanguages(),
   );
   ipcMain.handle(ipcChannels.localeSetLanguage, (_event, language: unknown) => {
     if (language !== "en" && language !== "zh-CN")
       throw new Error("Unsupported interface language");
-    if (setNativeLanguage(language))
-      installApplicationMenu(process.platform, nativeEditing);
+    if (setNativeLanguage(language)) installApplicationMenu();
   });
   let triggersPackage: ZenXTriggersCapabilityPackage | undefined;
   const resourcesDirectory = app.isPackaged

@@ -4,7 +4,6 @@ import { Menu, type MenuItemConstructorOptions } from "electron";
 /** Installs ZenX's platform menu policy without adding product navigation. */
 export function installApplicationMenu(
   platform: NodeJS.Platform = process.platform,
-  nativeEditing?: { available(): boolean; selectAll(): void },
 ): void {
   if (platform !== "darwin") {
     Menu.setApplicationMenu(null);
@@ -31,13 +30,7 @@ export function installApplicationMenu(
         { role: "cut", label: nativeText("cut") },
         { role: "copy", label: nativeText("copy") },
         { role: "paste", label: nativeText("paste") },
-        nativeEditing?.available()
-          ? {
-              label: nativeText("selectAll"),
-              accelerator: "CommandOrControl+A",
-              click: () => nativeEditing.selectAll(),
-            }
-          : { role: "selectAll", label: nativeText("selectAll") },
+        { role: "selectAll", label: nativeText("selectAll") },
       ],
     },
     {

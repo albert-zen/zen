@@ -57,10 +57,6 @@ import {
 import { useReadVisibleMessage } from "./conversation-read-state.js";
 import { HostMessageContent } from "./HostMessageContent.js";
 import { ImportedThreadNotice } from "./ImportedThreadNotice.js";
-import {
-  captureImagePreparationDisclosure,
-  ImagePreparationNotice,
-} from "./ImagePreparationNotice.js";
 import { projectThreadAttachmentItems } from "../../thread-attachment-projection.js";
 import {
   ThreadReadingContext,
@@ -853,11 +849,6 @@ function ThreadViewContent({
   }, [thread?.id, composer.draft.text.startsWith("/")]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualViewport = useRef<VirtualTranscriptHandle | null>(null);
-  const [virtualViewportRevision, setVirtualViewportRevision] = useState(0);
-  const handleVirtualViewportChanged = useCallback(
-    () => setVirtualViewportRevision((version) => version + 1),
-    [],
-  );
   const [virtualTranscript] = useState(() => {
     try {
       return (
@@ -1742,7 +1733,6 @@ function ThreadViewContent({
           view={viewRef}
           viewport={scrollRef}
           controller={virtualViewport}
-          viewportRevision={virtualViewportRevision}
           reading={readingState}
           wakeups={wakeups}
           pluginSnapshot={pluginSnapshot}
@@ -1767,10 +1757,6 @@ function ThreadViewContent({
                   <ImportedThreadNotice
                     items={displayedThread?.canonicalItems ?? []}
                   />
-                  <ImagePreparationNotice
-                    items={thread?.itemList ?? []}
-                    reading={virtualTranscript ? readingState : undefined}
-                  />
                 </>
               }
               footer={
@@ -1790,14 +1776,6 @@ function ThreadViewContent({
                 </>
               }
               onContentSettled={followBottom}
-              onNativeSelectionStart={pauseFollowing}
-              onBeforeViewportChange={
-                virtualTranscript
-                  ? (node) =>
-                      captureImagePreparationDisclosure(node, readingState)
-                  : undefined
-              }
-              onViewportChanged={handleVirtualViewportChanged}
               className="messages"
               style={{ overflowAnchor: atLive ? "none" : undefined }}
               onWheel={(event) => {
@@ -1873,10 +1851,6 @@ function ThreadViewContent({
               <div className="messages-inner">
                 <ImportedThreadNotice
                   items={displayedThread?.canonicalItems ?? []}
-                />
-                <ImagePreparationNotice
-                  items={thread?.itemList ?? []}
-                  reading={virtualTranscript ? readingState : undefined}
                 />
                 {transcriptRows.length === 0 ? (
                   (emptyContent ?? (
