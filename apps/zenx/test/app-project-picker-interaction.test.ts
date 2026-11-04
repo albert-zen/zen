@@ -9077,7 +9077,7 @@ for (const claimWins of [false, true]) {
         await setTextareaValue(composer, "Latest independent draft");
         const recall = await waitFor(() =>
           document.querySelector<HTMLButtonElement>(
-            ".pending-steer-heading button",
+            ".pending-steer-heading .queue-header-action",
           ),
         );
         await act(async () => {
@@ -9234,7 +9234,7 @@ test("complete App late recall acknowledgement never navigates or refreshes the 
     await setTextareaValue(composer, "Thread one draft");
     const recall = await waitFor(() =>
       document.querySelector<HTMLButtonElement>(
-        ".pending-steer-heading button",
+        ".pending-steer-heading .queue-header-action",
       ),
     );
     await act(async () => recall.click());
@@ -11442,7 +11442,7 @@ for (const outcome of [
       deferRestoreRead = outcome !== "restored";
       const recall = await waitFor(() =>
         document.querySelector<HTMLButtonElement>(
-          ".pending-steer-heading button",
+          ".pending-steer-heading .queue-header-action",
         ),
       );
       await invokeButtonClick(recall, 2);
