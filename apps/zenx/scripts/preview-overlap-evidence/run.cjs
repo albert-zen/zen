@@ -33,6 +33,8 @@ const receipt = {
   scope:
     "Production ImageUrlPreview, WorkspaceBrowserPanel and native WorkspaceBrowser; synthetic owned window/page; OS-composed desktopCapturer window screenshots. Not full App/Host or user desktop acceptance.",
   cases: [],
+  startupEvents: [],
+  mountRequests: [],
   status: "starting",
 };
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -109,6 +111,34 @@ async function capture(name, expected) {
   browser = createElectronWorkspaceBrowser({
     onCreateView: (value) => {
       view = value;
+      for (const event of [
+        "did-start-loading",
+        "did-stop-loading",
+        "dom-ready",
+        "did-finish-load",
+      ]) {
+        view.webContents.on(event, () =>
+          receipt.startupEvents.push({
+            event,
+            target: "native",
+            visible: view.getVisible(),
+          }),
+        );
+      }
+      view.webContents.on("did-fail-load", (_event, code) =>
+        receipt.startupEvents.push({
+          event: "did-fail-load",
+          code,
+          target: "native",
+        }),
+      );
+      view.webContents.on("render-process-gone", (_event, details) =>
+        receipt.startupEvents.push({
+          event: "render-process-gone",
+          reason: details.reason,
+          target: "native",
+        }),
+      );
     },
   });
   owner = new BrowserWindow({
@@ -137,17 +167,60 @@ async function capture(name, expected) {
   });
   ipcMain.handle("evidence:mount", (event, request) => {
     assert.equal(event.sender, owner.webContents);
-    browser.mount(event.sender, request);
+    const record = {
+      hasBounds: !!request.bounds,
+      bounds: request.bounds,
+      occluded: request.occluded,
+    };
+    receipt.mountRequests.push(record);
+    try {
+      browser.mount(event.sender, request);
+      record.nativeVisible = view.getVisible();
+    } catch (error) {
+      record.error = String(error);
+      throw error;
+    }
   });
   owner.webContents.on("console-message", (_event, level, message) => {
     if (level >= 3) receipt.rendererError = message.slice(0, 400);
   });
+  owner.webContents.on("preload-error", (_event, _path, error) =>
+    receipt.startupEvents.push({
+      event: "preload-error",
+      error: String(error),
+      target: "renderer",
+    }),
+  );
+  owner.webContents.on("render-process-gone", (_event, details) =>
+    receipt.startupEvents.push({
+      event: "render-process-gone",
+      reason: details.reason,
+      target: "renderer",
+    }),
+  );
   await owner.loadFile(path.join(__dirname, "index.html"));
   owner.show();
-  await until(
-    () => view.getVisible() && !view.webContents.isLoading(),
-    "initial native view",
-  );
+  try {
+    await until(
+      () => view.getVisible() && !view.webContents.isLoading(),
+      "initial native view",
+    );
+  } catch (error) {
+    receipt.initialState = {
+      nativeVisible: view.getVisible(),
+      nativeLoading: view.webContents.isLoading(),
+      nativeBounds: view.getBounds(),
+      ownerVisible: owner.isVisible(),
+      ownerFocused: owner.isFocused(),
+    };
+    receipt.initialState.renderer = await Promise.race([
+      owner.webContents.executeJavaScript(
+        `(() => { const viewport=document.querySelector('.workspace-browser-viewport'); const r=viewport?.getBoundingClientRect(); return { visibility:document.visibilityState, ready:document.readyState, hasApi:!!window.zenx?.workspaceBrowser, hasTab:!!window.__evidenceTab, previewCount:document.querySelectorAll('.image-preview-layer').length, viewport:r ? {x:r.x,y:r.y,width:r.width,height:r.height} : null, mountError:document.querySelector('.workspace-browser-error')?.textContent ?? null }; })()`,
+      ),
+      pause(1000).then(() => ({ diagnosticReadTimedOut: true })),
+    ]).catch((reason) => ({ diagnosticReadError: String(reason) }));
+    throw error;
+  }
   await capture("01-native-visible", [200, 0, 200]);
   const point = await owner.webContents.executeJavaScript(
     "(() => {const r=document.querySelector('#open-preview').getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()",
