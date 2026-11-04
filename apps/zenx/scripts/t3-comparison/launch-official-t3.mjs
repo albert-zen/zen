@@ -63,7 +63,7 @@ async function rpcSetup(){
 }
 async function rpc(tag,payload){return page.evaluate(`window.__ownedOfficialRpc(${JSON.stringify(tag)},${JSON.stringify(payload)})`);}
 async function quit(){
- page?.close();main?.evaluate(`__ownedComparisonElectron.app.quit();true`).catch(()=>{});
+ page?.close();if(main){await main.evaluate(`setImmediate(()=>__ownedComparisonElectron.app.quit());true`);main.close();}
  const result=await Promise.race([closed,delay(20000).then(()=>{throw Error('Official normal app quit did not finish');})]);
  try{assert.equal(result.code,0);assert.equal(result.signal,null);const group=await stopOwnedProcess(child,closed,main,page,privateLog,{normalCloseOnly:true});lifecycle.push({phase:'normal-close',...result,...group});}catch(error){lifecycle.push({phase:'normal-close-failed',...result,processGroupAbsentUnconfirmed:true});throw error;}
 }
