@@ -125,3 +125,24 @@ its original native identity, compilation stops with a diagnostic instead of
 showing private machine IDs or guessing a question number. Ordinary user text is
 unchanged. Recovering that missing mapping would require separately verified
 read-only source-Thread provenance; this implementation does not invent it.
+
+## Verified machine framing and rejection boundaries
+
+Display projection recognizes reserved native publication structures only inside
+semantic tool results with native Tool provenance, decoded as one complete native
+result frame. It checks all calls sharing the Turn/provider-call identity before
+assuming an Ask source. A result uniquely belonging to a non-Ask tool, ordinary
+user text, quoted JSON/UUIDs and Room publications retain their exact content.
+
+A recognized native publication with a missing/ambiguous Ask source, inconsistent
+body offset, unsuccessful state, unsupported additional model content or duplicate
+original request identity stops compilation. An orphan machine receipt remains
+unusable until its actual canonical call is repaired; it cannot guess an origin
+from the receipt. No label is assigned using missing provenance.
+
+Generated human reply projection additionally requires the entire supported
+plain-text body and native receipt frame, with no attached media or text annotation.
+If an exact historical machine wrapper is proven but its offset or body parts are
+invalid, compilation stops rather than exposing the native wrapper or discarding
+content. A nonmatching literal/forged body is preserved without gaining native
+response authority. These diagnostics never rewrite durable ItemList or Trace.

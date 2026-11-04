@@ -225,7 +225,12 @@ test("complete publication append order is stable across late-call repair, dupli
     call("second-call", 19),
     receipt("result-second", "second-call", 31),
   ];
-  assert.deepEqual(results(first), [["Q1"]]);
+  assert.deepEqual(results(first.slice(1)), [["Q1"]]);
+  assert.throws(
+    () => results(first),
+    /Cannot safely display user question publication.*source call/,
+    "an orphan machine receipt stops compilation until its actual call is repaired",
+  );
   const repaired = [...first, call("late-call", 1)];
   assert.deepEqual(results(repaired), [["Q2"], ["Q1"]]);
   assert.throws(

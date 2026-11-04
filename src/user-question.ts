@@ -127,8 +127,25 @@ export function parseUserQuestionPublication(
   sourceSequence: number,
 ): { requestRef?: string } | undefined {
   try {
-    const envelope = record(
+    return validateUserQuestionPublication(
       JSON.parse(body),
+      request,
+      sourceSequence,
+    );
+  } catch {
+    return;
+  }
+}
+
+/** Validate an already parsed machine frame without a second JSON parse. */
+export function validateUserQuestionPublication(
+  value: unknown,
+  request: QuestionIdentity,
+  sourceSequence: number,
+): { requestRef?: string } | undefined {
+  try {
+    const envelope = record(
+      value,
       ["kind", "version", "request", "requestRef"],
       "question publication",
     );

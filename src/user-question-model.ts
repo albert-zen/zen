@@ -4,7 +4,7 @@ import {
   ASK_USER_QUESTION_NAME,
   USER_QUESTION_PUBLICATION_KIND,
   parseUserQuestionSpecification,
-  parseUserQuestionPublication,
+  validateUserQuestionPublication,
   parseUserQuestionReply,
   normalizeUserQuestionReply,
   matchesUserQuestionReplyBody,
@@ -49,6 +49,56 @@ function origin(call: Call): QuestionIdentity | undefined {
   return { threadId: identity.threadId, callItemId: identity.callItemId };
 }
 
+/** A recognized native machine fact must never fall back to private-ID text. */
+class UserQuestionDisplayError extends Error {
+  constructor(itemId: string, reason: string) {
+    super(
+      `Cannot safely display user question publication ${itemId}: ${reason}`,
+    );
+    this.name = "UserQuestionDisplayError";
+  }
+}
+
+/** Read the complete native result frame, never search arbitrary user prose. */
+function publicationBody(
+  item: Receipt,
+): { marker: unknown; offset: number } | undefined {
+  const prefixes = [
+    "Exit code: 0\n",
+    item.content.exitCode === null
+      ? "Outcome: unknown\n"
+      : `Exit code: ${item.content.exitCode}\n`,
+  ];
+  const prefix =
+    prefixes.find((value) => item.content.text.startsWith(value)) ?? "";
+  const body = item.content.text.slice(prefix.length);
+  let marker: unknown;
+  try {
+    marker = JSON.parse(body);
+  } catch {
+    return;
+  }
+  if (
+    marker !== null &&
+    typeof marker === "object" &&
+    !Array.isArray(marker) &&
+    "kind" in marker &&
+    marker.kind === USER_QUESTION_PUBLICATION_KIND
+  )
+    return { marker, offset: prefix.length };
+  return;
+}
+
+function receiptPrefix(part: UserInput[number] | undefined): boolean {
+  return (
+    part?.type === "text" &&
+    part.skillSource === undefined &&
+    (part.text === "[Message receipt time unavailable]" ||
+      (part.text.startsWith("[Message received at ") &&
+        part.text.endsWith("]")))
+  );
+}
+
 /**
  * Deterministic display of complete committed question facts, before selection.
  * No registry, mutation, native address resolution or free-text replacement.
@@ -60,63 +110,66 @@ export function userQuestionModelProjection(
   const key = (item: Call | Receipt) =>
     JSON.stringify([item.turnId, item.content.callId]);
   items.forEach((item, position) => {
-    if (
-      item.kind === "tool_call" &&
-      item.content.name === ASK_USER_QUESTION_NAME
-    ) {
+    if (item.kind === "tool_call") {
       const values = calls.get(key(item)) ?? [];
       values.push({ call: item, position });
       calls.set(key(item), values);
     }
   });
-  if (calls.size === 0) return new Map();
   const publications = new Map<string, Publication>();
   items.forEach((item, position) => {
+    if (item.kind !== "tool_result") return;
+    const candidates = calls.get(key(item));
+    // A known non-Ask tool can quote the very same JSON as ordinary content.
+    // Neither its text nor user/third-party messages become native publications.
     if (
-      item.kind !== "tool_result" ||
+      candidates?.length &&
+      candidates.every(
+        ({ call }) => call.content.name !== ASK_USER_QUESTION_NAME,
+      )
+    )
+      return;
+    if (
+      item.source.kind !== "tool_result" &&
+      !candidates?.some(
+        ({ call }) => call.content.name === ASK_USER_QUESTION_NAME,
+      )
+    )
+      return;
+    const observed = publicationBody(item);
+    if (observed === undefined) return;
+    const fail: (reason: string) => never = (reason) => {
+      throw new UserQuestionDisplayError(item.id, reason);
+    };
+    if (candidates?.length !== 1)
+      fail("original source call is unavailable or ambiguous");
+    const { call, position: callPosition } = candidates[0]!;
+    if (
+      call.content.name !== ASK_USER_QUESTION_NAME ||
+      call.source.kind !== "tool_call" ||
+      item.source.kind !== "tool_result"
+    )
+      fail("original source call provenance is inconsistent");
+    if (
       item.content.exitCode !== 0 ||
       item.source.metadata?.executionStatus !== "completed"
     )
-      return;
-    const candidates = calls.get(key(item));
-    if (candidates?.length !== 1) return;
-    const { call, position: callPosition } = candidates[0]!;
+      fail("publication is not a successful completed result");
     const identity = origin(call);
     const offset = item.source.metadata?.bodyStart;
-    if (
-      !identity ||
-      typeof offset !== "number" ||
-      !Number.isSafeInteger(offset) ||
-      offset < 0
-    )
-      return;
-    const publication = parseUserQuestionPublication(
-      item.content.text.slice(offset),
+    if (!identity || offset !== observed.offset)
+      fail(
+        "original request provenance or body offset is unavailable or inconsistent",
+      );
+    if (item.content.parts?.length)
+      fail("publication has unsupported additional model content");
+    const publication = validateUserQuestionPublication(
+      observed.marker,
       identity,
       call.source.sequence,
     );
-    if (publication === undefined) {
-      // Old forks discarded their origin Item-ID mapping. A recognizable
-      // machine receipt must never fall back to exposing its private IDs to
-      // the model when provenance cannot be verified. Do not guess an origin
-      // from the receipt itself or rewrite ordinary user/Tool text.
-      let marker: unknown;
-      try {
-        marker = JSON.parse(item.content.text.slice(offset));
-      } catch {
-        return;
-      }
-      if (
-        marker !== null &&
-        typeof marker === "object" &&
-        "kind" in marker &&
-        marker.kind === USER_QUESTION_PUBLICATION_KIND
-      )
-        throw new Error(
-          `Cannot safely display user question publication ${item.id}: original request provenance is unavailable or inconsistent`,
-        );
-      return;
-    }
+    if (publication === undefined)
+      fail("original request provenance is unavailable or inconsistent");
     try {
       const specification = parseUserQuestionSpecification(
         call.content.arguments,
@@ -137,8 +190,9 @@ export function userQuestionModelProjection(
     } catch {
       // A successful machine publication with an invalid specification is
       // corrupt history, not a plain-text fallback carrying private IDs.
-      throw new Error(
-        `Cannot safely display user question publication ${item.id}: original question specification is invalid`,
+      throw new UserQuestionDisplayError(
+        item.id,
+        "original question specification is invalid",
       );
     }
   });
@@ -151,6 +205,11 @@ export function userQuestionModelProjection(
   for (const entry of ordered) {
     entry.numbers = entry.specification.questions.map(() => `Q${next++}`);
     const identities = byIdentity.get(identityKey(entry.identity)) ?? [];
+    if (identities.length !== 0)
+      throw new UserQuestionDisplayError(
+        entry.call.id,
+        "original request identity is ambiguous",
+      );
     identities.push(entry);
     byIdentity.set(identityKey(entry.identity), identities);
     for (const { item } of entry.receipts) {
@@ -187,22 +246,47 @@ export function userQuestionModelProjection(
       const entry = candidates[0]!;
       const normalized = normalizeUserQuestionReply(entry.specification, reply);
       const offset = item.source.metadata.bodyStart;
-      if (
-        typeof offset !== "number" ||
-        !Number.isSafeInteger(offset) ||
-        offset < 0
-      )
-        continue;
-      const body = textFromUserInput(item.content.parts.slice(offset));
-      if (
-        !matchesUserQuestionReplyBody(
+      const matchesAt = (position: number) =>
+        matchesUserQuestionReplyBody(
           entry.specification,
           normalized,
-          body,
+          textFromUserInput(item.content.parts.slice(position)),
           entry.receipts[0]!.requestRef,
-        )
+        );
+      const validOffset =
+        typeof offset === "number" &&
+        Number.isSafeInteger(offset) &&
+        offset >= 0 &&
+        offset <= item.content.parts.length;
+      const machineOffset =
+        receiptPrefix(item.content.parts[0]) && matchesAt(1)
+          ? 1
+          : matchesAt(0)
+            ? 0
+            : validOffset && matchesAt(offset)
+              ? offset
+              : undefined;
+      if (machineOffset === undefined) continue; // Literal or forged body stays literal.
+      if (
+        !validOffset ||
+        offset !== machineOffset ||
+        (machineOffset !== 0 &&
+          (machineOffset !== 1 || !receiptPrefix(item.content.parts[0])))
       )
-        continue;
+        throw new UserQuestionDisplayError(
+          item.id,
+          "generated reply body offset is unavailable or inconsistent",
+        );
+      const bodyParts = item.content.parts.slice(machineOffset);
+      if (
+        bodyParts.length !== 1 ||
+        bodyParts[0]?.type !== "text" ||
+        bodyParts[0].skillSource !== undefined
+      )
+        throw new UserQuestionDisplayError(
+          item.id,
+          "generated reply has unsupported body parts or annotations",
+        );
       let text: string;
       if (normalized.outcome === "cancel")
         text = `I chose not to answer ${entry.numbers.join(", ")}.`;
@@ -234,7 +318,8 @@ export function userQuestionModelProjection(
         ...item,
         content: { text: textFromUserInput(parts), parts },
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof UserQuestionDisplayError) throw error;
       /* Invalid provenance/body remains original untrusted content. */
     }
   }
