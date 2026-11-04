@@ -164,7 +164,7 @@ test("closing a session stops live reads before its unsettled action can release
 });
 
 test("finishing a session with a temporary page stops live reads before queued cleanup", async () => {
-  const cdp = await createFakeCdpServer();
+  const cdp = await createFakeCdpServer({ closeTargetsWithoutEvents: true });
   const connection = await connectUserBrowserCdp(cdp.endpoint, undefined, {
     liveFrameImageDecoder: fakeImageDecoder,
   });
@@ -282,6 +282,82 @@ test("unknown detach keeps the public lease fail-closed while stopping live read
     assert.equal(cdp.count("Target.closeTarget"), 0);
   } finally {
     stopCatalog();
+    await capability.close().catch(() => undefined);
+    await cdp.close();
+  }
+});
+
+test("failed temporary-page cleanup never becomes a confirmed release receipt", async () => {
+  const cdp = await createFakeCdpServer();
+  const connection = await connectUserBrowserCdp(cdp.endpoint);
+  const capability = new BrowserZenXCapabilityPackage(connection.backend);
+  const invoke = (
+    name: string,
+    args: Record<string, unknown> = {},
+    signal = new AbortController().signal,
+  ) =>
+    capability.invoke(name, {
+      name,
+      callId: name,
+      threadId: "thread",
+      cwd: process.cwd(),
+      arguments: { sessionId: "task", observe: false, ...args },
+      signal,
+    });
+  cdp.interceptRequests((request, emit) => {
+    if (request.method === "Target.closeTarget")
+      emit({
+        id: request.id,
+        error: {
+          code: -32000,
+          message: "Synthetic temporary-page cleanup failure",
+        },
+      });
+  });
+  try {
+    const tab = (await invoke("browser_open", {
+      url: "https://example.test/temporary",
+    })) as BrowserTabSummary;
+    const inspected = (await invoke("browser_inspect", {
+      tabId: tab.tabId,
+    })) as BrowserInspection;
+    cdp.holdNextActionReply();
+    const controller = new AbortController();
+    const action = invoke(
+      "browser_click",
+      {
+        tabId: tab.tabId,
+        observationId: inspected.observationId,
+        targetId: inspected.targets[0]!.targetId,
+      },
+      controller.signal,
+    );
+    await cdp.heldActionStarted();
+    controller.abort();
+    await assert.rejects(action, /outcome is unknown/u);
+    const closing = invoke("browser_close_session");
+    const receipt = assert.rejects(closing, (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.notEqual(
+        error.name,
+        "BrowserSessionReleasedWithUnknownEffectsError",
+      );
+      assert.match(error.message, /temporary.page cleanup/u);
+      return true;
+    });
+    await nextTurn();
+    assert.equal(cdp.count("Target.closeTarget"), 0);
+    cdp.releaseLateActionReply();
+    await receipt;
+    assert.equal(cdp.count("Target.closeTarget"), 1);
+    assert.equal(cdp.count("Target.detachFromTarget"), 1);
+    await assert.rejects(
+      invoke("browser_list_tabs"),
+      /outcome is unknown|tainted/u,
+    );
+    assert.equal(cdp.count("Target.attachToTarget"), 1);
+  } finally {
+    cdp.releaseLateActionReply();
     await capability.close().catch(() => undefined);
     await cdp.close();
   }

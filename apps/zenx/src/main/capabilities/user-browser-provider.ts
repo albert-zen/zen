@@ -1563,8 +1563,16 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         );
       }),
     );
-    await this.closeSession(sessionId);
     const failure = outcomes.find((r) => r.status === "rejected");
+    if (failure?.status === "rejected") {
+      // A confirmed detach cannot stand in for an unconfirmed temporary-page
+      // cleanup. Preserve that evidence before closeSession classifies release.
+      this.#taintSession(
+        session,
+        `temporary-page cleanup failed (${describeError(failure.reason)})`,
+      );
+    }
+    await this.closeSession(sessionId);
     if (failure?.status === "rejected") throw failure.reason;
   }
 
