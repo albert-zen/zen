@@ -1049,7 +1049,7 @@ correlation/buffer；所有 incomplete Item 都不重放给模型。
 
 **Empty reasoning observation** — Provider 已发出的 reasoning lifecycle 即使无公开文本或可回放状态也保留为现有 Trace 的 reasoning 观察，完成或中断状态照实展示；空公开观察不进入语义 ItemList、compiler selected IDs、模型回放或估算，usage 仍仅来自 Provider 报告。公共 Responses 缺少必需加密续接时仍失败关闭，不以空观察伪造 continuation。
 
-Responses 的公开 reasoning summary 由 adapter 对已验证的 OpenAI 官方端点及明确模型请求 `summary: auto`；未知模型、别名、第三方兼容端点与不请求 reasoning 的采样不自动添加该参数。摘要是否返回仍由 Provider 决定，摘要不是 opaque reasoning 的解码，也不改变其持久化与回放。
+Responses 的公开 reasoning summary 由 adapter 对 OpenAI 官方 Responses/Codex 端点在启用 reasoning 时默认请求 `summary: auto`，不按模型版本或别名筛选；第三方兼容端点与不请求 reasoning 的采样不自动添加该参数。此为请求策略而非能力保证；摘要是否返回仍由 Provider 决定，参数被拒绝不会触发新增的重放或回退。摘要不是 opaque reasoning 的解码，也不改变其持久化与回放。
 
 Reasoning control 只有一个权威：UI/Core 在 Turn admission 时冻结 canonical
 `reasoningEffort`，ModelAdapter 只把该值翻译为目标模型支持的 wire 字段。OpenAI-compatible

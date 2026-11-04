@@ -24,8 +24,19 @@ import { createRunCodeModelTool } from "../src/tool-presentation.js";
 const accountId = "acct_zen_test";
 const secretAccessToken = jwt(accountId);
 
-test("subscription requests public summaries only for known OpenAI reasoning models and routes", async (t) => {
+test("subscription requests summaries by official route without model-name gating", async (t) => {
   const cases = [
+    ...[
+      "gpt-6.1-terra",
+      "future-reasoner",
+      "reasoning-alias",
+      "gpt-5.4-2026-03-05",
+    ].map((model) => ({
+      model,
+      expected: "auto",
+      effort: undefined,
+      endpoint: undefined,
+    })),
     { model: "gpt-5.6-terra", expected: "auto" },
     { model: "gpt-5.6-sol", expected: "auto" },
     { model: "gpt-5.6-luna", expected: "auto" },
@@ -34,8 +45,8 @@ test("subscription requests public summaries only for known OpenAI reasoning mod
     { model: "gpt-6-astra", expected: "auto" },
     { model: "gpt-6.1-sol", expected: "auto" },
     { model: "gpt-5.4", effort: "none", expected: undefined },
-    { model: "gpt-5.3-codex-spark", expected: undefined },
-    { model: "unknown-model", expected: undefined },
+    { model: "gpt-5.3-codex-spark", expected: "auto" },
+    { model: "unknown-model", expected: "auto" },
     {
       model: "gpt-5.6-terra",
       endpoint: "https://example.test/backend-api/codex/responses",
