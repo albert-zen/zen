@@ -1,0 +1,57 @@
+{
+  "repository": "albert-zen/zen",
+  "PR": 686,
+  "productHead": "d7f8049efda1d645348ca1924a87d93f68ad616c",
+  "productTree": "5a65c85212d74719b5fbd529a4dde8e72121d0db",
+  "capturedCommit": "c5bfed0f2376d38b2c1676f6038b42c59811b19e",
+  "capturedCommitParents": [
+    "869921bd6ba827880113ca1e14a12ac6e2324b1e",
+    "d7f8049efda1d645348ca1924a87d93f68ad616c"
+  ],
+  "sameProductTreeVerified": true,
+  "runURL": "https://github.com/albert-zen/zen/actions/runs/41773442192",
+  "artifactId": 13296131013,
+  "artifactZIPsha256": "94d8b94f86e9763d8574668d4ce79b64b8e12eb517c68f0b00ea3c90bb47d7a2",
+  "platform": "Linux Chrome, sandbox enabled; desktop1100x820 and narrow390x600 viewports",
+  "scope": "Production ThreadView and ImagePreparationNotice with synthetic ItemList snapshots. No user data or image payloads. Not full App, Host, packaged native, physical OS input, mobile-device validation, or Send performance acceptance.",
+  "sourceHashes": {
+    "apps/zenx/src/renderer/src/ThreadView.tsx": "3e80e5e1a4f812971e5a5a401137252b0c1d233cc17c99a1df52785743fcef50",
+    "apps/zenx/src/renderer/src/ImagePreparationNotice.tsx": "48167280329e710a33cc6e4c7ab536499d74eb3ea55d1965299d428ed81f6ebb",
+    "apps/zenx/src/renderer/src/image-preparation-projection.ts": "334e0b0ba814489ae12020c56bc98efac77a24ec10a0af45c1a4ce584c005564",
+    "apps/zenx/src/renderer/src/styles.css": "f113cec837bc58c6bb62538d433a061d2c0f28e7f9870cfd9949543c0725824e",
+    "apps/zenx/src/renderer/src/theme.css": "6fe99f043bb28cc00757e6450e92241222a6714a83ff6737d3dd34a105ce8271",
+    "apps/zenx/src/renderer/src/i18n/shell.ts": "4793597ad6395106e67bd8c91609357b47e3e942d3f6585e13092fcfeb2839de",
+    "apps/zenx/test/fixtures/image-preparation-visual.tsx": "314be336f350ccc697dc71e9a673205ef258d087c35c16d309b84a700da33d58",
+    "apps/zenx/scripts/build-image-preparation-preview.mjs": "e7e135474091451ac22cef290e39b7650d9e4812fd1fe1d2680779b74e3d6fdd",
+    "apps/zenx/scripts/capture-image-preparation-preview.mjs": "b3ffc25a9bc4018f7eac696238f7209ac343466e855ebb079ce26948790aa4d6",
+    "apps/zenx/test/image-preparation-preview.test.mjs": "8bcced9de43679c088802d9edf8f70954763bebaff3aab742f75cf45a530138b",
+    ".github/workflows/ci.yml": "4fc6281ee981f1ecba3bda82fd31a831e612d0d593c916216dd7d8721cfc2a85"
+  },
+  "allSourceHashesMatchedCandidate": true,
+  "browserCapturePassed": true,
+  "captureErrors": [],
+  "caseCount": 4,
+  "originalScreenshotCount": 36,
+  "browserCleanupComplete": true,
+  "browserProfileRetained": false,
+  "independentVisualReview": "Passed within synthetic-browser scope; all36 PNGs reviewed through contact sheets and8 originals inspected.",
+  "componentConstructionResult": "Verified only in separate bounded real-React reducer tests:160turn metadata-only append1122 to2 historical Turn.id reads; preview wrapper7 to0. No milliseconds established.",
+  "endToEndPerformanceImprovement": "not established",
+  "images": [
+    {
+      "name": "desktop-en-expanded.png",
+      "bytes": 73028,
+      "sha256": "fc59f6af21a55c9979daaf5fb150f09e0ba0f83c1912ed9a41c8bcdc3960472e"
+    },
+    {
+      "name": "narrow-zh-mixed.png",
+      "bytes": 68789,
+      "sha256": "3b00357599f7bf3d69502e244575266e40e98a4f8a92a80d843170a8db26817e"
+    }
+  ],
+  "captureLimitations": [
+    "Six narrow Current/collapsed, expanded and keyboard captures clip notice upper content at transcript scroll boundary; no simultaneous whole-notice visibility established.",
+    "Focused keyboard checks explicitly establish focus; they do not verify Tab traversal or native accessibility.",
+    "No full App,Host,native OS,mobilehardware,baseline pixel equality,or actual Send latency improvement established."
+  ]
+}
