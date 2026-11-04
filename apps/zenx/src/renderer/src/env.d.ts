@@ -116,6 +116,7 @@ declare global {
           tabId?: string;
           lease: string;
           appearance?: "light" | "dark";
+          occluded?: boolean;
           bounds?: { x: number; y: number; width: number; height: number };
         }): Promise<void>;
         onChanged(

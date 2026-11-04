@@ -53,7 +53,12 @@ export class WorkspaceBrowserRenderer {
         throw new Error(
           "Browser mount changed before rendering; inspect again",
         );
-      if (mount && mount.window.isVisible() && !mount.window.isMinimized())
+      if (
+        mount &&
+        view.getVisible() &&
+        mount.window.isVisible() &&
+        !mount.window.isMinimized()
+      )
         return await operation();
       if (mount && !mount.window.contentView.children.includes(view))
         throw new Error("Browser view is not attached to its mount owner");

@@ -298,12 +298,13 @@ test("mounting during an Agent action fences its outcome while an unchanged moun
       inspection.observationId,
       inspection.targets[0]!.targetId,
     );
-    const mount = (appearance: "light" | "dark" = "light") =>
+    const mount = (appearance: "light" | "dark" = "light", occluded = false) =>
       fixture.browser.mount(fixture.sender as never, {
         threadId: "thread-a",
         tabId,
         lease: "lease-a",
         appearance,
+        occluded,
         bounds: { x: 0, y: 0, width: 640, height: 480 },
       });
     mount();
@@ -311,7 +312,10 @@ test("mounting during an Agent action fences its outcome while an unchanged moun
     await assert.rejects(acting, /outcome is unknown/u);
 
     inspection = await fixture.browser.inspect("agent-session", tabId);
-    mount("dark");
+    mount("dark", true);
+    assert.equal(fixture.views[0]!.visible, false);
+    mount("dark", false);
+    assert.equal(fixture.views[0]!.visible, true);
     web.debuggerApi.defaultValue = { ok: true };
     await fixture.browser.click(
       "agent-session",
@@ -1236,8 +1240,9 @@ class FakeView {
   }
   readonly webContents = new FakeWebContents();
   #bounds = { x: 0, y: 0, width: 0, height: 0 };
-  setVisible() {
-    return undefined;
+  visible = false;
+  setVisible(value: boolean) {
+    this.visible = value;
   }
   setBounds(bounds: { x: number; y: number; width: number; height: number }) {
     this.#bounds = bounds;
@@ -2524,5 +2529,129 @@ test("turn cleanup closes only this session's temporary pages and releases human
     assert.ok(remaining.every((t) => !t.temporary));
   } finally {
     await f.close();
+  }
+});
+
+test("occluded mounts stay hidden across bounds, tab and lease changes; stale cleanup cannot restore", async () => {
+  const f = await sharedFixture();
+  try {
+    const [first] = f.browser.command(f.sender as never, "thread-a", "new");
+    const second = f.browser
+      .command(f.sender as never, "thread-a", "new")
+      .find((tab) => tab.id !== first!.id)!;
+    const bounds = { x: 0, y: 0, width: 640, height: 480 };
+    const mount = (
+      tabId: string,
+      lease: string,
+      occluded: boolean,
+      width = 640,
+    ) =>
+      f.browser.mount(f.sender as never, {
+        threadId: "thread-a",
+        tabId,
+        lease,
+        occluded,
+        bounds: { ...bounds, width },
+      });
+    mount(first!.id, "first", true);
+    assert.equal(f.views[0]!.visible, false);
+    mount(first!.id, "first", true, 600);
+    assert.equal(f.views[0]!.visible, false);
+    mount(second.id, "second", true);
+    assert.equal(f.views[0]!.visible, false);
+    assert.equal(f.views[1]!.visible, false);
+    f.browser.mount(f.sender as never, {
+      threadId: "thread-a",
+      lease: "first",
+    });
+    assert.equal(f.views[1]!.visible, false);
+    mount(second.id, "second", false);
+    assert.equal(f.views[0]!.visible, false);
+    assert.equal(f.views[1]!.visible, true);
+    assert.throws(
+      () =>
+        f.browser.mount(f.sender as never, {
+          threadId: "thread-a",
+          tabId: second.id,
+          lease: "second",
+          bounds,
+          occluded: "false",
+        }),
+      /Invalid browser occlusion/,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("closing an overlay while its view is borrowed returns the exact visible mount and rejects late capture", async () => {
+  const { WorkspaceBrowserRenderer } =
+    await import("../src/main/workspace-browser-renderer.js");
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-overlay-render-"),
+  );
+  const owner = new PhysicalWindow();
+  owner.visible = true;
+  const view = new PhysicalView();
+  const renderer = new WorkspaceBrowserRenderer(
+    () => new PhysicalWindow() as never,
+    () => 1,
+  );
+  const browser = new WorkspaceBrowser({
+    artifactDirectory: directory,
+    dependencies: {
+      createView: () => view as never,
+      windowFor: () => owner as never,
+      renderWhileUnmounted: (v, current, operation) =>
+        renderer.render(v, current, operation),
+      releaseUnmountedView: (v) => renderer.release(v),
+      closeUnmountedRenderer: () => renderer.close(),
+    },
+  });
+  const entered = deferred<void>();
+  const finish = deferred<FakeImage>();
+  try {
+    browser.bindThreadSession("session", "thread");
+    const tab = await browser.open("session", "https://example.test/");
+    const bounds = { x: 20, y: 30, width: 640, height: 480 };
+    const mount = (occluded: boolean) =>
+      browser.mount(owner.webContents as never, {
+        threadId: "thread",
+        tabId: tab.tabId,
+        lease: "stable",
+        bounds,
+        occluded,
+      });
+    mount(true);
+    view.webContents.capturePage = async () => {
+      entered.resolve();
+      return await finish.promise;
+    };
+    const inspection = browser.inspect("session", tab.tabId);
+    const rejected = assert.rejects(inspection, /changed|stale|render/iu);
+    await entered.promise;
+    assert.notEqual(view.parent, owner);
+    mount(true);
+    assert.notEqual(
+      view.parent,
+      owner,
+      "same hidden presentation does not interrupt capture",
+    );
+    mount(false);
+    assert.equal(view.parent, owner);
+    assert.equal(view.visible, true);
+    assert.deepEqual(view.getBounds(), bounds);
+    finish.resolve(new FakeImage());
+    await rejected;
+    assert.equal(view.parent, owner);
+    assert.equal(
+      view.visible,
+      true,
+      "late cleanup cannot hide the restored view",
+    );
+  } finally {
+    finish.resolve(new FakeImage());
+    await browser.shutdown();
+    await rm(directory, { recursive: true, force: true });
   }
 });

@@ -1116,3 +1116,19 @@ test("owner takeover during redraw prevents the later native copy", async () => 
   assert.equal(captures, 0);
   assert.equal(f.view.parent, f.owner);
 });
+
+test("occluded view in a visible window renders offscreen and restores hidden", async () => {
+  const f = fixture();
+  f.owner.visible = true;
+  f.view.visible = false;
+  const bounds = f.view.getBounds();
+  await f.render(async () => {
+    assert.notEqual(f.view.parent, f.owner);
+    assert.equal(f.view.visible, true);
+  });
+  assert.equal(f.windows.length, 1);
+  assert.equal(f.view.parent, f.owner);
+  assert.equal(f.view.visible, false);
+  assert.deepEqual(f.view.getBounds(), bounds);
+  assert.equal(f.invalidations(), 0);
+});

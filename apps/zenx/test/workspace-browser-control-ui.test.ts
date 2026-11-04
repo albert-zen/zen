@@ -43,6 +43,7 @@ async function withPanel(
     pending: ReturnType<typeof deferred>[];
     unmount(): Promise<void>;
   }) => Promise<void>,
+  mountGate?: (request: Record<string, unknown>) => Promise<void>,
 ) {
   const dom = new JSDOM('<div id="root"></div>', {
     url: "https://zenx.local/",
@@ -66,6 +67,7 @@ async function withPanel(
         onFocusAddress: () => () => {},
         mount: async (request: Record<string, unknown>) => {
           mounts.push(request);
+          await mountGate?.(request);
         },
         command: (...args: unknown[]) => {
           calls.push(args);
@@ -463,4 +465,147 @@ test("human-mounted page retains one native lease through appearance and activit
     assert.equal(mounts.at(-1)!.lease, mounted.lease);
     assert.ok(mounts.every((request) => !("presentationId" in request)));
   });
+});
+
+test("image previews suppress native overlap until the final preview closes and preserve the lease", async () => {
+  const { ImageUrlPreview } =
+    await import("../src/renderer/src/ImagePresentation.js");
+  await withPanel(async ({ mounts }) => {
+    const viewport = document.querySelector<HTMLElement>(
+      ".workspace-browser-viewport",
+    )!;
+    viewport.getBoundingClientRect = () => ({
+      x: 500,
+      y: 0,
+      width: 500,
+      height: 700,
+      left: 500,
+      right: 1000,
+      top: 0,
+      bottom: 700,
+      toJSON() {},
+    });
+    await act(async () => window.dispatchEvent(new window.Event("resize")));
+    const initial = mounts.at(-1)!;
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const trigger = document.createElement("button");
+    document.body.append(trigger);
+    const preview = (key: string) =>
+      React.createElement(ImageUrlPreview, {
+        key,
+        name: key,
+        url: null,
+        error: null,
+        onClose() {},
+        trigger,
+      });
+    await act(async () =>
+      root.render(
+        React.createElement(
+          React.Fragment,
+          null,
+          preview("one"),
+          preview("two"),
+        ),
+      ),
+    );
+    for (const layer of document.querySelectorAll<HTMLElement>(
+      ".image-preview-layer",
+    )) {
+      layer.getBoundingClientRect = () => ({
+        x: 0,
+        y: 0,
+        width: 1000,
+        height: 700,
+        left: 0,
+        right: 1000,
+        top: 0,
+        bottom: 700,
+        toJSON() {},
+      });
+    }
+    await act(async () => window.dispatchEvent(new window.Event("resize")));
+    assert.equal(mounts.at(-1)!.occluded, true);
+    assert.equal(mounts.at(-1)!.lease, initial.lease);
+    assert.deepEqual(mounts.at(-1)!.bounds, initial.bounds);
+    await act(async () =>
+      root.render(React.createElement(React.Fragment, null, preview("two"))),
+    );
+    assert.equal(mounts.at(-1)!.occluded, true);
+    await act(async () => root.unmount());
+    assert.equal(mounts.at(-1)!.occluded, false);
+    assert.equal(mounts.at(-1)!.lease, initial.lease);
+    host.remove();
+    trigger.remove();
+  });
+});
+
+test("rapid overlay close and resize coalesce behind pending mount IPC without stale visibility", async () => {
+  const { registerNativeViewOverlay } =
+    await import("../src/renderer/src/native-view-overlays.js");
+  const gate = deferred();
+  let delayed = false;
+  await withPanel(
+    async ({ mounts }) => {
+      const viewport = document.querySelector<HTMLElement>(
+        ".workspace-browser-viewport",
+      )!;
+      let x = 500;
+      viewport.getBoundingClientRect = () => ({
+        x,
+        y: 0,
+        width: 400,
+        height: 700,
+        left: x,
+        right: x + 400,
+        top: 0,
+        bottom: 700,
+        toJSON() {},
+      });
+      await act(async () => window.dispatchEvent(new window.Event("resize")));
+      const initial = mounts.at(-1)!;
+      const layer = document.createElement("div");
+      document.body.append(layer);
+      layer.getBoundingClientRect = () => ({
+        x: 0,
+        y: 0,
+        width: 1000,
+        height: 700,
+        left: 0,
+        right: 1000,
+        top: 0,
+        bottom: 700,
+        toJSON() {},
+      });
+      let close!: () => void;
+      await act(async () => {
+        close = registerNativeViewOverlay(layer);
+      });
+      assert.equal(mounts.at(-1)!.occluded, true);
+      const pendingCount = mounts.length;
+      await act(async () => {
+        close();
+        x = 450;
+        window.dispatchEvent(new window.Event("resize"));
+      });
+      assert.equal(
+        mounts.length,
+        pendingCount,
+        "no concurrent mount IPC can reorder visibility",
+      );
+      await act(async () => gate.resolve());
+      assert.equal(mounts.at(-1)!.occluded, false);
+      assert.equal(mounts.at(-1)!.lease, initial.lease);
+      assert.equal((mounts.at(-1)!.bounds as { x: number }).x, 450);
+      layer.remove();
+    },
+    async (request) => {
+      if (request.occluded && !delayed) {
+        delayed = true;
+        await gate.promise;
+      }
+    },
+  );
 });
