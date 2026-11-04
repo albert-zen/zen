@@ -11,8 +11,8 @@
   },
   "project": "src/winapp-CLI/WinApp.Cli/WinApp.Cli.csproj",
   "targetRid": "win-x64",
-  "dotnetSdk": "10.0.401",
-  "runtimeVersion": "10.0.12",
+  "dotnetSdk": "10.0.403",
+  "runtimeVersion": "10.0.14",
   "patch": {
     "path": "vendor/winapp-0.3.1/disable-auto-set-focus.patch",
     "sha256": "8b09be221d60cf51be31cfebf8c56a12d9cefc412b1b6926942583ec77f34900"
@@ -27,7 +27,7 @@
   "nodeVersion": "22.23.3",
   "dependencyLock": {
     "path": "vendor/winapp-0.3.1/packages.lock.json",
-    "sha256": "33e2b9b7fad15c4b582be384306f769ead57ac17cfc598672c3d361a54e4860a",
+    "sha256": "5a2ccda657a74e12dddd30d81c056b89c0581f9fd62efced20a37c5aa13e1019",
     "sizeBytes": 13704
   }
 }
