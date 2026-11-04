@@ -658,6 +658,12 @@ function compileCanonicalModelMessages(
         break;
       case "reasoning": {
         if (item.incomplete === true) break;
+        if (
+          item.contentVisibility === "public" &&
+          item.reasoningContent === "" &&
+          (item.summary === undefined || item.summary === "")
+        )
+          break;
         const producingSelection = turnSelections.get(item.turnId);
         if (
           targetSelection !== undefined &&

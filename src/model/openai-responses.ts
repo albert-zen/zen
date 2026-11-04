@@ -1,3 +1,4 @@
+import { supportsOpenAiReasoningSummary } from "./reasoning-summary.js";
 import {
   responsesToolPresentation,
   supportsHostedToolSearch,
@@ -252,7 +253,15 @@ export class OpenAiResponsesModel implements ModelAdapter {
       include: ["reasoning.encrypted_content"],
       ...(request.reasoningEffort === null
         ? {}
-        : { reasoning: { effort: request.reasoningEffort } }),
+        : {
+            reasoning: {
+              effort: request.reasoningEffort,
+              ...(request.reasoningEffort !== "none" &&
+              supportsOpenAiReasoningSummary(this.#endpoint, request.model)
+                ? { summary: "auto" }
+                : {}),
+            },
+          }),
       ...(tools.length === 0
         ? {}
         : { tools, tool_choice: "auto", parallel_tool_calls: true }),

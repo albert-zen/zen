@@ -1738,6 +1738,128 @@ test("streams one correlated reasoning lifecycle and journals one complete item"
   }
 });
 
+test("empty reasoning observations survive retries and cold reads without model replay or invented usage", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-empty-reasoning-"));
+  const directory = path.join(root, "threads");
+  const metadata = new InMemoryThreadMetadataStore();
+  const journal = new DomainThreadJournal({
+    directory,
+    trace: new FileTraceStore(path.join(root, "trace")),
+    metadata,
+  });
+  const requests: ModelMessage[][] = [];
+  let attempts = 0;
+  const model: ModelAdapter = {
+    provider: "empty-reasoning-observation",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(structuredClone(request.messages));
+      attempts++;
+      if (attempts <= 3) {
+        yield { type: "reasoning_started", reasoningId: "observed" };
+        if (attempts !== 2)
+          yield {
+            type: "reasoning",
+            reasoningId: "observed",
+            reasoningContent: "",
+            contentVisibility: "public",
+          };
+        if (attempts < 3)
+          throw retryableModelSampleError("synthetic stream interruption");
+        yield {
+          type: "usage",
+          inputTokens: 10,
+          outputTokens: 2,
+          reasoningOutputTokens: 1,
+        };
+      }
+      yield { type: "text_delta", delta: "answer" };
+    },
+  };
+  const server = createServer({
+    journal,
+    model,
+    runtime: new AgentRuntime({
+      toolEnvironment: new ToolEnvironment({ runtimes: [] }),
+      sampleRetry: { maxAttempts: 3, baseDelayMs: 0 },
+    }),
+  });
+  const events: AppServerEvent[] = [];
+  server.subscribe((event) => events.push(event));
+  try {
+    const thread = await server.startThread();
+    await (
+      await server.startTurn(thread.id, "think")
+    ).done;
+    const snapshot = await server.readThread(thread.id);
+    const reasoning = snapshot.items.filter(
+      (item) => item.type === "reasoning",
+    );
+    assert.equal(attempts, 3);
+    assert.deepEqual(
+      reasoning.map((item) => item.incomplete === true),
+      [true, true, false],
+    );
+    assert.equal(new Set(reasoning.map((item) => item.id)).size, 3);
+    assert.equal(
+      events.filter(
+        (event) =>
+          event.type === "item_started" && event.itemType === "reasoning",
+      ).length,
+      3,
+    );
+    assert.equal(
+      events.filter(
+        (event) =>
+          event.type === "item_completed" && event.item.type === "reasoning",
+      ).length,
+      3,
+    );
+    assert.equal(
+      (await journal.readItemList(thread.id)).some(
+        (item) => item.kind === "reasoning",
+      ),
+      false,
+    );
+    const usage = snapshot.items.filter((item) => item.type === "model_usage");
+    assert.equal(usage.length, 1);
+    assert.equal(usage[0]?.reasoningOutputTokens, 1);
+    await journal.close();
+    const coldJournal = new DomainThreadJournal({
+      directory,
+      trace: new FileTraceStore(path.join(root, "trace")),
+      metadata,
+    });
+    try {
+      const cold = createServer({ journal: coldJournal, model });
+      const recovered = await cold.readThread(thread.id);
+      assert.deepEqual(
+        recovered.items.filter((item) => item.type === "reasoning"),
+        reasoning,
+      );
+      assert.equal(
+        (await coldJournal.readItemList(thread.id)).some(
+          (item) => item.kind === "reasoning",
+        ),
+        false,
+      );
+      await (
+        await cold.startTurn(thread.id, "continue")
+      ).done;
+      assert.equal(
+        requests.some((messages) =>
+          messages.some((message) => message.role === "reasoning"),
+        ),
+        false,
+      );
+    } finally {
+      await coldJournal.close();
+    }
+  } finally {
+    await journal.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("failed reasoning samples preserve incomplete traces without replaying them during recovery", async () => {
   const requests: ModelMessage[][] = [];
   const model: ModelAdapter = {

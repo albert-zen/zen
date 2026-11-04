@@ -106,6 +106,10 @@ export async function* parseResponsesStream(
         const slot = outputSlot(item);
         if (slot !== undefined) {
           state.slots.set(outputIndex, slot);
+          if (slot.type === "reasoning") {
+            const started = startReasoningEvent(state, outputIndex);
+            if (started !== undefined) yield started;
+          }
         }
       }
       continue;
@@ -374,6 +378,8 @@ async function* finishOutputItem(
   }
 
   if (slot.type === "reasoning") {
+    const started = startReasoningEvent(state, outputIndex);
+    if (started !== undefined) yield started;
     const itemId = stringField(item, "id") ?? slot.itemId;
     const encryptedContent =
       stringField(item, "encrypted_content") ?? slot.encryptedContent;
@@ -394,8 +400,6 @@ async function* finishOutputItem(
       encryptedContent.length > 0
     ) {
       const finalText = reasoningSummaryText(replaySummary) || slot.text;
-      const started = startReasoningEvent(state, outputIndex);
-      if (started !== undefined) yield started;
       yield {
         type: "reasoning",
         reasoningId: reasoningStreamId(outputIndex),
@@ -406,17 +410,15 @@ async function* finishOutputItem(
       };
     } else {
       const finalText = reasoningSummaryText(replaySummary) || slot.text;
-      if (finalText.length > 0) {
-        const started = startReasoningEvent(state, outputIndex);
-        if (started !== undefined) yield started;
-        yield {
-          type: "reasoning",
-          reasoningId: reasoningStreamId(outputIndex),
-          reasoningContent: finalText,
-          summary: finalText,
-          contentVisibility: "public",
-        };
-      }
+      // A real completed provider item remains an observation even without
+      // public text or replayable state. Empty observations never enter ItemList.
+      yield {
+        type: "reasoning",
+        reasoningId: reasoningStreamId(outputIndex),
+        reasoningContent: finalText,
+        ...(finalText.length === 0 ? {} : { summary: finalText }),
+        contentVisibility: "public",
+      };
     }
   } else if (slot.type === "message") {
     const finalText = messageText(item);

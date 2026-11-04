@@ -183,7 +183,6 @@ import {
   type MessageTargetRequest,
 } from "./message-target-navigation.js";
 import {
-  groupReasoningWithoutDetailsRows,
   projectTurn,
   summarizeTraceActivity,
   traceSummary,
@@ -3847,114 +3846,78 @@ function TraceSequence({
               aria-label={i18n.t("shell:executionDetails")}
               tabIndex={0}
             >
-              {groupReasoningWithoutDetailsRows(traceDisplayRows(node.items))
-                // Models that do not expose reasoning should leave no
-                // completed "Think" heading behind in the transcript.
-                .filter((row) => {
-                  if ("kind" in row) {
-                    return node.items.some(
-                      (item) =>
-                        row.ids.includes(item.id) &&
-                        item.type === "reasoning" &&
-                        item.status === "inProgress",
-                    );
-                  }
-                  const item = row.item;
-                  return !(
-                    item.type === "reasoning" &&
-                    item.status !== "inProgress" &&
-                    item.status !== "interrupted" &&
-                    item.summary.every((part) => part.trim().length === 0) &&
-                    item.content.every((part) => part.trim().length === 0)
-                  );
-                })
-                .map((row) => {
-                  if ("kind" in row) {
-                    return (
-                      <div
-                        className="trace-item trace-reasoning-without-details"
-                        key={row.ids[0]}
+              {traceDisplayRows(node.items).map((row) => {
+                const { item, nested, parentToolName } = row;
+                const open =
+                  choices.get(disclosureKey("item", turn.id, item.id)) ?? false;
+                const expandable = traceItemExpandable(item);
+                return (
+                  <div
+                    className={`trace-item${nested ? " trace-item-nested" : ""}`}
+                    aria-label={
+                      nested
+                        ? i18n.t("shell:nestedToolInvokedBy", {
+                            tool: parentToolName ?? i18n.t("shell:parentCode"),
+                          })
+                        : undefined
+                    }
+                    key={item.id}
+                  >
+                    {expandable ? (
+                      <button
+                        className="trace-item-toggle"
+                        type="button"
+                        aria-expanded={open}
+                        onClick={() => {
+                          setVisitedItems((current) =>
+                            new Set(current).add(item.id),
+                          );
+                          setChoice(
+                            disclosureKey("item", turn.id, item.id),
+                            (current) => !current,
+                          );
+                        }}
                       >
-                        <div className="trace-item-static">
-                          <Icon name="reasoning" size={14} />
-                          <span>{i18n.t("shell:thinking")}</span>
-                        </div>
+                        <TraceItemHeader
+                          turnRunning={turn.status === "inProgress"}
+                          activeProcess={false}
+                          item={item}
+                          expandable
+                          turnStatus={turnStatus}
+                          approvalPending={approvals.some(
+                            (approval) => approval.params.itemId === item.id,
+                          )}
+                        />
+                      </button>
+                    ) : (
+                      <div className="trace-item-static">
+                        <TraceItemHeader
+                          turnRunning={turn.status === "inProgress"}
+                          activeProcess={false}
+                          item={item}
+                          expandable={false}
+                          turnStatus={turnStatus}
+                          approvalPending={approvals.some(
+                            (approval) => approval.params.itemId === item.id,
+                          )}
+                        />
                       </div>
-                    );
-                  }
-                  const { item, nested, parentToolName } = row;
-                  const open =
-                    choices.get(disclosureKey("item", turn.id, item.id)) ??
-                    false;
-                  const expandable = traceItemExpandable(item);
-                  return (
-                    <div
-                      className={`trace-item${nested ? " trace-item-nested" : ""}`}
-                      aria-label={
-                        nested
-                          ? i18n.t("shell:nestedToolInvokedBy", {
-                              tool:
-                                parentToolName ?? i18n.t("shell:parentCode"),
-                            })
-                          : undefined
-                      }
-                      key={item.id}
-                    >
-                      {expandable ? (
-                        <button
-                          className="trace-item-toggle"
-                          type="button"
-                          aria-expanded={open}
-                          onClick={() => {
-                            setVisitedItems((current) =>
-                              new Set(current).add(item.id),
-                            );
-                            setChoice(
-                              disclosureKey("item", turn.id, item.id),
-                              (current) => !current,
-                            );
-                          }}
-                        >
-                          <TraceItemHeader
-                            turnRunning={turn.status === "inProgress"}
-                            activeProcess={false}
+                    )}
+                    <ToolActionLink item={item} />
+                    {expandable ? (
+                      <TraceReveal open={open}>
+                        {visitedItems.has(item.id) || open ? (
+                          <TraceDetail
                             item={item}
-                            expandable
-                            turnStatus={turnStatus}
-                            approvalPending={approvals.some(
-                              (approval) => approval.params.itemId === item.id,
-                            )}
+                            pluginSnapshot={pluginSnapshot}
+                            pluginUiRegistry={pluginUiRegistry}
                           />
-                        </button>
-                      ) : (
-                        <div className="trace-item-static">
-                          <TraceItemHeader
-                            turnRunning={turn.status === "inProgress"}
-                            activeProcess={false}
-                            item={item}
-                            expandable={false}
-                            turnStatus={turnStatus}
-                            approvalPending={approvals.some(
-                              (approval) => approval.params.itemId === item.id,
-                            )}
-                          />
-                        </div>
-                      )}
-                      <ToolActionLink item={item} />
-                      {expandable ? (
-                        <TraceReveal open={open}>
-                          {visitedItems.has(item.id) || open ? (
-                            <TraceDetail
-                              item={item}
-                              pluginSnapshot={pluginSnapshot}
-                              pluginUiRegistry={pluginUiRegistry}
-                            />
-                          ) : null}
-                        </TraceReveal>
-                      ) : null}
-                    </div>
-                  );
-                })}
+                        ) : null}
+                      </TraceReveal>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
           ) : null}
         </TraceReveal>

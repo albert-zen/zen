@@ -2584,7 +2584,7 @@ test("opaque reasoning with a summary is a static summary row", async () => {
   });
 });
 
-test("adjacent no-details reasoning shares an honest count while tools and public summaries remain in order", async () => {
+test("grouped reasoning keeps every item without public details alongside tools and summaries", async () => {
   await withDom(async (root) => {
     await renderInteractive(
       root,
@@ -2601,9 +2601,19 @@ test("adjacent no-details reasoning shares an honest count while tools and publi
     await act(async () => requiredButton(".trace-toggle").click());
     const details = requiredElement(".trace-items");
     const rows = [...details.children].map((row) => row.textContent ?? "");
-    assert.equal(rows.length, 2);
-    assert.match(rows[0]!, /Shell/u);
-    assert.match(rows[1]!, /Public summary/u);
+    assert.equal(rows.length, 7);
+    assert.deepEqual(
+      rows.map((text) => text.trim()),
+      [
+        "Thought",
+        "Thought",
+        "Shell Run commandCompleted",
+        "Thought",
+        "Public summary",
+        "Thought",
+        "Thought",
+      ],
+    );
     assert.equal(
       details.querySelectorAll(".trace-reasoning-without-details").length,
       0,
@@ -2614,6 +2624,120 @@ test("adjacent no-details reasoning shares an honest count while tools and publi
       0,
     );
   });
+});
+
+test("native opaque reasoning keeps summary and empty rows through completion without exposing provider payload", async () => {
+  let value = thread([turnWithItems("inProgress", [])]);
+  for (const [id, summary] of [
+    ["opaque-empty", undefined],
+    ["opaque-summary", "Visible provider summary"],
+  ] as const) {
+    value = applyNativeThreadEvent(value, {
+      type: "item_completed",
+      item: {
+        type: "reasoning",
+        id,
+        threadId: value.id,
+        turnId: "turn-1",
+        createdAt: "2026-11-04T00:00:00.000Z",
+        contentVisibility: "opaque",
+        reasoningContent: "opaque-payload-must-not-be-rendered",
+        ...(summary === undefined ? {} : { summary }),
+      },
+    });
+  }
+  await withDom(async (root) => {
+    await renderInteractive(root, value.turns[0]!);
+    await act(async () => requiredButton(".trace-toggle").click());
+    const assertRows = () => {
+      assert.deepEqual(
+        [...requiredElement(".trace-items").children].map(
+          (row) => row.textContent,
+        ),
+        ["Thought", "Visible provider summary"],
+      );
+      assert.doesNotMatch(
+        document.body.innerHTML,
+        /opaque-payload-must-not-be-rendered/u,
+      );
+      assert.equal(
+        document.querySelectorAll(".trace-items [aria-expanded]").length,
+        0,
+      );
+    };
+    assertRows();
+    await renderInteractive(root, {
+      ...value.turns[0]!,
+      status: "completed",
+      items: [...value.turns[0]!.items, agent("Done")],
+    });
+    await act(async () => requiredButton(".turn-toggle").click());
+    assertRows();
+  });
+});
+
+test("true empty public reasoning survives native completion interruption and recovery without an empty disclosure", async () => {
+  const { emptyReasoningScenario } =
+    await import("./fixtures/empty-reasoning-scenario.js");
+  for (const terminal of ["completed", "interrupted"] as const) {
+    await withDom(async (root) => {
+      for (const phase of [
+        "started",
+        terminal,
+        `restored-${terminal}`,
+      ] as const) {
+        const value = emptyReasoningScenario(phase);
+        const reasoning = value.turns[0]!.items.filter(
+          (item) => item.type === "reasoning",
+        );
+        assert.equal(reasoning.length, 1);
+        assert.equal(reasoning[0]!.id, "empty-observation");
+        assert.equal(reasoning[0]!.summary.join(""), "");
+        assert.equal(reasoning[0]!.content.join(""), "");
+        assert.equal(
+          reasoning[0]!.status,
+          phase === "started"
+            ? "inProgress"
+            : terminal === "interrupted"
+              ? "interrupted"
+              : undefined,
+        );
+        if (phase.startsWith("restored")) {
+          const canonical = value.canonicalItems!.find(
+            (item) => item.id === "empty-observation",
+          );
+          assert.ok(canonical?.type === "reasoning");
+          assert.equal(canonical.contentVisibility, "public");
+          assert.equal(canonical.reasoningContent, "");
+          assert.equal(canonical.summary, undefined);
+          assert.equal(canonical.providerItemId, undefined);
+          await act(async () => root.render(null));
+        }
+        await renderInteractive(root, value.turns[0]!);
+        const turnToggle =
+          document.querySelector<HTMLButtonElement>(".turn-toggle");
+        if (turnToggle?.getAttribute("aria-expanded") === "false")
+          await act(async () => turnToggle.click());
+        const row = requiredElement(".trace-singleton");
+        assert.match(
+          row.textContent ?? "",
+          phase === "started" ? /Thinking/ : /Thought/,
+        );
+        assert.equal(
+          row.querySelectorAll("button, [aria-expanded], .trace-detail").length,
+          0,
+        );
+        assert.equal(
+          row.querySelectorAll(".mini-spinner").length,
+          phase === "started" ? 1 : 0,
+        );
+        assert.equal(
+          row.querySelectorAll(".tool-status.interrupted").length,
+          phase !== "started" && terminal === "interrupted" ? 1 : 0,
+        );
+      }
+    });
+  }
 });
 
 test("opaque reasoning without a summary exposes only a neutral static row", async () => {

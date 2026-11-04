@@ -11757,10 +11757,6 @@ button:disabled {
   }
 }
 
-.trace-reasoning-without-details .trace-item-static {
-  grid-template-columns: 16px minmax(0, 1fr);
-}
-
 .sidebar-settings-row {
   display: flex;
   align-items: center;

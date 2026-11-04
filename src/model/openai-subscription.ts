@@ -1,3 +1,4 @@
+import { supportsOpenAiReasoningSummary } from "./reasoning-summary.js";
 import { retryableModelSampleError } from "../model.js";
 import {
   parseResponsesStream,
@@ -168,6 +169,10 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
           request.reasoningEffort ?? "",
           "reasoning effort",
         ),
+        ...(request.reasoningEffort !== "none" &&
+        supportsOpenAiReasoningSummary(this.#endpoint, request.model)
+          ? { summary: "auto" }
+          : {}),
       },
       tool_choice: tools.length === 0 ? "none" : "auto",
       parallel_tool_calls: true,

@@ -24,6 +24,59 @@ import { createRunCodeModelTool } from "../src/tool-presentation.js";
 const accountId = "acct_zen_test";
 const secretAccessToken = jwt(accountId);
 
+test("subscription requests public summaries only for known OpenAI reasoning models and routes", async (t) => {
+  const cases = [
+    { model: "gpt-5.6-terra", expected: "auto" },
+    { model: "gpt-5.6-sol", expected: "auto" },
+    { model: "gpt-5.6-luna", expected: "auto" },
+    { model: "gpt-5.5", expected: "auto" },
+    { model: "gpt-5.4", expected: "auto" },
+    { model: "gpt-6-astra", expected: "auto" },
+    { model: "gpt-6.1-sol", expected: "auto" },
+    { model: "gpt-5.4", effort: "none", expected: undefined },
+    { model: "gpt-5.3-codex-spark", expected: undefined },
+    { model: "unknown-model", expected: undefined },
+    {
+      model: "gpt-5.6-terra",
+      endpoint: "https://example.test/backend-api/codex/responses",
+      expected: undefined,
+    },
+  ];
+  for (const entry of cases) {
+    await t.test(
+      `${entry.model} ${entry.effort ?? "medium"} at ${entry.endpoint ?? "OpenAI"}`,
+      async () => {
+        let body: Record<string, unknown> = {};
+        const adapter = new OpenAiSubscriptionModel({
+          acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
+          ...(entry.endpoint === undefined ? {} : { endpoint: entry.endpoint }),
+          fetch: async (_input, init) => {
+            body = requestBody(init);
+            return sseResponse([
+              {
+                type: "response.completed",
+                response: { status: "completed", output: [] },
+              },
+            ]);
+          },
+        });
+        const effort = entry.effort ?? "medium";
+        await collect(
+          adapter.stream(
+            request({ model: entry.model, reasoningEffort: effort }),
+          ),
+        );
+        assert.deepEqual(body.reasoning, {
+          effort,
+          ...(entry.expected === undefined ? {} : { summary: entry.expected }),
+        });
+        assert.deepEqual(body.include, ["reasoning.encrypted_content"]);
+        assert.equal(body.store, false);
+      },
+    );
+  }
+});
+
 test("subscription transports run_code as raw source with stable ids and arguments", async () => {
   let body: Record<string, unknown> = {};
   const adapter = new OpenAiSubscriptionModel({
@@ -453,7 +506,7 @@ test("sends a native Codex Responses request and maps SSE output", async () => {
   assert.equal(JSON.stringify(body.input).includes("encrypted_content"), false);
 });
 
-test("ignores an empty subscription reasoning output without opening a lifecycle", async () => {
+test("preserves an empty subscription reasoning output as a completed observation", async () => {
   const adapter = new OpenAiSubscriptionModel({
     acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
     fetch: async () =>
@@ -480,6 +533,13 @@ test("ignores an empty subscription reasoning output without opening a lifecycle
   });
 
   assert.deepEqual(await collect(adapter.stream(request())), [
+    { type: "reasoning_started", reasoningId: "reasoning:0" },
+    {
+      type: "reasoning",
+      reasoningId: "reasoning:0",
+      reasoningContent: "",
+      contentVisibility: "public",
+    },
     { type: "usage", inputTokens: 3, outputTokens: 0 },
   ]);
 });
