@@ -198,11 +198,14 @@ test("complete publication append order is stable across late-call repair, dupli
         callId,
         exitCode,
         executionStatus: "completed",
-        output: JSON.stringify({
-          kind: "zen.user-question.published",
-          version: 1,
-          request: { threadId: "synthetic-thread", callItemId: callId },
-        }),
+        output:
+          exitCode === 0
+            ? JSON.stringify({
+                kind: "zen.user-question.published",
+                version: 1,
+                request: { threadId: "synthetic-thread", callItemId: callId },
+              })
+            : "Question publication failed",
       },
       [],
       sequence,
@@ -225,6 +228,16 @@ test("complete publication append order is stable across late-call repair, dupli
   assert.deepEqual(results(first), [["Q1"]]);
   const repaired = [...first, call("late-call", 1)];
   assert.deepEqual(results(repaired), [["Q2"], ["Q1"]]);
+  assert.throws(
+    () =>
+      results([
+        ...repaired,
+        call("corrupt", 32, false),
+        receipt("corrupt-result", "corrupt", 33),
+      ]),
+    /Cannot safely display user question publication.*specification is invalid/,
+    "a corrupt successful machine publication cannot fall back to private-ID text",
+  );
   assert.deepEqual(
     results([
       ...repaired,
@@ -232,7 +245,7 @@ test("complete publication append order is stable across late-call repair, dupli
       call("failed", 33),
       receipt("failed-result", "failed", 34, 1),
       call("invalid", 35, false),
-      receipt("invalid-result", "invalid", 36),
+      receipt("invalid-result", "invalid", 36, 1),
       call("final", 37),
       receipt("final-result", "final", 38),
     ]),

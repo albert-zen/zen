@@ -116,3 +116,12 @@ custom templates/options; old ID/key-only/previous numbered histories; wrong
 number/key/body/outcome or missing provenance; literal human UUIDs unchanged.
 Existing no-question/hot-read projection-cost assertions remain intact. Evidence
 must bind to the final source tree; old candidate CI is not new-code acceptance.
+
+## Legacy fork boundary
+
+Forks written before typed display-origin provenance discarded the original
+Item-ID mapping. When an inherited machine publication cannot be verified against
+its original native identity, compilation stops with a diagnostic instead of
+showing private machine IDs or guessing a question number. Ordinary user text is
+unchanged. Recovering that missing mapping would require separately verified
+read-only source-Thread provenance; this implementation does not invent it.

@@ -52,7 +52,7 @@ export class AskUserQuestionToolRuntime implements ToolRuntime {
   readonly specification = {
     name: ASK_USER_QUESTION_NAME,
     description:
-      "Ask the user one or more questions with optional choices and free-text answers. This publishes a question card and returns immediately; it does not wait for an answer. Answers or explicit cancellation arrive later as ordinary user messages linked to this request. Continue independent work, or finish your turn if the next step requires the answer. Do not poll or treat defaults as user approval. Do not request secrets or use this tool instead of a permission approval flow. Questions are immutable: use a new call for a new request. The system assigns consecutive Thread question numbers Q1, Q2 and so on in publication order and uses them in the returned receipt and later answers. You need only supply question text and option labels; optional IDs are local template/answer bindings, not question numbers. You may omit answerTemplate to receive answers labelled by the assigned question number. An explicit answerTemplate must contain each question ID exactly once as {{id}}; no expressions are evaluated. Free-text answers are always supported.",
+      "Ask the user one or more questions with optional choices and free-text answers. This publishes a question card and returns immediately; it does not wait for an answer. Answers or explicit cancellation arrive later as ordinary user messages linked to this request. Continue independent work, or finish your turn if the next step requires the answer. Do not poll or treat defaults as user approval. Do not request secrets or use this tool instead of a permission approval flow. Questions are immutable: use a new call for a new request. For native Thread questions, the system assigns consecutive question numbers Q1, Q2 and so on in publication order and uses them in the returned receipt and later answers. You need only supply question text and option labels; optional IDs are local template/answer bindings, not question numbers. You may omit answerTemplate to receive native Thread answers labelled by the assigned question number. An explicit answerTemplate must contain each question ID exactly once as {{id}}; no expressions are evaluated. Free-text answers are always supported.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -96,7 +96,7 @@ export class AskUserQuestionToolRuntime implements ToolRuntime {
           minLength: 1,
           maxLength: 4096,
           description:
-            "Optional reply formatting. Include each question ID exactly once as {{id}}. If omitted, answers are labelled by question ID in authored order.",
+            "Optional reply formatting. Include each local question binding ID exactly once as {{id}}. If omitted, native Thread answers use assigned system question numbers in authored order.",
         },
       },
     },

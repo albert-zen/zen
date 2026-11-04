@@ -9,6 +9,7 @@ import { FileTraceStore } from "../src/trace.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import { compileItemList, type ContextItem } from "../src/item-list.js";
 import { textFromUserInput } from "../src/item.js";
+import { FakeModel, type ModelRequest } from "../src/model.js";
 import { readUserQuestions } from "../src/user-question-state.js";
 
 function compileText(items: readonly ContextItem[], usersOnly = false) {
@@ -329,6 +330,31 @@ test("real Host question numbering survives cold legacy replay and exact-body gu
           ),
         );
         assert.deepEqual((await host.listUserQuestions(fork.id)).questions, []);
+        const oldFork = structuredClone(fork.itemList!);
+        for (const item of oldFork) {
+          if (item.kind === "tool_call")
+            delete item.source.metadata?.questionOrigin;
+        }
+        assert.throws(
+          () => compileItemList(oldFork),
+          /Cannot safely display user question publication.*provenance/,
+          "old forks without a verified origin stop sampling, never expose private machine IDs",
+        );
+        const wrongOrigin = structuredClone(fork.itemList!);
+        const inheritedCall = wrongOrigin.find(
+          (item) =>
+            item.kind === "tool_call" &&
+            item.content.name === "ask_user_question",
+        )!;
+        inheritedCall.source.metadata!.questionOrigin = {
+          threadId: thread.id,
+          callItemId: "unrelated-call",
+        };
+        assert.throws(
+          () => compileItemList(wrongOrigin),
+          /Cannot safely display user question publication.*provenance/,
+          "a wrong origin must not acquire display authority from its own receipt",
+        );
         await (
           await host.startTurn(fork.id, ask())
         ).done;
@@ -385,6 +411,138 @@ test("real Host question numbering survives cold legacy replay and exact-body gu
           "selection must not renumber Q2 to Q1",
         );
         assert.ok(!compacted.includes('"id":"Q1"'));
+        const nested = await host.forkThread({
+          sourceThreadId: fork.id,
+          through: { type: "latest-complete" },
+          workspace: { type: "same-directory" },
+        });
+        assert.deepEqual(
+          (await host.listUserQuestions(nested.id)).questions,
+          [],
+        );
+        const origins = nested
+          .itemList!.filter(
+            (item) =>
+              item.kind === "tool_call" &&
+              item.content.name === "ask_user_question",
+          )
+          .map((item) => item.source.metadata!.questionOrigin);
+        assert.deepEqual(
+          origins,
+          [request.request, local.request],
+          "nested copies preserve original typed identities, not intermediate copy IDs",
+        );
+        await host.closeHostResources();
+        host = createHostedAppServer(options);
+        assert.deepEqual(
+          (await host.readThread(nested.id)).itemList,
+          nested.itemList,
+        );
+        assert.ok(
+          compileText(nested.itemList!).includes("I chose not to answer Q2."),
+        );
+        await (
+          await host.startTurn(nested.id, ask())
+        ).done;
+        const third = (await host.listUserQuestions(nested.id)).questions[0]!;
+        assert.ok(
+          compileText((await host.readThread(nested.id)).itemList!).includes(
+            '{"questions":[{"id":"Q3","key":"scope"}]}',
+          ),
+        );
+        await (
+          await host.respondToUserQuestion(nested.id, {
+            questionCallItemId: third.request.callItemId,
+            clientId: "nested-answer",
+            outcome: "answer",
+            answers: [{ questionId: "scope", optionIds: ["small"] }],
+          })
+        ).turn.done;
+        const beforeCompaction = await host.readThread(nested.id);
+        const compactionRequests: ModelRequest[] = [];
+        const originalStream = FakeModel.prototype.stream;
+        FakeModel.prototype.stream = async function* (modelRequest) {
+          if (modelRequest.debugContext?.purpose === "compaction")
+            compactionRequests.push(modelRequest);
+          yield* originalStream.call(this, modelRequest);
+        };
+        try {
+          await host.compactThread(nested.id, {
+            includeOriginalReference: false,
+            retention: { mode: "selected-items", recentTurnCount: 1 },
+          });
+        } finally {
+          FakeModel.prototype.stream = originalStream;
+        }
+        assert.ok(
+          compactionRequests.length > 0,
+          "inspect real auxiliary ModelRequest, not only a hand-built compiler selection",
+        );
+        const auxiliaryText = JSON.stringify(
+          compactionRequests.map((request) => request.messages),
+        );
+        assert.ok(
+          auxiliaryText.includes('\\"id\\":\\"Q3\\"'),
+          "auxiliary compaction must consume numbered publications",
+        );
+        assert.ok(auxiliaryText.includes("Reply to Q3:"));
+        assert.ok(
+          !auxiliaryText.includes("zen.user-question.published"),
+          "auxiliary input must not regress to native machine envelopes",
+        );
+        const afterCompaction = await host.readThread(nested.id);
+        assert.deepEqual(
+          afterCompaction.items.slice(0, beforeCompaction.items.length),
+          beforeCompaction.items,
+        );
+        assert.ok(
+          afterCompaction.itemList!.some((item) => item.kind === "selection"),
+        );
+        assert.ok(
+          compileText(afterCompaction.itemList!, true).includes("Reply to Q3:"),
+        );
+        await host.closeHostResources();
+        host = createHostedAppServer(options);
+        assert.deepEqual(
+          (await host.readThread(nested.id)).itemList,
+          afterCompaction.itemList,
+        );
+        assert.equal(
+          (
+            await host.readUserQuestion(
+              nested.id,
+              third.request.callItemId,
+              "nested-answer",
+            )
+          ).response.status,
+          "claimed",
+        );
+        await (
+          await host.startTurn(nested.id, ask())
+        ).done;
+        const fourth = (await host.listUserQuestions(nested.id)).questions.find(
+          (question) => question.state === "open",
+        )!;
+        const finalText = compileText(
+          (await host.readThread(nested.id)).itemList!,
+        );
+        assert.ok(
+          finalText.includes('{"questions":[{"id":"Q4","key":"scope"}]}'),
+          "real compaction and cold restart must not recycle hidden question numbers",
+        );
+        await (
+          await host.respondToUserQuestion(nested.id, {
+            questionCallItemId: fourth.request.callItemId,
+            clientId: "post-compaction-cancel",
+            outcome: "cancel",
+          })
+        ).turn.done;
+        assert.ok(
+          compileText(
+            (await host.readThread(nested.id)).itemList!,
+            true,
+          ).includes("I chose not to answer Q4."),
+        );
       },
     );
   } finally {

@@ -2,6 +2,7 @@ import type { ContextItem } from "./item-list.js";
 import { textFromUserInput, type UserInput } from "./item.js";
 import {
   ASK_USER_QUESTION_NAME,
+  USER_QUESTION_PUBLICATION_KIND,
   parseUserQuestionSpecification,
   parseUserQuestionPublication,
   parseUserQuestionReply,
@@ -94,7 +95,28 @@ export function userQuestionModelProjection(
       identity,
       call.source.sequence,
     );
-    if (publication === undefined) return;
+    if (publication === undefined) {
+      // Old forks discarded their origin Item-ID mapping. A recognizable
+      // machine receipt must never fall back to exposing its private IDs to
+      // the model when provenance cannot be verified. Do not guess an origin
+      // from the receipt itself or rewrite ordinary user/Tool text.
+      let marker: unknown;
+      try {
+        marker = JSON.parse(item.content.text.slice(offset));
+      } catch {
+        return;
+      }
+      if (
+        marker !== null &&
+        typeof marker === "object" &&
+        "kind" in marker &&
+        marker.kind === USER_QUESTION_PUBLICATION_KIND
+      )
+        throw new Error(
+          `Cannot safely display user question publication ${item.id}: original request provenance is unavailable or inconsistent`,
+        );
+      return;
+    }
     try {
       const specification = parseUserQuestionSpecification(
         call.content.arguments,
@@ -113,7 +135,11 @@ export function userQuestionModelProjection(
       }
       entry.receipts.push({ item, position, ...publication });
     } catch {
-      /* Invalid specifications cannot publish or reserve numbers. */
+      // A successful machine publication with an invalid specification is
+      // corrupt history, not a plain-text fallback carrying private IDs.
+      throw new Error(
+        `Cannot safely display user question publication ${item.id}: original question specification is invalid`,
+      );
     }
   });
   const ordered = [...publications.values()].sort(
