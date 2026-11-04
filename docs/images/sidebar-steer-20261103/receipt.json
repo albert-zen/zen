@@ -138,10 +138,21 @@
   ],
   "integratedMain": "b23b2810ccca7fcbdce2c9657915fb6e29e3afdc",
   "completeCi": {
-    "statusAsOfPublication": "In progress. Native Mac and Windows passed first attempts. Complete CI is still running; no claim of final acceptance.",
-    "run": "https://github.com/albert-zen/zen/actions/runs/41811091409"
+    "status": "passed",
+    "run": "https://github.com/albert-zen/zen/actions/runs/41811091409",
+    "successfulJobs": 8,
+    "zenxPassed": 5546,
+    "zenxSkipped": 56,
+    "zenxFailed": 0,
+    "companionWorkflows": {
+      "native": 41811090518,
+      "motion": 41811090789,
+      "composer": 41811090504,
+      "trace": 41811090866
+    },
+    "allCompanionsPassed": true
   },
-  "verifiedAtUtc": "2026-11-04T10:05:22.660260+00:00",
+  "verifiedAtUtc": "2026-11-04T10:32:07.516485+00:00",
   "nativeCurrentAttempts": {
     "macos": 1,
     "windows": 1,
@@ -175,5 +186,16 @@
     "zenxSkipped": 56,
     "zenxFailed": 0,
     "substitutesForCurrentSource": false
+  },
+  "merge": {
+    "commit": "05cea27f0a0da36b2c6d1253b7c2dcca9413d3d5",
+    "tree": "2504327134c97d41de675e3c91523a1158e51e5f",
+    "parents": [
+      "b23b2810ccca7fcbdce2c9657915fb6e29e3afdc",
+      "a7012da238f3fec2dde504e2625d60f3df28120d"
+    ],
+    "sameAcceptedTreeVerified": true,
+    "pullRequest": 669,
+    "pullRequestApprovalUsed": false
   }
 }
