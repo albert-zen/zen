@@ -155,6 +155,8 @@ for (const platform of ["darwin", "win32"]) {
         args: [
           "--user-data-dir=/tmp/owned/browser-profile",
           "--remote-debugging-port=0",
+          "--site-per-process",
+          "--host-resolver-rules=MAP localhost 127.0.0.1, MAP nested.localhost 127.0.0.1",
           ...(platform === "darwin" ? ["--force-renderer-accessibility"] : []),
           "--no-first-run",
           "--no-default-browser-check",

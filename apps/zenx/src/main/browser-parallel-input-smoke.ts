@@ -413,28 +413,31 @@ const witness=event=>{
   if(event.type==='pointerdown'&&event.isTrusted&&replaceOnPress){
     replaceOnPress=false;
     const body='<canvas id="canvas" tabindex="0" width="200" height="60"></canvas><input id="text-a"><input id="text-b">';
-    document.open();document.write('<!doctype html><body>'+body+'</body>');document.close();documentId=crypto.randomUUID();bind();node('text-b').focus();
+    document.open();document.write('<!doctype html><body>'+body+'</body>');document.close();documentId=crypto.randomUUID();bind();node('text-b').focus({preventScroll:true});
   }
 };
 const bind=()=>{
   for(const type of ['pointerdown','pointerup','keydown','keyup'])window.addEventListener(type,witness,true);
   window.addEventListener('message',receive);
-  node('canvas').onclick=event=>{if(!event.isTrusted)throw Error('Untrusted fixture click');clicks++;event.currentTarget.focus()};
+  node('canvas').onclick=event=>{if(!event.isTrusted)throw Error('Untrusted fixture click');clicks++;event.currentTarget.focus({preventScroll:true})};
 };
-const state=()=>({mode:config.mode,documentId,events:[...events],clicks,widgets:{},values:{'text-a':node('text-a').value,'text-b':node('text-b').value},inner:document.activeElement?.id,visibility:document.visibilityState});
+const viewport=()=>({width:innerWidth,height:innerHeight,scrollX,scrollY});
+const state=()=>({mode:config.mode,documentId,viewport:viewport(),events:[...events],clicks,widgets:{},values:{'text-a':node('text-a').value,'text-b':node('text-b').value},inner:document.activeElement?.id,visibility:document.visibilityState});
 const receive=event=>{
   const message=event.data;
   if(event.source!==parent||event.origin!==config.parentOrigin||!message||message.nonce!==config.nonce||message.kind!=='request'||!Number.isSafeInteger(message.id)||message.id<1)return;
   let result;
   if(message.method==='state')result=state();
-  else if(message.method==='focus'&&node(message.argument)){node(message.argument).focus();result={inner:document.activeElement?.id}}
-  else if(message.method==='point'&&node(message.argument)){const r=node(message.argument).getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;result={x,y,documentId,hitId:document.elementFromPoint?.(x,y)?.id||'',owners:[]}}
+  else if(message.method==='focus'&&node(message.argument)){node(message.argument).focus({preventScroll:true});result={inner:document.activeElement?.id}}
+  else if(message.method==='point'&&node(message.argument)){const r=node(message.argument).getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;result={x,y,localPoint:{x,y},childViewport:viewport(),documentId,hitId:document.elementFromPoint?.(x,y)?.id||'',owners:[]}}
   else if(message.method==='mutate'){node('text-a').style.marginLeft='8px';result=state()}
   else if(message.method==='armReplace'){replaceOnPress=true;result={armed:true}}
   else return;
   parent.postMessage({kind:'reply',nonce:config.nonce,id:message.id,result},config.parentOrigin);
 };
-bind();node('text-a').focus();
+// Initial OOPIF focus can precede its viewport. Fixture focus must not scroll
+// the authored canvas out of view; this is setup, never repair after input.
+bind();node('text-a').focus({preventScroll:true});
 parent.postMessage({kind:'ready',nonce:config.nonce,documentId},config.parentOrigin);
 </script>`;
   const childUrl = new URL("/remote-frame-child", fixture.childOrigin);
@@ -593,6 +596,13 @@ interface RemoteFixturePoint {
   y: number;
   documentId: string;
   hitId: string;
+  localPoint: { x: number; y: number };
+  childViewport: {
+    width: number;
+    height: number;
+    scrollX: number;
+    scrollY: number;
+  };
   owners: {
     id: string;
     left: number;
@@ -616,6 +626,27 @@ export function assertRemoteFixturePoint(
     point.hitId,
     id,
     "Independent child point must hit the requested element",
+  );
+  assert.equal(point.childViewport.width, depth === 1 ? 620 : 400);
+  assert.equal(point.childViewport.height, depth === 1 ? 480 : 300);
+  assert.equal(
+    point.childViewport.scrollX,
+    0,
+    "Fixture child must not scroll during setup",
+  );
+  assert.equal(
+    point.childViewport.scrollY,
+    0,
+    "Fixture child must not scroll during setup",
+  );
+  assert.ok(
+    Number.isFinite(point.localPoint.x) && Number.isFinite(point.localPoint.y),
+  );
+  assert.ok(
+    point.localPoint.x >= 0 && point.localPoint.x < point.childViewport.width,
+  );
+  assert.ok(
+    point.localPoint.y >= 0 && point.localPoint.y < point.childViewport.height,
   );
   assert.equal(point.owners.length, depth);
   for (const [index, owner] of point.owners.entries()) {

@@ -870,6 +870,13 @@ function remotePoint(
     y: 66,
     documentId: "fixture-document-before",
     hitId: "canvas",
+    localPoint: { x: 100, y: 30 },
+    childViewport: {
+      width: depth === 1 ? 620 : 400,
+      height: depth === 1 ? 480 : 300,
+      scrollX: 0,
+      scrollY: 0,
+    },
     owners: [
       {
         id: "contract-frame",
@@ -923,6 +930,15 @@ test("authored remote point requires current owner geometry and exact parent and
       },
       (point: ReturnType<typeof remotePoint>) => {
         point.owners.pop();
+      },
+      (point: ReturnType<typeof remotePoint>) => {
+        point.childViewport.scrollY = 106;
+      },
+      (point: ReturnType<typeof remotePoint>) => {
+        point.childViewport.height = 0;
+      },
+      (point: ReturnType<typeof remotePoint>) => {
+        point.localPoint.y = -76;
       },
     ]) {
       const point = remotePoint(depth);
@@ -1257,5 +1273,86 @@ test("placement discovery refuses ambiguous targets and mismatched ownership and
       fixture.operations.some(({ method }) => method.startsWith("Input.")),
       false,
     );
+  }
+});
+
+test("remote fixture focus prevents setup scrolling and reports actual child viewport and point", () => {
+  const replies: Record<string, unknown>[] = [];
+  const focusCalls: { id: string; preventScroll: boolean | undefined }[] = [];
+  const dom = new JSDOM(
+    remoteFrameContractPage("child", {
+      ...configuration,
+      mode: "cross-origin-oopif",
+    }),
+    {
+      url: configuration.childOrigin,
+      runScripts: "dangerously",
+      beforeParse(window) {
+        // This checks authored focus options, not real native viewport timing.
+        Object.defineProperties(window, {
+          innerWidth: { value: 0, configurable: true },
+          innerHeight: { value: 0, configurable: true },
+        });
+        const focus = window.HTMLElement.prototype.focus;
+        window.HTMLElement.prototype.focus = function (
+          this: HTMLElement,
+          options,
+        ) {
+          focusCalls.push({
+            id: this.id,
+            preventScroll: options?.preventScroll,
+          });
+          return focus.call(this, options);
+        };
+        window.postMessage = (message: Record<string, unknown>) => {
+          replies.push(message);
+        };
+      },
+    },
+  );
+  try {
+    assert.deepEqual(focusCalls, [{ id: "text-a", preventScroll: true }]);
+    Object.defineProperties(dom.window, {
+      innerWidth: { value: 620 },
+      innerHeight: { value: 480 },
+    });
+    const send = (method: string, argument?: string) =>
+      dom.window.dispatchEvent(
+        new dom.window.MessageEvent("message", {
+          source: dom.window as unknown as Window,
+          origin: configuration.parentOrigin,
+          data: {
+            kind: "request",
+            nonce: configuration.nonce,
+            id: 1,
+            method,
+            argument,
+          },
+        }),
+      );
+    send("focus", "text-b");
+    assert.deepEqual(focusCalls, [
+      { id: "text-a", preventScroll: true },
+      { id: "text-b", preventScroll: true },
+    ]);
+    // An externally changed scroll is reported unchanged, never reset/repaired.
+    Object.defineProperty(dom.window, "scrollY", { value: 106 });
+    dom.window.document.querySelector("#canvas")!.getBoundingClientRect = () =>
+      box(0, -106, 200, 60);
+    send("point", "canvas");
+    const point = JSON.parse(JSON.stringify(replies.at(-1)!.result));
+    assert.deepEqual(point.localPoint, { x: 100, y: -76 });
+    assert.deepEqual(point.childViewport, {
+      width: 620,
+      height: 480,
+      scrollX: 0,
+      scrollY: 106,
+    });
+    assert.equal(dom.window.scrollY, 106);
+    send("state");
+    const state = JSON.parse(JSON.stringify(replies.at(-1)!.result));
+    assert.deepEqual(state.viewport, point.childViewport);
+  } finally {
+    dom.window.close();
   }
 });
