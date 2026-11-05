@@ -288,19 +288,16 @@ test("virtual composer, sent bubble and queued-editor source actions materialize
         );
       };
       await h.click("#thread-composer .reference-token-details");
-      await h.click(".reference-open-source");
       await assertSource();
       await backToLive();
       await h.click(
         '[data-sent-message-id="sent-quote"] .reference-token-details',
       );
-      await h.click(".reference-open-source");
       await assertSource();
       await backToLive();
       await h.click('[data-queue-id="queue-0"] .queue-row-edit');
       assert.ok(document.querySelector(".queued-message-editor"));
       await h.click(".queued-message-editor .reference-token-details");
-      await h.click(".reference-open-source");
       assert.equal(
         document.querySelector(".queued-message-editor"),
         null,
@@ -318,22 +315,22 @@ test("virtual composer, sent bubble and queued-editor source actions materialize
         /Unsent main question/,
       );
       assert.equal(saves, 0);
-      await h.click(".queued-message-editor .reference-token-details");
+      const quoteButton = document.querySelector<HTMLButtonElement>(
+        ".queued-message-editor .reference-token-details",
+      )!;
       const outside = document.createElement("button");
       document.body.append(outside);
+      // Complete the native click and release the modal focus trap before a new outside gesture.
+      await act(async () => quoteButton.click());
       await act(async () => {
-        document
-          .querySelector<HTMLButtonElement>(".reference-open-source")!
-          .click();
         outside.focus();
         outside.dispatchEvent(
           new window.MouseEvent("pointerdown", { button: 0, bubbles: true }),
         );
       });
       await settle();
-      assert.equal(
-        document.activeElement,
-        outside,
+      assert.ok(
+        document.activeElement === outside,
         "a cancelled queued source request cannot steal the newer reader's focus",
       );
       assert.equal(saves, 0);
@@ -362,7 +359,6 @@ for (const invalid of [
         await settle();
         await h.click('[data-queue-id="queue-0"] .queue-row-edit');
         await h.click(".queued-message-editor .reference-token-details");
-        await h.click(".reference-open-source");
         await settle();
         assert.ok(document.querySelector(".queued-message-editor"));
         assert.ok(document.querySelector(".reference-source-error"));
@@ -441,7 +437,6 @@ test("virtual tool-result source opens its exact nested trace disclosure and rep
         null,
       );
       await h.click("#thread-composer .reference-token-details");
-      await h.click(".reference-open-source");
       await settle();
       const target = document.querySelector<HTMLElement>(
         '[data-quote-item-id="historical-call-5"]',
@@ -472,5 +467,43 @@ test("virtual tool-result source opens its exact nested trace disclosure and rep
     } finally {
       restore();
     }
+  });
+});
+
+test("nonvirtual quoted intermediate message opens its owning collapsed turn before focusing", async () => {
+  await withRuntimeDom(async (h) => {
+    const thread = history();
+    const turn = thread.turns.find(
+      (entry) => entry.id === "historical-turn-5",
+    )!;
+    turn.items.push(runtimeMessage("later-final", "Later final message"));
+    thread.canonicalItems!.push({
+      type: "agent_message",
+      id: "later-final",
+      threadId: thread.id,
+      turnId: turn.id,
+      createdAt: "2026-11-03T00:00:01Z",
+      text: "Later final message",
+    });
+    await h.render(thread, {
+      composer: editComposer(
+        emptyComposerState(),
+        withSkillDraft("Keep this question", [], [quote]),
+      ),
+    });
+    const before = document.querySelector<HTMLElement>(sourceSelector);
+    assert.ok(
+      !before || before.closest("[hidden], [aria-hidden='true'], [inert]"),
+    );
+    await h.click("#thread-composer .reference-token-details");
+    await settle();
+    const source = document.querySelector<HTMLElement>(sourceSelector);
+    assert.ok(source?.isConnected);
+    assert.equal(
+      source.closest("[hidden], [aria-hidden='true'], [inert]"),
+      null,
+    );
+    assert.ok(document.activeElement === source);
+    assert.equal(source.dataset.quoteHighlight, "true");
   });
 });

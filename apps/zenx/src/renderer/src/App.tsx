@@ -3324,7 +3324,13 @@ function AppContent() {
     if (result.thread.archived)
       throw new Error(i18n.t("shell:sourceThreadArchived"));
     const message = target.itemId
-      ? resolveDeliveredMessage(result.thread.items, target.itemId)
+      ? target.excerpt !== undefined
+        ? result.thread.items.some(
+            (item) => item.id === target.itemId && item.threadId === target.id,
+          )
+          ? { itemId: target.itemId }
+          : "missing"
+        : resolveDeliveredMessage(result.thread.items, target.itemId)
       : undefined;
     if (message === "missing")
       throw new Error(i18n.t("shell:toolMessageMissing"));
@@ -3343,6 +3349,7 @@ function AppContent() {
         threadId: target.id,
         itemId: message.itemId,
         requestId: intent,
+        ...(target.excerpt !== undefined ? { excerpt: target.excerpt } : {}),
       });
   };
 

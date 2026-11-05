@@ -1,0 +1,49 @@
+name: Quote bubble source acceptance
+on:
+  pull_request:
+    paths:
+      - .github/workflows/quote-bubble-ui.yml
+      - apps/zenx/src/renderer/src/ReferenceToken.tsx
+      - apps/zenx/src/renderer/src/quote-source-navigation.ts
+      - apps/zenx/src/renderer/src/message-target-navigation.tsx
+      - apps/zenx/src/renderer/src/message-source-navigation.tsx
+      - apps/zenx/src/renderer/src/reference-token.css
+      - apps/zenx/scripts/capture-quote-bubble-preview.mjs
+      - apps/zenx/test/quote-source-navigation.test.ts
+      - apps/zenx/test/virtual-quote-source-interaction.test.ts
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: quote-bubble-ui-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  quote-bubble:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install Chinese screenshot fonts
+        run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
+      - run: npm ci
+      - run: npm run build --workspace @zenx/plugin-sdk
+      - name: Exact identity, missing sources and recycled virtual rows
+        run: node --import tsx --test apps/zenx/test/quote-source-navigation.test.ts apps/zenx/test/virtual-quote-source-interaction.test.ts apps/zenx/test/message-quote-sent.test.ts apps/zenx/test/queued-edit-interaction.test.ts apps/zenx/test/message-target-retirement.test.ts
+      - name: Build production components with synthetic transcript
+        run: node apps/zenx/scripts/build-quote-preview.mjs "${{ runner.temp }}/quote-bubble"
+      - name: Hover, direct jump, sentence centering and transient highlight
+        run: node apps/zenx/scripts/capture-quote-bubble-preview.mjs "${{ runner.temp }}/quote-bubble"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quote-bubble-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/quote-bubble/*.png
+            ${{ runner.temp }}/quote-bubble/*evidence.json
+            ${{ runner.temp }}/quote-bubble/*lifecycle*.json
+          if-no-files-found: warn
+          retention-days: 14

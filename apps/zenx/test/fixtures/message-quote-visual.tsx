@@ -54,9 +54,19 @@ const unified =
   document.documentElement.dataset.previewMode === "references";
 const stress = params.has("stress");
 const long = params.has("long");
-const sourceText = unified
+let sourceText = unified
   ? "这是一组完整的合成引用。线程、子线程和文件仅包含位置；消息与选段包含精确原文。编辑下方问题并发送，即可查看实际生产组件的发送态。"
   : "建议把执行细节留在对话里，但不要让日志成为页面的主角。\n\n完成后保留结果，具体命令和输出按需展开。\n\n选中文字后，复制不会改变输入框；引用则作为上下文，问题仍写在原来的输入框。\n\n```ts\nconst source = { threadId, messageId };\nconst excerpt = selection.toString();\n// 保留换行、缩进与准确来源\n```";
+if (params.has("quote-bubble")) {
+  sourceText =
+    "合成上文：这些内容仅用于验证长消息中引用原句的准确定位，不包含真实对话。\n\n".repeat(
+      12,
+    ) +
+    sourceText +
+    "\n\n合成下文：保留足够的上下文高度，确保原句可以在视口中央呈现。".repeat(
+      12,
+    );
+}
 const base: Thread = {
   ...runtimeThread(
     [
@@ -233,7 +243,9 @@ const initial = params.has("legacy-quote")
                 cwd: base.cwd,
                 threadId: base.id,
                 id: "synthetic-answer",
-                excerpt: "按需展开",
+                excerpt: params.has("quote-bubble")
+                  ? "选中文字后，复制不会改变输入框；引用则作为上下文，问题仍写在原来的输入框。"
+                  : "按需展开",
               },
               3,
             );
