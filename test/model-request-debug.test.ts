@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { recordModelTransport } from "../src/trace-model.js";
 import { FileTraceStore, type TraceEvent } from "../src/trace.js";
 import {
   ModelRequestDebugStore,
@@ -377,4 +378,47 @@ test("zero-byte artifacts still verify ownership and existence", async (t) => {
     })
   ).page!;
   assert.equal(page.availability, "unavailable");
+});
+
+test("the request debugger pages an exact compact capture after reopening", async (t) => {
+  const { directory, store } = await fixture(t);
+  const image = Buffer.alloc(2577, 0xae).toString("base64");
+  const body = `{"input":[{"type":"input_image","image_url":"data:image/png;base64,${image}"}],"text":"测试😀"}\n`;
+  await recordModelTransport(
+    store,
+    { threadId: "thread-a", sampleId: "sample-a" },
+    {
+      type: "request",
+      captureLayer: "fetch-request-input",
+      url: "https://synthetic.invalid/v1/responses",
+      method: "POST",
+      headers: [],
+      omittedHeaders: [],
+      body: Buffer.from(body),
+      completeness: "complete",
+      format: "responses",
+      provider: "synthetic",
+      model: "synthetic",
+      transportAttempt: 1,
+    },
+  );
+  const cold = new FileTraceStore(directory);
+  const record = (await cold.read("thread-a")).records[0]!;
+  const ref = record.artifacts[0]!.ref;
+  await assert.rejects(
+    stat(path.join(directory, "artifacts", ref.sha256)),
+    /ENOENT/u,
+  );
+  const reader = new ModelRequestDebugStore(cold, { pageCharacters: 257 });
+  assert.equal(await whole(reader, "thread-a", record.id), body);
+  const eof = (
+    await reader.control({
+      action: "read",
+      threadId: "thread-a",
+      id: record.id,
+      offset: ref.byteLength,
+    })
+  ).page!;
+  assert.equal(eof.availability, "available");
+  assert.equal(eof.text, "");
 });

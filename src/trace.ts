@@ -1,6 +1,6 @@
 import type { TraceClock } from "./trace-clock.js";
 import { createHash, randomUUID } from "node:crypto";
-import { constants, type Stats } from "node:fs";
+import { constants } from "node:fs";
 import {
   chmod,
   link,
@@ -12,6 +12,16 @@ import {
   type FileHandle,
 } from "node:fs/promises";
 import path from "node:path";
+import { TraceRequestImageStore } from "./trace-request-image-store.js";
+import {
+  assertOwnedRegularFile,
+  assertRealDirectory,
+  assertSameFile,
+  isCode,
+  readOwnedFile,
+  syncDirectory,
+  writeAll,
+} from "./trace-storage-files.js";
 
 const clockDomain = randomUUID();
 const clockStart = process.hrtime.bigint();
@@ -138,6 +148,7 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
   readonly directory: string;
   readonly #queues = new Map<string, Promise<unknown>>();
   readonly #next = new Map<string, number>();
+  readonly #requestImages: TraceRequestImageStore;
   readonly #artifactQueues = new Map<string, Promise<unknown>>();
   readonly #segments = new Map<string, string>();
   // A single recently read Thread, not a read-authority or lifecycle cache.
@@ -165,6 +176,7 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
     options: { onFailure?: (issue: TraceIssue) => void } = {},
   ) {
     this.directory = path.resolve(directory);
+    this.#requestImages = new TraceRequestImageStore(this.directory);
     this.#onFailure = options.onFailure;
   }
   status(): TraceStatus {
@@ -200,16 +212,32 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
         await this.#initialize(snapshot.threadId);
         await this.#recordGap(snapshot.threadId);
         const artifacts: TraceRecord["artifacts"] = [];
+        const localArtifacts = [];
         for (const artifact of snapshot.artifacts ?? []) {
           if (!artifact.name)
             throw new Error("Trace artifact name is required");
-          artifacts.push({
+          const { ref, raw } = await this.#storeArtifact(
+            artifact.bytes,
+            artifact.mediaType,
+            isModelRequestBody(
+              snapshot.type,
+              artifact.name,
+              artifact.mediaType,
+            ),
+          );
+          const saved = {
             name: artifact.name,
-            ref: await this.#storeArtifact(artifact.bytes, artifact.mediaType),
+            ref,
             ...(artifact.captureLayer === undefined
               ? {}
               : { captureLayer: artifact.captureLayer }),
-          });
+          };
+          artifacts.push(saved);
+          if (raw)
+            localArtifacts.push({
+              ...saved,
+              path: this.#artifactPath(ref.sha256),
+            });
         }
         const record: TraceRecord = {
           id,
@@ -231,10 +259,7 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
           recordId: id,
           sequence: record.sequence,
           sync,
-          localArtifacts: artifacts.map((artifact) => ({
-            ...artifact,
-            path: this.#artifactPath(artifact.ref.sha256),
-          })),
+          localArtifacts,
         };
       } catch (error) {
         this.#segments.delete(snapshot.threadId);
@@ -394,11 +419,14 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
   }
   async readArtifact(ref: TraceArtifactRef): Promise<Uint8Array> {
     assertArtifactRef(ref);
-    await this.#assertDirectories("artifacts");
-    const bytes = await readOwnedFile(this.#artifactPath(ref.sha256));
-    await this.#assertDirectories("artifacts");
-    assertBytes(bytes, ref);
-    return bytes;
+    try {
+      return await this.#readRawArtifact(ref);
+    } catch (error) {
+      if (!isCode(error, "ENOENT")) throw error;
+      const bytes = await this.#requestImages.read(ref);
+      if (bytes === undefined) throw error;
+      return bytes;
+    }
   }
   async readArtifactRange(
     ref: TraceArtifactRef,
@@ -415,6 +443,27 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
     )
       throw new Error("Invalid Trace artifact range");
     await this.#assertDirectories("artifacts");
+    try {
+      return await this.#readRawArtifactRange(ref, offset, limit);
+    } catch (error) {
+      if (!isCode(error, "ENOENT")) throw error;
+      const bytes = await this.#requestImages.read(ref, { offset, limit });
+      if (bytes === undefined) throw error;
+      return bytes;
+    }
+  }
+  async #readRawArtifact(ref: TraceArtifactRef): Promise<Buffer> {
+    await this.#assertDirectories("artifacts");
+    const bytes = await readOwnedFile(this.#artifactPath(ref.sha256));
+    await this.#assertDirectories("artifacts");
+    assertBytes(bytes, ref);
+    return bytes;
+  }
+  async #readRawArtifactRange(
+    ref: TraceArtifactRef,
+    offset: number,
+    limit: number,
+  ): Promise<Uint8Array> {
     const filename = this.#artifactPath(ref.sha256),
       before = await lstat(filename);
     assertOwnedRegularFile(before);
@@ -486,7 +535,15 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
             for (const artifact of snapshot.artifacts) {
               const bytes = await source.readArtifact(artifact.ref);
               assertBytes(bytes, artifact.ref);
-              await this.#storeArtifact(bytes, artifact.ref.mediaType);
+              await this.#storeArtifact(
+                bytes,
+                artifact.ref.mediaType,
+                isModelRequestBody(
+                  snapshot.type,
+                  artifact.name,
+                  artifact.ref.mediaType,
+                ),
+              );
             }
             const record: TraceRecord = {
               ...snapshot,
@@ -653,7 +710,8 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
   async #storeArtifact(
     bytes: Uint8Array | string,
     mediaType = "application/octet-stream",
-  ): Promise<TraceArtifactRef> {
+    compactRequest = false,
+  ): Promise<{ ref: TraceArtifactRef; raw: boolean }> {
     const payload =
       typeof bytes === "string" ? Buffer.from(bytes, "utf8") : bytes;
     const ref = {
@@ -666,12 +724,14 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
       .catch(() => undefined)
       .then(async () => {
         try {
-          await this.readArtifact(ref);
-          return ref;
+          await this.#readRawArtifact(ref);
+          return { ref, raw: true };
         } catch (error) {
           if (!isCode(error, "ENOENT")) throw error;
         }
         await this.#assertDirectories("artifacts");
+        if (compactRequest && (await this.#requestImages.store(ref, payload)))
+          return { ref, raw: false };
         const target = this.#artifactPath(ref.sha256),
           temporary = `${target}.${randomUUID()}.tmp`;
         const file = await open(temporary, "wx", 0o600);
@@ -686,14 +746,13 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
             await link(temporary, target);
           } catch (error) {
             if (!isCode(error, "EEXIST")) throw error;
-            await this.readArtifact(ref);
           }
         } finally {
           await rm(temporary, { force: true });
         }
         await syncDirectory(path.dirname(target));
-        await this.readArtifact(ref);
-        return ref;
+        await this.#readRawArtifact(ref);
+        return { ref, raw: true };
       });
     this.#artifactQueues.set(ref.sha256, pending);
     void pending
@@ -858,7 +917,11 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
       if (verifyArtifacts)
         for (const artifact of record.artifacts)
           try {
-            await this.readArtifact(artifact.ref);
+            await this.readArtifactRange(
+              artifact.ref,
+              artifact.ref.byteLength,
+              1,
+            );
           } catch (error) {
             issues.push({
               kind: "artifact_unavailable",
@@ -1038,16 +1101,19 @@ function describe(error: unknown): string {
     ? `${error.name}: ${error.message}`
     : String(error);
 }
-function isCode(error: unknown, code: string): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === code
-  );
-}
 function assertIdentifier(value: string): void {
   if (!identifier.test(value)) throw new Error("Invalid Trace thread id");
+}
+function isModelRequestBody(
+  type: string,
+  name: string,
+  mediaType?: string,
+): boolean {
+  return (
+    type === "model_request" &&
+    name === "request_body" &&
+    mediaType === "application/json"
+  );
 }
 function assertArtifactRef(value: TraceArtifactRef): void {
   if (
@@ -1088,44 +1154,6 @@ function validateRecord(value: TraceRecord): void {
     assertArtifactRef(artifact.ref);
   }
 }
-async function assertRealDirectory(directory: string): Promise<Stats> {
-  const metadata = await lstat(directory);
-  if (!metadata.isDirectory() || metadata.isSymbolicLink())
-    throw new Error(
-      "Trace storage must be an owned real directory, not an alias",
-    );
-  return metadata;
-}
-function assertOwnedRegularFile(metadata: Stats): void {
-  if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.nlink !== 1)
-    throw new Error(
-      "Trace storage must be an owned regular file, not a symbolic or hard-link alias",
-    );
-}
-function assertSameFile(left: Stats, right: Stats): void {
-  if (left.dev !== right.dev || left.ino !== right.ino)
-    throw new Error("Trace file ownership changed during access");
-}
-async function readOwnedFile(filename: string): Promise<Buffer> {
-  const before = await lstat(filename);
-  assertOwnedRegularFile(before);
-  const file = await open(
-    filename,
-    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
-  );
-  try {
-    const opened = await file.stat();
-    assertOwnedRegularFile(opened);
-    assertSameFile(before, opened);
-    const bytes = await file.readFile();
-    const after = await lstat(filename);
-    assertOwnedRegularFile(after);
-    assertSameFile(opened, after);
-    return bytes;
-  } finally {
-    await file.close();
-  }
-}
 async function privateDirectory(directory: string): Promise<{
   dev: number;
   ino: number;
@@ -1142,23 +1170,4 @@ async function privateDirectory(directory: string): Promise<{
     permissionsChanged:
       process.platform !== "win32" && (metadata.mode & 0o7777) !== 0o700,
   };
-}
-async function syncDirectory(directory: string): Promise<boolean> {
-  if (process.platform === "win32") return false;
-  const file = await open(directory, "r");
-  try {
-    await file.sync();
-  } finally {
-    await file.close();
-  }
-  return true;
-}
-async function writeAll(file: FileHandle, bytes: Uint8Array): Promise<void> {
-  let offset = 0;
-  while (offset < bytes.byteLength) {
-    const result = await file.write(bytes, offset, bytes.byteLength - offset);
-    if (result.bytesWritten === 0)
-      throw new Error("Trace write made no progress");
-    offset += result.bytesWritten;
-  }
 }
