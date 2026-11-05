@@ -20,7 +20,11 @@ export function AnsweredQuestionCardVisual() {
       specification: parseUserQuestionSpecification(call.arguments),
     };
     return createUserQuestionStore({
-      list: async () => ({ questions: [question], totalPending: 1 }),
+      list: async () => {
+        if (new URLSearchParams(location.search).has("question-read-failure"))
+          throw new Error("Synthetic question list unavailable");
+        return { questions: [question], totalPending: 1 };
+      },
       read: async () => ({ question }),
       respond: async () => {
         throw new Error("Synthetic preview does not submit");

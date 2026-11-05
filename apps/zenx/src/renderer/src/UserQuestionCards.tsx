@@ -1,3 +1,4 @@
+import { useQuestionReadRecovery } from "./use-question-read-recovery.js";
 import {
   memo,
   useEffect,
@@ -31,6 +32,13 @@ export const UserQuestionCards = memo(function UserQuestionCards({
     () => store.get(threadId),
   );
   useEffect(() => store.mount(threadId), [threadId, store]);
+  useQuestionReadRecovery({
+    owner: threadId,
+    loading: state.loading,
+    error: state.error,
+    disabled: disabled,
+    refresh: () => store.refresh(threadId),
+  });
   if (state.loaded && state.ids.length === 0 && !state.error) return null;
   return (
     <section
@@ -42,16 +50,6 @@ export const UserQuestionCards = memo(function UserQuestionCards({
           <Icon name="question" size={15} />
           {t("questionTitle")}
         </h3>
-        <button
-          type="button"
-          className="icon-button"
-          aria-label={t("refresh")}
-          title={t("refresh")}
-          disabled={state.loading || disabled}
-          onClick={() => void store.refresh(threadId)}
-        >
-          <Icon name="reload" size={14} />
-        </button>
       </header>
       {!state.loaded && !state.error ? (
         <p role="status">{t("boardLoading")}</p>
@@ -60,6 +58,14 @@ export const UserQuestionCards = memo(function UserQuestionCards({
         <details className="user-question-error">
           <summary>{t("questionReadFailed")}</summary>
           <pre>{state.error}</pre>
+          <button
+            type="button"
+            className="quiet-button"
+            disabled={state.loading || disabled}
+            onClick={() => void store.refresh(threadId)}
+          >
+            {t("questionRetryRead")}
+          </button>
         </details>
       ) : null}
       {state.ids.map((id) =>

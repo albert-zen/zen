@@ -1,3 +1,4 @@
+import { useQuestionReadRecovery } from "./use-question-read-recovery.js";
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
@@ -63,12 +64,23 @@ export function RoomQuestionCards({
     const end = window.zenx.roomQuestions?.onChanged((id) => {
       if (active && id === roomId) void store.refresh();
     });
+    const endStatus = window.zenx.protocol?.onStatus?.((status) => {
+      if (active && status.type === "ready") void store.refresh();
+    });
     return () => {
       active = false;
       end?.();
+      endStatus?.();
       store.disconnect();
     };
   }, [roomId, store]);
+  useQuestionReadRecovery({
+    owner: roomId,
+    loading: state.loading,
+    error: state.error,
+    disabled: false,
+    refresh: () => store.refresh(),
+  });
   if (state.loaded && !state.ids.length && !state.error) return null;
   return (
     <section
@@ -83,16 +95,6 @@ export function RoomQuestionCards({
           <Icon name="question" size={15} />
           {t("roomQuestionTitle")}
         </h3>
-        <button
-          type="button"
-          className="icon-button"
-          aria-label={t("refresh")}
-          title={t("refresh")}
-          disabled={state.loading}
-          onClick={() => void store.refresh()}
-        >
-          <Icon name="reload" size={14} />
-        </button>
       </header>
       {!state.loaded && !state.error ? (
         <p role="status">{t("boardLoading")}</p>
@@ -101,6 +103,14 @@ export function RoomQuestionCards({
         <details className="user-question-error">
           <summary>{t("questionReadFailed")}</summary>
           <pre>{state.error}</pre>
+          <button
+            type="button"
+            className="quiet-button"
+            disabled={state.loading || false}
+            onClick={() => void store.refresh()}
+          >
+            {t("questionRetryRead")}
+          </button>
         </details>
       ) : null}
       {state.ids.map((id) => {

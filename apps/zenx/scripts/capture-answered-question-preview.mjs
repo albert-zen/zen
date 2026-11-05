@@ -191,7 +191,36 @@ for (const scene of [
         ),
         [true, true],
       );
+      assert.equal(
+        await evaluate(
+          "document.querySelectorAll('.user-question-attention > header button').length",
+        ),
+        0,
+      );
       await screenshot(`question-card-${scene.theme}-${scene.width}.png`);
+      await send("Page.navigate", {
+        url: `${entry}&question-card&question-read-failure`,
+      });
+      await waitFor("!!document.querySelector('.user-question-error')");
+      await delay(4500);
+      await evaluate(
+        "document.querySelector('.user-question-error summary').click()",
+      );
+      assert.equal(
+        await evaluate(
+          "document.querySelectorAll('.user-question-attention > header button').length",
+        ),
+        0,
+      );
+      assert.match(
+        await evaluate(
+          "document.querySelector('.user-question-error button')?.textContent",
+        ),
+        /重新加载问题|Try loading questions again/,
+      );
+      await screenshot(
+        `question-read-failure-${scene.theme}-${scene.width}.png`,
+      );
       evidence.scenes.push({
         ...scene,
         hover: true,

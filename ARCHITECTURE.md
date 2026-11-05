@@ -1778,3 +1778,5 @@ The virtual transcript keeps ordinary native selection and per-message copy on t
 图片预览通过 renderer 临时浮层几何登记与原生浏览器 viewport 协调遮挡，只控制原生视图可见性，不另建页面、权限、会话状态或 mount 所有权；隐藏期间沿用现有后台合成路径。
 
 ZenX answered-question bubbles are a disposable read-only presentation of native questionReply provenance and the exact original ask_user_question call; they do not rewrite model inputs or infer missing historical question content.
+
+Question-list read recovery is a disposable mounted-view concern: existing authoritative invalidations and reconnection reads remain primary, with at most two delayed read retries per failure episode; it never resubmits answers or adds persistent retry authority.
