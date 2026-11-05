@@ -201,7 +201,7 @@ for (const scene of [
       await send("Page.navigate", {
         url: `${entry}&question-card&question-read-failure`,
       });
-      await waitFor("!!document.querySelector('.user-question-error')");
+      await waitFor("!!document.querySelector('.user-question-read-error')");
       await delay(4500);
 
       assert.equal(
@@ -214,11 +214,22 @@ for (const scene of [
         await evaluate(
           "document.querySelector('.user-question-read-error button')?.textContent",
         ),
-        /重新加载问题|Try loading questions again/,
+        /重试|Retry/,
       );
       assert(
         await evaluate(
           "(() => {const b = document.querySelector('.user-question-read-error button'); const r = b.getBoundingClientRect(); return r.height > 0 && r.bottom <= innerHeight && getComputedStyle(b).visibility === 'visible';})()",
+        ),
+      );
+      assert.equal(
+        await evaluate(
+          "document.querySelectorAll('.user-question-read-error details, .user-question-read-error pre').length",
+        ),
+        0,
+      );
+      assert(
+        await evaluate(
+          "(() => {const row = document.querySelector('.user-question-read-error');const label = row.querySelector('span').getBoundingClientRect();const button = row.querySelector('button').getBoundingClientRect();return button.left > label.right && Math.abs((label.top+label.bottom)-(button.top+button.bottom)) < 4;})()",
         ),
       );
       await screenshot(

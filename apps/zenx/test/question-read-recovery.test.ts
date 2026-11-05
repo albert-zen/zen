@@ -219,6 +219,22 @@ for (const kind of ["native", "room"] as const) {
       await act(async () => root.render(element));
       assert.equal(reads, 1);
       assert.equal(document.querySelectorAll("header button").length, 0);
+      assert.match(
+        document.querySelector(".user-question-read-error")!.textContent!,
+        /Loading failedRetry|加载失败重试/,
+      );
+      assert.equal(
+        document.querySelector(
+          ".user-question-read-error pre, .user-question-read-error details",
+        ),
+        null,
+      );
+      assert.ok(document.querySelector(".user-question-read-error button svg"));
+      assert.ok(
+        document
+          .querySelector(".user-question-read-error button")!
+          .getAttribute("aria-label"),
+      );
       assert.ok(
         document.querySelector(".user-question-read-error button")?.textContent,
       );
@@ -230,7 +246,7 @@ for (const kind of ["native", "room"] as const) {
         t.mock.timers.tick(3000);
       });
       assert.equal(reads, 3);
-      assert.equal(document.querySelector(".user-question-error"), null);
+      assert.equal(document.querySelector(".user-question-read-error"), null);
       const input = document.querySelector("textarea")!;
       const key = Object.keys(input).find((k) =>
         k.startsWith("__reactProps$"),

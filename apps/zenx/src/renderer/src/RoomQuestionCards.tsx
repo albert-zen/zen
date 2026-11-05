@@ -101,17 +101,16 @@ export function RoomQuestionCards({
       ) : null}
       {state.error ? (
         <div className="user-question-read-error" role="status">
-          <details className="user-question-error">
-            <summary>{t("questionReadFailed")}</summary>
-            <pre>{state.error}</pre>
-          </details>
+          <span>{t("questionLoadFailed")}</span>
           <button
             type="button"
-            className="quiet-button"
+            className="quiet-button question-read-retry"
+            aria-label={t("questionRetryRead")}
             disabled={state.loading || false}
             onClick={() => void store.refresh()}
           >
-            {t("questionRetryRead")}
+            <Icon name="reload" size={14} />
+            {t("questionRetry")}
           </button>
         </div>
       ) : null}

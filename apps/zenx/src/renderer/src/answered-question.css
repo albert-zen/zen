@@ -119,3 +119,26 @@
 .answered-question-popover .user-question-options {
   margin-bottom: 0;
 }
+
+.user-question-read-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-block: 8px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.user-question-read-error .question-read-retry {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex: none;
+  min-height: 32px;
+  padding: 4px 8px;
+}
+@media (pointer: coarse) {
+  .user-question-read-error .question-read-retry {
+    min-height: 44px;
+  }
+}
