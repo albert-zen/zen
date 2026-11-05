@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { createWindowsForegroundSampler } from "./windows-foreground-sampler.mjs";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import WebSocket from "ws";
@@ -744,30 +743,6 @@ export function assertNativeProviderPair(
   assert.equal(pair[0].sessionId, pair[1].sessionId);
 }
 
-// Same read-only Win32 observation used by the existing native input fixture.
-// No activation, input injection, registration, permissions or persistent helper.
-const foregroundScript = `Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class ForegroundWitness {
-  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
-}
-'@
-$window = [ForegroundWitness]::GetForegroundWindow()
-[uint32]$owner = 0
-[void][ForegroundWitness]::GetWindowThreadProcessId($window, [ref]$owner)
-@{pid=$owner;hwnd=$window.ToInt64().ToString()} | ConvertTo-Json -Compress`;
-export async function readWin32Foreground() {
-  assert.equal(process.platform, "win32");
-  assert.equal(process.env.GITHUB_ACTIONS, "true");
-  const { stdout } = await promisify(execFile)(
-    "powershell.exe",
-    ["-NoProfile", "-NonInteractive", "-Command", foregroundScript],
-    { windowsHide: true, timeout: 5000, maxBuffer: 4096 },
-  );
-  return JSON.parse(stdout.trim());
-}
 export function assertForegroundSample(sample, browserPid, previous) {
   assert.equal(
     sample.pid,
@@ -826,10 +801,11 @@ export async function runExtensionProviderAcceptance({
   let failure;
   let healthy;
   let nativeWindow;
+  let foregroundSampler;
   const guard = async (native = false) => {
     if (native) {
       nativeWindow = assertForegroundSample(
-        await readWin32Foreground(),
+        await foregroundSampler.read(),
         browserPid,
         nativeWindow,
       );
@@ -850,6 +826,9 @@ export async function runExtensionProviderAcceptance({
     );
   };
   try {
+    setPhase("provider:foreground-sampler-setup");
+    foregroundSampler = await createWindowsForegroundSampler();
+    receipt.foregroundSampler = foregroundSampler.evidence;
     await new Promise((resolve, reject) => {
       remote.once("error", reject);
       remote.listen(0, "127.0.0.1", resolve);
@@ -1177,7 +1156,12 @@ export async function runExtensionProviderAcceptance({
       failures.push(error);
     }
     try {
-      await guard(true);
+      if (foregroundSampler) await guard(true);
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      await foregroundSampler?.close();
     } catch (error) {
       failures.push(error);
     }

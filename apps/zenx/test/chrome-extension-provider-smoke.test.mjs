@@ -589,9 +589,16 @@ test("provider acceptance uses actual bridge backend and native foreground sampl
   );
   assert.match(helper, /await bridge\.connectProvider\(\)/);
   assert.match(helper, /receipt.nativeOsForegroundObserved = true/);
-  assert.match(helper, /GetForegroundWindow/);
+  const sampler = await readFile(
+    new URL("../scripts/windows-foreground-sampler.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(sampler, /GetForegroundWindow/);
+  assert.match(helper, /await createWindowsForegroundSampler\(\)/);
+  assert.match(helper, /await foregroundSampler\.read\(\)/);
+  assert.match(helper, /await foregroundSampler\?\.close\(\)/);
   assert.doesNotMatch(
-    helper,
+    helper + sampler,
     /SetForegroundWindow|SendInput|ShowWindow|ExecutionPolicy/,
   );
   assert.match(helper, /nativeMessaging: false/);
