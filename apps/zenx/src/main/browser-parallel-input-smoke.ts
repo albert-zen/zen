@@ -1718,6 +1718,55 @@ export async function runTargetedInputContractSmoke(options: {
   let providerRootSession: { sessionId: string; socketId: number } | undefined;
   let providerPlacement: FramePlacementEvidence | undefined;
   WebSocket.prototype.send = function (this: WebSocket, ...args: unknown[]) {
+    // Passive timing only, scoped to the disposable nested-frame fixture.
+    if (
+      remoteWitness?.mode === "nested-oopif" &&
+      (this === rpc.socket || this.url === version.webSocketDebuggerUrl) &&
+      typeof args[0] === "string"
+    ) {
+      const diagnosticCommand = JSON.parse(args[0]) as {
+        id?: number;
+        method?: string;
+        sessionId?: string;
+      };
+      if (diagnosticCommand.method === "Page.captureScreenshot") {
+        const started = performance.now();
+        const details = {
+          id: diagnosticCommand.id,
+          sessionId: diagnosticCommand.sessionId,
+          directRoot: this === rpc.socket,
+        };
+        console.log(
+          "Readonly capture transport " +
+            JSON.stringify({ ...details, phase: "sent" }),
+        );
+        const response = (raw: unknown) => {
+          const message = JSON.parse(String(raw)) as {
+            id?: number;
+            error?: unknown;
+            result?: { data?: string };
+          };
+          if (message.id !== diagnosticCommand.id) return;
+          cleanup();
+          console.log(
+            "Readonly capture transport " +
+              JSON.stringify({
+                ...details,
+                phase: "received",
+                elapsedMs: Math.round(performance.now() - started),
+                error: message.error,
+                encodedLength: message.result?.data?.length,
+              }),
+          );
+        };
+        const cleanup = () => {
+          this.off("message", response);
+          this.off("close", cleanup);
+        };
+        this.on("message", response);
+        this.once("close", cleanup);
+      }
+    }
     if (
       this.url === version.webSocketDebuggerUrl &&
       this !== placementRpc.socket &&
@@ -2105,11 +2154,65 @@ export async function runTargetedInputContractSmoke(options: {
             acknowledgedDispatches: 0,
             settlementReads: 0,
           };
-          const screenshot = await rpc.send("Page.captureScreenshot", {
-            format: "png",
-            fromSurface: true,
-            captureBeyondViewport: false,
-          });
+          // Evidence-only instrumentation: never retry capture or dispatch input.
+          const captureStarted = performance.now();
+          const captureDiagnostic = (label: string, value: unknown) =>
+            console.log(
+              "Readonly compositor diagnostic " +
+                JSON.stringify({
+                  mode,
+                  kind,
+                  label,
+                  elapsedMs: Math.round(performance.now() - captureStarted),
+                  value,
+                }),
+            );
+          const captureTimer = setTimeout(() => {
+            const probes: [string, Promise<Record<string, unknown>>][] = [
+              [
+                "root-runtime",
+                rpc.send("Runtime.evaluate", {
+                  expression:
+                    "({visibility:document.visibilityState,readyState:document.readyState})",
+                  returnByValue: true,
+                }),
+              ],
+              ["browser-version", placementRpc.send("Browser.getVersion")],
+              [
+                "child-frame-tree",
+                placementRpc.send(
+                  "Page.getFrameTree",
+                  {},
+                  placement.childSessionId,
+                ),
+              ],
+            ];
+            for (const [label, probe] of probes) {
+              void probe.then(
+                (result) => captureDiagnostic(label, result),
+                (error) => captureDiagnostic(label, { error: String(error) }),
+              );
+            }
+          }, 3_000);
+          let screenshot: Record<string, unknown>;
+          try {
+            screenshot = await rpc.send("Page.captureScreenshot", {
+              format: "png",
+              fromSurface: true,
+              captureBeyondViewport: false,
+            });
+            captureDiagnostic("capture-returned", {
+              encodedLength:
+                typeof screenshot.data === "string"
+                  ? screenshot.data.length
+                  : 0,
+            });
+          } catch (error) {
+            captureDiagnostic("capture-failed", { error: String(error) });
+            throw error;
+          } finally {
+            clearTimeout(captureTimer);
+          }
           assert.ok(
             typeof screenshot.data === "string" && screenshot.data.length > 0,
             "Direct fixture needs a real read-only compositor capture before input",
