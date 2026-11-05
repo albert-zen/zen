@@ -1,0 +1,85 @@
+name: Information content and controls acceptance
+on:
+  pull_request:
+    paths:
+      - .github/workflows/information-content-ui.yml
+      - apps/zenx/scripts/*information*preview*
+      - apps/zenx/scripts/*titlebar-safe-area*
+      - apps/zenx/src/information-layout.ts
+      - apps/zenx/src/renderer/src/EditableInformationPanel.tsx
+      - apps/zenx/src/renderer/src/ConversationInformationCards.tsx
+      - apps/zenx/src/renderer/src/BackgroundShellStatus.tsx
+      - apps/zenx/src/renderer/src/board-ui.tsx
+      - apps/zenx/src/renderer/src/subagents-ui.tsx
+      - apps/zenx/src/renderer/src/plugin-information-host.tsx
+      - apps/zenx/src/renderer/src/auxiliary-panel.tsx
+      - apps/zenx/src/renderer/src/styles.css
+      - apps/zenx/src/renderer/src/i18n/panels.ts
+      - apps/zenx/src/renderer/src/UserQuestionCards.tsx
+      - apps/zenx/src/renderer/src/RoomQuestionCards.tsx
+      - apps/zenx/test/*information*.test.*
+      - apps/zenx/test/board-empty-visibility-ui.test.ts
+      - apps/zenx/test/user-question-cards-interaction.test.ts
+      - apps/zenx/test/question-read-recovery.test.ts
+      - apps/zenx/test/app-project-picker-interaction.test.ts
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: information-content-ui-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  information-content:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install readable CJK fonts
+        run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
+      - run: npm ci
+      - run: npm run build --workspace @zenx/plugin-sdk
+      - name: Content visibility, draft hints and control interactions
+        run: >-
+          node --import tsx --test
+          apps/zenx/test/editable-information-panel.test.ts
+          apps/zenx/test/information-layout-contract.test.ts
+          apps/zenx/test/information-provider-visibility.test.ts
+          apps/zenx/test/board-empty-visibility-ui.test.ts
+          apps/zenx/test/conversation-information-cards.test.ts
+          apps/zenx/test/background-shell-renderer.test.ts
+          apps/zenx/test/plugin-information-layout.test.ts
+          apps/zenx/test/user-question-cards-interaction.test.ts
+          apps/zenx/test/question-read-recovery.test.ts
+          apps/zenx/test/information-board-native-input.test.mjs
+      - name: Real Host questions survive hiding every managed information widget
+        run: >-
+          node --import tsx --test
+          --test-name-pattern='real Host questions render in full App information panel'
+          apps/zenx/test/app-project-picker-interaction.test.ts
+      - name: Build actual information components with synthetic data
+        run: node apps/zenx/scripts/build-information-layout-preview.mjs "${{ runner.temp }}/information-content"
+      - name: Empty to populated cards, switch geometry and repeated hide/show/close
+        env:
+          ZENX_PREVIEW_DESKTOP_INPUT: "1"
+        run: node apps/zenx/scripts/capture-empty-information-preview.mjs "${{ runner.temp }}/information-content"
+      - name: Build actual titlebar and information entry with synthetic data
+        run: node apps/zenx/scripts/build-titlebar-safe-area-preview.mjs "${{ runner.temp }}/information-entry"
+      - name: Cross-platform entry geometry and pointer interactions
+        env:
+          ZENX_PREVIEW_DESKTOP_INPUT: "1"
+        run: node apps/zenx/scripts/capture-information-entry-preview.mjs "${{ runner.temp }}/information-entry"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: information-content-controls-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/information-content/*.png
+            ${{ runner.temp }}/information-content/*.json
+            ${{ runner.temp }}/information-entry/*.png
+            ${{ runner.temp }}/information-entry/*.json
+          if-no-files-found: warn
+          retention-days: 14

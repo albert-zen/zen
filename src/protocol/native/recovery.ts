@@ -1,3 +1,4 @@
+import type { ThreadHistoryWindowOptions } from "../../thread-history-window.js";
 import { randomUUID } from "node:crypto";
 
 import type {
@@ -60,7 +61,10 @@ export class NativeRecoveryProjection {
     return () => this.#listeners.delete(listener);
   }
 
-  async resume(threadId: string): Promise<NativeThreadRecoverySnapshot> {
+  async resume(
+    threadId: string,
+    windowed = false,
+  ): Promise<NativeThreadRecoverySnapshot> {
     /*
      * The projection subscription is installed before this read. Events that
      * overlap the asynchronous journal/metadata snapshot are retained below;
@@ -72,7 +76,9 @@ export class NativeRecoveryProjection {
     const boundary = state.watermark;
     state.inFlightResumes.set(resume, boundary);
     try {
-      const thread = await this.#appServer.readThread(threadId);
+      const thread = windowed
+        ? await this.#appServer.readThreadHistory(threadId)
+        : await this.#appServer.readThread(threadId);
       const watermark = state.watermark;
       const events = structuredClone(
         state.events.filter(
@@ -94,6 +100,13 @@ export class NativeRecoveryProjection {
       state.inFlightResumes.delete(resume);
       throw error;
     }
+  }
+
+  async history(
+    threadId: string,
+    options: ThreadHistoryWindowOptions = {},
+  ): Promise<ThreadSnapshot> {
+    return await this.#appServer.readThreadHistory(threadId, options);
   }
 
   async read(threadId: string): Promise<ThreadSnapshot> {
@@ -274,6 +287,25 @@ function eventRepresentedInSnapshot(
   event: AppServerEvent,
   snapshot: ThreadSnapshot,
 ): boolean {
+  if (snapshot.history !== undefined) {
+    // A latest-window recovery always contains the active/latest Turn. Events
+    // for older Turns are canonical backfill, not live overlap. Events observed
+    // after the resume boundary are retained separately by the caller.
+    if (event.type === "context_item_completed") return true;
+    const turnId =
+      event.type === "item_completed"
+        ? event.item.turnId
+        : "turnId" in event
+          ? event.turnId
+          : undefined;
+    if (
+      turnId !== undefined &&
+      !snapshot.turns.some((turn) => turn.id === turnId)
+    )
+      return true;
+    if (event.type === "item_completed" && event.item.turnId === undefined)
+      return true;
+  }
   switch (event.type) {
     case "context_item_completed":
       return (

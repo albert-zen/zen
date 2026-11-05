@@ -120,6 +120,7 @@ for (const kind of ["native", "room"] as const) {
     });
     let reads = 0,
       writes = 0;
+    let terminal = false;
     let changed: ((id: string) => void) | undefined;
     let ready: ((status: { type: string }) => void) | undefined;
     const specification = {
@@ -135,7 +136,7 @@ for (const kind of ["native", "room"] as const) {
                 request: { threadId: "t", callItemId: "call" },
                 resultItemId: "result",
                 createdAt: "2026-11-05T00:00:00Z",
-                state: "open",
+                state: terminal ? "cancelled" : "open",
                 specification,
               },
             ],
@@ -151,7 +152,7 @@ for (const kind of ["native", "room"] as const) {
                 createdAt: 1,
                 updatedAt: 1,
                 origin: { threadId: "t", callItemId: "call" },
-                state: "open",
+                state: terminal ? "cancelled" : "open",
                 specification,
               },
             ],
@@ -247,6 +248,11 @@ for (const kind of ["native", "room"] as const) {
       });
       assert.equal(reads, 3);
       assert.equal(document.querySelector(".user-question-read-error"), null);
+      assert.equal(
+        document.querySelector("details.user-question-draft-note"),
+        null,
+        "empty cards have no draft warning",
+      );
       const input = document.querySelector("textarea")!;
       const key = Object.keys(input).find((k) =>
         k.startsWith("__reactProps$"),
@@ -259,6 +265,17 @@ for (const kind of ["native", "room"] as const) {
           >
         )[key]!.onChange({ target: { value: "Retain my draft" } }),
       );
+      const draftNote = document.querySelector<HTMLDetailsElement>(
+        "details.user-question-draft-note",
+      );
+      assert.ok(draftNote);
+      assert.equal(
+        draftNote.open,
+        false,
+        "storage limitation is disclosed on demand",
+      );
+      assert.ok(draftNote.querySelector("summary")?.textContent);
+      assert.match(draftNote.textContent!, /reload|重载/);
       if (kind === "room") {
         await act(async () => changed?.("r"));
         await act(async () => ready?.({ type: "ready" }));
@@ -274,6 +291,13 @@ for (const kind of ["native", "room"] as const) {
       assert.equal(
         document.querySelector("textarea")!.value,
         "Retain my draft",
+      );
+      terminal = true;
+      await act(async () => window.dispatchEvent(new window.Event("focus")));
+      assert.equal(
+        document.querySelector("details.user-question-draft-note"),
+        null,
+        "terminal cards never call retained answers unsent drafts",
       );
       assert.equal(writes, 0);
       await act(async () => root.unmount());

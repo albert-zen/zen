@@ -5,6 +5,7 @@
  * These tests do not validate a real compositor, native PNG decoder or grants.
  */
 import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
@@ -25,7 +26,7 @@ const originalWindow = {
   id: 42,
   title: "Editor",
   app_id: "org.example.Editor",
-  pid: 123,
+  pid: process.pid + 1_000,
   layout: { window_size: [800, 600] },
 };
 type TestWindow = {
@@ -200,7 +201,7 @@ describe(
         height: 600,
         window: {
           id: 42,
-          pid: 123,
+          pid: originalWindow.pid,
           title: "Editor",
           appId: "org.example.Editor",
           bounds: { x: 0, y: 0, width: 800, height: 600 },
@@ -526,6 +527,130 @@ describe(
         capture({ createImage: () => fakeImage(5120, 3200, oversized) }),
         /Invalid or oversized/,
       );
+      await assertPrivateCaptureRemoved();
+    });
+
+    for (const explicitExclusions of [false, true]) {
+      it("excludes its own PID: " + explicitExclusions, async () => {
+        focused = { ...originalWindow, pid: process.pid };
+        await assert.rejects(
+          capture(explicitExclusions ? { excludedPids: [] } : {}),
+          /cannot capture its own application/,
+        );
+        assert.equal(capturePath, undefined);
+        assert.equal(
+          calls.some((call) => typeof call !== "string"),
+          false,
+        );
+      });
+    }
+
+    it("excludes additional host-owned PIDs before taking pixels", async () => {
+      await assert.rejects(
+        capture({ excludedPids: [originalWindow.pid] }),
+        /cannot capture its own application/,
+      );
+      assert.equal(capturePath, undefined);
+      assert.equal(
+        calls.some((call) => typeof call !== "string"),
+        false,
+      );
+    });
+
+    it("keeps null PID distinct from excluded PID zero", async () => {
+      focused = { ...originalWindow, pid: null };
+      windows = [structuredClone(focused)];
+      const snapshot = await capture({ excludedPids: [0] });
+      assert.equal(snapshot.window?.pid, null);
+      await assertPrivateCaptureRemoved();
+    });
+
+    it("does not start an already-cancelled capture", async () => {
+      const abort = new AbortController();
+      abort.abort();
+      await assert.rejects(capture({ signal: abort.signal }), {
+        name: "AbortError",
+      });
+      assert.deepEqual(calls, []);
+      assert.equal(getEventListeners(abort.signal, "abort").length, 0);
+    });
+
+    for (const stage of [
+      "Version",
+      "EventStream",
+      "FocusedWindow",
+      "Windows",
+    ]) {
+      it("cancels a pending socket wait: " + stage, async () => {
+        const abort = new AbortController();
+        let markReached: () => void = () => undefined;
+        const reached = new Promise<void>((resolve) => {
+          markReached = resolve;
+        });
+        const original = handler;
+        handler = async (request, socket) => {
+          if (request === stage) markReached();
+          else await original(request, socket);
+        };
+        const pending = capture({ signal: abort.signal });
+        const rejected = assert.rejects(pending, { name: "AbortError" });
+        await reached;
+        abort.abort();
+        await rejected;
+        if (capturePath) await assertPrivateCaptureRemoved();
+        assert.equal(getEventListeners(abort.signal, "abort").length, 0);
+      });
+    }
+
+    it("cancels an accepted screenshot while awaiting its event", async () => {
+      const abort = new AbortController();
+      let markReached: () => void = () => undefined;
+      const reached = new Promise<void>((resolve) => {
+        markReached = resolve;
+      });
+      const original = handler;
+      handler = async (request, socket) => {
+        if (typeof request !== "string" && request.Action.ScreenshotWindow) {
+          capturePath = request.Action.ScreenshotWindow.path;
+          await NodeFSP.writeFile(capturePath, png);
+          send(socket, { Ok: "Handled" });
+          markReached();
+        } else {
+          await original(request, socket);
+        }
+      };
+      const pending = capture({ signal: abort.signal });
+      const rejected = assert.rejects(pending, { name: "AbortError" });
+      await reached;
+      abort.abort();
+      await rejected;
+      await assertPrivateCaptureRemoved();
+      assert.equal(calls.includes("Windows"), false);
+      assert.equal(getEventListeners(abort.signal, "abort").length, 0);
+    });
+
+    it("discards decoded pixels after cancellation", async () => {
+      const abort = new AbortController();
+      await assert.rejects(
+        capture({
+          signal: abort.signal,
+          createImage: () => {
+            abort.abort();
+            return fakeImage();
+          },
+        }),
+        { name: "AbortError" },
+      );
+      assert.equal(calls.includes("Windows"), false);
+      await assertPrivateCaptureRemoved();
+      assert.equal(getEventListeners(abort.signal, "abort").length, 0);
+    });
+
+    it("removes abort listeners after a successful capture", async () => {
+      const abort = new AbortController();
+      await capture({ signal: abort.signal });
+      assert.equal(getEventListeners(abort.signal, "abort").length, 0);
+      abort.abort();
       await assertPrivateCaptureRemoved();
     });
   },

@@ -111,6 +111,11 @@ import type {
   ApprovalDecision,
 } from "../../main/app-server-manager.js";
 import type { ZenXThreadAttachmentProjection } from "../../main/image-attachments.js";
+import {
+  abandonClosedComposerImages,
+  abandonUnusedComposerImage,
+  abandonDraftImage,
+} from "./draft-image-lifecycle.js";
 import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
 import type {
   ZenXProjectProjectionEntry,
@@ -630,6 +635,7 @@ function AppContent() {
       () => refreshSideChatDrafts((revision) => revision + 1),
       () => crypto.randomUUID(),
       () => i18n.t("panels:sideChatCreationUnconfirmed"),
+      abandonClosedComposerImages,
     ),
   ).current;
 
@@ -1342,9 +1348,14 @@ function AppContent() {
     setThreadError(null);
     void loadComposerCatalog();
     try {
-      const result = await window.zenx.protocol.request("zen/thread/resume", {
-        threadId,
-      });
+      const result = await window.zenx.protocol.request(
+        debugMode || (preserveNavigation && debugThreadId === threadId)
+          ? "zen/thread/resume"
+          : "zen/thread/resume-window",
+        {
+          threadId,
+        },
+      );
       if (selectionEpoch.current !== epoch) {
         if (propagateFailure)
           throw new Error(i18n.t("shell:importOpenSuperseded"));
@@ -2356,9 +2367,12 @@ function AppContent() {
     if (threadProjectionCacheRef.current.get(threadId)?.processEpoch === null) {
       // Promote the draft before this read: a failed bootstrap must retry the
       // same Thread, not create another one or send with unowned CAS history.
-      const recovery = await window.zenx.protocol.request("zen/thread/resume", {
-        threadId,
-      });
+      const recovery = await window.zenx.protocol.request(
+        "zen/thread/resume-window",
+        {
+          threadId,
+        },
+      );
       const current = threadProjectionCacheRef.current.get(threadId);
       if (
         current === undefined ||
@@ -3938,36 +3952,34 @@ function AppContent() {
             editComposer(state, text),
           )
         }
-        onImportImages={async (files) => {
-          const images = await window.zenx.imageAttachments.import(
-            await Promise.all(
-              files.map(async (file) => ({
-                name: file.name,
-                mediaType: file.type,
-                bytes: new Uint8Array(await file.arrayBuffer()),
-              })),
+        onImportImages={(files) =>
+          sideChatDrafts.importImages(id, async () =>
+            window.zenx.imageAttachments.import(
+              await Promise.all(
+                files.map(async (file) => ({
+                  name: file.name,
+                  mediaType: file.type,
+                  bytes: new Uint8Array(await file.arrayBuffer()),
+                })),
+              ),
             ),
-          );
-          sideChatDrafts.updateComposer(id, (state) =>
-            addComposerImages(state, images),
-          );
-        }}
-        onAddAppShot={(image) =>
-          sideChatDrafts.updateComposer(id, (state) =>
-            addComposerImages(state, [image]),
           )
         }
-        onPickImages={async () => {
-          const images = await window.zenx.imageAttachments.pick();
-          sideChatDrafts.updateComposer(id, (state) =>
-            addComposerImages(state, images),
-          );
+        onAddAppShot={(image) => {
+          void sideChatDrafts.importImages(id, async () => [image]);
         }}
-        onRemoveImage={(image) =>
+        onPickImages={() =>
+          sideChatDrafts.importImages(id, () =>
+            window.zenx.imageAttachments.pick(),
+          )
+        }
+        onRemoveImage={(image) => {
           sideChatDrafts.updateComposer(id, (state) =>
             removeComposerImage(state, image),
-          )
-        }
+          );
+          const state = sideChatDrafts.get(id)?.composer;
+          if (state !== undefined) abandonUnusedComposerImage(image, state);
+        }}
         onReadAttachment={async (attachment) =>
           await window.zenx.imageAttachments.read(attachment)
         }
@@ -4016,7 +4028,15 @@ function AppContent() {
             const nativeOwner = current.roomId
               ? { kind: "room" as const, id: current.roomId }
               : current.parentThreadId;
-            updateComposer(child, () => current.composer);
+            // Transfer before sidebar awaits can reveal the child. Later
+            // imports follow this owner, and never overwrite edits made in
+            // the child's Composer while those sidebar writes are pending.
+            if (
+              !sideChatDrafts.transfer(id, (change) =>
+                updateComposer(child, change),
+              )
+            )
+              return;
             const draftTab = `custom:side-chat-draft-${id}`;
             const order = (
               sideChatTabOrdersRef.current[owner] ??
@@ -4058,6 +4078,8 @@ function AppContent() {
                   [owner]: `thread:${child}`,
                 }));
             }
+            // The temporary tab presented the real child during sidebar writes;
+            // ownership was already transferred, so retiring it discards no input.
             sideChatDrafts.close(id);
             void loadThreadSummaries();
           }
@@ -4246,8 +4268,6 @@ function AppContent() {
             toggle: (threadId) => {
               if (page === "agent" && debugThreadId === threadId)
                 setDebugThreadId(null);
-              else if (page === "agent" && selectedThreadId === threadId)
-                setDebugThreadId(threadId);
               else void resumeThread(threadId, false, false, true);
             },
           }}
@@ -4606,6 +4626,7 @@ function AppContent() {
                     updateNewThreadComposer(id, (state) =>
                       addComposerImages(state, [image]),
                     );
+                  else abandonDraftImage(image.id);
                 }}
                 onPickImages={async (threadId) => {
                   const images = await window.zenx.imageAttachments.pick();
@@ -4626,17 +4647,20 @@ function AppContent() {
                     releaseNewThreadImageLease(draftId);
                   }
                 }}
-                onRemoveImage={(threadId, imageId) =>
-                  updateComposer(threadId, (state) =>
+                onRemoveImage={(threadId, imageId) => {
+                  const next = updateComposer(threadId, (state) =>
                     removeComposerImage(state, imageId),
-                  )
-                }
-                onRemoveNewThreadImage={(imageId) =>
-                  updateNewThreadDraft((current) => ({
+                  );
+                  abandonUnusedComposerImage(imageId, next);
+                }}
+                onRemoveNewThreadImage={(imageId) => {
+                  const next = updateNewThreadDraft((current) => ({
                     ...current,
                     composer: removeComposerImage(current.composer, imageId),
-                  }))
-                }
+                  }));
+                  if (next !== null)
+                    abandonUnusedComposerImage(imageId, next.composer);
+                }}
                 onReadAttachment={readAttachment}
                 onRetryTurn={async (turnId) => {
                   if (

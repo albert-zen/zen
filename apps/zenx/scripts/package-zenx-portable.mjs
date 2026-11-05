@@ -1,3 +1,4 @@
+import { stageAppShotDbus } from "./stage-app-shot-dbus.mjs";
 import {
   appShotRuntimeDependencies,
   stageAppShotRuntime,
@@ -866,6 +867,8 @@ export async function stagePackage(options) {
   if (options.target === "app") {
     await stageShellPty(options.rootDirectory, options.appDirectory);
     await stageAppShotRuntime(options.rootDirectory, options.appDirectory);
+    if (process.platform === "linux")
+      await stageAppShotDbus(options.rootDirectory, options.appDirectory);
     const licenseDirectory = path.join(options.appDirectory, "licenses");
     await mkdir(licenseDirectory, { recursive: true });
     for (const name of ["xterm", "addon-fit"])
@@ -1247,6 +1250,7 @@ export function packageManifest(
         main: "out/main/index.js",
         dependencies: {
           ...appShotRuntimeDependencies(platform),
+          ...(platform === "linux" ? { "dbus-next": "0.10.2" } : {}),
           "@zenx/plugin-sdk": zenxPackage.dependencies["@zenx/plugin-sdk"],
           ws: zenxPackage.dependencies.ws,
           "node-pty": zenxPackage.dependencies["node-pty"],

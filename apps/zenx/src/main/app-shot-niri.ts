@@ -70,6 +70,9 @@ export interface NiriAppShotOptions {
   /** Main-process only. Never accept a socket path from the renderer. */
   socketPath?: string;
   env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
+  /** Host-owned extra process exclusions; the ZenX main PID is always excluded. */
+  excludedPids?: readonly number[];
   /** Native-image boundary for synthetic transport tests; Electron by default. */
   createImage?: (png: Buffer) => NiriAppShotImage;
 }
@@ -189,13 +192,27 @@ export function niriSocketPath(
     : undefined;
 }
 
+function captureCancelled(): Error {
+  const error = new Error("Niri App Shot capture cancelled.");
+  error.name = "AbortError";
+  return error;
+}
+
+function checkCancellation(signal?: AbortSignal): void {
+  if (signal?.aborted) throw captureCancelled();
+}
+
 class NiriConnection {
   private readonly socket: NodeNet.Socket;
   private readonly listeners = new Set<(value: unknown) => void>();
   private readonly failures = new Set<(error: Error) => void>();
   private failure: Error | undefined;
+  private readonly signal: AbortSignal | undefined;
+  private readonly abort = () => this.close(captureCancelled());
 
-  constructor(path: string) {
+  constructor(path: string, signal?: AbortSignal) {
+    checkCancellation(signal);
+    this.signal = signal;
     this.socket = NodeNet.createConnection(path);
     this.socket.setEncoding("utf8");
     let pending = "";
@@ -221,6 +238,7 @@ class NiriConnection {
     });
     this.socket.on("error", (error) => this.close(error));
     this.socket.on("close", () => this.close(new Error("Niri disconnected.")));
+    signal?.addEventListener("abort", this.abort, { once: true });
   }
 
   waitFor<T>(select: (value: unknown) => T | undefined): Promise<T> {
@@ -264,13 +282,18 @@ class NiriConnection {
   close(error = new Error("Niri connection closed.")) {
     if (this.failure) return;
     this.failure = error;
+    this.signal?.removeEventListener("abort", this.abort);
     for (const fail of this.failures) fail(error);
     this.socket.destroy();
   }
 }
 
-async function request(path: string, message: unknown): Promise<unknown> {
-  const connection = new NiriConnection(path);
+async function request(
+  path: string,
+  message: unknown,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const connection = new NiriConnection(path, signal);
   try {
     const reply = connection.waitFor((value) => ({
       value: decodeReply(value),
@@ -284,8 +307,11 @@ async function request(path: string, message: unknown): Promise<unknown> {
   }
 }
 
-export async function checkNiriCaptureSupport(path: string): Promise<void> {
-  const version = decodeVersion(await request(path, "Version")).Version;
+export async function checkNiriCaptureSupport(
+  path: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const version = decodeVersion(await request(path, "Version", signal)).Version;
   // 25.11 introduced both caller-selected screenshot paths and completion events.
   const match = /^(?:niri )?(\d+)\.(\d+)/.exec(version);
   if (
@@ -299,16 +325,20 @@ export async function checkNiriCaptureSupport(path: string): Promise<void> {
 async function readNiriPng(
   path: string,
   createImage?: NiriAppShotOptions["createImage"],
+  signal?: AbortSignal,
 ): Promise<Pick<NiriAppShotCapture, "png" | "width" | "height">> {
+  checkCancellation(signal);
   const file = await NodeFSP.open(path, "r");
   let png: Buffer;
   try {
     const stat = await file.stat();
+    checkCancellation(signal);
     if (!stat.isFile() || stat.size > MAX_PNG_BYTES)
       throw new Error("Invalid screenshot file.");
     png = Buffer.alloc(stat.size);
     let offset = 0;
     while (offset < png.length) {
+      checkCancellation(signal);
       const { bytesRead } = await file.read(
         png,
         offset,
@@ -321,11 +351,13 @@ async function readNiriPng(
   } finally {
     await file.close();
   }
+  checkCancellation(signal);
   if (!png.subarray(0, 8).equals(PNG_HEADER))
     throw new Error("Invalid or oversized window screenshot.");
   const image = createImage
     ? createImage(png)
     : (await import("electron")).nativeImage.createFromBuffer(png);
+  checkCancellation(signal);
   if (image.isEmpty()) throw new Error("The window screenshot is empty.");
   const { width, height } = image.getSize();
   if (!isSize(width) || !isSize(height))
@@ -343,6 +375,7 @@ async function readNiriPng(
   });
   if (resized.isEmpty()) throw new Error("The window screenshot is empty.");
   const resizedPng = resized.toPNG();
+  checkCancellation(signal);
   const size = resized.getSize();
   if (
     resizedPng.length > MAX_OUTPUT_BYTES ||
@@ -364,16 +397,18 @@ async function readNiriPng(
 export async function captureNiriActiveAppShot(
   options: NiriAppShotOptions = {},
 ): Promise<NiriAppShotCapture> {
+  checkCancellation(options.signal);
   const path = options.socketPath ?? niriSocketPath(options.env);
   if (!path || !NodePath.isAbsolute(path))
     throw new Error("Native Niri App Shot is unavailable in this session.");
-  await checkNiriCaptureSupport(path);
+  await checkNiriCaptureSupport(path, options.signal);
   const directory = await NodeFSP.mkdtemp(
     NodePath.join(NodeOS.tmpdir(), "zenx-niri-capture-"),
   );
   const imagePath = NodePath.join(directory, "capture.png");
-  const events = new NiriConnection(path);
+  let events: NiriConnection | undefined;
   try {
+    events = new NiriConnection(path, options.signal);
     // Initial state proves subscription; the EventStream reply alone does not.
     const ready = events.waitFor((value) =>
       isWindowsChanged(value) ? true : undefined,
@@ -381,9 +416,14 @@ export async function captureNiriActiveAppShot(
     events.send("EventStream");
     await ready;
     const window = decodeFocused(
-      await request(path, "FocusedWindow"),
+      await request(path, "FocusedWindow", options.signal),
     ).FocusedWindow;
     if (!window) throw new Error("Niri has no focused window to capture.");
+    if (
+      window.pid !== null &&
+      (window.pid === process.pid || options.excludedPids?.includes(window.pid))
+    )
+      throw new Error("App Shot cannot capture its own application window.");
     const captured = events.waitFor((value) =>
       isScreenshotCaptured(value) && value.ScreenshotCaptured.path === imagePath
         ? true
@@ -391,21 +431,29 @@ export async function captureNiriActiveAppShot(
     );
     // Observe rejection if the command is rejected before awaiting its event.
     void captured.catch(() => undefined);
-    await request(path, {
-      Action: {
-        ScreenshotWindow: {
-          id: window.id,
-          write_to_disk: true,
-          show_pointer: false,
-          path: imagePath,
+    await request(
+      path,
+      {
+        Action: {
+          ScreenshotWindow: {
+            id: window.id,
+            write_to_disk: true,
+            show_pointer: false,
+            path: imagePath,
+          },
         },
       },
-    });
-    await captured;
-    const image = await readNiriPng(imagePath, options.createImage);
-    const after = decodeWindows(await request(path, "Windows")).Windows.find(
-      (item) => item.id === window.id,
+      options.signal,
     );
+    await captured;
+    const image = await readNiriPng(
+      imagePath,
+      options.createImage,
+      options.signal,
+    );
+    const after = decodeWindows(
+      await request(path, "Windows", options.signal),
+    ).Windows.find((item) => item.id === window.id);
     // Changed/closed windows still yield pixels, never text from a replacement.
     const identityUnchanged =
       after &&
@@ -415,6 +463,7 @@ export async function captureNiriActiveAppShot(
       after.layout.window_size.every(
         (size, i) => size === window.layout.window_size[i],
       );
+    checkCancellation(options.signal);
     return {
       ...image,
       ...(identityUnchanged
@@ -436,8 +485,10 @@ export async function captureNiriActiveAppShot(
         : {}),
     };
   } finally {
-    events.close();
+    events?.close();
     // Only our private capture directory is removed, never an event's path.
+    // An accepted compositor request cannot be undone: a late write may fail
+    // or recreate a private file after cancellation and this cleanup.
     await NodeFSP.rm(directory, { recursive: true, force: true });
   }
 }

@@ -156,6 +156,8 @@ export type NativeSteerRecallResult =
 
 export const NATIVE_QUEUE_CANCEL_METHOD = "zen/thread/queue/cancel";
 export const NATIVE_THREAD_RESUME_METHOD = "zen/thread/resume";
+export const NATIVE_THREAD_RESUME_WINDOW_METHOD = "zen/thread/resume-window";
+export const NATIVE_THREAD_HISTORY_METHOD = "zen/thread/history";
 export const NATIVE_THREAD_EVENT_METHOD = "zen/thread/event";
 export const NATIVE_MODEL_CATALOG_UPDATED_METHOD = "model/catalog/updated";
 

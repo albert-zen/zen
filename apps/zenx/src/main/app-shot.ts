@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { niriSocketPath, type NiriAppShotCapture } from "./app-shot-niri.js";
 import type { AppShotActiveWindow } from "./app-shot-native.js";
 import {
   APP_SHOT_MAX_TEXT,
@@ -41,6 +42,7 @@ export interface AppShotAccessibilityRead {
 }
 
 export interface AppShotService {
+  readonly hasNativeActiveCapture?: boolean;
   listSources(): Promise<AppShotSource[]>;
   capture(
     sourceId: string,
@@ -115,6 +117,9 @@ export function createAppShotService(
 ): AppShotService {
   let selections = new Map<string, Selection>();
   return {
+    hasNativeActiveCapture: Boolean(
+      dependencies.captureActiveNative || dependencies.getActiveWindow,
+    ),
     async listSources() {
       // Invalidates all prior tokens, including on enumeration failure.
       selections = new Map();
@@ -365,7 +370,19 @@ export function createElectronAppShotService(
               captureOptions?.includeAccessibility === true,
             );
           }
-        : undefined,
+        : process.platform === "linux" && niriSocketPath()
+          ? async (captureOptions) => {
+              const { captureNiriActiveAppShot } =
+                await import("./app-shot-niri.js");
+              const shot = await captureNiriActiveAppShot({
+                signal: captureOptions?.signal,
+              });
+              return niriAppShotDraft(
+                shot,
+                captureOptions?.includeAccessibility === true,
+              );
+            }
+          : undefined,
     readAccessibility:
       process.platform === "darwin" ? readMacAppShotAccessibility : undefined,
     getActiveWindow:
@@ -470,5 +487,27 @@ export function fitAppShotDimensions(size: { width: number; height: number }): {
   return {
     width: Math.max(1, Math.round(size.width * scale)),
     height: Math.max(1, Math.round(size.height * scale)),
+  };
+}
+
+export function niriAppShotDraft(
+  shot: NiriAppShotCapture,
+  includeAccessibility: boolean,
+): AppShotCapture {
+  const title = shot.window?.title ?? shot.window?.appId ?? "Niri window";
+  return {
+    name: filename(title),
+    bytes: shot.png,
+    mediaType: "image/png",
+    context: [
+      shot.window
+        ? `App Shot of Niri window "${plain(title, 1000)}"${shot.window.appId ? ` in ${plain(shot.window.appId, 100)}` : ""}.`
+        : "App Shot of the Niri window selected at capture start. Window identity changed or was unavailable afterward; metadata is omitted.",
+      `Captured at: ${new Date().toISOString()}.`,
+      includeAccessibility
+        ? "Screenshot only. Niri accessibility text is not implemented in this stage."
+        : "Screenshot only. Accessibility text was not requested.",
+      "This is a draft attachment, not permission to control the app.",
+    ].join("\n"),
   };
 }

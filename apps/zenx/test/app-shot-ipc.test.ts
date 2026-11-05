@@ -24,7 +24,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function fixture(platform = "darwin") {
+function fixture(platform = "darwin", niri = false) {
   type Renderer = { owned: boolean; url: string; frame: object; calls: number };
   const renderer: Renderer = {
     owned: true,
@@ -35,6 +35,8 @@ function fixture(platform = "darwin") {
   let shortcut: (() => void) | undefined;
   let unregisters = 0;
   let imports = 0;
+  const abandoned: string[] = [];
+  let importWait: Promise<void> | undefined;
   let prepared = 0;
   let focusCount = 0;
   const events: AppShotEvent[] = [];
@@ -58,6 +60,26 @@ function fixture(platform = "darwin") {
   let manualCapture: () => Promise<AppShotCapture> = async () => capture;
   const controller = new AppShotIpcController<Renderer, object>({
     platform,
+    niriBinding: niri
+      ? 'Ctrl+Shift+2 repeat=false { spawn "gdbus"; }'
+      : undefined,
+    startNiriShortcut: niri
+      ? async (options) => {
+          modifierStarts.push({
+            onTrigger: options.onCapture,
+            onFailure: (error) =>
+              options.onFailure(
+                error instanceof Error ? error : new Error("failure"),
+              ),
+            signal: options.signal,
+          });
+          return {
+            stop() {
+              modifierStops++;
+            },
+          };
+        }
+      : undefined,
     rendererUrl: "file:///zen/index.html",
     trusted({ renderer: target, frame }) {
       return {
@@ -69,6 +91,7 @@ function fixture(platform = "darwin") {
     createService(target): AppShotService {
       target.calls++;
       return {
+        hasNativeActiveCapture: niri,
         async listSources() {
           return [{ id: "source", title: "Window" }];
         },
@@ -90,9 +113,15 @@ function fixture(platform = "darwin") {
         appShotContext: captured.context,
       };
     },
-    async importCapture(captured) {
+    async importCapture(captured, owner) {
+      assert.equal(owner, renderer);
       imports++;
+      await importWait;
       return { ...draft, appShotContext: captured.context };
+    },
+    async abandonCapture(owner, image) {
+      assert.equal(owner, renderer);
+      abandoned.push(image.id);
     },
     startModifierPair(options) {
       modifierStarts.push(options);
@@ -115,6 +144,10 @@ function fixture(platform = "darwin") {
   });
   return {
     controller,
+    abandoned,
+    waitForImport(value: Promise<void>) {
+      importWait = value;
+    },
     renderer,
     caller: () => ({ renderer, frame: renderer.frame }),
     events,
@@ -477,4 +510,54 @@ test("invalid shortcut kinds cannot register a global listener", async () => {
   );
   assert.equal(f.shortcut, undefined);
   assert.equal(f.modifierStarts.length, 0);
+});
+
+test("Niri opt-in owns a bus action without registering or writing a compositor shortcut", async () => {
+  const f = fixture("linux", true);
+  assert.equal(f.controller.configuration(f.caller()).nativeForeground, true);
+  assert.match(f.controller.configuration(f.caller()).niriBinding!, /gdbus/);
+  await f.controller.arm(f.caller(), "niri", false, "chord");
+  assert.equal(f.shortcut, undefined);
+  assert.equal(f.modifierStarts.length, 1);
+  await f.controller.onShortcut();
+  assert.equal(f.activeCaptures, 1);
+  assert.equal(f.imports, 0);
+  assert.ok(f.events[0]?.image);
+  assert.equal(f.events[0]?.openPicker, undefined);
+  await f.controller.disarm(f.caller(), "niri");
+  assert.equal(f.modifierStarts[0]?.signal.aborted, true);
+  assert.equal(f.modifierStops, 1);
+  f.modifierStarts[0]?.onTrigger();
+  await Promise.resolve();
+  assert.equal(f.activeCaptures, 1);
+  f.controller.dispose();
+});
+
+test("Niri configuration is available only to the trusted main frame", () => {
+  const f = fixture("linux", true);
+  assert.throws(
+    () => f.controller.configuration({ renderer: f.renderer, frame: {} }),
+    /trusted/,
+  );
+  f.controller.dispose();
+});
+
+test("App Shot retires a staged attachment if its owner or review disappears during Attach", async () => {
+  for (const changed of ["owner", "review"]) {
+    const f = fixture();
+    const image = await f.controller.capture(f.caller(), "source", false);
+    let finish!: () => void;
+    f.waitForImport(
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const attaching = f.controller.attach(f.caller(), image.id);
+    if (changed === "owner") f.controller.forget(f.renderer);
+    else f.controller.discard(f.caller(), image.id);
+    finish();
+    await assert.rejects(attaching, /changed|discarded/);
+    assert.deepEqual(f.abandoned, ["image"]);
+    f.controller.dispose();
+  }
 });

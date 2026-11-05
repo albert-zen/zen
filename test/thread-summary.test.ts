@@ -5,6 +5,8 @@ import path from "node:path";
 import test from "node:test";
 
 import { ZenAppServer, type AppServerEvent } from "../src/app-server.js";
+import { DomainThreadJournal } from "../src/domain-journal.js";
+import { FileTraceStore } from "../src/trace.js";
 import { JsonlThreadJournal } from "../src/journal.js";
 import type { ThreadJournal } from "../src/journal.js";
 import { StaticModelCatalog } from "../src/model-catalog.js";
@@ -1174,3 +1176,319 @@ for (const type of [
     }
   });
 }
+
+test("valid persisted summaries do not read or retain complete Thread histories", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-summary-window-"),
+  );
+  try {
+    const seed = createServer(directory);
+    const a = await seed.startThread();
+    const b = await seed.startThread();
+    await seed.setThreadArchived(b.id, true);
+    await drainSummaries(directory);
+    // Upgrade a legacy projection using one bounded, disposable rebuild.
+    await createServer(directory).listThreadSummaries();
+    await drainSummaries(directory);
+    const disk = new JsonlThreadJournal(path.join(directory, "threads"));
+    let reads = 0;
+    const journal: ThreadJournal = {
+      append: disk.append.bind(disk),
+      listThreadIds: disk.listThreadIds.bind(disk),
+      read: async (id) => {
+        reads++;
+        return disk.read(id);
+      },
+      summarySourceRevision: disk.summarySourceRevision.bind(disk),
+    };
+    const cold = createServer(directory, journal);
+    assert.deepEqual(
+      (await cold.listThreadSummaries()).map((s) => s.threadId),
+      [a.id],
+    );
+    assert.equal(
+      (await cold.listThreadSummaries({ archived: true }))[0]?.threadId,
+      b.id,
+    );
+    assert.equal(reads, 0, "valid sidebars must never materialize a journal");
+    await cold.readThread(a.id);
+    assert.equal(
+      reads,
+      1,
+      "the first explicit open still performs its cold read",
+    );
+  } finally {
+    await removeDirectory(directory);
+  }
+});
+
+test("a missing summary rebuild never warms the App Server Thread cache", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-summary-disposable-"),
+  );
+  try {
+    const seed = createServer(directory);
+    const thread = await seed.startThread();
+    await drainSummaries(directory);
+    await unlink(path.join(directory, "thread-summaries.json"));
+    const disk = new JsonlThreadJournal(path.join(directory, "threads"));
+    let reads = 0;
+    const cold = createServer(directory, {
+      append: disk.append.bind(disk),
+      listThreadIds: disk.listThreadIds.bind(disk),
+      read: async (id) => {
+        reads++;
+        return disk.read(id);
+      },
+    });
+    await cold.listThreadSummaries();
+    assert.equal(reads, 1);
+    await cold.readThread(thread.id);
+    assert.equal(reads, 2, "rebuild does not hold onto a complete Thread");
+  } finally {
+    await removeDirectory(directory);
+  }
+});
+
+test("Domain publications produce restart-safe checkpoints; changed sources rebuild only their own summary", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-domain-summary-"),
+  );
+  const metadata = new JsonlThreadMetadataStore(
+    path.join(directory, "thread-metadata.jsonl"),
+  );
+  const trace = new FileTraceStore(path.join(directory, "trace"));
+  const writer = new DomainThreadJournal({
+    directory: path.join(directory, "threads"),
+    metadata,
+    trace,
+  });
+  try {
+    const server = createServer(directory, writer);
+    const a = await server.startThread();
+    const b = await server.startThread();
+    await server
+      .startTurn(a.id, "Visible first input")
+      .then((turn) => turn.done);
+    await server.setThreadArchived(b.id, true);
+    const expected = await server.listThreadSummaries();
+    await drainSummaries(directory);
+    await writer.close();
+    const readOnly = new DomainThreadJournal({
+      directory: path.join(directory, "threads"),
+      metadata,
+      trace: new FileTraceStore(path.join(directory, "trace")),
+      access: "read-only",
+    });
+    const reads: string[] = [];
+    let semanticReads = 0;
+    const journal: ThreadJournal = {
+      append: readOnly.append.bind(readOnly),
+      listThreadIds: readOnly.listThreadIds.bind(readOnly),
+      read: async (id) => {
+        reads.push(id);
+        return readOnly.read(id);
+      },
+      readItemList: async (id) => {
+        semanticReads++;
+        return readOnly.readItemList(id);
+      },
+      summarySourceRevision: readOnly.summarySourceRevision.bind(readOnly),
+    };
+    assert.deepEqual(
+      await createServer(directory, journal).listThreadSummaries(),
+      expected,
+    );
+    assert.equal(reads.length, 0);
+    assert.equal(semanticReads, 0);
+    await drainSummaries(directory);
+    // The new observation is not model history, but its source revision still conservatively invalidates this Thread only.
+    await trace.record({
+      threadId: a.id,
+      type: "synthetic_observation",
+      data: { label: "new" },
+    });
+    const cold = createServer(directory, journal);
+    assert.deepEqual(await cold.listThreadSummaries(), expected);
+    assert.deepEqual(reads, [a.id]);
+    assert.equal(semanticReads, 1);
+    await cold.readThread(a.id);
+    assert.deepEqual(
+      reads,
+      [a.id, a.id],
+      "rebuild never owns the history cache",
+    );
+    await readOnly.close();
+  } finally {
+    await writer.close();
+    await removeDirectory(directory);
+  }
+});
+
+test("product metadata changes and stale journals invalidate persisted summaries independently", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zen-summary-stale-"));
+  try {
+    const seed = createServer(directory);
+    const a = await seed.startThread();
+    const b = await seed.startThread();
+    await drainSummaries(directory);
+    await createServer(directory).listThreadSummaries();
+    await drainSummaries(directory);
+    await new JsonlThreadMetadataStore(
+      path.join(directory, "thread-metadata.jsonl"),
+    ).setName(a.id, "Fresh product name");
+    const disk = new JsonlThreadJournal(path.join(directory, "threads"));
+    const reads: string[] = [];
+    const journal: ThreadJournal = {
+      append: disk.append.bind(disk),
+      listThreadIds: disk.listThreadIds.bind(disk),
+      read: async (id) => {
+        reads.push(id);
+        return disk.read(id);
+      },
+      summarySourceRevision: disk.summarySourceRevision.bind(disk),
+    };
+    const updated = await createServer(
+      directory,
+      journal,
+    ).listThreadSummaries();
+    assert.equal(
+      updated.find((s) => s.threadId === a.id)?.name,
+      "Fresh product name",
+    );
+    assert.deepEqual(reads, [a.id]);
+    await drainSummaries(directory);
+    await disk.append({
+      id: "pending-new",
+      threadId: b.id,
+      type: "user_message_queued",
+      createdAt: new Date().toISOString(),
+      clientId: "pending-client",
+      input: [{ type: "text", text: "Queue stays authoritative" }],
+    });
+    await createServer(directory, journal).listThreadSummaries();
+    assert.deepEqual(reads, [a.id, b.id]);
+  } finally {
+    await removeDirectory(directory);
+  }
+});
+
+test("deleted Domain Threads have a valid absent summary and restore invalidates that checkpoint", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-summary-deleted-"),
+  );
+  const metadata = new JsonlThreadMetadataStore(
+    path.join(directory, "thread-metadata.jsonl"),
+  );
+  const options = {
+    directory: path.join(directory, "threads"),
+    metadata,
+    trace: new FileTraceStore(path.join(directory, "trace")),
+  };
+  const journal = new DomainThreadJournal(options);
+  try {
+    const server = createServer(directory, journal);
+    const thread = await server.startThread();
+    await server.setThreadArchived(thread.id, true);
+    const deleted = await server.deleteThread(
+      thread.id,
+      thread.items.at(-1)!.id,
+    );
+    await drainSummaries(directory);
+    let reads = 0;
+    const disk = new DomainThreadJournal({ ...options, access: "read-only" });
+    const observed: ThreadJournal = {
+      append: disk.append.bind(disk),
+      listThreadIds: disk.listThreadIds.bind(disk),
+      read: async (id) => {
+        reads++;
+        return disk.read(id);
+      },
+      readItemList: disk.readItemList.bind(disk),
+      summarySourceRevision: disk.summarySourceRevision.bind(disk),
+    };
+    assert.deepEqual(
+      await createServer(directory, observed).listThreadSummaries(),
+      [],
+    );
+    assert.equal(reads, 0);
+    await drainSummaries(directory);
+    const stale = await readFile(path.join(directory, "thread-summaries.json"));
+    await server.restoreThread(thread.id, deleted.deletionItemId);
+    await drainSummaries(directory);
+    await writeFile(path.join(directory, "thread-summaries.json"), stale);
+    assert.equal(
+      (
+        await createServer(directory, observed).listThreadSummaries({
+          archived: true,
+        })
+      )[0]?.threadId,
+      thread.id,
+    );
+    assert.equal(reads, 1);
+    await disk.close();
+  } finally {
+    await journal.close();
+    await removeDirectory(directory);
+  }
+});
+
+test("legacy sidebar migration does not retain complete source histories in the Domain journal", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-summary-legacy-"),
+  );
+  const metadata = new JsonlThreadMetadataStore(
+    path.join(directory, "thread-metadata.jsonl"),
+  );
+  let journal: DomainThreadJournal | undefined;
+  try {
+    const legacy = createServer(directory);
+    const threads = await Promise.all([
+      legacy.startThread(),
+      legacy.startThread(),
+      legacy.startThread(),
+    ]);
+    await drainSummaries(directory);
+    const trace = new FileTraceStore(path.join(directory, "trace"));
+    let traceReads = 0;
+    const read = trace.read.bind(trace);
+    trace.read = async (...args) => {
+      traceReads++;
+      return read(...args);
+    };
+    journal = new DomainThreadJournal({
+      directory: path.join(directory, "threads"),
+      metadata,
+      trace,
+    });
+    assert.equal(
+      (await createServer(directory, journal).listThreadSummaries()).length,
+      3,
+    );
+    const before = traceReads;
+    for (const thread of threads) {
+      assert.equal((await journal.read(thread.id))[0]?.id, thread.items[0]?.id);
+    }
+    assert.equal(
+      traceReads - before,
+      3,
+      "migration must not leave the full library in the journal writer cache",
+    );
+    // A subsequent append still reconstructs the same authoritative prefix.
+    await journal.append({
+      id: "legacy-queue",
+      threadId: threads[0]!.id,
+      createdAt: new Date().toISOString(),
+      type: "user_message_queued",
+      clientId: "legacy-client",
+      input: [{ type: "text", text: "Preserve migrated source" }],
+    });
+    assert.equal(
+      (await journal.read(threads[0]!.id)).at(-1)?.id,
+      "legacy-queue",
+    );
+  } finally {
+    await journal?.close();
+    await removeDirectory(directory);
+  }
+});

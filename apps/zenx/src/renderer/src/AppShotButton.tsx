@@ -1,7 +1,12 @@
+import { abandonDraftImage } from "./draft-image-lifecycle.js";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
-import type { AppShotApi, AppShotShortcutKind } from "../../app-shot.js";
+import type {
+  AppShotApi,
+  AppShotConfiguration,
+  AppShotShortcutKind,
+} from "../../app-shot.js";
 import type { AppShotSource } from "../../main/app-shot.js";
 import type { ZenXImageDraft } from "../../main/image-attachments.js";
 import { AttachmentImage } from "./ImagePresentation.js";
@@ -47,6 +52,25 @@ export function AppShotButton({
     supportsBothShift ? "both-shift" : "chord",
   );
   const pending = useRef(false);
+  const [configuration, setConfiguration] =
+    useState<AppShotConfiguration | null>(null);
+
+  useEffect(() => {
+    let current = true;
+    setConfiguration(null);
+    if (api.configuration)
+      void api.configuration().then(
+        (value) => {
+          if (current) setConfiguration(value);
+        },
+        () => {
+          /* Capture/registration reports the concrete availability error. */
+        },
+      );
+    return () => {
+      current = false;
+    };
+  }, [api]);
 
   useEffect(() => {
     live.current = true;
@@ -233,8 +257,10 @@ export function AppShotButton({
         !live.current ||
         operation.current !== generation ||
         latest.current.disabled
-      )
+      ) {
+        abandonDraftImage(attached.id);
         return;
+      }
       latest.current.onAttach(attached);
       const next = waitingImages.current.shift();
       if (next) {
@@ -440,17 +466,32 @@ export function AppShotButton({
                 disabled={disabled}
                 onChange={() => void toggleShortcut()}
               />
-              {t("appShotGlobalShortcut")}
+              {t(
+                configuration?.niriBinding
+                  ? "appShotNiriEnable"
+                  : "appShotGlobalShortcut",
+              )}
             </label>
             <p className="app-shot-hint">
               {t(
-                window.zenx.platform === "linux"
-                  ? "appShotLinuxShortcutHint"
-                  : shortcutKind === "both-shift"
-                    ? "appShotBothShiftHint"
-                    : "appShotGlobalHint",
+                configuration?.niriBinding
+                  ? "appShotNiriHint"
+                  : window.zenx.platform === "linux"
+                    ? "appShotLinuxShortcutHint"
+                    : shortcutKind === "both-shift"
+                      ? "appShotBothShiftHint"
+                      : "appShotGlobalHint",
               )}
             </p>
+            {configuration?.niriBinding && (
+              <details>
+                <summary>{t("appShotNiriBinding")}</summary>
+                <p className="app-shot-hint">{t("appShotNiriManualSetup")}</p>
+                <pre className="app-shot-context">
+                  {configuration.niriBinding}
+                </pre>
+              </details>
+            )}
           </div>
         </div>
       </Dialog>

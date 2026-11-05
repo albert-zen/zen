@@ -270,6 +270,10 @@ test("question cards avoid repeated open headings and distinguish optional detai
       document.querySelectorAll(".user-question-text > span").length,
       1,
     );
+    assert.equal(
+      document.querySelector("details.user-question-draft-note"),
+      null,
+    );
     const fields = [...document.querySelectorAll("textarea")];
     assert.equal(fields.length, 2);
     assert.match(fields[0]!.getAttribute("aria-label")!, /^Which format\? · /);
@@ -290,6 +294,21 @@ test("question cards avoid repeated open headings and distinguish optional detai
     assert.equal(
       document.querySelector<HTMLButtonElement>(".primary-button")!.disabled,
       false,
+    );
+    assert.equal(
+      document.querySelector<HTMLDetailsElement>(
+        "details.user-question-draft-note",
+      )?.open,
+      false,
+    );
+    question.state = "answer-pending";
+    await act(async () => {
+      await store.refresh("synthetic");
+    });
+    assert.equal(
+      document.querySelector("details.user-question-draft-note"),
+      null,
+      "submitted answers are not labelled unsent drafts",
     );
     question.state = "unavailable";
     await act(async () => {

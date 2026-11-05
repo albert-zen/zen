@@ -302,7 +302,7 @@ test("app manifest matches staged dependencies and smoke remains independent", a
   );
   assert.match(
     config,
-    /include: \["sharp", "ffi-rs", "@crowecawcaw\/xa11y"\]/u,
+    /include: \["sharp", "ffi-rs", "@crowecawcaw\/xa11y", "dbus-next"\]/u,
   );
   for (const entry of ["app-shot-native-worker", "app-shot-shortcut-worker"])
     assert.ok(config.includes(`"src/main/${entry}.ts"`));

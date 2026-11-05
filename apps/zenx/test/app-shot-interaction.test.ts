@@ -39,6 +39,7 @@ async function fixture(
     api: AppShotApi;
     click(label: string): Promise<void>;
     attached: ZenXImageDraft[];
+    abandoned: string[];
     emit(event: AppShotEvent): void;
     render(disabled?: boolean, key?: string): Promise<void>;
     armed(): string | null;
@@ -69,6 +70,7 @@ async function fixture(
     revokeObjectURL: () => {},
   });
   const attached: ZenXImageDraft[] = [];
+  const abandoned: string[] = [];
   const disarmed: string[] = [];
   const armRequests: Array<{ token: string; kind?: AppShotShortcutKind }> = [];
   let listener: (event: AppShotEvent) => void = () => {};
@@ -100,7 +102,12 @@ async function fixture(
     zenx: {
       platform,
       appShot: api,
-      imageAttachments: { read: async () => new Uint8Array([1, 2, 3, 4]) },
+      imageAttachments: {
+        read: async () => new Uint8Array([1, 2, 3, 4]),
+        abandon: async (ids: string[]) => {
+          abandoned.push(...ids);
+        },
+      },
     },
   });
   const root = createRoot(document.getElementById("root")!);
@@ -137,6 +144,7 @@ async function fixture(
       api,
       click,
       attached,
+      abandoned,
       emit: (event) => listener(event),
       render,
       armed: () => armed,
@@ -441,4 +449,46 @@ test("startup rejection leaves an unchecked preference and visible error", async
       /Shortcut unavailable/,
     );
   });
+});
+
+test("Niri shows manual setup without implying the action reserves its keys", async () => {
+  await fixture(async ({ api, render, click, armed, attached }) => {
+    api.configuration = async () => ({
+      nativeForeground: true,
+      niriBinding: 'Ctrl+Shift+2 repeat=false { spawn "gdbus"; }',
+    });
+    await render(false, "niri");
+    await click("App Shot");
+    assert.match(document.body.textContent!, /Enable Niri capture action/);
+    assert.match(document.body.textContent!, /does not reserve keys/);
+    assert.match(document.body.textContent!, /same-session process/);
+    assert.match(document.body.textContent!, /does not read or edit/);
+    assert.equal(armed(), null);
+    await act(async () => shortcutCheckbox().click());
+    assert.ok(armed());
+    assert.deepEqual(attached, []);
+    await act(async () => shortcutCheckbox().click());
+    assert.equal(armed(), null);
+  }, "linux");
+});
+
+test("a late explicit Attach retires its staging lease after cancel, disable or composer replacement", async () => {
+  for (const action of ["cancel", "disable", "replace"]) {
+    await fixture(async ({ api, click, attached, abandoned, render }) => {
+      await click("App Shot");
+      await click("Example");
+      const pending = deferred<ZenXImageDraft>();
+      api.attach = async () => pending.promise;
+      await click("Attach to draft");
+      if (action === "cancel") await click("Close App Shot");
+      else
+        await render(
+          action === "disable",
+          action === "replace" ? "two" : "one",
+        );
+      await act(async () => pending.resolve(shot));
+      assert.deepEqual(attached, []);
+      assert.deepEqual(abandoned, [shot.id]);
+    });
+  }
 });

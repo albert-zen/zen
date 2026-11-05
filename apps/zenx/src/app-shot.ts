@@ -11,7 +11,13 @@ export interface AppShotEvent {
   openPicker?: true;
 }
 
+export interface AppShotConfiguration {
+  nativeForeground: boolean;
+  niriBinding?: string;
+}
+
 export interface AppShotApi {
+  configuration?(): Promise<AppShotConfiguration>;
   list(): Promise<AppShotSource[]>;
   capture(
     sourceId: string,

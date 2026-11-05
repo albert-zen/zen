@@ -1,6 +1,6 @@
 import { localErrorDetail } from "../../local-error-detail.js";
 import { useTranslation } from "react-i18next";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
 import type {
   BoardBlock,
   BoardEventResult,
@@ -21,12 +21,21 @@ import {
 import { Select } from "./ui/controls.js";
 import { Icon } from "./icons.js";
 
+/** Trusted host-only presentation callbacks never enter the serializable plugin SDK. */
+export const BoardInformationVisibilityContext = React.createContext<{
+  onVisibilityChange?: (visible: boolean) => void;
+  manageMode?: boolean;
+}>({});
+
 const sessions = new Map<string, BoardUiSession>();
 export function registerBoardUi(registry: PluginUiRegistry) {
   registry.registerTrusted("zenx/bundled/board-ui", { board: BoardSurface });
 }
 export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
   const { t } = useTranslation("panels");
+  const { onVisibilityChange, manageMode } = useContext(
+    BoardInformationVisibilityContext,
+  );
   const owner = sdk.context.owner as BoardConversation;
   const instanceKey = sdk.context.instanceKey as string | undefined;
   const key = boardUiSessionKey(owner, instanceKey, sdk.context.admissionId);
@@ -94,10 +103,17 @@ export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
   );
   useEffect(() => {
     void session.refresh();
-    const timer = setInterval(() => {
+    const refresh = () => {
       if (!document.hidden && !session.busy) void session.refresh();
-    }, 3000);
-    return () => clearInterval(timer);
+    };
+    const timer = setInterval(refresh, 3000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
   }, [session]);
   // Retire callbacks on owner changes, even if this component later returns to that owner.
   const active = useMemo(() => ({ mounted: true }), [key]);
@@ -247,31 +263,24 @@ export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
       },
     };
   }, [sdk, session, session.snapshot, session.values, active]);
-  if (session.loading && !session.snapshot)
+  // A read failure is not proof of an empty document: retain any known content.
+  // Initially unavailable content stays quiet outside the explicit management view.
+  const visible = Boolean(session.snapshot || (manageMode && error));
+  useEffect(() => {
+    onVisibilityChange?.(visible);
+  }, [onVisibilityChange, visible, key]);
+  if (!session.snapshot) {
+    if (!manageMode || !error) return null;
     return (
-      <p role="status" className="board-empty">
-        {t("boardLoading")}
-      </p>
-    );
-  if (!session.snapshot && !error && sdk.context.hasConversationInformation)
-    return null;
-  if (!session.snapshot)
-    return (
-      <div className="board-empty">
-        <Icon name="list-detail" size={24} />
-        <h3>{t("boardEmptyTitle")}</h3>
-        <p>{t("boardEmptyDescription")}</p>
-        {error ? (
-          <div role="alert" className="board-error">
-            <p>{error}</p>
-            <BoardErrorDetail detail={errorDetail} />
-          </div>
-        ) : null}
+      <div role="alert" className="board-error">
+        <p>{error}</p>
+        <BoardErrorDetail detail={errorDetail} />
         <button type="button" onClick={() => void session.refresh()}>
           {t("boardRefreshContent")}
         </button>
       </div>
     );
+  }
   const board = session.snapshot.document;
   return (
     <div className="board-surface">
@@ -379,18 +388,6 @@ export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
               ? t("boardUnsaved")
               : t("boardSaved")}
         </span>
-        <button
-          className="icon-button"
-          type="button"
-          aria-label={t("boardRefreshLabel")}
-          title={t("boardRefreshLabel")}
-          onClick={() => {
-            setLocalError(null);
-            void session.refresh();
-          }}
-        >
-          <Icon name="reload" size={14} />
-        </button>
       </footer>
     </div>
   );

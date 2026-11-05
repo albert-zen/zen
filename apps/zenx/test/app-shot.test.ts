@@ -5,6 +5,7 @@ import {
   fitAppShotDimensions,
   sameObservedWindow,
   windowsAppShotDraft,
+  niriAppShotDraft,
   type AppShotNativeSource,
 } from "../src/main/app-shot.js";
 
@@ -272,4 +273,14 @@ it("fits native App Shot dimensions without upscaling or changing aspect ratio",
     height: 600,
   });
   assert.throws(() => fitAppShotDimensions({ width: 0, height: 1 }), /invalid/);
+});
+
+it("Niri image-only identity drift never invents metadata or claims text availability", () => {
+  const draft = niriAppShotDraft(
+    { png: Buffer.from([1]), width: 1, height: 1 },
+    true,
+  );
+  assert.match(draft.context, /metadata is omitted/);
+  assert.match(draft.context, /accessibility text is not implemented/);
+  assert.match(draft.context, /not permission to control/);
 });

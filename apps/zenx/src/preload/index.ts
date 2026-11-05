@@ -349,6 +349,8 @@ contextBridge.exposeInMainWorld("zenx", {
       await ipcRenderer.invoke(ipcChannels.threadSummariesList, options),
   },
   appShot: {
+    configuration: async () =>
+      await ipcRenderer.invoke(ipcChannels.appShotConfiguration),
     read: async (id: string) =>
       await ipcRenderer.invoke(ipcChannels.appShotRead, id),
     attach: async (id: string) =>
@@ -389,6 +391,11 @@ contextBridge.exposeInMainWorld("zenx", {
     },
   } satisfies AppShotApi,
   imageAttachments: {
+    abandon: async (ids: readonly string[]): Promise<void> =>
+      await ipcRenderer.invoke(ipcChannels.imageAttachmentsAbandon, ids),
+    inventory: async (): Promise<
+      import("../main/draft-attachments.js").DraftAttachmentInventory
+    > => await ipcRenderer.invoke(ipcChannels.imageAttachmentsInventory),
     readLocal: async (
       source: string,
       cwd?: string,

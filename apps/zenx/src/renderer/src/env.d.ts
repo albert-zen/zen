@@ -211,6 +211,10 @@ declare global {
       };
       appShot: import("../../app-shot.js").AppShotApi;
       imageAttachments: {
+        abandon(ids: readonly string[]): Promise<void>;
+        inventory(): Promise<
+          import("../../main/draft-attachments.js").DraftAttachmentInventory
+        >;
         readLocal(
           source: string,
           cwd?: string,

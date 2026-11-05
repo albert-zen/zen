@@ -1522,6 +1522,7 @@ interface MountOptions {
     commandId: string,
     input?: unknown,
   ): Promise<unknown>;
+  observeRequest?(method: string, params?: unknown): void;
   request(method: string, params?: unknown): Promise<unknown>;
   attachments?(threadId: string): Promise<ZenXThreadAttachmentProjection>;
   usage?(threadId: string): Promise<ModelUsageProjection>;
@@ -1582,6 +1583,10 @@ async function mountApp(options: MountOptions) {
           ? []
           : await options.getPendingApprovals(),
       request: async (method: string, params?: unknown) => {
+        options.observeRequest?.(method, params);
+        // Existing projection scenarios share full/window recovery fixtures.
+        // Observe the raw method above when testing the actual wire route.
+        if (method === "zen/thread/resume-window") method = "zen/thread/resume";
         if (method === "model/list")
           return { data: [model()], nextCursor: null };
         if (method === "zen/initialize") return { processEpoch: "live-epoch" };
@@ -2420,8 +2425,10 @@ test("message action row appears only after the source Turn finishes, then Fork 
 });
 
 test("Sidebar debug mode targets its exact Thread, defaults off, exits, and never enables capture", async () => {
+  const wireRequests: Array<{ method: string; params: unknown }> = [];
   const requests: Array<{ method: string; params: unknown }> = [];
   const harness = await mountApp({
+    observeRequest: (method, params) => wireRequests.push({ method, params }),
     threads: async (archived) =>
       archived ? [] : [summary(), summary("thread-2", "Thread two")],
     request: async (method, params) => {
@@ -2442,6 +2449,15 @@ test("Sidebar debug mode targets its exact Thread, defaults off, exits, and neve
     await click('[data-thread-id="thread-1"] .thread-row');
     assert.equal(document.querySelector(".thread-view-switch"), null);
     assert.equal(document.querySelector(".thread-debugger"), null);
+    assert.deepEqual(
+      wireRequests.filter((r) => r.method.startsWith("zen/thread/resume")),
+      [
+        {
+          method: "zen/thread/resume-window",
+          params: { threadId: "thread-1" },
+        },
+      ],
+    );
     await click("#thread-menu-trigger-thread-2");
     const toggle = document.querySelector<HTMLButtonElement>(
       '[data-thread-action="debug"]',
@@ -2458,6 +2474,12 @@ test("Sidebar debug mode targets its exact Thread, defaults off, exits, and neve
       toggle.click();
     });
     await waitFor(() => document.querySelector(".thread-debugger"));
+    assert.deepEqual(
+      wireRequests
+        .filter((r) => r.method.startsWith("zen/thread/resume"))
+        .at(-1),
+      { method: "zen/thread/resume", params: { threadId: "thread-2" } },
+    );
     assert.deepEqual(
       requests.filter((r) => r.method === "zen/thread/resume").at(-1)?.params,
       { threadId: "thread-2" },

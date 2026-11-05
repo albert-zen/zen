@@ -1,0 +1,72 @@
+name: Workspace tab discoverability
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/workspace-tab-discovery.yml
+      - apps/zenx/src/renderer/src/auxiliary-panel.tsx
+      - apps/zenx/src/renderer/src/styles.css
+      - apps/zenx/src/renderer/src/i18n/panels.ts
+      - apps/zenx/test/auxiliary-*.test.ts
+      - apps/zenx/test/fixtures/ui-polish-visual.*
+      - apps/zenx/scripts/build-ui-polish-visual.mjs
+      - apps/zenx/scripts/capture-tab-discovery-visual.mjs
+      - apps/zenx/scripts/preview-browser*.mjs
+      - apps/zenx/scripts/prepare-cjk-fonts.mjs
+      - package-lock.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workspace-tab-discovery-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  workspace-tab-discovery:
+    name: Workspace tab visual and interaction checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node --import tsx --test apps/zenx/test/auxiliary-*.test.ts
+      - name: Resolve CJK font from authenticated Ubuntu package indexes
+        id: cjk-package
+        timeout-minutes: 2
+        run: node apps/zenx/scripts/prepare-cjk-fonts.mjs resolve "${{ runner.temp }}/zenx-cjk-fonts"
+      - name: Restore exact verified CJK package archive
+        id: cjk-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.cjk-package.outputs.deb-path }}
+          key: ${{ steps.cjk-package.outputs.cache-key }}
+      - name: Install and verify CJK fonts before workspace tab capture
+        id: zenx-fonts
+        timeout-minutes: 4
+        run: node apps/zenx/scripts/prepare-cjk-fonts.mjs install "${{ runner.temp }}/zenx-cjk-fonts"
+      - name: Cache only the verified CJK package archive
+        if: ${{ steps.zenx-fonts.outcome == 'success' && steps.cjk-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.cjk-package.outputs.deb-path }}
+          key: ${{ steps.cjk-package.outputs.cache-key }}
+      - name: Build and exercise production workspace tabs
+        timeout-minutes: 3
+        run: |
+          node apps/zenx/scripts/build-ui-polish-visual.mjs "${{ runner.temp }}/workspace-tab-discovery"
+          cp "${{ runner.temp }}/zenx-cjk-fonts/package.json" "${{ runner.temp }}/workspace-tab-discovery/cjk-package.json"
+          fc-match ':lang=zh' > "${{ runner.temp }}/workspace-tab-discovery/cjk-font.txt"
+          node apps/zenx/scripts/capture-tab-discovery-visual.mjs "${{ runner.temp }}/workspace-tab-discovery"
+      - name: Retain screenshots and measured tab geometry
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace-tab-discovery-${{ github.sha }}
+          path: ${{ runner.temp }}/workspace-tab-discovery
+          if-no-files-found: warn
+          retention-days: 14

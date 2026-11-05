@@ -992,6 +992,7 @@ test("stages the real app without modifying reusable build output", async () => 
         main: "out/main/index.js",
         dependencies: {
           ...appShotRuntimeDependencies(),
+          ...(process.platform === "linux" ? { "dbus-next": "0.10.2" } : {}),
           "@zenx/plugin-sdk": "0.1.0",
           ws: "^8.18.3",
           "node-pty": "1.1.0",
@@ -1034,7 +1035,12 @@ test("stages only the provider smoke through the same digest path", async () => 
     await access(
       path.join(appDirectory, "node_modules", "fs-native-extensions"),
     );
-    for (const omitted of ["node-pty", "@crowecawcaw/xa11y", "ffi-rs"])
+    for (const omitted of [
+      "node-pty",
+      "@crowecawcaw/xa11y",
+      "ffi-rs",
+      "dbus-next",
+    ])
       await assert.rejects(
         access(path.join(appDirectory, "node_modules", omitted)),
         { code: "ENOENT" },

@@ -52,7 +52,10 @@ let previewTabs: import("../../src/main/workspace-browser.js").WorkspaceBrowserT
 
 const options = {
   request: async (method: string) => {
-    if (method === "zen/thread/resume") {
+    if (
+      method === "zen/thread/resume" ||
+      method === "zen/thread/resume-window"
+    ) {
       const recovery = resumed(
         threadWithMessage(
           "已检查工作区。你可以在右侧阅读和编辑计划，同时保留当前对话。\n\n### 下一步\n\n- 统一浏览器和文件工作区\n- 在同一页面与 Agent 协作\n- 查看上下文压缩结果",

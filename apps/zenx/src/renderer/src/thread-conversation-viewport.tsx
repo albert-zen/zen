@@ -29,6 +29,7 @@ import type {
   ZenXProviderProfile,
 } from "../../main/host-profile.js";
 import type { ZenXThreadAttachmentProjection } from "../../main/image-attachments.js";
+import { abandonUnusedComposerImage } from "./draft-image-lifecycle.js";
 import type { ModelSummary, Thread } from "../../protocol-client/index.js";
 import type { ApprovalCardState } from "./approval-state.js";
 import { ThreadView } from "./ThreadView.js";
@@ -279,7 +280,7 @@ export function ThreadConversationViewport({
       else apply(event);
     });
     void window.zenx.protocol
-      .request("zen/thread/resume", { threadId })
+      .request("zen/thread/resume-window", { threadId })
       .then((snapshot) => {
         if (!current()) return;
         callbacks.current.onRecovery?.(threadId, snapshot);
@@ -542,9 +543,10 @@ export function ThreadConversationViewport({
           const images = await window.zenx.imageAttachments.import(imports);
           updateComposer((value) => addComposerImages(value, images));
         }}
-        onRemoveImage={(id) =>
-          updateComposer((value) => removeComposerImage(value, id))
-        }
+        onRemoveImage={(id) => {
+          updateComposer((value) => removeComposerImage(value, id));
+          abandonUnusedComposerImage(id, readComposer());
+        }}
         onCompact={async () =>
           await requestContextCompaction({
             threadId,

@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+import { stageAppShotDbus } from "../../scripts/stage-app-shot-dbus.mjs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { appShotRuntimePackages } from "../../scripts/stage-app-shot-runtime.mjs";
@@ -58,6 +60,10 @@ export async function writeAppShotRuntimeFixture(
         path.join(directory, "LICENSE"),
         `Synthetic license for ${entry.name}\n`,
       );
+  }
+  if (process.platform === "linux") {
+    const repository = fileURLToPath(new URL("../../../../", import.meta.url));
+    await stageAppShotDbus(repository, rootDirectory);
   }
   return paths;
 }

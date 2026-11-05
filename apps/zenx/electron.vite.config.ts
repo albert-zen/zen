@@ -113,7 +113,7 @@ export default defineConfig({
     build: {
       // Portable packaging stages only the native/runtime externals explicitly.
       externalizeDeps: {
-        include: ["sharp", "ffi-rs", "@crowecawcaw/xa11y"],
+        include: ["sharp", "ffi-rs", "@crowecawcaw/xa11y", "dbus-next"],
         exclude: ["@modelcontextprotocol/sdk"],
       },
       rollupOptions: {

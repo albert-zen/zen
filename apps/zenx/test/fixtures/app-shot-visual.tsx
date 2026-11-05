@@ -46,7 +46,16 @@ const shot: ZenXImageDraft = {
   appShotContext:
     "App Shot\nApplication: Example Notes\nWindow: Product review\nCaptured: 2026-11-05T11:00:00.000Z\nAccessibility: screenshot only (not requested)",
 };
+const niri = params.get("platform") === "niri";
 const api: AppShotApi = {
+  configuration: async () =>
+    niri
+      ? {
+          nativeForeground: true,
+          niriBinding:
+            'Ctrl+Shift+2 repeat=false { spawn "gdbus" "call" "--session" "--dest" "io.github.albert_zen.ZenX.AppShot" "--object-path" "/io/github/albert_zen/ZenX/AppShot" "--method" "io.github.albert_zen.ZenX.AppShot.Capture"; }',
+        }
+      : { nativeForeground: true },
   list: async () => [
     { id: "notes", title: "Product review", applicationName: "Example Notes" },
     {
@@ -65,7 +74,7 @@ const api: AppShotApi = {
 };
 Object.assign(window, {
   zenx: {
-    platform: "darwin",
+    platform: niri ? "linux" : "darwin",
     appShot: api,
     imageAttachments: { read: async () => png },
   },

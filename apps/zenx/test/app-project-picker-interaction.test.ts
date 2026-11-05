@@ -4730,6 +4730,9 @@ async function mountApp(
           : await options.getStatus(),
       getPendingApprovals: async () => [],
       request: async (method: string, params?: unknown) => {
+        // These interaction scenarios share complete recovery fixtures. Actual
+        // full/window wire routing is asserted in app-live-projection.test.ts.
+        if (method === "zen/thread/resume-window") method = "zen/thread/resume";
         if (method === "zen/initialize") return { processEpoch: "test-host" };
         // Passive evidence is not an input-admission call. Scenarios can fail or
         // hold its reply independently without changing the native send mock.
@@ -11109,28 +11112,44 @@ test("real Host questions render in full App information panel with independent 
         '[aria-label="Customize information"]',
       )!,
     );
+    const widgetIds = [
+      "default:lineage",
+      "default:triggers",
+      "default:shell",
+      "default:board",
+    ];
     await waitFor(
       () =>
         document.querySelectorAll('.information-widget[data-visible="true"]')
-          .length === 6,
+          .length === widgetIds.length,
     );
-    for (let index = 0; index < 6; index++) {
-      await invokeButtonClick(
-        document.querySelector<HTMLButtonElement>(
-          '.information-widget[data-visible="true"] .information-widget-actions button:nth-child(3)',
-        )!,
-      );
+    assert.deepEqual(
+      [...document.querySelectorAll<HTMLElement>(".information-widget")].map(
+        (widget) => widget.dataset.widgetId,
+      ),
+      widgetIds,
+      "Manage exposes every implemented default without unavailable PR/artifact placeholders",
+    );
+    for (const id of widgetIds) {
+      const widget = document.querySelector<HTMLElement>(
+        `[data-widget-id="${id}"]`,
+      )!;
+      const hide = [
+        ...widget.querySelectorAll<HTMLButtonElement>(
+          ".information-widget-actions button",
+        ),
+      ].find((button) => button.textContent?.trim() === "Hide");
+      assert.ok(hide && !hide.disabled, `Hide is available for ${id}`);
+      await invokeButtonClick(hide);
       await waitFor(
         () =>
-          document.querySelectorAll('.information-widget[data-visible="true"]')
-            .length ===
-          5 - index,
+          widget.dataset.visible === "false" &&
+          document.querySelector<HTMLElement>(".editable-information-panel")
+            ?.dataset.busy === "false",
       );
     }
     await invokeButtonClick(
-      document.querySelector<HTMLButtonElement>(
-        '[aria-label="Customize information"]',
-      )!,
+      document.querySelector<HTMLButtonElement>('[aria-label="Done"]')!,
     );
     assert.equal(
       document.querySelectorAll(".information-widget-body").length,
@@ -11141,11 +11160,13 @@ test("real Host questions render in full App information panel with independent 
       2,
       "real Host question cards remain outside every hidden native widget",
     );
-    assert.ok(
-      (
-        await sidebar.read({ kind: "thread", id: thread.id })
-      ).informationLayout!.widgets.every((widget) => !widget.visible),
+    const savedLayout = (await sidebar.read({ kind: "thread", id: thread.id }))
+      .informationLayout!;
+    assert.deepEqual(
+      savedLayout.widgets.map((widget) => widget.id),
+      widgetIds,
     );
+    assert.ok(savedLayout.widgets.every((widget) => !widget.visible));
     assert.equal(firstCard.querySelectorAll("input:checked").length, 0);
     const answerButton =
       firstCard.querySelector<HTMLButtonElement>(".primary-button")!;

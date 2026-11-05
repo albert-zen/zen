@@ -8416,11 +8416,16 @@ button:disabled {
 .workspace-content-tab {
   display: inline-flex;
   align-items: center;
-  flex: 0 0 auto;
+  flex: 0 1 210px;
   max-width: min(210px, 100%);
-  min-width: 0;
+  min-width: min(112px, 100%);
   height: 30px;
-  border-radius: 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px 8px 4px 4px;
+  background: var(--color-surface-wash);
+}
+.workspace-content-tab:hover {
+  background: var(--color-surface-hover);
 }
 .workspace-content-tab[data-active="true"] {
   background: var(--color-surface-hover);
@@ -8430,12 +8435,14 @@ button:disabled {
   align-items: center;
   gap: 7px;
   min-width: 0;
-  flex-shrink: 1;
+  flex: 1 1 auto;
+  text-align: left;
   padding: 6px 3px 6px 9px;
   line-height: 18px;
   background: transparent;
 }
 .workspace-content-tab .workspace-tab-title {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -8978,7 +8985,11 @@ button:disabled {
 }
 .workspace-content-tab[data-active="true"] {
   box-shadow: none;
-  background: var(--color-surface-hover);
+  background: var(--color-surface-active);
+  border-color: var(--color-border-strong);
+}
+.workspace-content-tab[data-active="true"] [role="tab"] {
+  font-weight: 600;
 }
 [data-plugin-surface] :where(button:not([class])) {
   min-height: var(--control-height);
@@ -11884,6 +11895,7 @@ button:disabled {
 .information-toolbar > button {
   width: 36px;
   height: 36px;
+  -webkit-app-region: no-drag;
 }
 /* Information and workspace toggles share one neutral, legible active state. */
 .information-toolbar > .icon-button[aria-pressed="true"],
@@ -11896,13 +11908,37 @@ button:disabled {
   top: calc(var(--native-titlebar-height) + 4px);
   right: 48px;
 }
-/* The information entry sits immediately before Close, without covering Restore,
-   tab hit targets or the existing platform-specific leading safe area. */
+/* Information belongs to the main conversation, not the resource toolbar.
+   Split mode places it at that conversation's own trailing titlebar edge. */
+.workspace:has(> .auxiliary-panel[data-open="true"]:not([data-expanded="true"]))
+  > .information-toolbar {
+  right: calc(var(--workspace-panel-width, 0px) + 8px);
+}
+.app-shell:has(.workspace > .information-toolbar)
+  .window-titlebar-session
+  > .workspace-header {
+  padding-inline-end: 92px;
+}
+.app-shell:has(
+    .workspace > .auxiliary-panel[data-open="true"]:not([data-expanded="true"])
+  ):has(.workspace > .information-toolbar)
+  .window-titlebar-session
+  > .workspace-header {
+  padding-inline-end: 52px;
+}
+/* Only maximized main-chat tabs bring the entry back to the shared title row.
+   Exclude its rectangle inside that later native drag surface as well. */
+.auxiliary-information-slot {
+  display: none;
+  flex: 0 0 40px;
+  height: 36px;
+  -webkit-app-region: no-drag;
+}
 .workspace:has(> .information-toolbar)
-  > .auxiliary-panel[data-open="true"]
+  > .auxiliary-panel[data-open="true"][data-expanded="true"][data-primary-active="true"]
   > .auxiliary-heading
-  .auxiliary-close-button {
-  margin-inline-start: 44px;
+  > .auxiliary-information-slot {
+  display: block;
 }
 .information-popover {
   padding: 0;
@@ -11982,8 +12018,8 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 6px 0;
+  gap: 4px;
+  padding: 2px 0;
 }
 .information-trigger-list li > span {
   display: grid;
@@ -12011,15 +12047,27 @@ button:disabled {
   cursor: not-allowed;
 }
 .information-trigger-list strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13px;
-  font-weight: 500;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.5;
+  font-weight: 400;
 }
 .information-trigger-list small {
   font-size: 11px;
   color: var(--color-text-muted);
+}
+.information-trigger-list .plugin-switch[aria-checked="true"]::after {
+  transform: translateX(8px);
+}
+.information-trigger-list .icon-button {
+  color: var(--color-text-muted);
+}
+@media (hover: none) {
+  .information-trigger-list .icon-button {
+    width: 44px;
+    height: 44px;
+  }
 }
 .conversation-information-section .subagents-panel {
   padding: 0;
@@ -12350,6 +12398,22 @@ button:disabled {
 .information-settings-toolbar > span {
   flex: 1;
   color: var(--color-text-muted);
+  font-size: 11px;
+}
+.information-dismiss-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 14px 0;
+}
+.information-dismiss-toolbar button,
+.information-customize {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.information-widget-hide {
+  flex-shrink: 0;
   font-size: 11px;
 }
 .information-settings-toolbar .icon-button {

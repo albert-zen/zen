@@ -1,4 +1,10 @@
 export const en = {
+  appShotNiriEnable: "Enable Niri capture action for this composer",
+  appShotNiriHint:
+    "Registering this action does not reserve keys. Add the binding below to your own Niri configuration, then use it in an external app. Any same-session process can invoke the action while enabled. Disable to unregister. Review, Attach and Send remain separate.",
+  appShotNiriBinding: "Manual Niri shortcut setup",
+  appShotNiriManualSetup:
+    "Niri 25.11 or newer and gdbus are required. Place this line inside your existing binds block after checking conflicts. ZenX does not read or edit your configuration. If you remove the binding, disable the action here too.",
   appShotWaiting:
     "{{count}} more captures waiting for review. Closing discards unadded captures.",
   appShotQueueFull:
@@ -33,6 +39,9 @@ export const en = {
   appShotLinuxShortcutHint:
     "Opens the window chooser; it does not capture the foreground app automatically on Linux. Disable to release the shortcut. Availability depends on the desktop. This preference is not saved.",
 
+  historyLoading: "Loading earlier messages…",
+  historyLoadEarlier: "Load earlier messages",
+  historySearching: "Searching earlier history…",
   answeredQuestion: "Original question",
   answeredQuestionSelected: "Selected",
   answeredQuestionNotSelected: "Not selected",
@@ -1029,6 +1038,12 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  appShotNiriEnable: "为当前输入框启用 Niri 捕获动作",
+  appShotNiriHint:
+    "注册动作不等于保留按键。请自行添加下方 Niri 配置后，在外部应用使用快捷键。启用期间，同一会话内的其他进程也可调用该动作。取消启用会撤销注册；检查、添加和发送仍为独立步骤。",
+  appShotNiriBinding: "手动设置 Niri 快捷键",
+  appShotNiriManualSetup:
+    "需要 Niri 25.11 或更新版本及 gdbus。请检查冲突后，将此行放入已有 binds 块。ZenX 不读取或修改配置。移除绑定后，也请在这里取消启用。",
   appShotWaiting: "还有 {{count}} 张快照待检查。关闭会放弃尚未添加的快照。",
   appShotQueueFull: "请先检查等待中的快照。最新这张尚未添加。",
   appShot: "应用快照",
@@ -1060,6 +1075,9 @@ export const zhCN = {
   appShotLinuxShortcutHint:
     "打开窗口选择器，不会在 Linux 自动捕获前台应用。取消勾选可释放快捷键，是否可用取决于桌面环境。偏好不会长期保存。",
 
+  historyLoading: "正在加载更早的消息…",
+  historyLoadEarlier: "加载更早的消息",
+  historySearching: "正在查找更早的历史…",
   answeredQuestion: "原问题",
   answeredQuestionSelected: "已选择",
   answeredQuestionNotSelected: "未选择",

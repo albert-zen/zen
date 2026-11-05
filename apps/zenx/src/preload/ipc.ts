@@ -1,4 +1,5 @@
 export const ipcChannels = {
+  appShotConfiguration: "zenx:app-shot:configuration",
   appShotRead: "zenx:app-shot:read",
   appShotAttach: "zenx:app-shot:attach",
   appShotDiscard: "zenx:app-shot:discard",
@@ -51,6 +52,8 @@ export const ipcChannels = {
   threadSummariesList: "zenx:threads:list",
   imageAttachmentsPick: "zenx:image-attachments:pick",
   imageAttachmentsImport: "zenx:image-attachments:import",
+  imageAttachmentsAbandon: "zenx:image-attachments:abandon",
+  imageAttachmentsInventory: "zenx:image-attachments:inventory",
   imageLocalRead: "zenx:image-local:read",
   imageAttachmentsRead: "zenx:image-attachments:read",
   threadAttachmentsRead: "zenx:thread-attachments:read",

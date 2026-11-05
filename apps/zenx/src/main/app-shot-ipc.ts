@@ -1,17 +1,26 @@
 import { join } from "node:path";
-import {
-  InMemoryAttachmentStore,
-  type FileAttachmentStore,
-} from "../../../../src/attachment.js";
+import { InMemoryAttachmentStore } from "../../../../src/attachment.js";
+import type { ZenXDraftAttachments } from "./draft-attachments.js";
 import type { ZenXImageDraft } from "./image-attachments.js";
 import type { AppShotCapture, AppShotService } from "./app-shot.js";
 import { imageDraft } from "./image-attachments.js";
 import { isTrustedImZenXSetupSender } from "./imzenx-setup-ipc.js";
-import type { AppShotEvent, AppShotShortcutKind } from "../app-shot.js";
+import type {
+  AppShotConfiguration,
+  AppShotEvent,
+  AppShotShortcutKind,
+} from "../app-shot.js";
 import { startAppShotModifierPair } from "./app-shot-shortcut.js";
+
+import { niriSocketPath, checkNiriCaptureSupport } from "./app-shot-niri.js";
+import {
+  niriAppShotBinding,
+  startNiriAppShotShortcut,
+} from "./app-shot-niri-shortcut.js";
 
 const SHORTCUT = "CommandOrControl+Shift+2";
 const CHANNELS = {
+  configuration: "zenx:app-shot:configuration",
   list: "zenx:app-shot:list",
   capture: "zenx:app-shot:capture",
   read: "zenx:app-shot:read",
@@ -32,6 +41,13 @@ export interface AppShotIpcDependencies<
   Frame extends object,
 > {
   platform: string;
+  niriBinding?: string;
+  startNiriShortcut?(options: {
+    signal: AbortSignal;
+    isCurrentOwner(): boolean;
+    onCapture(): void;
+    onFailure(error: Error): void;
+  }): Promise<{ stop(): void }>;
   rendererUrl: string;
   trusted(caller: AppShotCaller<Renderer, Frame>): {
     ownedWindow: boolean;
@@ -40,7 +56,11 @@ export interface AppShotIpcDependencies<
   };
   createService(renderer: Renderer): AppShotService;
   preparePreview(capture: AppShotCapture): Promise<ZenXImageDraft>;
-  importCapture(capture: AppShotCapture): Promise<ZenXImageDraft>;
+  importCapture(
+    capture: AppShotCapture,
+    renderer: Renderer,
+  ): Promise<ZenXImageDraft>;
+  abandonCapture(renderer: Renderer, draft: ZenXImageDraft): Promise<void>;
   registerShortcut(accelerator: string, callback: () => void): boolean;
   unregisterShortcut(accelerator: string): void;
   startModifierPair?(options: {
@@ -124,6 +144,16 @@ export class AppShotIpcController<
     } catch {
       return false;
     }
+  }
+
+  configuration(caller: Caller<Renderer, Frame>): AppShotConfiguration {
+    const session = this.#require(caller);
+    return {
+      nativeForeground: session.service.hasNativeActiveCapture === true,
+      ...(this.#deps.niriBinding
+        ? { niriBinding: this.#deps.niriBinding }
+        : {}),
+    };
   }
 
   async list(caller: Caller<Renderer, Frame>) {
@@ -229,8 +259,9 @@ export class AppShotIpcController<
     if (!this.#still(caller, session))
       throw new Error("App Shot renderer changed before attach");
     preview.attaching = true;
+    let draft: ZenXImageDraft | undefined;
     try {
-      const draft = await this.#deps.importCapture(preview.capture);
+      draft = await this.#deps.importCapture(preview.capture, caller.renderer);
       if (!this.#still(caller, session))
         throw new Error("App Shot renderer changed during attach");
       if (session.previews.get(preview.draft.id) !== preview)
@@ -239,6 +270,7 @@ export class AppShotIpcController<
       return draft;
     } catch (error) {
       preview.attaching = false;
+      if (draft) await this.#deps.abandonCapture(caller.renderer, draft);
       throw error;
     }
   }
@@ -326,6 +358,28 @@ export class AppShotIpcController<
           },
           onFailure: (error) => this.#modifierFailed(owner, error),
         });
+        await owner.modifierPair;
+        if (this.#owner !== owner || !this.#still(caller, session)) {
+          await this.#stopModifierPair(owner);
+          throw new Error("App Shot shortcut was cancelled");
+        }
+      } else if (
+        this.#deps.platform === "linux" &&
+        session.service.hasNativeActiveCapture
+      ) {
+        if (!this.#deps.startNiriShortcut)
+          throw new Error("Niri App Shot shortcut is unavailable");
+        owner.modifierPair = this.#deps
+          .startNiriShortcut({
+            signal: owner.abort.signal,
+            isCurrentOwner: () =>
+              this.#owner === owner && this.#still(caller, session),
+            onCapture: () => {
+              if (this.#owner === owner) void this.onShortcut();
+            },
+            onFailure: (error) => this.#modifierFailed(owner, error),
+          })
+          .then((handle) => ({ stop: async () => handle.stop() }));
         await owner.modifierPair;
         if (this.#owner !== owner || !this.#still(caller, session)) {
           await this.#stopModifierPair(owner);
@@ -421,8 +475,11 @@ export class AppShotIpcController<
       this.forget(owner.caller.renderer);
       return;
     }
-    if (this.#deps.platform === "linux") {
-      // Linux has no verified foreground identity: request an explicit chooser.
+    if (
+      this.#deps.platform === "linux" &&
+      !owner.session.service.hasNativeActiveCapture
+    ) {
+      // Other Linux sessions still require an explicit chooser.
       this.#deps.sendCaptured(owner.caller.renderer, {
         token: owner.token,
         openPicker: true,
@@ -470,7 +527,7 @@ export class AppShotIpcController<
 }
 
 export async function installAppShotIpc(options: {
-  attachments: FileAttachmentStore;
+  attachments: Pick<ZenXDraftAttachments, "importImages" | "abandon">;
   ownedWindowIds: Set<number>;
   rendererUrl: string;
 }): Promise<() => void> {
@@ -489,6 +546,20 @@ export async function installAppShotIpc(options: {
   >();
   const controller = new AppShotIpcController<Renderer, Frame>({
     platform: process.platform,
+    niriBinding:
+      process.platform === "linux" && niriSocketPath()
+        ? niriAppShotBinding(!app.isPackaged)
+        : undefined,
+    startNiriShortcut: async (shortcutOptions) => {
+      const socket = niriSocketPath();
+      if (process.platform !== "linux" || !socket)
+        throw new Error("Niri App Shot is unavailable in this session");
+      await checkNiriCaptureSupport(socket, shortcutOptions.signal);
+      return startNiriAppShotShortcut({
+        ...shortcutOptions,
+        development: !app.isPackaged,
+      });
+    },
     rendererUrl: options.rendererUrl,
     trusted({ renderer, frame }) {
       const window = BrowserWindow.fromWebContents(renderer);
@@ -519,15 +590,19 @@ export async function installAppShotIpc(options: {
         appShotContext: capture.context,
       };
     },
-    async importCapture(capture) {
-      const attachment = await options.attachments.importBytes(
-        capture.bytes,
-        capture.mediaType,
-      );
-      return {
-        ...imageDraft(capture.name, attachment),
-        appShotContext: capture.context,
-      };
+    async importCapture(capture, renderer) {
+      const [draft] = await options.attachments.importImages(renderer.id, [
+        {
+          name: capture.name,
+          mediaType: capture.mediaType,
+          bytes: capture.bytes,
+        },
+      ]);
+      if (!draft) throw new Error("App Shot draft import returned no image");
+      return { ...draft, appShotContext: capture.context };
+    },
+    async abandonCapture(renderer, draft) {
+      await options.attachments.abandon(renderer.id, [draft.id]);
     },
     startModifierPair: (modifierOptions) =>
       startAppShotModifierPair({
@@ -575,6 +650,9 @@ export async function installAppShotIpc(options: {
     }
     return { renderer: event.sender, frame };
   }
+  ipcMain.handle(CHANNELS.configuration, (event) =>
+    controller.configuration(caller(event)),
+  );
   ipcMain.handle(CHANNELS.list, (event) => controller.list(caller(event)));
   ipcMain.handle(
     CHANNELS.capture,
@@ -600,6 +678,7 @@ export async function installAppShotIpc(options: {
   );
   return () => {
     for (const channel of [
+      CHANNELS.configuration,
       CHANNELS.list,
       CHANNELS.capture,
       CHANNELS.read,

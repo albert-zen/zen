@@ -12,6 +12,7 @@ import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import {
   informationCatalog,
   informationDefinition,
+  isImplementedInformationType,
   type InformationLayout,
   type InformationType,
   type InformationWidget,
@@ -26,6 +27,7 @@ import {
 } from "./plugin-ui-host.js";
 import type { BoardConversation } from "./board-ui-state.js";
 import { Icon } from "./icons.js";
+import { BoardInformationVisibilityContext } from "./board-ui.js";
 import { RoomQuestionCards } from "./RoomQuestionCards.js";
 
 export interface InformationReceipt {
@@ -104,6 +106,12 @@ function InformationPanel({
   currentOwner.current = ownerKey;
   const [receipt, setReceipt] = useState<InformationReceipt | null>(null);
   const [editing, setEditing] = useState(false);
+  const [contentVisible, setContentVisible] = useState<Record<string, boolean>>(
+    {},
+  );
+  const visibilityReports = useRef(
+    new Map<string, (visible: boolean) => void>(),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [pending, setPending] = useState<Pending | null>(
@@ -217,6 +225,20 @@ function InformationPanel({
     };
   }, [ownerKey, refresh]);
   useEffect(() => {
+    if (!error || busy) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const retry = async () => {
+      if (!document.hidden && !inFlight.current) await refresh();
+      if (active) timer = setTimeout(() => void retry(), 3000);
+    };
+    timer = setTimeout(() => void retry(), 3000);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [error, busy, refresh]);
+  useEffect(() => {
     if (previousRoster.current === rosterFingerprint) return;
     previousRoster.current = rosterFingerprint;
     if (owner.kind !== "room" || roomMembers === undefined) return;
@@ -275,6 +297,100 @@ function InformationPanel({
   };
   const title = (widget: InformationWidget) => t(titleKeys[widget.type]);
   const widgets = receipt?.layout.widgets ?? [];
+  // The legacy PR/artifact entries have no content implementation. Keep their
+  // saved placement inspectable/removable in Customize, without showing a
+  // permanent unavailable card or mutating an existing layout on read.
+  const displayedWidgets = widgets.filter(
+    (widget) =>
+      editing || (widget.visible && isImplementedInformationType(widget.type)),
+  );
+  const providerSurface = (widget: InformationWidget) => {
+    const contribution =
+      widget.type === "board"
+        ? snapshot.information?.find((entry) => entry.pluginId === "zenx-board")
+        : widget.type === "lineage"
+          ? snapshot.panels.find((entry) => entry.pluginId === "zenx-subagents")
+          : undefined;
+    const surface = snapshot.surfaces.find(
+      (entry) =>
+        entry.pluginId === contribution?.pluginId &&
+        entry.id === contribution?.surfaceId,
+    );
+    const bundle = snapshot.bundles.find(
+      (entry) =>
+        entry.pluginId === contribution?.pluginId &&
+        entry.id === surface?.bundleId,
+    );
+    const renderable =
+      !!surface &&
+      !!bundle &&
+      bundle.apiVersion === 1 &&
+      (bundle.kind === "isolated" ||
+        !!registry.resolveTrusted(bundle.entry)?.[surface.exportName]);
+    return { contribution, surface, bundle, renderable };
+  };
+  const contentKey = (widget: InformationWidget) => {
+    const pluginId =
+      widget.type === "board"
+        ? "zenx-board"
+        : widget.type === "lineage"
+          ? "zenx-subagents"
+          : widget.type === "triggers"
+            ? "zenx-triggers"
+            : "";
+    const plugin = snapshot.plugins.find((entry) => entry.id === pluginId);
+    const provider = providerSurface(widget);
+    return JSON.stringify([
+      ownerKey,
+      widget.id,
+      widget.binding,
+      widget.config,
+      provider.contribution?.surfaceId,
+      provider.surface,
+      provider.bundle?.id,
+      provider.bundle?.entry,
+      provider.bundle?.kind,
+      provider.bundle?.apiVersion,
+      provider.renderable,
+      plugin?.admissionId,
+      plugin?.enabled,
+      plugin?.available,
+    ]);
+  };
+  const reportVisibility = (widget: InformationWidget) => {
+    const key = contentKey(widget);
+    let report = visibilityReports.current.get(key);
+    if (!report) {
+      report = (visible) => {
+        if (!mounted.current || currentOwner.current !== ownerKey) return;
+        setContentVisible((current) =>
+          current[key] === visible ? current : { ...current, [key]: visible },
+        );
+      };
+      visibilityReports.current.set(key, report);
+    }
+    return report;
+  };
+  const hasContent = (widget: InformationWidget) => {
+    if (!widget.visible || !isImplementedInformationType(widget.type))
+      return false;
+    const binding = widget.binding;
+    if (
+      binding.kind === "member" &&
+      !receipt?.members.some(
+        (entry) => entry.threadId === binding.resourceThreadId,
+      )
+    )
+      return false;
+    if (widget.type === "room-members") return !!receipt?.members.length;
+    if (
+      (widget.type === "board" || widget.type === "lineage") &&
+      !providerSurface(widget).renderable
+    )
+      return false;
+    return contentVisible[contentKey(widget)] === true;
+  };
+  const hasVisibleContent = widgets.some(hasContent);
   const locked = busy || !!pending;
   const move = (id: string, direction: -1 | 1) => {
     const index = widgets.findIndex((widget) => widget.id === id);
@@ -338,31 +454,39 @@ function InformationPanel({
         (entry) => entry.id === "zenx-board",
       )?.admissionId;
       return contribution ? (
-        <GenericPluginUiHost
-          key={`${ownerKey}:${widget.config.instanceKey}:${admissionId}`}
-          registry={registry}
-          snapshot={snapshot}
-          pluginId={contribution.pluginId}
-          surfaceId={contribution.surfaceId}
-          context={{
-            owner,
-            admissionId,
-            instanceKey: widget.config.instanceKey,
-            ...(owner.kind === "room"
-              ? { members: roomMembers ?? receipt?.members ?? [] }
-              : {}),
+        <BoardInformationVisibilityContext.Provider
+          value={{
+            onVisibilityChange: reportVisibility(widget),
+            manageMode: editing,
           }}
-          theme={theme}
-          navigate={navigate}
-          executeCommand={window.zenx.plugins.executeCommand}
-          readHandle={window.zenx.plugins.readHandle}
-        />
+        >
+          <GenericPluginUiHost
+            key={`${ownerKey}:${widget.config.instanceKey}:${admissionId}`}
+            registry={registry}
+            snapshot={snapshot}
+            pluginId={contribution.pluginId}
+            surfaceId={contribution.surfaceId}
+            context={{
+              owner,
+              admissionId,
+              instanceKey: widget.config.instanceKey,
+              ...(owner.kind === "room"
+                ? { members: roomMembers ?? receipt?.members ?? [] }
+                : {}),
+            }}
+            theme={theme}
+            navigate={navigate}
+            executeCommand={window.zenx.plugins.executeCommand}
+            readHandle={window.zenx.plugins.readHandle}
+          />
+        </BoardInformationVisibilityContext.Provider>
       ) : (
         <p role="status">{t("unavailable")}</p>
       );
     }
     return (
       <ConversationInformationCards
+        key={contentKey(widget)}
         threadId={threadId!}
         threads={threads}
         snapshot={snapshot}
@@ -370,13 +494,19 @@ function InformationPanel({
         theme={theme}
         navigate={navigate}
         types={[widget.type]}
+        onVisibilityChange={reportVisibility(widget)}
+        manageMode={editing}
         triggerConfig={widget.type === "triggers" ? widget.config : undefined}
         embedded
       />
     );
   };
   return (
-    <div className="editable-information-panel" data-owner={ownerKey}>
+    <div
+      className="editable-information-panel"
+      data-owner={ownerKey}
+      data-busy={busy || pending?.status === "saving"}
+    >
       {attention ? (
         <div className="information-attention">{attention}</div>
       ) : null}
@@ -391,31 +521,32 @@ function InformationPanel({
         </div>
       ) : null}
       <div className="information-settings-toolbar">
-        <span>{t("informationComponents")}</span>
+        <span>
+          {editing || hasVisibleContent ? t("informationComponents") : null}
+        </span>
         <button
           type="button"
-          className="icon-button"
-          aria-label={t("informationRefresh")}
-          title={t("informationRefresh")}
-          disabled={busy}
-          onClick={() => void refresh()}
-        >
-          <Icon name="reload" size={14} />
-        </button>
-        <button
-          type="button"
-          className="icon-button"
-          aria-label={t("informationCustomize")}
-          title={t("informationCustomize")}
+          className="quiet-button information-customize"
+          aria-label={t(editing ? "informationDone" : "informationCustomize")}
+          title={t(editing ? "informationDone" : "informationCustomize")}
           aria-pressed={editing}
           onClick={() => setEditing((value) => !value)}
         >
-          <Icon name="compose" size={14} />
+          <Icon name={editing ? "check" : "compose"} size={14} />
+          {t(editing ? "informationDone" : "informationManage")}
         </button>
       </div>
       {error ? (
         <p className="information-error" role="alert">
           {error}
+          <button
+            type="button"
+            className="quiet-button"
+            disabled={busy}
+            onClick={() => void refresh()}
+          >
+            {t("retry")}
+          </button>
         </p>
       ) : null}
       {pending ? (
@@ -468,7 +599,9 @@ function InformationPanel({
         </div>
       ) : null}
       {!receipt ? (
-        <p role="status">{t(error ? "unavailable" : "boardLoading")}</p>
+        editing ? (
+          <p role="status">{t(error ? "unavailable" : "boardLoading")}</p>
+        ) : null
       ) : (
         <>
           {editing ? (
@@ -504,7 +637,8 @@ function InformationPanel({
                   {informationCatalog
                     .filter(
                       (entry) =>
-                        entry.source !== "room" || owner.kind === "room",
+                        isImplementedInformationType(entry.type) &&
+                        (entry.source !== "room" || owner.kind === "room"),
                     )
                     .map((entry) => (
                       <option key={entry.type} value={entry.type}>
@@ -559,199 +693,211 @@ function InformationPanel({
             </div>
           ) : null}
           <div className="information-widget-list">
-            {widgets
-              .filter((widget) => editing || widget.visible)
-              .map((widget) => (
-                <section
-                  key={widget.id}
-                  className="information-widget"
-                  data-widget-id={widget.id}
-                  data-visible={widget.visible}
-                  draggable={editing && !locked}
-                  onDragStart={(event) => {
-                    setDragging(widget.id);
-                    event.dataTransfer?.setData("text/plain", widget.id);
-                  }}
-                  onDragEnd={() => setDragging(null)}
-                  onDragOver={(event) => {
-                    if (
-                      editing &&
-                      !locked &&
-                      dragging &&
-                      dragging !== widget.id
-                    )
-                      event.preventDefault();
-                  }}
-                  onDrop={(event) => {
+            {displayedWidgets.map((widget) => (
+              <section
+                key={widget.id}
+                className="information-widget"
+                hidden={!editing && !hasContent(widget)}
+                data-widget-id={widget.id}
+                data-visible={widget.visible}
+                draggable={editing && !locked}
+                onDragStart={(event) => {
+                  setDragging(widget.id);
+                  event.dataTransfer?.setData("text/plain", widget.id);
+                }}
+                onDragEnd={() => setDragging(null)}
+                onDragOver={(event) => {
+                  if (editing && !locked && dragging && dragging !== widget.id)
                     event.preventDefault();
-                    if (!locked && dragging && dragging !== widget.id)
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  if (!locked && dragging && dragging !== widget.id)
+                    void update([
+                      { op: "move", id: dragging, before: widget.id },
+                    ]);
+                  setDragging(null);
+                }}
+                onKeyDown={(event) => {
+                  if (
+                    editing &&
+                    event.altKey &&
+                    ["ArrowUp", "ArrowDown"].includes(event.key)
+                  ) {
+                    event.preventDefault();
+                    move(widget.id, event.key === "ArrowUp" ? -1 : 1);
+                  }
+                }}
+              >
+                <header>
+                  <button
+                    type="button"
+                    className="information-widget-disclosure"
+                    aria-expanded={!widget.collapsed}
+                    disabled={locked}
+                    onClick={() =>
                       void update([
-                        { op: "move", id: dragging, before: widget.id },
-                      ]);
-                    setDragging(null);
-                  }}
-                  onKeyDown={(event) => {
-                    if (
-                      editing &&
-                      event.altKey &&
-                      ["ArrowUp", "ArrowDown"].includes(event.key)
-                    ) {
-                      event.preventDefault();
-                      move(widget.id, event.key === "ArrowUp" ? -1 : 1);
+                        {
+                          op: "set",
+                          id: widget.id,
+                          collapsed: !widget.collapsed,
+                        },
+                      ])
                     }
-                  }}
-                >
-                  <header>
+                  >
+                    <Icon
+                      name={widget.collapsed ? "chevron-right" : "chevron-down"}
+                      size={13}
+                    />
+                    <h3>{title(widget)}</h3>
+                  </button>
+                  {editing ? (
+                    <div className="information-widget-actions">
+                      <button
+                        type="button"
+                        aria-label={`${t("informationMoveUp")} · ${title(widget)}`}
+                        disabled={locked || widgets[0]?.id === widget.id}
+                        onClick={() => move(widget.id, -1)}
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`${t("informationMoveDown")} · ${title(widget)}`}
+                        disabled={locked || widgets.at(-1)?.id === widget.id}
+                        onClick={() => move(widget.id, 1)}
+                      >
+                        ↓
+                      </button>
+                      <button
+                        type="button"
+                        disabled={
+                          locked || !isImplementedInformationType(widget.type)
+                        }
+                        onClick={() =>
+                          void update([
+                            {
+                              op: "set",
+                              id: widget.id,
+                              visible: !widget.visible,
+                            },
+                          ])
+                        }
+                      >
+                        {t(
+                          widget.visible
+                            ? "informationHide"
+                            : "informationShow",
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`${t("informationRemove")} · ${title(widget)}`}
+                        disabled={locked}
+                        onClick={() =>
+                          void update([{ op: "remove", id: widget.id }])
+                        }
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ) : (
                     <button
                       type="button"
-                      className="information-widget-disclosure"
-                      aria-expanded={!widget.collapsed}
+                      className="quiet-button information-widget-hide"
+                      aria-label={`${t("informationHide")} · ${title(widget)}`}
                       disabled={locked}
                       onClick={() =>
                         void update([
-                          {
-                            op: "set",
-                            id: widget.id,
-                            collapsed: !widget.collapsed,
-                          },
+                          { op: "set", id: widget.id, visible: false },
                         ])
                       }
                     >
-                      <Icon
-                        name={
-                          widget.collapsed ? "chevron-right" : "chevron-down"
-                        }
-                        size={13}
-                      />
-                      <h3>{title(widget)}</h3>
+                      {t("informationHide")}
                     </button>
-                    {editing ? (
-                      <div className="information-widget-actions">
-                        <button
-                          type="button"
-                          aria-label={`${t("informationMoveUp")} · ${title(widget)}`}
-                          disabled={locked || widgets[0]?.id === widget.id}
-                          onClick={() => move(widget.id, -1)}
-                        >
-                          ↑
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={`${t("informationMoveDown")} · ${title(widget)}`}
-                          disabled={locked || widgets.at(-1)?.id === widget.id}
-                          onClick={() => move(widget.id, 1)}
-                        >
-                          ↓
-                        </button>
-                        <button
-                          type="button"
-                          disabled={locked}
-                          onClick={() =>
-                            void update([
-                              {
-                                op: "set",
-                                id: widget.id,
-                                visible: !widget.visible,
-                              },
-                            ])
-                          }
-                        >
-                          {t(
-                            widget.visible
-                              ? "informationHide"
-                              : "informationShow",
-                          )}
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={`${t("informationRemove")} · ${title(widget)}`}
-                          disabled={locked}
-                          onClick={() =>
-                            void update([{ op: "remove", id: widget.id }])
-                          }
-                        >
-                          ×
-                        </button>
-                      </div>
-                    ) : null}
-                  </header>
-                  {editing && widget.binding.kind === "member" ? (
-                    <small className="information-source-label">
-                      {t("informationBoundMember", {
-                        member:
-                          receipt.members.find(
-                            (entry) =>
-                              entry.threadId ===
-                              (widget.binding as { resourceThreadId: string })
-                                .resourceThreadId,
-                          )?.name ?? widget.binding.resourceThreadId,
-                      })}
-                    </small>
-                  ) : null}
-                  {editing && widget.type === "board" ? (
-                    <small className="information-source-label">
-                      {t("informationAddress", {
-                        address: widget.config.instanceKey,
-                      })}
-                    </small>
-                  ) : null}
-                  {editing && widget.type === "triggers" ? (
-                    <div className="information-trigger-config">
-                      <label>
-                        {t("informationTriggerFilter")}
-                        <select
-                          aria-label={`${t("informationTriggerFilter")} · ${widget.id}`}
-                          value={widget.config.filter}
-                          disabled={locked}
-                          onChange={(event) =>
-                            void update([
-                              {
-                                op: "set",
-                                id: widget.id,
-                                config: { filter: event.target.value },
-                              },
-                            ])
-                          }
-                        >
-                          <option value="all">
-                            {t("informationFilterAll")}
-                          </option>
-                          <option value="timer">
-                            {t("informationFilterTimer")}
-                          </option>
-                          <option value="event">
-                            {t("informationFilterEvent")}
-                          </option>
-                        </select>
-                      </label>
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={widget.config.showPaused}
-                          disabled={locked}
-                          onChange={(event) =>
-                            void update([
-                              {
-                                op: "set",
-                                id: widget.id,
-                                config: { showPaused: event.target.checked },
-                              },
-                            ])
-                          }
-                        />
-                        {t("informationShowPaused")}
-                      </label>
-                    </div>
-                  ) : null}
-                  {widget.visible && !widget.collapsed ? (
-                    <div className="information-widget-body">
-                      {body(widget)}
-                    </div>
-                  ) : null}
-                </section>
-              ))}
+                  )}
+                </header>
+                {editing && widget.binding.kind === "member" ? (
+                  <small className="information-source-label">
+                    {t("informationBoundMember", {
+                      member:
+                        receipt.members.find(
+                          (entry) =>
+                            entry.threadId ===
+                            (widget.binding as { resourceThreadId: string })
+                              .resourceThreadId,
+                        )?.name ?? widget.binding.resourceThreadId,
+                    })}
+                  </small>
+                ) : null}
+                {editing && widget.type === "board" ? (
+                  <small className="information-source-label">
+                    {t("informationAddress", {
+                      address: widget.config.instanceKey,
+                    })}
+                  </small>
+                ) : null}
+                {editing && widget.type === "triggers" ? (
+                  <div className="information-trigger-config">
+                    <label>
+                      {t("informationTriggerFilter")}
+                      <select
+                        aria-label={`${t("informationTriggerFilter")} · ${widget.id}`}
+                        value={widget.config.filter}
+                        disabled={locked}
+                        onChange={(event) =>
+                          void update([
+                            {
+                              op: "set",
+                              id: widget.id,
+                              config: { filter: event.target.value },
+                            },
+                          ])
+                        }
+                      >
+                        <option value="all">{t("informationFilterAll")}</option>
+                        <option value="timer">
+                          {t("informationFilterTimer")}
+                        </option>
+                        <option value="event">
+                          {t("informationFilterEvent")}
+                        </option>
+                      </select>
+                    </label>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={widget.config.showPaused}
+                        disabled={locked}
+                        onChange={(event) =>
+                          void update([
+                            {
+                              op: "set",
+                              id: widget.id,
+                              config: { showPaused: event.target.checked },
+                            },
+                          ])
+                        }
+                      />
+                      {t("informationShowPaused")}
+                    </label>
+                  </div>
+                ) : null}
+                {widget.visible || editing ? (
+                  <div
+                    className="information-widget-body"
+                    hidden={
+                      widget.collapsed &&
+                      !(editing && !isImplementedInformationType(widget.type))
+                    }
+                  >
+                    {body(widget)}
+                  </div>
+                ) : null}
+              </section>
+            ))}
           </div>
-          {widgets.every((widget) => !widget.visible) ? (
+          {editing && !hasVisibleContent ? (
             <p>{t("informationNoVisible")}</p>
           ) : null}
         </>

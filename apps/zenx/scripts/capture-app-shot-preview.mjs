@@ -96,83 +96,106 @@ try {
         }
         return state;
       };
-      for (const theme of ["light", "dark"]) {
-        for (const width of [1280, 390]) {
-          const height = 900;
-          const name = `${theme}-${width}`;
-          const receipt = { name, theme, width, height, states: [] };
-          evidence.cases.push(receipt);
-          await send("Emulation.setDeviceMetricsOverride", {
-            width,
-            height,
-            deviceScaleFactor: 1,
-            mobile: false,
-          });
-          const destination = `${url}/app-shot.html?theme=${theme}`;
-          await send("Page.navigate", { url: destination });
+      const cases = [
+        ...["light", "dark"].flatMap((theme) =>
+          [1280, 390].map((width) => ({ theme, width, platform: "darwin" })),
+        ),
+        { theme: "light", width: 390, platform: "niri" },
+        { theme: "dark", width: 1280, platform: "niri" },
+      ];
+      for (const { theme, width, platform } of cases) {
+        const height = 900;
+        const name = `${platform}-${theme}-${width}`;
+        const receipt = { name, theme, width, height, platform, states: [] };
+        evidence.cases.push(receipt);
+        await send("Emulation.setDeviceMetricsOverride", {
+          width,
+          height,
+          deviceScaleFactor: 1,
+          mobile: false,
+        });
+        const destination = `${url}/app-shot.html?theme=${theme}&platform=${platform}`;
+        await send("Page.navigate", { url: destination });
+        await wait(
+          `location.href===${JSON.stringify(destination)} && document.querySelectorAll('.app-shot-sources button').length===2`,
+        );
+        await stable();
+        receipt.states.push({
+          phase: "picker",
+          ...(await check(width, height)),
+        });
+        await screenshot(`${name}-picker.png`);
+        if (platform === "niri") {
+          await click(".app-shot-shortcut details summary");
           await wait(
-            `location.href===${JSON.stringify(destination)} && document.querySelectorAll('.app-shot-sources button').length===2`,
+            "document.querySelector('.app-shot-shortcut details')?.open",
           );
           await stable();
+          assert.match(
+            await evaluate(
+              "document.querySelector('.app-shot-shortcut details').textContent",
+            ),
+            /io\.github\.albert_zen\.ZenX\.AppShot/,
+          );
           receipt.states.push({
-            phase: "picker",
+            phase: "manual-binding",
             ...(await check(width, height)),
           });
-          await screenshot(`${name}-picker.png`);
-
-          await click(".app-shot-sources button");
-          await wait(`(${measure}).imageReady`);
-          await stable();
-          const review = await check(width, height);
-          assert.match(review.context, /Example Notes/);
-          assert.match(review.context, /screenshot only/);
-          assert.equal(review.count, "已添加 0 张，未发送。");
-          receipt.states.push({ phase: "review", ...review });
-          await screenshot(`${name}-review.png`);
-          await click(".app-shot-preview .image-thumbnail");
-          await wait(`(${measure}).expanded`);
-          receipt.states.push({
-            phase: "expanded",
-            ...(await check(width, height)),
-          });
-          await screenshot(`${name}-expanded.png`);
-
-          await click(".app-shot-heading button");
-          await wait("!document.querySelector('.app-shot-dialog')");
-          assert.equal(
-            (await check(width, height)).count,
-            "已添加 0 张，未发送。",
-          );
-          await click('[aria-label="应用快照"]');
-          await wait(
-            "document.querySelectorAll('.app-shot-sources button').length===2",
-          );
-          await click(".app-shot-sources button");
-          await wait(`(${measure}).imageReady`);
-          await click(".app-shot-actions .primary-button");
-          await wait("!document.querySelector('.app-shot-dialog')");
-          const attached = await check(width, height);
-          assert.equal(attached.count, "已添加 1 张，未发送。");
-          receipt.states.push({ phase: "attached-not-sent", ...attached });
-          await screenshot(`${name}-attached.png`);
-          await click('[aria-label="应用快照"]');
-          await wait(
-            "document.querySelectorAll('.app-shot-sources button').length===2",
-          );
-          for (const type of ["rawKeyDown", "keyUp"])
-            await send("Input.dispatchKeyEvent", {
-              type,
-              key: "Escape",
-              code: "Escape",
-              windowsVirtualKeyCode: 27,
-            });
-          await wait("!document.querySelector('.app-shot-dialog')");
-          assert.equal(
-            (await check(width, height)).count,
-            "已添加 1 张，未发送。",
-          );
-          receipt.status = "passed";
+          await screenshot(`${name}-manual-binding.png`);
         }
+
+        await click(".app-shot-sources button");
+        await wait(`(${measure}).imageReady`);
+        await stable();
+        const review = await check(width, height);
+        assert.match(review.context, /Example Notes/);
+        assert.match(review.context, /screenshot only/);
+        assert.equal(review.count, "已添加 0 张，未发送。");
+        receipt.states.push({ phase: "review", ...review });
+        await screenshot(`${name}-review.png`);
+        await click(".app-shot-preview .image-thumbnail");
+        await wait(`(${measure}).expanded`);
+        receipt.states.push({
+          phase: "expanded",
+          ...(await check(width, height)),
+        });
+        await screenshot(`${name}-expanded.png`);
+
+        await click(".app-shot-heading button");
+        await wait("!document.querySelector('.app-shot-dialog')");
+        assert.equal(
+          (await check(width, height)).count,
+          "已添加 0 张，未发送。",
+        );
+        await click('[aria-label="应用快照"]');
+        await wait(
+          "document.querySelectorAll('.app-shot-sources button').length===2",
+        );
+        await click(".app-shot-sources button");
+        await wait(`(${measure}).imageReady`);
+        await click(".app-shot-actions .primary-button");
+        await wait("!document.querySelector('.app-shot-dialog')");
+        const attached = await check(width, height);
+        assert.equal(attached.count, "已添加 1 张，未发送。");
+        receipt.states.push({ phase: "attached-not-sent", ...attached });
+        await screenshot(`${name}-attached.png`);
+        await click('[aria-label="应用快照"]');
+        await wait(
+          "document.querySelectorAll('.app-shot-sources button').length===2",
+        );
+        for (const type of ["rawKeyDown", "keyUp"])
+          await send("Input.dispatchKeyEvent", {
+            type,
+            key: "Escape",
+            code: "Escape",
+            windowsVirtualKeyCode: 27,
+          });
+        await wait("!document.querySelector('.app-shot-dialog')");
+        assert.equal(
+          (await check(width, height)).count,
+          "已添加 1 张，未发送。",
+        );
+        receipt.status = "passed";
       }
     },
   );

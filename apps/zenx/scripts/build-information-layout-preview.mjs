@@ -67,6 +67,8 @@ const sources = [
   "src/renderer/src/ConversationInformationCards.tsx",
   "src/renderer/src/board-ui.tsx",
   "src/renderer/src/board-ui-state.ts",
+  "src/renderer/src/BackgroundShellStatus.tsx",
+  "src/renderer/src/subagents-ui.tsx",
   "src/renderer/src/plugin-information-host.tsx",
   "src/renderer/src/plugin-ui-host.tsx",
   "src/information-layout.ts",
@@ -80,6 +82,7 @@ const sources = [
   "scripts/information-layout-preview.tsx",
   "scripts/build-information-layout-preview.mjs",
   "scripts/capture-information-layout-preview.mjs",
+  "scripts/capture-empty-information-preview.mjs",
 ];
 await writeFile(
   path.join(directory, "plugin-frame.html"),

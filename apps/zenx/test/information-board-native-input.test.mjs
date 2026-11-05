@@ -171,14 +171,16 @@ async function clickFixture({
       listener = callback;
     },
   };
-  const refresh = {
-    get disabled() {
-      return busy;
+  const panel = {
+    dataset: {
+      get busy() {
+        return String(busy);
+      },
     },
   };
   const document = {
     querySelector: (selector) => {
-      if (selector.includes("Refresh information")) return refresh;
+      if (selector === ".editable-information-panel") return panel;
       assert.equal(
         focused,
         true,
@@ -251,6 +253,39 @@ test("native click waits for actual trusted delivery before layout idle can be o
     1,
     "one element is located, checked and armed",
   );
+});
+
+test("layout readiness requires the mounted panel's explicit idle state", async () => {
+  let panel = null;
+  const helpers = await actualHelpers(["settledLayout"], {
+    evaluate: async (expression) =>
+      runInNewContext(expression, {
+        document: {
+          querySelector(selector) {
+            assert.equal(selector, ".editable-information-panel");
+            return panel;
+          },
+        },
+      }),
+    until: async (check) => {
+      assert.equal(await check(), false, "an absent panel is not idle");
+      panel = { dataset: {} };
+      assert.equal(
+        await check(),
+        false,
+        "missing busy observation is not idle",
+      );
+      panel.dataset.busy = "true";
+      assert.equal(await check(), false, "an in-flight write must settle");
+      panel.dataset.busy = "false";
+      assert.equal(
+        await check(),
+        true,
+        "mounted panel explicitly reports idle",
+      );
+    },
+  });
+  await helpers.settledLayout();
 });
 
 test("a temporarily missing control waits only before the single native dispatch", async () => {
@@ -420,4 +455,38 @@ test("native resize waits for width while allowing OS-constrained height", async
   });
   await helpers.resizeWindow(1000, 820);
   assert.equal(requests, 1, "resize is not replayed");
+});
+
+test("information regression traverses OS hit testing in split and maximized main modes", async () => {
+  const calls = [];
+  const result = {};
+  const helpers = await actualHelpers(["verifyInformationOsInput"], {
+    result,
+    resizeWindow: async (width, height) => calls.push({ width, height }),
+    click: async (selector, label, systemPointer) => {
+      assert.equal(systemPointer, true, label);
+      calls.push({ selector });
+    },
+    capture: async (name, mode) => calls.push({ name, mode }),
+  });
+  await helpers.verifyInformationOsInput();
+  assert.equal(result.informationOsInput.status, "passed");
+  assert.equal(
+    calls.filter((call) => call.selector === ".information-toolbar button")
+      .length,
+    8,
+  );
+  assert.deepEqual(
+    calls.filter((call) => call.mode).map((call) => call.mode),
+    [
+      "dock",
+      "closed",
+      "dock",
+      "closed",
+      "overlay",
+      "closed",
+      "overlay",
+      "closed",
+    ],
+  );
 });

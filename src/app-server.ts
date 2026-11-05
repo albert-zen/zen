@@ -1,4 +1,9 @@
 import {
+  selectThreadHistoryWindow,
+  type ThreadHistoryWindow,
+  type ThreadHistoryWindowOptions,
+} from "./thread-history-window.js";
+import {
   prepareSampleImages,
   preparedImageDimensions,
   unavailableImageTokenEstimate,
@@ -198,6 +203,8 @@ export interface StartThreadInput {
 }
 
 export interface ThreadSnapshot {
+  /** Present only for explicitly requested native presentation windows. */
+  history?: ThreadHistoryWindow;
   /** Derived from semantic publication and existing native input facts. */
   userQuestions?: readonly UserQuestionState[];
   /** Bounded first attention page; absence never proves a response was claimed. */
@@ -535,6 +542,7 @@ export class ZenAppServer {
   readonly #providerRegistry: ProviderRegistry;
   readonly #threadMetadata: ThreadMetadataStore;
   readonly #threadSummaryProjection: ThreadSummaryProjection;
+  readonly #threadSummarySourceRevisions = new Map<string, string>();
   #runtimeConfiguration: RuntimeConfigurationSnapshot;
   readonly #preparedRuntimeConfigurations = new WeakSet<object>();
   readonly #rootOperations = new Set<{
@@ -1446,6 +1454,14 @@ export class ZenAppServer {
   async readThread(threadId: string): Promise<ThreadSnapshot> {
     const thread = await this.#requireThread(threadId);
     return await this.#snapshot(thread);
+  }
+
+  async readThreadHistory(
+    threadId: string,
+    options: ThreadHistoryWindowOptions = {},
+  ): Promise<ThreadSnapshot> {
+    const thread = await this.#requireThread(threadId);
+    return await this.#snapshot(thread, options);
   }
 
   /** Host-only launch fence; the existing task manager registers before unlock. */
@@ -6688,7 +6704,10 @@ export class ZenAppServer {
       });
   }
 
-  async #snapshot(thread: Thread): Promise<ThreadSnapshot> {
+  async #snapshot(
+    thread: Thread,
+    historyOptions?: ThreadHistoryWindowOptions,
+  ): Promise<ThreadSnapshot> {
     let productMetadata: ThreadProductMetadata = {};
     try {
       productMetadata = await this.#threadMetadata.read(thread.id);
@@ -6708,14 +6727,21 @@ export class ZenAppServer {
     const displayName =
       productMetadata.name ??
       (metadata?.importedFrom ? importedThreadDisplayName(items) : undefined);
-    const turns = thread.deriveTurns(
-      activeTurnId === undefined ? {} : { activeTurnId },
-    );
+    const window =
+      historyOptions === undefined
+        ? undefined
+        : selectThreadHistoryWindow(thread.id, items, historyOptions);
+    const turns = thread.deriveTurns({
+      ...(activeTurnId === undefined ? {} : { activeTurnId }),
+      ...(window === undefined ? {} : { turnIds: window.turnIds }),
+    });
     return {
       id: thread.id,
       ...(parentThreadId === undefined ? {} : { parentThreadId }),
-      items,
-      itemList: thread.itemList,
+      items: window?.items ?? items,
+      ...(window === undefined
+        ? { itemList: thread.itemList }
+        : { history: window.history }),
       userQuestions: questionPage.questions,
       userQuestionsPage: {
         totalPending: questionPage.totalPending,
@@ -6776,46 +6802,107 @@ export class ZenAppServer {
     }
   }
 
+  async #summarySourceRevision(
+    threadId: string,
+    expectedLastItemId?: string,
+  ): Promise<string | undefined> {
+    try {
+      const current = await this.#journal.summarySourceRevision?.(threadId);
+      if (current === undefined) return undefined;
+      if (
+        expectedLastItemId !== undefined &&
+        (await this.#journal.summarySourceRevision?.(
+          threadId,
+          expectedLastItemId,
+        )) !== current
+      )
+        return undefined;
+      return JSON.stringify([
+        current,
+        await this.#threadMetadata.read(threadId),
+      ]);
+    } catch {
+      return undefined;
+    }
+  }
+
   async #loadOrRebuildThreadSummaries(): Promise<void> {
     const threadIds = await this.#journal.listThreadIds();
-    let persisted: NativeThreadSummary[] | undefined;
+    let checkpoint:
+      import("./thread-summary.js").ThreadSummaryCheckpoint | undefined;
     try {
-      persisted = await this.#threadSummaryProjection.load();
+      checkpoint = await this.#threadSummaryProjection.loadCheckpoint?.();
     } catch (error) {
       console.warn("Could not load native Thread summary projection", error);
     }
+    const persisted = new Map(
+      checkpoint?.summaries.map((summary) => [summary.threadId, summary]),
+    );
     const rebuilt = new Map<string, NativeThreadSummary>();
+    this.#threadSummarySourceRevisions.clear();
     for (const threadId of threadIds) {
+      const before = await this.#summarySourceRevision(threadId);
+      if (
+        !this.#threads.has(threadId) &&
+        before !== undefined &&
+        checkpoint?.sourceRevisions[threadId] === before
+      ) {
+        const summary = persisted.get(threadId);
+        if (summary !== undefined)
+          rebuilt.set(
+            threadId,
+            summary.status === "active"
+              ? { ...summary, status: "idle" }
+              : summary,
+          );
+        this.#threadSummarySourceRevisions.set(threadId, before);
+        continue;
+      }
       try {
-        const thread = await this.#loadThread(threadId);
-        if (thread !== undefined && thread.deletion === undefined) {
+        // A cold sidebar rebuild owns only one disposable Thread at a time.
+        // Explicit open/admission remains the only path that retains full history.
+        const cached = this.#threads.get(threadId);
+        const items = cached?.items ?? (await this.#journal.read(threadId));
+        const thread =
+          cached ??
+          (items.length === 0
+            ? undefined
+            : new Thread(
+                threadId,
+                items,
+                await this.#journal.readItemList?.(threadId),
+              ));
+        if (thread !== undefined && thread.deletion === undefined)
           rebuilt.set(threadId, await this.#summary(thread));
-        }
+        const after = await this.#summarySourceRevision(threadId);
+        if (cached === undefined && before !== undefined && before === after)
+          this.#threadSummarySourceRevisions.set(threadId, before);
       } catch (error) {
         console.warn(`Could not rebuild Thread summary ${threadId}`, error);
         rebuilt.set(threadId, await this.#unavailableSummary(threadId, error));
       }
     }
     this.#threadSummaries = rebuilt;
-    const persistedForRestart = persisted?.map((summary) =>
-      summary.status === "active"
-        ? { ...summary, status: "idle" as const }
-        : summary,
-    );
-    if (
-      persistedForRestart === undefined ||
-      !sameSummaries(persistedForRestart, [...rebuilt.values()])
-    ) {
-      this.#scheduleThreadSummaryPersistence();
-    }
+    this.#scheduleThreadSummaryPersistence();
   }
 
   async #refreshThreadSummary(thread: Thread): Promise<void> {
     const summaries = await this.#captureThreadSummaries();
     const update = this.#threadSummaryWrites.then(async () => {
+      this.#threadSummarySourceRevisions.delete(thread.id);
+      const before = await this.#summarySourceRevision(
+        thread.id,
+        thread.items.at(-1)?.id,
+      );
       if (thread.deletion === undefined)
         summaries.set(thread.id, await this.#summary(thread));
       else summaries.delete(thread.id);
+      const after = await this.#summarySourceRevision(
+        thread.id,
+        thread.items.at(-1)?.id,
+      );
+      if (before !== undefined && before === after)
+        this.#threadSummarySourceRevisions.set(thread.id, before);
       this.#scheduleThreadSummaryPersistence();
     });
     this.#threadSummaryWrites = update.catch(() => undefined);
@@ -6877,6 +6964,7 @@ export class ZenAppServer {
         [...summaries.values()].sort((left, right) =>
           left.threadId.localeCompare(right.threadId),
         ),
+        Object.fromEntries(this.#threadSummarySourceRevisions),
       );
     } catch (error) {
       console.warn("Could not persist native Thread summary projection", error);
@@ -7761,17 +7849,6 @@ function deferred<T>(): {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
-}
-
-function sameSummaries(
-  left: readonly NativeThreadSummary[],
-  right: readonly NativeThreadSummary[],
-): boolean {
-  const sorted = (values: readonly NativeThreadSummary[]) =>
-    [...values].sort((first, second) =>
-      first.threadId.localeCompare(second.threadId),
-    );
-  return JSON.stringify(sorted(left)) === JSON.stringify(sorted(right));
 }
 
 function selectionFrom(selection: ProviderSelection): ProviderSelection {
