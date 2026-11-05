@@ -1,0 +1,773 @@
+{
+  "scope": "Production titlebar, information host and auxiliary panel in production DOM order. Synthetic content only. Chromium pointer and computed native exclusion geometry; not macOS OS hit testing.",
+  "cases": [
+    {
+      "platform": "darwin",
+      "mode": "split",
+      "repeat": 0,
+      "heading": {
+        "x": 921,
+        "y": 0,
+        "right": 1440,
+        "bottom": 44,
+        "width": 519,
+        "height": 44,
+        "region": "drag"
+      },
+      "slot": {
+        "x": 0,
+        "y": 0,
+        "right": 0,
+        "bottom": 0,
+        "width": 0,
+        "height": 0,
+        "region": "no-drag"
+      },
+      "button": {
+        "x": 876,
+        "y": 4,
+        "right": 912,
+        "bottom": 40,
+        "width": 36,
+        "height": 36,
+        "region": "no-drag"
+      },
+      "titlebar": {
+        "x": 264,
+        "y": 0,
+        "right": 920,
+        "bottom": 44,
+        "width": 656,
+        "height": 44,
+        "region": "drag"
+      },
+      "toolbarHidden": false,
+      "chat": {
+        "x": 264,
+        "y": 0,
+        "right": 920,
+        "bottom": 900,
+        "width": 656,
+        "height": 900,
+        "region": "none"
+      },
+      "dock": null,
+      "overlay": {
+        "x": 552,
+        "y": 52.139259338378906,
+        "right": 912,
+        "bottom": 180.13925170898438,
+        "width": 360,
+        "height": 127.99999237060547,
+        "region": "none"
+      },
+      "draft": "Keep this unsent draft through all panel states.",
+      "identity": true,
+      "order": true
+    },
+    {
+      "platform": "darwin",
+      "mode": "split",
+      "repeat": 1,
+      "heading": {
+        "x": 921,
+        "y": 0,
+        "right": 1440,
+        "bottom": 44,
+        "width": 519,
+        "height": 44,
+        "region": "drag"
+      },
+      "slot": {
+        "x": 0,
+        "y": 0,
+        "right": 0,
+        "bottom": 0,
+        "width": 0,
+        "height": 0,
+        "region": "no-drag"
+      },
+      "button": {
+        "x": 876,
+        "y": 4,
+        "right": 912,
+        "bottom": 40,
+        "width": 36,
+        "height": 36,
+        "region": "no-drag"
+      },
+      "titlebar": {
+        "x": 264,
+        "y": 0,
+        "right": 920,
+        "bottom": 44,
+        "width": 656,
+        "height": 44,
+        "region": "drag"
+      },
+      "toolbarHidden": false,
+      "chat": {
+        "x": 264,
+        "y": 0,
+        "right": 920,
+        "bottom": 900,
+        "width": 656,
+        "height": 900,
+        "region": "none"
+      },
+      "dock": null,
+      "overlay": {
+        "x": 552,
+        "y": 52.481014251708984,
+        "right": 912,
+        "bottom": 180.48101425170898,
+        "width": 360,
+        "height": 128,
+        "region": "none"
+      },
+      "draft": "Keep this unsent draft through all panel states.",
+      "identity": true,
+      "order": true
+    },
+    {
+      "platform": "darwin",
+      "mode": "maximized-main",
+      "repeat": 0,
+      "heading": {
+        "x": 265,
+        "y": 0,
+        "right": 1440,
+        "bottom": 44,
+        "width": 1175,
+        "height": 44,
+        "region": "drag"
+      },
+      "slot": {
+        "x": 1352,
+        "y": 3.5,
+        "right": 1392,
+        "bottom": 39.5,
+        "width": 40,
+        "height": 36,
+        "region": "no-drag"
+      },
+      "button": {
+        "x": 1356,
+        "y": 4,
+        "right": 1392,
+        "bottom": 40,
+        "width": 36,
+        "height": 36,
+        "region": "no-drag"
+      },
+      "titlebar": {
+        "x": 264,
+        "y": 0,
+        "right": 264,
+        "bottom": 44,
+        "width": 0,
+        "height": 44,
+        "region": "drag"
+      },
+      "toolbarHidden": false,
+      "chat": {
+        "x": 264,
+        "y": 0,
+        "right": 1076,
+        "bottom": 900,
+        "width": 812,
+        "height": 900,
+        "region": "none"
+      },
+      "dock": {
+        "x": 1088,
+        "y": 56,
+        "right": 1428,
+        "bottom": 184,
+        "width": 340,
+        "height": 128,
+        "region": "none"
+      },
+      "overlay": null,
+      "draft": "Keep this unsent draft through all panel states.",
+      "identity": true,
+      "order": true
+    },
+    {
+      "platform": "darwin",
+      "mode": "maximized-main",
+      "repeat": 1,
+      "heading": {
+        "x": 265,
+        "y": 0,
+        "right": 1440,
+        "bottom": 44,
+        "width": 1175,
+        "height": 44,
+        "region": "drag"
+      },
+      "slot": {
+        "x": 1352,
+        "y": 3.5,
+        "right": 1392,
+        "bottom": 39.5,
+        "width": 40,
+        "height": 36,
+        "region": "no-drag"
+      },
+      "button": {
+        "x": 1356,
+        "y": 4,
+        "right": 1392,
+        "bottom": 40,
+        "width": 36,
+        "height": 36,
+        "region": "no-drag"
+      },
+      "titlebar": {
+        "x": 264,
+        "y": 0,
+        "right": 264,
+        "bottom": 44,
+        "width": 0,
+        "height": 44,
+        "region": "drag"
+      },
+      "toolbarHidden": false,
+      "chat": {
+        "x": 264,
+        "y": 0,
+        "right": 1076,
+        "bottom": 900,
+        "width": 812,
+        "height": 900,
+        "region": "none"
+      },
+      "dock": {
+        "x": 1088,
+        "y": 56,
+        "right": 1428,
+        "bottom": 184,
+        "width": 340,
+        "height": 128,
+        "region": "none"
+      },
+      "overlay": null,
+      "draft": "Keep this unsent draft through all panel states.",
+      "identity": true,
+      "order": true
+    },
+    {
+      "platform": "win32",
+      "mode": "split",
+      "repeat": 0,
+      "heading": {
+        "x": 921,
+        "y": 44,
+        "right": 1440,
+        "bottom": 88,
+        "width": 519,
+        "height": 44,
+        "region": "drag"
+      },
+      "slot": {
+        "x": 0,
+        "y": 0,
+        "right": 0,
+        "bottom": 0,
+        "width": 0,
+        "height": 0,
+        "region": "no-drag"
+      },
+      "button": {
+        "x": 876,
+        "y": 48,
+        "right": 912,
+        "bottom": 84,
+        "width": 36,
+        "height": 36,
+        "region": "no-drag"
+      },
+      "titlebar": {
+        "x": 264,
+        "y": 44,
+        "right": 920,
+        "bottom": 88,
+        "width": 656,
+        "height": 44,
+        "region": "drag"
+      },
+      "toolbarHidden": false,
+      "chat": {
+        "x": 264,
+        "y": 44,
+        "right": 920,
+        "bottom": 900,
+        "width": 656,
+        "height": 856,
+        "region": "none"
+      },
+      "dock": null,
+      "overlay": {
+        "x": 552,
+        "y": 96.27342987060547,
+        "right": 912,
+        "bottom": 224.27342224121094,
+        "width": 360,
+        "height": 127.99999237060547,
+        "region": "none"
+      },
+      "draft": "Keep this unsent draft through all panel states.",
+      "identity": true,
+      "order": true
+    },
+    {
+      "platform": "win32",
+      "mode": "split",
+      "repeat": 1,
+      "heading": {
+        "x": 921,
+        "y": 44,
+        "right": 1440,
+        "bottom": 88,
+        "width": 519,
+        "height": 44,
+        "region": "drag"
+      },
+      "slot": {
+        "x": 0,
+        "y": 0,
+        "right": 0,
+        "bottom": 0,
+        "width": 0,
+        "height": 0,
+        "region": "no-drag"
+      },
+      "button": {
+        "x": 876,
+        "y": 48,
+        "right": 912,
+        "bottom": 84,
+        "width": 36,
+        "height": 36,
+        "region": "no-drag"
+      },
+      "titlebar": {
+        "x": 264,
+        "y": 44,
+        "right": 920,
+        "bottom": 88,
+        "width": 656,
+        "height": 44,
+        "region": "drag"
+      },
+      "toolbarHidden": false,
+      "chat": {
+        "x": 264,
+        "y": 44,
+        "right": 920,
+        "bottom": 900,
+        "width": 656,
+        "height": 856,
+        "region": "none"
+      },
+      "dock": null,
+      "overlay": {
+        "x": 552,
+        "y": 96.2729721069336,
+        "right": 912,
+        "bottom": 224.27296447753906,
+        "width": 360,
+        "height": 127.99999237060547,
+        "region": "none"
+      },
+      "draft": "Keep this unsent draft through all panel states.",
+      "identity": true,
+      "order": true
+    },
+    {
+      "platform": "win32",
+      "mode": "maximized-main",
+      "repeat": 0,
+      "heading": {
+        "x": 265,
+        "y": 44,
+        "right": 1440,
+        "bottom": 88,
+        "width": 1175,
+        "height": 44,
+        "region": "drag"
+      },
+      "slot": {
+        "x": 1352,
+        "y": 47.5,
+        "right": 1392,
+        "bottom": 83.5,
+        "width": 40,
+        "height": 36,
+        "region": "no-drag"
+      },
+      "button": {
+        "x": 1356,
+        "y": 48,
+        "right": 1392,
+        "bottom": 84,
+        "width": 36,
+        "height": 36,
+        "region": "no-drag"
+      },
+      "titlebar": {
+        "x": 264,
+        "y": 44,
+        "right": 264,
+        "bottom": 88,
+        "width": 0,
+        "height": 44,
+        "region": "drag"
+      },
+      "toolbarHidden": false,
+      "chat": {
+        "x": 264,
+        "y": 44,
+        "right": 1076,
+        "bottom": 900,
+        "width": 812,
+        "height": 856,
+        "region": "none"
+      },
+      "dock": {
+        "x": 1088,
+        "y": 100,
+        "right": 1428,
+        "bottom": 228,
+        "width": 340,
+        "height": 128,
+        "region": "none"
+      },
+      "overlay": null,
+      "draft": "Keep this unsent draft through all panel states.",
+      "identity": true,
+      "order": true
+    },
+    {
+      "platform": "win32",
+      "mode": "maximized-main",
+      "repeat": 1,
+      "heading": {
+        "x": 265,
+        "y": 44,
+        "right": 1440,
+        "bottom": 88,
+        "width": 1175,
+        "height": 44,
+        "region": "drag"
+      },
+      "slot": {
+        "x": 1352,
+        "y": 47.5,
+        "right": 1392,
+        "bottom": 83.5,
+        "width": 40,
+        "height": 36,
+        "region": "no-drag"
+      },
+      "button": {
+        "x": 1356,
+        "y": 48,
+        "right": 1392,
+        "bottom": 84,
+        "width": 36,
+        "height": 36,
+        "region": "no-drag"
+      },
+      "titlebar": {
+        "x": 264,
+        "y": 44,
+        "right": 264,
+        "bottom": 88,
+        "width": 0,
+        "height": 44,
+        "region": "drag"
+      },
+      "toolbarHidden": false,
+      "chat": {
+        "x": 264,
+        "y": 44,
+        "right": 1076,
+        "bottom": 900,
+        "width": 812,
+        "height": 856,
+        "region": "none"
+      },
+      "dock": {
+        "x": 1088,
+        "y": 100,
+        "right": 1428,
+        "bottom": 228,
+        "width": 340,
+        "height": 128,
+        "region": "none"
+      },
+      "overlay": null,
+      "draft": "Keep this unsent draft through all panel states.",
+      "identity": true,
+      "order": true
+    },
+    {
+      "platform": "linux",
+      "mode": "split",
+      "repeat": 0,
+      "heading": {
+        "x": 921,
+        "y": 44,
+        "right": 1440,
+        "bottom": 88,
+        "width": 519,
+        "height": 44,
+        "region": "drag"
+      },
+      "slot": {
+        "x": 0,
+        "y": 0,
+        "right": 0,
+        "bottom": 0,
+        "width": 0,
+        "height": 0,
+        "region": "no-drag"
+      },
+      "button": {
+        "x": 876,
+        "y": 48,
+        "right": 912,
+        "bottom": 84,
+        "width": 36,
+        "height": 36,
+        "region": "no-drag"
+      },
+      "titlebar": {
+        "x": 264,
+        "y": 44,
+        "right": 920,
+        "bottom": 88,
+        "width": 656,
+        "height": 44,
+        "region": "drag"
+      },
+      "toolbarHidden": false,
+      "chat": {
+        "x": 264,
+        "y": 44,
+        "right": 920,
+        "bottom": 900,
+        "width": 656,
+        "height": 856,
+        "region": "none"
+      },
+      "dock": null,
+      "overlay": {
+        "x": 552,
+        "y": 96.13899993896484,
+        "right": 912,
+        "bottom": 224.1389923095703,
+        "width": 360,
+        "height": 127.99999237060547,
+        "region": "none"
+      },
+      "draft": "Keep this unsent draft through all panel states.",
+      "identity": true,
+      "order": true
+    },
+    {
+      "platform": "linux",
+      "mode": "split",
+      "repeat": 1,
+      "heading": {
+        "x": 921,
+        "y": 44,
+        "right": 1440,
+        "bottom": 88,
+        "width": 519,
+        "height": 44,
+        "region": "drag"
+      },
+      "slot": {
+        "x": 0,
+        "y": 0,
+        "right": 0,
+        "bottom": 0,
+        "width": 0,
+        "height": 0,
+        "region": "no-drag"
+      },
+      "button": {
+        "x": 876,
+        "y": 48,
+        "right": 912,
+        "bottom": 84,
+        "width": 36,
+        "height": 36,
+        "region": "no-drag"
+      },
+      "titlebar": {
+        "x": 264,
+        "y": 44,
+        "right": 920,
+        "bottom": 88,
+        "width": 656,
+        "height": 44,
+        "region": "drag"
+      },
+      "toolbarHidden": false,
+      "chat": {
+        "x": 264,
+        "y": 44,
+        "right": 920,
+        "bottom": 900,
+        "width": 656,
+        "height": 856,
+        "region": "none"
+      },
+      "dock": null,
+      "overlay": {
+        "x": 552,
+        "y": 96.2738037109375,
+        "right": 912,
+        "bottom": 224.2738037109375,
+        "width": 360,
+        "height": 128,
+        "region": "none"
+      },
+      "draft": "Keep this unsent draft through all panel states.",
+      "identity": true,
+      "order": true
+    },
+    {
+      "platform": "linux",
+      "mode": "maximized-main",
+      "repeat": 0,
+      "heading": {
+        "x": 265,
+        "y": 44,
+        "right": 1440,
+        "bottom": 88,
+        "width": 1175,
+        "height": 44,
+        "region": "drag"
+      },
+      "slot": {
+        "x": 1352,
+        "y": 47.5,
+        "right": 1392,
+        "bottom": 83.5,
+        "width": 40,
+        "height": 36,
+        "region": "no-drag"
+      },
+      "button": {
+        "x": 1356,
+        "y": 48,
+        "right": 1392,
+        "bottom": 84,
+        "width": 36,
+        "height": 36,
+        "region": "no-drag"
+      },
+      "titlebar": {
+        "x": 264,
+        "y": 44,
+        "right": 264,
+        "bottom": 88,
+        "width": 0,
+        "height": 44,
+        "region": "drag"
+      },
+      "toolbarHidden": false,
+      "chat": {
+        "x": 264,
+        "y": 44,
+        "right": 1076,
+        "bottom": 900,
+        "width": 812,
+        "height": 856,
+        "region": "none"
+      },
+      "dock": {
+        "x": 1088,
+        "y": 100,
+        "right": 1428,
+        "bottom": 228,
+        "width": 340,
+        "height": 128,
+        "region": "none"
+      },
+      "overlay": null,
+      "draft": "Keep this unsent draft through all panel states.",
+      "identity": true,
+      "order": true
+    },
+    {
+      "platform": "linux",
+      "mode": "maximized-main",
+      "repeat": 1,
+      "heading": {
+        "x": 265,
+        "y": 44,
+        "right": 1440,
+        "bottom": 88,
+        "width": 1175,
+        "height": 44,
+        "region": "drag"
+      },
+      "slot": {
+        "x": 1352,
+        "y": 47.5,
+        "right": 1392,
+        "bottom": 83.5,
+        "width": 40,
+        "height": 36,
+        "region": "no-drag"
+      },
+      "button": {
+        "x": 1356,
+        "y": 48,
+        "right": 1392,
+        "bottom": 84,
+        "width": 36,
+        "height": 36,
+        "region": "no-drag"
+      },
+      "titlebar": {
+        "x": 264,
+        "y": 44,
+        "right": 264,
+        "bottom": 88,
+        "width": 0,
+        "height": 44,
+        "region": "drag"
+      },
+      "toolbarHidden": false,
+      "chat": {
+        "x": 264,
+        "y": 44,
+        "right": 1076,
+        "bottom": 900,
+        "width": 812,
+        "height": 856,
+        "region": "none"
+      },
+      "dock": {
+        "x": 1088,
+        "y": 100,
+        "right": 1428,
+        "bottom": 228,
+        "width": 340,
+        "height": 128,
+        "region": "none"
+      },
+      "overlay": null,
+      "draft": "Keep this unsent draft through all panel states.",
+      "identity": true,
+      "order": true
+    }
+  ]
+}

@@ -1,0 +1,376 @@
+{
+  "ok": true,
+  "synthetic": true,
+  "scope": "Real production React components and CSS in Chromium; synthetic in-memory ports and outer scaffold, not native Electron/real Host acceptance",
+  "cases": [
+    "06-desktop-light-toggle: real mouse toggles update aria and synthetic provider facts once, both thumb states fit the track, no visible duplicate status",
+    "Empty providers stay mounted; trigger content automatically appears without a layout write or refresh control",
+    "Explicit Hide persists across content changes; Manage/Show restores the chosen card",
+    "07-narrow-dark-toggle: real mouse toggles update aria and synthetic provider facts once, both thumb states fit the track, no visible duplicate status",
+    "Narrow dark popover renders only available content; visible Close restores trigger focus",
+    "08-touch-light-toggle: real touch toggles update aria and synthetic provider facts once, both thumb states fit the track, no visible duplicate status",
+    "Existing independent Board documents remain visible alongside triggers"
+  ],
+  "toggleGeometry": [
+    {
+      "label": "06-desktop-light-toggle-on",
+      "input": "mouse",
+      "track": {
+        "left": 1344,
+        "top": 208,
+        "width": 30,
+        "height": 22
+      },
+      "thumb": {
+        "left": 1355,
+        "top": 211,
+        "width": 16,
+        "height": 16
+      },
+      "checked": "true",
+      "ariaLabel": "Pause trigger · Daily project review",
+      "visibleRowText": "Daily project reviewRelease signal",
+      "statuses": [
+        {
+          "text": "Enabled",
+          "clip": "rect(0px, 0px, 0px, 0px)",
+          "clipPath": "none",
+          "overflow": "hidden",
+          "width": 1,
+          "height": 1
+        },
+        {
+          "text": "Paused",
+          "clip": "rect(0px, 0px, 0px, 0px)",
+          "clipPath": "none",
+          "overflow": "hidden",
+          "width": 1,
+          "height": 1
+        }
+      ],
+      "hover": true,
+      "finePointer": true,
+      "touchPoints": 0
+    },
+    {
+      "label": "06-desktop-light-toggle-off",
+      "input": "mouse",
+      "track": {
+        "left": 1344,
+        "top": 208,
+        "width": 30,
+        "height": 22
+      },
+      "thumb": {
+        "left": 1347,
+        "top": 211,
+        "width": 16,
+        "height": 16
+      },
+      "checked": "false",
+      "ariaLabel": "Enable trigger · Daily project review",
+      "visibleRowText": "Daily project reviewRelease signal",
+      "statuses": [
+        {
+          "text": "Paused",
+          "clip": "rect(0px, 0px, 0px, 0px)",
+          "clipPath": "none",
+          "overflow": "hidden",
+          "width": 1,
+          "height": 1
+        },
+        {
+          "text": "Paused",
+          "clip": "rect(0px, 0px, 0px, 0px)",
+          "clipPath": "none",
+          "overflow": "hidden",
+          "width": 1,
+          "height": 1
+        }
+      ],
+      "hover": true,
+      "finePointer": true,
+      "touchPoints": 0
+    },
+    {
+      "label": "06-desktop-light-toggle-restored-on",
+      "input": "mouse",
+      "track": {
+        "left": 1344,
+        "top": 208,
+        "width": 30,
+        "height": 22
+      },
+      "thumb": {
+        "left": 1355,
+        "top": 211,
+        "width": 16,
+        "height": 16
+      },
+      "checked": "true",
+      "ariaLabel": "Pause trigger · Daily project review",
+      "visibleRowText": "Daily project reviewRelease signal",
+      "statuses": [
+        {
+          "text": "Enabled",
+          "clip": "rect(0px, 0px, 0px, 0px)",
+          "clipPath": "none",
+          "overflow": "hidden",
+          "width": 1,
+          "height": 1
+        },
+        {
+          "text": "Paused",
+          "clip": "rect(0px, 0px, 0px, 0px)",
+          "clipPath": "none",
+          "overflow": "hidden",
+          "width": 1,
+          "height": 1
+        }
+      ],
+      "hover": true,
+      "finePointer": true,
+      "touchPoints": 0
+    },
+    {
+      "label": "07-narrow-dark-toggle-on",
+      "input": "mouse",
+      "track": {
+        "left": 628,
+        "top": 244,
+        "width": 30,
+        "height": 22
+      },
+      "thumb": {
+        "left": 639,
+        "top": 247,
+        "width": 16,
+        "height": 16
+      },
+      "checked": "true",
+      "ariaLabel": "Pause trigger · Daily project review",
+      "visibleRowText": "Daily project reviewRelease signal",
+      "statuses": [
+        {
+          "text": "Enabled",
+          "clip": "rect(0px, 0px, 0px, 0px)",
+          "clipPath": "none",
+          "overflow": "hidden",
+          "width": 1,
+          "height": 1
+        },
+        {
+          "text": "Paused",
+          "clip": "rect(0px, 0px, 0px, 0px)",
+          "clipPath": "none",
+          "overflow": "hidden",
+          "width": 1,
+          "height": 1
+        }
+      ],
+      "hover": true,
+      "finePointer": true,
+      "touchPoints": 0
+    },
+    {
+      "label": "07-narrow-dark-toggle-off",
+      "input": "mouse",
+      "track": {
+        "left": 628,
+        "top": 244,
+        "width": 30,
+        "height": 22
+      },
+      "thumb": {
+        "left": 631,
+        "top": 247,
+        "width": 16,
+        "height": 16
+      },
+      "checked": "false",
+      "ariaLabel": "Enable trigger · Daily project review",
+      "visibleRowText": "Daily project reviewRelease signal",
+      "statuses": [
+        {
+          "text": "Paused",
+          "clip": "rect(0px, 0px, 0px, 0px)",
+          "clipPath": "none",
+          "overflow": "hidden",
+          "width": 1,
+          "height": 1
+        },
+        {
+          "text": "Paused",
+          "clip": "rect(0px, 0px, 0px, 0px)",
+          "clipPath": "none",
+          "overflow": "hidden",
+          "width": 1,
+          "height": 1
+        }
+      ],
+      "hover": true,
+      "finePointer": true,
+      "touchPoints": 0
+    },
+    {
+      "label": "07-narrow-dark-toggle-restored-on",
+      "input": "mouse",
+      "track": {
+        "left": 628,
+        "top": 244,
+        "width": 30,
+        "height": 22
+      },
+      "thumb": {
+        "left": 639,
+        "top": 247,
+        "width": 16,
+        "height": 16
+      },
+      "checked": "true",
+      "ariaLabel": "Pause trigger · Daily project review",
+      "visibleRowText": "Daily project reviewRelease signal",
+      "statuses": [
+        {
+          "text": "Enabled",
+          "clip": "rect(0px, 0px, 0px, 0px)",
+          "clipPath": "none",
+          "overflow": "hidden",
+          "width": 1,
+          "height": 1
+        },
+        {
+          "text": "Paused",
+          "clip": "rect(0px, 0px, 0px, 0px)",
+          "clipPath": "none",
+          "overflow": "hidden",
+          "width": 1,
+          "height": 1
+        }
+      ],
+      "hover": true,
+      "finePointer": true,
+      "touchPoints": 0
+    },
+    {
+      "label": "08-touch-light-toggle-on",
+      "input": "touch",
+      "track": {
+        "left": 612,
+        "top": 260,
+        "width": 30,
+        "height": 22
+      },
+      "thumb": {
+        "left": 623,
+        "top": 263,
+        "width": 16,
+        "height": 16
+      },
+      "checked": "true",
+      "ariaLabel": "Pause trigger · Daily project review",
+      "visibleRowText": "Daily project reviewRelease signal",
+      "statuses": [
+        {
+          "text": "Enabled",
+          "clip": "rect(0px, 0px, 0px, 0px)",
+          "clipPath": "none",
+          "overflow": "hidden",
+          "width": 1,
+          "height": 1
+        },
+        {
+          "text": "Paused",
+          "clip": "rect(0px, 0px, 0px, 0px)",
+          "clipPath": "none",
+          "overflow": "hidden",
+          "width": 1,
+          "height": 1
+        }
+      ],
+      "hover": false,
+      "finePointer": false,
+      "touchPoints": 1
+    },
+    {
+      "label": "08-touch-light-toggle-off",
+      "input": "touch",
+      "track": {
+        "left": 612,
+        "top": 260,
+        "width": 30,
+        "height": 22
+      },
+      "thumb": {
+        "left": 615,
+        "top": 263,
+        "width": 16,
+        "height": 16
+      },
+      "checked": "false",
+      "ariaLabel": "Enable trigger · Daily project review",
+      "visibleRowText": "Daily project reviewRelease signal",
+      "statuses": [
+        {
+          "text": "Paused",
+          "clip": "rect(0px, 0px, 0px, 0px)",
+          "clipPath": "none",
+          "overflow": "hidden",
+          "width": 1,
+          "height": 1
+        },
+        {
+          "text": "Paused",
+          "clip": "rect(0px, 0px, 0px, 0px)",
+          "clipPath": "none",
+          "overflow": "hidden",
+          "width": 1,
+          "height": 1
+        }
+      ],
+      "hover": false,
+      "finePointer": false,
+      "touchPoints": 1
+    },
+    {
+      "label": "08-touch-light-toggle-restored-on",
+      "input": "touch",
+      "track": {
+        "left": 612,
+        "top": 260,
+        "width": 30,
+        "height": 22
+      },
+      "thumb": {
+        "left": 623,
+        "top": 263,
+        "width": 16,
+        "height": 16
+      },
+      "checked": "true",
+      "ariaLabel": "Pause trigger · Daily project review",
+      "visibleRowText": "Daily project reviewRelease signal",
+      "statuses": [
+        {
+          "text": "Enabled",
+          "clip": "rect(0px, 0px, 0px, 0px)",
+          "clipPath": "none",
+          "overflow": "hidden",
+          "width": 1,
+          "height": 1
+        },
+        {
+          "text": "Paused",
+          "clip": "rect(0px, 0px, 0px, 0px)",
+          "clipPath": "none",
+          "overflow": "hidden",
+          "width": 1,
+          "height": 1
+        }
+      ],
+      "hover": false,
+      "finePointer": false,
+      "touchPoints": 1
+    }
+  ]
+}

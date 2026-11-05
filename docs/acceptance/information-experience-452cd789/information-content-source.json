@@ -1,0 +1,26 @@
+{
+  "commit": "81d3fbad8a83c8136983db37711330fea33d3509",
+  "scope": "Actual production editable information panel, Board, information host and isolated frame components with synthetic in-memory ports and an outer chat scaffold. This is a Chromium component preview, not native Electron or real Host acceptance. Question card is a separate synthetic attention-slot probe. No private data, model calls or external writes. Source hashes bind screenshots to code.",
+  "sources": {
+    "src/renderer/src/EditableInformationPanel.tsx": "9af5949346295121407079a1582173833d1ac3bd6b8383d3e4e91adb2c76d852",
+    "src/renderer/src/ConversationInformationCards.tsx": "b37411459514e13f615e5f245d9df4b5927b3372881e46ce41461f2a0cae5b75",
+    "src/renderer/src/board-ui.tsx": "e085a6a63291c623856ce253e5f65294e6af6b622189a0d3bdfff8c0a809a815",
+    "src/renderer/src/board-ui-state.ts": "0a840a84ea8e02596c6ad2882fecc5f0d2ad3c9154a30304df17d13537a0653e",
+    "src/renderer/src/BackgroundShellStatus.tsx": "9e60740462d17c868b5c127df77896445130d077b0bc13f5aa0b845226386fa3",
+    "src/renderer/src/subagents-ui.tsx": "aee2019ea363170fe755e01b2efef373e9a861f4eda3b0701dfb64a650892914",
+    "src/renderer/src/plugin-information-host.tsx": "5f48f4cae2477d63ba7bd27418606f7325939099a25e162d3c567af9bf6201a0",
+    "src/renderer/src/plugin-ui-host.tsx": "23e73a7e37330fff47332d96e1cf6c16e80aea31205f43139ae77670b1d43608",
+    "src/information-layout.ts": "d890397e77e409a81841dc3446c66f443a9358e946ed1b0b765b17e736ccbde8",
+    "src/native-information.ts": "58ab39fadca0ad8927b0315d32b3ed6278c6a82d10127be1a0aa45b36370b308",
+    "src/renderer/src/i18n/panels.ts": "dfb2b4f5a4c9432023c2a45f6eeb3da12c32b088c9407b0ec6fd6dea640a61a0",
+    "src/renderer/src/styles.css": "35c5322e9a2b517695419c9614db38509c8a391d69a3f409f56657d12393c747",
+    "src/renderer/src/theme.css": "9128df57b83980e609de0057081d641ba75b205b0e71de8767ffd84924e1977c",
+    "src/renderer/src/shell-thread-panel.css": "77884cfda51a5fd8fae4e3976bac9d072405c8238c149ae6decb7bd8d2521646",
+    "src/renderer/src/subagents.css": "dc6603d37925f8d9661ff1cd56edd0b3a06d4e8864ff87710caa161a965c1561",
+    "src/renderer/public/plugin-frame.html": "384d294a16fcfb191b7c972e5e2393407214364da8f3f3acf8bf7a87739e319a",
+    "scripts/information-layout-preview.tsx": "530bb3cd9cd5ee30edc8c7980d2967c06db4d9f4485cb374e832ca3cbcabdad4",
+    "scripts/build-information-layout-preview.mjs": "c817fe2ac4842a536ab78929d191babd010ccd0d6d206fb59f45886f43e50c47",
+    "scripts/capture-information-layout-preview.mjs": "907803eb675509c147714104e007a411686255b0db87e9ebf2f7d39646acd1f8",
+    "scripts/capture-empty-information-preview.mjs": "9c3c68acaae1d648f5987f42ca0730942eda5d2c2db965fea31183b6cde862a8"
+  }
+}

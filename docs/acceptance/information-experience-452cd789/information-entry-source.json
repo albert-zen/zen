@@ -1,0 +1,20 @@
+{
+  "commit": "81d3fbad8a83c8136983db37711330fea33d3509",
+  "scope": "Actual WindowTitleBar and AuxiliaryPanel with production styles, synthetic native-control markers and tabs. No Host, private files or profile. Browser CDP input and Darwin CSS marker, not native Electron or physical OS acceptance.",
+  "sources": {
+    "src/renderer/src/App.tsx": "dd50221f617fb76020c5ba44fe49b2497053e5a27bf62266ff7e7539a1e3c0c1",
+    "src/renderer/src/Sidebar.tsx": "aa1d2791f08ab64793a140d580c3e258b4040578b4a561117be97d3d2facc95d",
+    "src/renderer/src/sidebar-expansion.ts": "7a718d52c8b91241ad021177c022097c6c0ce48f982e17e6d846bfbdac252340",
+    "src/renderer/src/auxiliary-panel.tsx": "0a2ab618857253cd85b1e7cf328bddd4e118059fe207a801197a630bdf991fbe",
+    "src/renderer/src/plugin-information-host.tsx": "5f48f4cae2477d63ba7bd27418606f7325939099a25e162d3c567af9bf6201a0",
+    "../../packages/zenx-subagents-plugin/src/manifest.ts": "499b0b80cd15ec2a0f03d542356d39fa0ef737cc06cfaddc7bc6270e092ff23b",
+    "src/thread-sidebar-state.ts": "0f09b467c81741369ec80bf26d48a9c23904615b6c95e14589484ca8a11588c0",
+    "src/renderer/src/styles.css": "35c5322e9a2b517695419c9614db38509c8a391d69a3f409f56657d12393c747",
+    "src/renderer/src/theme.css": "9128df57b83980e609de0057081d641ba75b205b0e71de8767ffd84924e1977c",
+    "scripts/titlebar-safe-area-preview.tsx": "ee4feddd720930824a228760c1912b31264cb893ef6424a84b3f80d0970f21ff",
+    "scripts/build-titlebar-safe-area-preview.mjs": "2261cac9e205e2bdea97f0a409bcee391bf5fd6beaa5f25b964d438f13bd41fd",
+    "scripts/capture-titlebar-safe-area-preview.mjs": "3f3eba057adf0703b3becf6097c6263b47cbdd9fec2cc4b7baafbf79c4cf7b09",
+    "scripts/capture-workspace-tab-overflow.mjs": "8f64a80efc7b0093c1cbadb6f502836f7c83e97deba00c5c31feea287dee560b",
+    "scripts/capture-information-entry-preview.mjs": "93bbcb802eb0be87e7f3365f985c3461dfc05ffca480e26c356e233be022de50"
+  }
+}
