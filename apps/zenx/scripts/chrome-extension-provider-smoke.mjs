@@ -4,6 +4,8 @@ import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import WebSocket from "ws";
+import { BrowserFrameInputObserver } from "../src/main/capabilities/browser-frame-input.js";
+import { observeFramePreparation } from "./browser-frame-capture-diagnostics.mjs";
 import {
   remoteFrameContractPage,
   remoteFrameFixtureFromUrl,
@@ -38,6 +40,17 @@ export class FixtureBridgeRelay {
   contexts = new Map();
   owners = new Map();
   expectedDocuments = new Map();
+  nativePending = new Map();
+  nativeDiagnostics = {
+    commands: 0,
+    results: 0,
+    events: 0,
+    dropped: 0,
+    observerErrors: 0,
+    failures: [],
+    head: [],
+    tail: [],
+  };
   diagnostics = new Map();
   failure;
   closed = false;
@@ -113,7 +126,158 @@ export class FixtureBridgeRelay {
     this.socket.close();
     this.upstream.close();
   }
+  nativeRecord(value) {
+    const receipt = this.nativeDiagnostics;
+    if (receipt.head.length < 32) receipt.head.push(value);
+    else {
+      if (receipt.tail.length === 32) {
+        receipt.tail.shift();
+        receipt.dropped++;
+      }
+      receipt.tail.push(value);
+    }
+  }
+  traceBridge(message) {
+    try {
+      if (message.type !== "cdp-command") return;
+      const { tabId, sessionId, rootSessionId, method, params = {} } = message;
+      const record = {
+        ordinal: ++this.nativeDiagnostics.commands,
+        method,
+        tabId,
+        sessionId,
+        rootSessionId,
+        ...(method === "Runtime.evaluate"
+          ? {
+              contextId: params.contextId,
+              uniqueContextId: params.uniqueContextId,
+            }
+          : {}),
+        ...(method === "Page.createIsolatedWorld"
+          ? { frameId: params.frameId, worldName: params.worldName }
+          : {}),
+        ...(method === "DOM.getFrameOwner" ? { frameId: params.frameId } : {}),
+      };
+      if (this.nativePending.size >= MAX_PENDING) {
+        this.nativePending.delete(this.nativePending.keys().next().value);
+        this.nativeDiagnostics.dropped++;
+      }
+      this.nativePending.set(message.requestId, record);
+      this.nativeRecord({ ...record, kind: "command" });
+    } catch {
+      this.nativeDiagnostics.observerErrors++;
+    }
+  }
+  traceExtension(message) {
+    try {
+      if (message.type === "cdp-result") {
+        const command = this.nativePending.get(message.requestId);
+        if (!command) return;
+        this.nativePending.delete(message.requestId);
+        this.nativeDiagnostics.results++;
+        const exception = message.result?.exceptionDetails;
+        const record = {
+          ...command,
+          kind: "result",
+          error: message.error?.message?.slice(0, 1024),
+          exception: (
+            exception?.exception?.description ?? exception?.text
+          )?.slice(0, 1024),
+          ...(message.result?.executionContextId
+            ? { executionContextId: message.result.executionContextId }
+            : {}),
+          ...(message.result?.backendNodeId
+            ? { backendNodeId: message.result.backendNodeId }
+            : {}),
+        };
+        this.nativeRecord(record);
+        if (message.error || exception) {
+          if (this.nativeDiagnostics.failures.length === 8)
+            this.nativeDiagnostics.failures.shift();
+          this.nativeDiagnostics.failures.push(record);
+        }
+      }
+      if (
+        message.type === "cdp-event" &&
+        [
+          "Runtime.executionContextCreated",
+          "Runtime.executionContextDestroyed",
+          "Runtime.executionContextsCleared",
+          "Target.attachedToTarget",
+          "Target.detachedFromTarget",
+        ].includes(message.method)
+      ) {
+        this.nativeDiagnostics.events++;
+        const context = message.params?.context;
+        this.nativeRecord({
+          kind: "event",
+          method: message.method,
+          tabId: message.tabId,
+          sessionId: message.sessionId,
+          rootSessionId: message.rootSessionId,
+          ...(context
+            ? {
+                context: {
+                  id: context.id,
+                  uniqueId: context.uniqueId,
+                  name: context.name?.slice(0, 128),
+                  auxData: {
+                    frameId: context.auxData?.frameId,
+                    isDefault: context.auxData?.isDefault,
+                  },
+                },
+              }
+            : {}),
+          ...(message.method.startsWith("Target.")
+            ? {
+                childSessionId: message.params?.sessionId,
+                waitingForDebugger: message.params?.waitingForDebugger,
+              }
+            : {}),
+        });
+      }
+    } catch {
+      this.nativeDiagnostics.observerErrors++;
+    }
+  }
+  captureDiagnostics() {
+    return {
+      ...this.nativeDiagnostics,
+      head: [...this.nativeDiagnostics.head],
+      tail: [...this.nativeDiagnostics.tail],
+      failures: [...this.nativeDiagnostics.failures],
+      pending: [...this.nativePending.values()],
+      frameTrees: [...this.trees].map(([route, tree]) => ({
+        route,
+        frames: (() => {
+          const frames = [];
+          const visit = (node, depth) => {
+            if (depth > 8 || frames.length >= 32) return;
+            frames.push({
+              id: node.frame?.id,
+              parentId: node.frame?.parentId,
+              loaderId: node.frame?.loaderId,
+              url: node.frame?.url?.slice(0, 2048),
+            });
+            for (const child of node.childFrames ?? []) visit(child, depth + 1);
+          };
+          visit(tree, 0);
+          return frames;
+        })(),
+      })),
+      defaultContexts: [...this.contexts].map(([route, contexts]) => ({
+        route,
+        contexts: [...contexts.values()].map((context) => ({
+          id: context.id,
+          uniqueId: context.uniqueId,
+          frameId: context.auxData?.frameId,
+          isDefault: context.auxData?.isDefault,
+        })),
+      })),
+    };
+  }
   observeBridge(message) {
+    this.traceBridge(message);
     if (message.type !== "cdp-command") return;
     const { tabId, rootSessionId, sessionId, method, params } = message;
     if (
@@ -164,6 +328,7 @@ export class FixtureBridgeRelay {
     }
   }
   observeExtension(message) {
+    this.traceExtension(message);
     if (message.type === "browser-connected")
       for (const tab of message.tabs) this.tabs.add(tab.id);
     if (message.type === "tab-updated") this.tabs.add(message.tab.id);
@@ -652,6 +817,11 @@ export async function runExtensionProviderAcceptance({
     outcome: "running",
     scenarios: reports,
   };
+  const preparation = observeFramePreparation(
+    BrowserFrameInputObserver.prototype,
+  );
+  receipt.framePreparation = preparation.receipt;
+  receipt.inspections = { calls: 0, withoutInput: 0 };
   publishReceipt?.(receipt);
   let failure;
   let healthy;
@@ -709,7 +879,9 @@ export async function runExtensionProviderAcceptance({
     const inspect = async (tab) =>
       await waitFor(async () => {
         const count = relay.inputs.length;
+        receipt.inspections.calls++;
         const observation = await backend.inspect(session, tab.tabId);
+        if (!observation.inputViewport) receipt.inspections.withoutInput++;
         assert.equal(observation.screenshot.status, "captured");
         assert.equal(
           relay.inputs.length,
@@ -970,8 +1142,14 @@ export async function runExtensionProviderAcceptance({
     receipt.outcome = "failed";
     receipt.error = String(error.message ?? error).slice(0, 512);
     receipt.providerNativeInputCount = relay.inputs.length;
+    try {
+      receipt.nativeCaptureDiagnostics = relay.captureDiagnostics();
+    } catch {
+      receipt.nativeDiagnosticsCaptureFailed = true;
+    }
     throw error;
   } finally {
+    preparation.restore();
     const failures = [];
     for (const [tabId, providerTabId] of owned) {
       try {

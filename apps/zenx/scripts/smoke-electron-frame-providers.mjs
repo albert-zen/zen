@@ -27,6 +27,8 @@ const sources = [
   "test/fixtures/electron-frame-providers-main.ts",
   "test/fixtures/electron-frame-provider-evidence.ts",
   "scripts/smoke-electron-frame-providers.mjs",
+  "scripts/browser-frame-capture-diagnostics.mjs",
+  "scripts/browser-frame-capture-diagnostics.d.mts",
 ];
 await build({
   configFile: false,

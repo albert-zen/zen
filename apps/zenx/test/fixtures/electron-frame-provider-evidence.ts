@@ -90,3 +90,105 @@ export function assertNativeInputRoute(
       );
     }
 }
+
+/** Scalar-only passive receipts from the synthetic native fixture transport. */
+export function nativeFrameCommandReceipt(
+  method: string,
+  params: Record<string, unknown>,
+  response: unknown,
+): Record<string, unknown> | undefined {
+  if (
+    ![
+      "Page.createIsolatedWorld",
+      "DOM.resolveNode",
+      "Runtime.callFunctionOn",
+      "Runtime.evaluate",
+    ].includes(method)
+  )
+    return;
+  const object = (value: unknown): Record<string, unknown> =>
+    value !== null && typeof value === "object"
+      ? (value as Record<string, unknown>)
+      : {};
+  const text = (value: unknown, limit = 512): string | undefined =>
+    typeof value === "string" ? value.slice(0, limit) : undefined;
+  const result = object(response),
+    runtime = object(result.result),
+    exception = object(result.exceptionDetails);
+  const declaration = text(params.functionDeclaration, 16_384) ?? "";
+  const label = declaration.includes("const ownerEntry")
+    ? "ancestor-chain"
+    : declaration.includes("Browser iframe parent viewport")
+      ? "owner-witness"
+      : declaration.includes("closed shadow candidate")
+        ? "closed-shadow-registration"
+        : method;
+  const value = object(runtime.value),
+    snapshot = object(value.inputSnapshot ?? runtime.value);
+  return {
+    method,
+    label,
+    ...(params.contextId === undefined ? {} : { contextId: params.contextId }),
+    ...(params.uniqueContextId === undefined
+      ? {}
+      : { uniqueContextId: text(params.uniqueContextId) }),
+    ...(params.executionContextId === undefined
+      ? {}
+      : { executionContextId: params.executionContextId }),
+    ...(params.objectId === undefined
+      ? {}
+      : { objectId: text(params.objectId) }),
+    ...(method === "Page.createIsolatedWorld"
+      ? {
+          frameId: text(params.frameId),
+          worldName: text(params.worldName),
+          createdContextId: result.executionContextId,
+        }
+      : {}),
+    ...(method === "DOM.resolveNode"
+      ? {
+          resolvedObjectId: text(object(result.object).objectId),
+          nodeDescription: text(object(result.object).description, 256),
+        }
+      : {}),
+    ...(typeof snapshot.documentKey === "string"
+      ? {
+          snapshot: {
+            documentKey: text(snapshot.documentKey),
+            localFrame: snapshot.localFrame,
+            frameOwnerScanComplete: snapshot.frameOwnerScanComplete,
+            frameOwnerIds: Array.isArray(snapshot.frameOwnerIds)
+              ? snapshot.frameOwnerIds.slice(0, 32).map((id) => text(id, 128))
+              : undefined,
+            viewport: Object.fromEntries(
+              [
+                "width",
+                "height",
+                "deviceScaleFactor",
+                "scrollX",
+                "scrollY",
+                "visualScale",
+                "visualOffsetX",
+                "visualOffsetY",
+              ]
+                .filter((key) =>
+                  Number.isFinite(object(snapshot.viewport)[key]),
+                )
+                .map((key) => [key, object(snapshot.viewport)[key]]),
+            ),
+          },
+        }
+      : {}),
+    ...(result.exceptionDetails === undefined
+      ? {}
+      : {
+          exception: {
+            text: text(exception.text),
+            description: text(
+              object(exception.exception).description ?? runtime.description,
+              2048,
+            ),
+          },
+        }),
+  };
+}

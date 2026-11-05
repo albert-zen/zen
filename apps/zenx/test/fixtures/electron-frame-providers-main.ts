@@ -18,6 +18,8 @@ import {
   type ZenXBrowserBackend,
   type BrowserInspection,
 } from "../../src/main/capabilities/browser-provider.js";
+import { BrowserFrameInputObserver } from "../../src/main/capabilities/browser-frame-input.js";
+import { observeFramePreparation } from "../../scripts/browser-frame-capture-diagnostics.mjs";
 import { BrowserInputOutcomeUnknownError } from "../../src/main/capabilities/browser-targeted-input.js";
 import { createElectronWorkspaceBrowser } from "../../src/main/workspace-browser-electron.js";
 import {
@@ -27,6 +29,7 @@ import {
 import {
   assertNativeFramePlacement,
   assertNativeInputRoute,
+  nativeFrameCommandReceipt,
   type NativeInputAttempt,
   type NativeChildRoute,
   type NativeFrameIdentity,
@@ -68,7 +71,10 @@ async function waitFor<T>(
 function recordTransport(web: WebContents) {
   const inputs: NativeInputAttempt[] = [];
   const routes: NativeChildRoute[] = [];
-  const failures: { method: string; sessionId: string; error: string }[] = [];
+  const failures: Record<string, unknown>[] = [];
+  const commands: Record<string, unknown>[] = [];
+  const contexts: Record<string, unknown>[] = [];
+  let sequence = 0;
   const original = web.debugger.sendCommand;
   const listener = (
     _event: Electron.Event,
@@ -86,9 +92,21 @@ function recordTransport(web: WebContents) {
         targetId: params.targetInfo.targetId,
         url: params.targetInfo.url,
       });
+    if (method === "Runtime.executionContextCreated" && contexts.length < 24) {
+      const context = params.context;
+      contexts.push({
+        sessionId: sessionId ?? "",
+        id: context?.id,
+        uniqueId: context?.uniqueId,
+        name: String(context?.name ?? "").slice(0, 128),
+        frameId: context?.auxData?.frameId,
+        isDefault: context?.auxData?.isDefault,
+      });
+    }
   };
   web.debugger.on("message", listener);
   web.debugger.sendCommand = function (method, params, sessionId) {
+    const requestSequence = ++sequence;
     if (method.startsWith("Input."))
       inputs.push({
         method,
@@ -96,23 +114,44 @@ function recordTransport(web: WebContents) {
         sessionId: sessionId ?? "",
         ...(params?.x === undefined ? {} : { x: params.x, y: params.y }),
       });
-    // Preserve the original promise and native outcome. No fixture response,
-    // injected event, extra native command, retry or alternate dispatch route.
+    // Passive observers never replace the original native promise, add commands,
+    // inject events, retry input or change the native failure.
     const pending = original.call(this, method, params, sessionId);
-    const failed = (error: unknown) => {
+    const failed = (error: unknown, detail?: Record<string, unknown>) => {
       try {
-        if (failures.length < 16)
-          failures.push({
-            method,
-            sessionId: sessionId ?? "",
-            error: String(error),
-          });
+        const receipt = {
+          method,
+          sessionId: sessionId ?? "",
+          error: String(error).slice(0, 2048),
+          ...detail,
+        };
+        if (
+          failures.length < 16 &&
+          !failures.some(
+            (entry) => JSON.stringify(entry) === JSON.stringify(receipt),
+          )
+        )
+          failures.push(receipt);
       } catch {
-        /* Diagnostic-only, never changes the native outcome. */
+        /* Diagnostic-only. */
       }
     };
     void pending.then((result) => {
-      if (result?.exceptionDetails) failed(result.exceptionDetails.text);
+      try {
+        const detail = nativeFrameCommandReceipt(method, params ?? {}, result);
+        if (detail) {
+          commands.push({
+            sequence: requestSequence,
+            sessionId: sessionId ?? "",
+            ...detail,
+          });
+          if (commands.length > 24) commands.shift();
+        }
+        if (result?.exceptionDetails)
+          failed(result.exceptionDetails.text, detail);
+      } catch {
+        /* Diagnostic-only. */
+      }
     }, failed);
     return pending;
   };
@@ -120,6 +159,8 @@ function recordTransport(web: WebContents) {
     inputs,
     routes,
     failures,
+    commands,
+    contexts,
     restore() {
       web.debugger.sendCommand = original;
       web.debugger.removeListener("message", listener);
@@ -304,6 +345,9 @@ async function main() {
           );
           const web = matches[0]!;
           const transport = recordTransport(web);
+          const preparation = observeFramePreparation(
+            BrowserFrameInputObserver.prototype,
+          );
           const receipt: Record<string, unknown> = {
             provider,
             mode,
@@ -317,6 +361,9 @@ async function main() {
             inputs: transport.inputs,
             routes: transport.routes,
             nativeFailures: transport.failures,
+            nativeCommands: transport.commands,
+            nativeContexts: transport.contexts,
+            framePreparation: preparation.receipt,
           };
           cases.push(receipt);
           const evaluate = async <T>(expression: string): Promise<T> =>
@@ -566,6 +613,7 @@ async function main() {
           } finally {
             // Both local providers own actual native pages. Their close must
             // destroy this exact WebContents, including a possibly held press.
+            preparation.restore();
             transport.restore();
             try {
               await backend.closeTab(sessionId, owned.tabId);
@@ -626,6 +674,19 @@ async function main() {
     if (cleanupFailures.length) {
       failure ??= new Error("Native fixture cleanup failed");
       process.exitCode = 1;
+    }
+    if (failure !== undefined) {
+      const diagnostic = JSON.stringify({
+        phase,
+        error: String(failure),
+        cleanupFailures,
+        case: cases.at(-1),
+      });
+      console.error(
+        "ZENX_NATIVE_FRAME_FAILURE",
+        diagnostic.slice(0, 32768),
+        diagnostic.length > 32768 ? "[truncated]" : "",
+      );
     }
     await writeFile(
       path.join(evidence, "result.json"),

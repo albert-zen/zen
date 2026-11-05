@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import {
   assertNativeFramePlacement,
   assertNativeInputRoute,
+  nativeFrameCommandReceipt,
   type NativeChildRoute,
   type NativeInputAttempt,
 } from "./fixtures/electron-frame-provider-evidence.js";
@@ -168,4 +169,88 @@ test("native harness is gated, build-only is supported, pure fixture never impor
     fixture,
     /browser-parallel-input-smoke|child_process|\bmain\(/u,
   );
+});
+
+test("native command diagnostics retain exact bounded exception/world evidence without expressions or PNG data", () => {
+  const detail = nativeFrameCommandReceipt(
+    "Runtime.callFunctionOn",
+    {
+      objectId: "root-wrapper",
+      functionDeclaration:
+        "function() { const ownerEntry = state.documents.get(document); }",
+    },
+    {
+      exceptionDetails: {
+        text: "Uncaught",
+        exception: {
+          description:
+            "Error: Browser iframe owner or document changed\n    at <anonymous>:5:12",
+        },
+      },
+    },
+  );
+  assert.equal(detail?.label, "ancestor-chain");
+  assert.deepEqual(detail?.exception, {
+    text: "Uncaught",
+    description:
+      "Error: Browser iframe owner or document changed\n    at <anonymous>:5:12",
+  });
+  assert.equal(
+    nativeFrameCommandReceipt(
+      "Runtime.callFunctionOn",
+      { functionDeclaration: "Browser iframe parent viewport" },
+      {},
+    )?.label,
+    "owner-witness",
+  );
+  assert.equal(
+    nativeFrameCommandReceipt(
+      "Runtime.callFunctionOn",
+      { functionDeclaration: "closed shadow candidate" },
+      {},
+    )?.label,
+    "closed-shadow-registration",
+  );
+  assert.deepEqual(
+    nativeFrameCommandReceipt(
+      "DOM.resolveNode",
+      { executionContextId: 7 },
+      {
+        object: {
+          objectId: "isolated-wrapper",
+          description: "iframe#contract-frame",
+        },
+      },
+    ),
+    {
+      method: "DOM.resolveNode",
+      label: "DOM.resolveNode",
+      executionContextId: 7,
+      resolvedObjectId: "isolated-wrapper",
+      nodeDescription: "iframe#contract-frame",
+    },
+  );
+  assert.equal(
+    nativeFrameCommandReceipt(
+      "Page.captureScreenshot",
+      {},
+      { data: "must-not-retain-png" },
+    ),
+    undefined,
+  );
+  const bounded = nativeFrameCommandReceipt(
+    "Runtime.evaluate",
+    {
+      expression: "must-not-retain-expression",
+      uniqueContextId: "unique-root",
+    },
+    {
+      exceptionDetails: {
+        text: "Uncaught",
+        exception: { description: "x".repeat(10000) },
+      },
+    },
+  );
+  assert.ok(JSON.stringify(bounded).length < 2400);
+  assert.ok(!JSON.stringify(bounded).includes("must-not-retain-expression"));
 });

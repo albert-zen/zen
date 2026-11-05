@@ -211,6 +211,58 @@ test("passive owner replies and context retirement keep exact native request and
   f.relay.close();
 });
 
+test("passive capture diagnostics correlate native errors without copying source, handshake or tokens", () => {
+  const f = fixture();
+  f.relay.traceExtension({
+    type: "hello",
+    nativeWebSocketUrl: "secret-descriptor",
+    token: "secret-token",
+  });
+  f.relay.traceBridge({
+    type: "cdp-command",
+    requestId: "diagnostic",
+    tabId: 7,
+    sessionId: "child",
+    method: "Runtime.evaluate",
+    params: {
+      expression: "do-not-copy-source",
+      uniqueContextId: "unique-context",
+    },
+  });
+  f.relay.traceExtension({
+    type: "cdp-result",
+    requestId: "unrelated",
+    error: { message: "wrong request" },
+  });
+  f.relay.traceExtension({
+    type: "cdp-result",
+    requestId: "diagnostic",
+    error: { message: "Original native refusal" },
+  });
+  for (let i = 0; i < 200; i++)
+    f.relay.traceBridge({
+      type: "cdp-command",
+      requestId: `bounded-${i}`,
+      tabId: 7,
+      method: "Page.getFrameTree",
+      params: {},
+    });
+  const diagnostics = f.relay.captureDiagnostics();
+  assert.equal(diagnostics.failures.length, 1);
+  assert.equal(diagnostics.failures[0].method, "Runtime.evaluate");
+  assert.equal(diagnostics.failures[0].sessionId, "child");
+  assert.equal(diagnostics.failures[0].uniqueContextId, "unique-context");
+  assert.equal(diagnostics.failures[0].error, "Original native refusal");
+  assert.equal(diagnostics.head.length, 32);
+  assert.equal(diagnostics.tail.length, 32);
+  assert.equal(diagnostics.pending.length, 128);
+  assert.doesNotMatch(
+    JSON.stringify(diagnostics),
+    /do-not-copy-source|secret-descriptor|secret-token|wrong request/,
+  );
+  f.relay.close();
+});
+
 test("relay rejects replacement root ownership and cross-root native child input", () => {
   const f = fixture();
   f.relay.observeBridge(rootCommand);
