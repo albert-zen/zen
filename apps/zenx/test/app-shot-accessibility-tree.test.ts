@@ -541,7 +541,7 @@ describe("total parent validation of accessibility worker data", () => {
         ...base,
         root: {
           ...base.root,
-          children: [leaf({ bounds: { x: 0, y: 0, width: 1, height: 1 } })],
+          children: [leaf({ bounds: { x: -1, y: 0, width: 1, height: 1 } })],
         },
       },
       { ...base, root: { ...base.root, state: { active: false } } },

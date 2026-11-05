@@ -337,6 +337,10 @@ try {
           assert.match(review.context, /"format":"element-tree"/);
           assert.match(review.context, /"actions":\["press"\]/);
           assert.match(review.context, /"bounds":null/);
+          assert.match(
+            review.context,
+            /"bounds":\{"x":52,"y":145,"width":820,"height":80\}/,
+          );
           assert.match(review.context, /review-end/);
         } else assert.match(review.context, /screenshot only/);
         assert.equal(review.count, "已添加 0 张，未发送。");

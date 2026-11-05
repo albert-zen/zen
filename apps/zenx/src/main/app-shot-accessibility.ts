@@ -27,6 +27,8 @@ import {
   APP_SHOT_MAX_DEPTH,
   APP_SHOT_ACCESSIBILITY_LIMITS,
   appShotString,
+  appShotImageBounds,
+  type AppShotBounds,
   isAppShotImageSize,
   serializeAppShotTree,
   type AppShotAccessibilityPayload,
@@ -193,12 +195,84 @@ function knownSecure(
   );
 }
 
+/** Geometry failure is local: retain otherwise valid semantic descriptions. */
+function elementBounds(
+  element: AppShotAccessibilityElement,
+): AppShotBounds | undefined {
+  try {
+    const value = element.bounds;
+    if (!value) return undefined;
+    const bounds = {
+      x: value.x,
+      y: value.y,
+      width: value.width,
+      height: value.height,
+    };
+    return isAppShotBounds(bounds) ? bounds : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Private observations, not a screen target or exported coordinate authority. */
+interface AppShotCoordinateSource {
+  sourceBounds: AppShotBounds;
+  rootBounds: AppShotBounds;
+  verifyDescendantLocations: boolean;
+}
+
+function coordinateSource(
+  window: AppShotAccessibilityElement,
+  identity: AppShotAccessibilityIdentity,
+): AppShotCoordinateSource | undefined {
+  const rootBounds = elementBounds(window);
+  if (!rootBounds) return undefined;
+  const wayland =
+    identity.platform === "linux" && identity.matchMode === "wayland";
+  if (!wayland)
+    return {
+      sourceBounds: rootBounds,
+      rootBounds,
+      verifyDescendantLocations: false,
+    };
+  // T3 prefers client dimensions when they match. Size-only matching still admits
+  // semantic text, but neither AX coordinates alone nor a fabricated origin proves position.
+  const matchingBounds =
+    identity.clientBounds &&
+    Math.abs(rootBounds.width - identity.clientBounds.width) <= 2 &&
+    Math.abs(rootBounds.height - identity.clientBounds.height) <= 2
+      ? identity.clientBounds
+      : identity.bounds;
+  if (
+    !isAppShotBounds(matchingBounds) ||
+    Math.abs(rootBounds.x - matchingBounds.x) > 2 ||
+    Math.abs(rootBounds.y - matchingBounds.y) > 2
+  )
+    return undefined;
+  // Decorated screenshots include the frame, not only the AX client area.
+  const sourceBounds = identity.clientBounds ? identity.bounds : rootBounds;
+  return isAppShotBounds(sourceBounds)
+    ? { sourceBounds, rootBounds, verifyDescendantLocations: true }
+    : undefined;
+}
+
+/** The producer already bounds this tree; downgrading coordinates preserves semantics. */
+function clearDescendantBounds(root: AppShotElementNode): void {
+  const pending = [...root.children];
+  while (pending.length) {
+    const node = pending.pop()!;
+    node.bounds = null;
+    pending.push(...node.children);
+  }
+}
+
 /** One read-only traversal supplies both formats; no recursive native tree materialization. */
 export async function appShotAccessibleElements(
   root: AppShotAccessibilityElement,
   platform: AppShotAccessibilityIdentity["platform"],
   imageSize: AppShotImageSize | undefined,
   expired: () => boolean = () => false,
+  coordinates?: AppShotCoordinateSource,
 ): Promise<AppShotAccessibilityPayload | undefined> {
   const flat = flatCollector();
   const rich = isAppShotImageSize(imageSize);
@@ -212,6 +286,7 @@ export async function appShotAccessibleElements(
   let richTruncated = false;
   let richTextTruncated = false;
   let richRoot: AppShotElementNode | undefined;
+  let descendantLocationVaries = false;
   // Reserve the exact envelope with truncated:false (one character longer than true).
   let richLength = rich
     ? JSON.stringify({
@@ -230,6 +305,15 @@ export async function appShotAccessibleElements(
       traversalTruncated = true;
       continue;
     }
+    const bounds =
+      rich && coordinates && depth > 0 ? elementBounds(element) : undefined;
+    if (
+      bounds &&
+      coordinates &&
+      (Math.abs(bounds.x - coordinates.rootBounds.x) > 2 ||
+        Math.abs(bounds.y - coordinates.rootBounds.y) > 2)
+    )
+      descendantLocationVaries = true;
     const name = element.name;
     const value = element.value;
     flat.add(name);
@@ -298,7 +382,9 @@ export async function appShotAccessibleElements(
         bounds:
           depth === 0
             ? { x: 0, y: 0, width: imageSize.width, height: imageSize.height }
-            : null,
+            : bounds && coordinates
+              ? appShotImageBounds(bounds, coordinates.sourceBounds, imageSize)
+              : null,
         state,
         actions,
         children: [],
@@ -340,6 +426,12 @@ export async function appShotAccessibleElements(
   }
   const fallback = flat.result();
   const truncated = traversalTruncated || stack.length > 0;
+  if (
+    richRoot &&
+    coordinates?.verifyDescendantLocations &&
+    !descendantLocationVaries
+  )
+    clearDescendantBounds(richRoot);
   if (richRoot && !(richTextTruncated && fallback.text)) {
     const payload: AppShotAccessibilityPayload = {
       format: "element-tree",
@@ -446,11 +538,13 @@ export async function readAppShotAccessibilityWithApi(
       (!linuxKey || linuxKey.pid !== owner.pid)
     )
       return undefined;
+    const coordinates = coordinateSource(window, identity);
     const result = await appShotAccessibleElements(
       window,
       identity.platform,
       imageSize,
       () => expired,
+      coordinates,
     );
     if (
       expired ||
@@ -486,6 +580,12 @@ export async function readAppShotAccessibilityWithApi(
         currentKey.pid !== linuxKey.pid
       )
         return undefined;
+      if (
+        coordinates &&
+        result?.format === "element-tree" &&
+        !coordinateSource(currentMatches[0]!, identity)
+      )
+        clearDescendantBounds(result.root);
     }
     return result;
   };

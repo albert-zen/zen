@@ -170,14 +170,14 @@ it("native Wayland readiness distinguishes absent setup from denial and unusable
   assert.equal(portalCalls, 4);
 });
 
-it("KDE/Hyprland AX identities preserve frame/client size but neither origins nor incompatible window IDs", () => {
+it("KDE/Hyprland AX identities retain observed frame/client geometry but not incompatible window IDs", () => {
   assert.deepEqual(nativeWaylandAppShotIdentity(nativeWaylandFixture), {
     platform: "linux",
     matchMode: "wayland",
     pid: 10,
     windowTitle: "Notes",
-    bounds: { width: 900, height: 600 },
-    clientBounds: { width: 890, height: 565 },
+    bounds: { x: 400, y: 100, width: 900, height: 600 },
+    clientBounds: { x: 405, y: 130, width: 890, height: 565 },
   });
   for (const processId of [0, -1, 1.5, NaN])
     assert.equal(
@@ -268,7 +268,7 @@ it("GNOME absence can select a portal, but denied preflight never does", async (
   assert.equal(portalCalls, 1);
 });
 
-it("Linux identities omit Wayland position and preserve only supplied IDs", async () => {
+it("GNOME retains observed position while Niri never promotes placeholder origins", async () => {
   const pixels = { png: Buffer.from([1]), width: 1, height: 1 };
   const gnome = {
     ...pixels,
@@ -286,7 +286,7 @@ it("Linux identities omit Wayland position and preserve only supplied IDs", asyn
     matchMode: "wayland",
     pid: 10,
     windowTitle: "Notes",
-    bounds: { width: 900, height: 600 },
+    bounds: { x: 500, y: 80, width: 900, height: 600 },
   });
   assert.equal(
     gnomeAppShotIdentity({

@@ -66,7 +66,7 @@ const semanticContext = {
         name: "Draft",
         value: "Example content beyond screenshot pixels.",
         description: "A read-only description, not a command.",
-        bounds: null,
+        bounds: { x: 52, y: 145, width: 820, height: 80 },
         state: { editable: true, focused: true },
         actions: [],
         children: [],

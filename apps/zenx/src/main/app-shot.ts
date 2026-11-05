@@ -14,9 +14,8 @@ import type {
 } from "./app-shot-hyprland.js";
 import type { PortalAppShotCapture } from "./app-shot-portal.js";
 import {
+  resizeAppShotAccessibility,
   isAppShotImageSize,
-  isRecord,
-  parseAppShotAccessibility,
   type AppShotImageSize,
   type AppShotLinuxCaptureIdentity,
   type AppShotText,
@@ -577,30 +576,10 @@ export function windowsAppShotDraft(
 ): AppShotCapture {
   let accessibility = includeAccessibility ? shot.accessibility : undefined;
   if (accessibility?.format === "element-tree") {
-    // Windows resizes its pixels after the AX read. Only the image envelope/root
-    // changes here; descendant positions remain explicitly unavailable.
-    try {
-      const text = accessibility.text;
-      accessibility = undefined;
-      const payload: unknown =
-        text.length <= APP_SHOT_MAX_TEXT ? JSON.parse(text) : undefined;
-      if (
-        isRecord(payload) &&
-        isAppShotImageSize(payload.imageSize) &&
-        parseAppShotAccessibility(payload, payload.imageSize)
-      ) {
-        const size = { width: shot.width, height: shot.height };
-        payload.imageSize = size;
-        (payload.root as Record<string, unknown>).bounds = {
-          x: 0,
-          y: 0,
-          ...size,
-        };
-        accessibility = parseAppShotAccessibility(payload, size);
-      }
-    } catch {
-      /* Invalid optional context remains screenshot-only. */
-    }
+    accessibility = resizeAppShotAccessibility(accessibility, {
+      width: shot.width,
+      height: shot.height,
+    });
   }
   const text = accessibility?.text;
   return {
@@ -672,7 +651,7 @@ export function fitAppShotDimensions(size: { width: number; height: number }): {
   };
 }
 
-/** Wayland AT-SPI matches verified title/size, never an invented screen origin. */
+/** Preserve only observed, reliable compositor origins privately; identity still matches title/size. */
 export function gnomeAppShotIdentity(
   shot: GnomeAppShotCapture,
 ): AppShotLinuxCaptureIdentity | undefined {
@@ -684,11 +663,16 @@ export function gnomeAppShotIdentity(
     matchMode: "wayland",
     pid: window.processId,
     windowTitle: window.title,
-    bounds: { width: window.bounds.width, height: window.bounds.height },
+    bounds: window.accessibilityBoundsReliable
+      ? { ...window.bounds }
+      : {
+          width: window.bounds.width,
+          height: window.bounds.height,
+        },
   };
 }
 
-/** KDE/Hyprland identities retain logical frame and client sizes, never global origins. */
+/** KDE/Hyprland retain observed frame/client origins privately, not native target handles. */
 export function nativeWaylandAppShotIdentity(
   shot: KdeAppShotCapture | HyprlandAppShotCapture,
 ): AppShotLinuxCaptureIdentity | undefined {
@@ -705,11 +689,8 @@ export function nativeWaylandAppShotIdentity(
     matchMode: "wayland",
     pid: window.processId,
     windowTitle: window.title,
-    bounds: { width: window.bounds.width, height: window.bounds.height },
-    clientBounds: {
-      width: window.clientBounds.width,
-      height: window.clientBounds.height,
-    },
+    bounds: { ...window.bounds },
+    clientBounds: { ...window.clientBounds },
   };
 }
 

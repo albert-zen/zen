@@ -101,7 +101,7 @@ export interface AppShotElementNode {
   name: string | null;
   value: string | null;
   description: string | null;
-  /** Semantic-only stage: no native/screen position is exported. */
+  /** Descriptive captured-image pixels only, never a native position or input target. */
   bounds: AppShotBounds | null;
   state: AppShotElementState;
   /** Advertised names only, never executable actions or target references. */
@@ -235,6 +235,85 @@ function validScalar(value: unknown, max: number, nullable = false): boolean {
   );
 }
 
+/** Exact image rectangles have no native metadata, fractional edges or off-image area. */
+function isAppShotImageBounds(
+  value: unknown,
+  size: AppShotImageSize,
+): value is AppShotBounds {
+  return (
+    isDataRecord(value) &&
+    exactKeys(value, ["x", "y", "width", "height"]) &&
+    ["x", "y", "width", "height"].every((key) =>
+      Number.isSafeInteger(value[key]),
+    ) &&
+    Number(value.x) >= 0 &&
+    Number(value.y) >= 0 &&
+    Number(value.width) > 0 &&
+    Number(value.height) > 0 &&
+    Number(value.x) + Number(value.width) <= size.width &&
+    Number(value.y) + Number(value.height) <= size.height
+  );
+}
+
+/** T3 edge rounding and image clipping; callers admit safe source/element geometry first. */
+export function appShotImageBounds(
+  bounds: AppShotBounds,
+  source: AppShotBounds,
+  size: AppShotImageSize,
+): AppShotBounds | null {
+  const sx = size.width / source.width;
+  const sy = size.height / source.height;
+  const x = Math.max(0, Math.round((bounds.x - source.x) * sx));
+  const y = Math.max(0, Math.round((bounds.y - source.y) * sy));
+  const right = Math.min(
+    size.width,
+    Math.round((bounds.x + bounds.width - source.x) * sx),
+  );
+  const bottom = Math.min(
+    size.height,
+    Math.round((bounds.y + bounds.height - source.y) * sy),
+  );
+  return right > x && bottom > y
+    ? { x, y, width: right - x, height: bottom - y }
+    : null;
+}
+
+/** Windows pixels may be resized after AX. Validate, scale every node, then rebudget. */
+export function resizeAppShotAccessibility(
+  read: AppShotText,
+  size: AppShotImageSize,
+): AppShotText | undefined {
+  if (read.format !== "element-tree") return read;
+  try {
+    if (read.text.length > APP_SHOT_MAX_TEXT || !isAppShotImageSize(size))
+      return undefined;
+    const value: unknown = JSON.parse(read.text);
+    if (
+      !isRecord(value) ||
+      !isAppShotImageSize(value.imageSize) ||
+      !parseAppShotAccessibility(value, value.imageSize)
+    )
+      return undefined;
+    // Validation bounds the tree before this iterative walk and rejects all hooks/cycles.
+    const payload = value as unknown as Extract<
+      AppShotAccessibilityPayload,
+      { format: "element-tree" }
+    >;
+    const source = { x: 0, y: 0, ...payload.imageSize };
+    const pending = [payload.root];
+    while (pending.length) {
+      const node = pending.pop()!;
+      if (node.bounds)
+        node.bounds = appShotImageBounds(node.bounds, source, size);
+      pending.push(...node.children);
+    }
+    payload.imageSize = size;
+    return parseAppShotAccessibility(payload, size);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Total parent-side validation: rejects extra fields, cycles, depth and output excess. */
 export function parseAppShotAccessibility(
   value: unknown,
@@ -293,19 +372,13 @@ export function parseAppShotAccessibility(
           "children",
         ]) ||
         (depth === 0
-          ? !isDataRecord(node.bounds) ||
-            !isAppShotBounds(node.bounds) ||
-            !exactKeys(node.bounds as unknown as Record<string, unknown>, [
-              "x",
-              "y",
-              "width",
-              "height",
-            ]) ||
+          ? !isAppShotImageBounds(node.bounds, imageSize) ||
             node.bounds.x !== 0 ||
             node.bounds.y !== 0 ||
             node.bounds.width !== imageSize.width ||
             node.bounds.height !== imageSize.height
-          : node.bounds !== null)
+          : node.bounds !== null &&
+            !isAppShotImageBounds(node.bounds, imageSize))
       )
         return undefined;
       seen.add(node);
