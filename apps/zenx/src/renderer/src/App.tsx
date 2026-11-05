@@ -4072,6 +4072,9 @@ function AppContent() {
                   [owner]: `thread:${child}`,
                 }));
             }
+            // The temporary tab presented the real child during sidebar writes;
+            // ownership was already transferred, so retiring it discards no input.
+            sideChatDrafts.close(id);
             void loadThreadSummaries();
           }
         }}

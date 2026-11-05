@@ -265,9 +265,18 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
       request: async (method: string, params?: unknown) => {
         if (method === "model/list")
           return { data: [wireModel("fake")], nextCursor: null };
-        if (method === "zen/thread/resume") {
+        // Ordinary App recovery must use the window route, never full audit.
+        if (method === "zen/thread/resume-window") {
           const threadId = (params as { threadId: string }).threadId;
-          return nativeRecoveryForThread(resumedThread(threadId));
+          const snapshot = nativeRecoveryForThread(resumedThread(threadId));
+          snapshot.thread.history = {
+            before: null,
+            preview: "",
+            itemPositions: Object.fromEntries(
+              snapshot.thread.items.map((item, index) => [item.id, index]),
+            ),
+          };
+          return snapshot;
         }
         throw new Error(`Unexpected protocol request: ${method}`);
       },

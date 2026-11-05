@@ -82,6 +82,12 @@ for (const phase of [
         async () => "child",
         () => delivery,
       );
+      assert.equal(
+        drafts.transfer(draft.id, () => {
+          assert.fail("Pending delivery must not transfer its input owner");
+        }),
+        false,
+      );
       if (phase === "before admission") {
         finishImport();
         await imported;
@@ -106,6 +112,36 @@ for (const phase of [
       );
       if (phase === "after transfer")
         child = editComposer(child, "child edit while sidebar awaits");
+      if (!discarded) {
+        assert.equal(
+          drafts.get(draft.id),
+          draft,
+          "The temporary tab still presents the real child while sidebar writes await",
+        );
+        assert.equal(drafts.entries().length, 1);
+        assert.equal(
+          drafts.transfer(draft.id, () => {
+            assert.fail("Repeated transfer must not replace later child edits");
+          }),
+          true,
+        );
+        const beforeUpdate = child;
+        drafts.updateComposer(draft.id, (state) => ({ ...state }));
+        assert.notEqual(
+          child,
+          beforeUpdate,
+          "A late update through the transitional tab targets the unique child Composer",
+        );
+        await drafts.submit(
+          draft.id,
+          async () => {
+            assert.fail("Transferred presentation cannot create another child");
+          },
+          async () => {
+            assert.fail("Transferred presentation cannot resend input");
+          },
+        );
+      }
       // Stale source-tab close after transfer must not discard the child's input.
       drafts.close(draft.id);
       finishImport();

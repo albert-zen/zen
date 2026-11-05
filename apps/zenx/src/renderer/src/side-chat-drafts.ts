@@ -35,9 +35,9 @@ export interface SideChatDraft<Boundary = unknown> {
 
 export class SideChatDrafts<Boundary = unknown> {
   #drafts = new Map<string, SideChatDraft<Boundary>>();
-  // Only pending async imports keep a closed draft alive. A missing tab alone
-  // never means its images were discarded: promotion transfers their owner.
-  #closed = new WeakMap<
+  // A transferred entry may still present its real child while sidebar writes
+  // await. Closing that presentation never retires the child's input owner.
+  #disposition = new WeakMap<
     SideChatDraft<Boundary>,
     { kind: "discarded" } | { kind: "transferred"; update: ComposerUpdater }
   >();
@@ -80,15 +80,29 @@ export class SideChatDrafts<Boundary = unknown> {
   }
   close(id: string) {
     const draft = this.get(id);
-    if (draft !== undefined) this.#closed.set(draft, { kind: "discarded" });
+    const transferred =
+      draft !== undefined &&
+      this.#disposition.get(draft)?.kind === "transferred";
+    if (draft !== undefined && !transferred)
+      this.#disposition.set(draft, { kind: "discarded" });
     this.#drafts.delete(id);
     this.changed();
-    if (draft !== undefined && !draft.sending && !draft.creationUnconfirmed)
+    if (
+      draft !== undefined &&
+      !transferred &&
+      !draft.sending &&
+      !draft.creationUnconfirmed
+    )
       this.discardImages?.(draft.composer);
   }
   /** Transfer the latest input synchronously, without retiring any image lease. */
   transfer(id: string, update: ComposerUpdater): boolean {
     const draft = this.get(id);
+    if (
+      draft !== undefined &&
+      this.#disposition.get(draft)?.kind === "transferred"
+    )
+      return true;
     if (
       draft === undefined ||
       draft.sending ||
@@ -98,8 +112,7 @@ export class SideChatDrafts<Boundary = unknown> {
     )
       return false;
     update(() => draft.composer);
-    this.#closed.set(draft, { kind: "transferred", update });
-    this.#drafts.delete(id);
+    this.#disposition.set(draft, { kind: "transferred", update });
     this.changed();
     return true;
   }
@@ -111,7 +124,7 @@ export class SideChatDrafts<Boundary = unknown> {
     const draft = this.get(id);
     if (draft === undefined) return;
     const images = await operation();
-    const disposition = this.#closed.get(draft);
+    const disposition = this.#disposition.get(draft);
     if (disposition?.kind === "transferred") {
       disposition.update((state) => addComposerImages(state, images));
     } else if (disposition?.kind === "discarded") {
@@ -124,6 +137,11 @@ export class SideChatDrafts<Boundary = unknown> {
   updateComposer(id: string, change: (state: ComposerState) => ComposerState) {
     const draft = this.get(id);
     if (!draft) return;
+    const disposition = this.#disposition.get(draft);
+    if (disposition?.kind === "transferred") {
+      disposition.update(change);
+      return;
+    }
     draft.composer = change(draft.composer);
     this.changed();
   }
@@ -143,7 +161,13 @@ export class SideChatDrafts<Boundary = unknown> {
     observation?: ClientSendObservation,
   ) {
     const draft = this.get(id);
-    if (!draft || draft.sending || draft.creationUnconfirmed) return;
+    if (
+      !draft ||
+      draft.sending ||
+      draft.creationUnconfirmed ||
+      this.#disposition.get(draft)?.kind === "transferred"
+    )
+      return;
     const started = beginComposerSubmission(
       draft.composer,
       "start",
