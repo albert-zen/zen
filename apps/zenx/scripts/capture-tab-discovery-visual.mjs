@@ -33,8 +33,7 @@ await withPreviewBrowser(
       scroll: rail.scrollLeft,
       width: viewport.width,
       selected: document.querySelector('[aria-selected="true"]')?.id,
-      previous: document.querySelector('.workspace-tabs-previous')?.disabled ?? null,
-      next: document.querySelector('.workspace-tabs-next')?.disabled ?? null,
+      overflowControls: document.querySelectorAll('.workspace-tabs-previous, .workspace-tabs-next').length,
       tabs: [...document.querySelectorAll('.workspace-content-tab')].map(tab => {
         const r = tab.getBoundingClientRect();
         const title = tab.querySelector('.workspace-tab-title').getBoundingClientRect();
@@ -43,19 +42,6 @@ await withPreviewBrowser(
       })
     };
   })()`);
-    const click = async (selector) => {
-      const point = await evaluate(
-        `(() => { const e = document.querySelector(${JSON.stringify(selector)}); const r=e.getBoundingClientRect(); return {x:r.left+r.width/2,y:r.top+r.height/2}; })()`,
-      );
-      for (const type of ["mousePressed", "mouseReleased"])
-        await send("Input.dispatchMouseEvent", {
-          type,
-          ...point,
-          button: "left",
-          clickCount: 1,
-        });
-      await delay(100);
-    };
     for (const [width, platform, theme] of [
       [1280, "darwin", "light"],
       [1280, "darwin", "dark"],
@@ -84,23 +70,13 @@ await withPreviewBrowser(
           state.tabs.every((tab) => tab.full),
           "both long tabs fit in the normal side panel",
         );
-        assert.equal(
-          state.previous,
-          null,
-          "fitting tabs need no overflow arrows",
-        );
       } else {
         assert.ok(
           state.tabs.some((tab) => tab.full),
           "the narrow panel shows a whole tab",
         );
-        assert.ok(
-          state.tabs.every((tab) => tab.full) ||
-            state.previous === false ||
-            state.next === false,
-          "narrow overflow explicitly exposes the hidden tabs",
-        );
       }
+      assert.equal(state.overflowControls, 0, "no added overflow indicators");
       assert.notEqual(
         state.tabs[0].background,
         state.tabs[1].background,
@@ -122,19 +98,39 @@ await withPreviewBrowser(
     );
     await delay(300);
     const start = await geometry();
-    assert.equal(start.next, false, "hidden later tabs are discoverable");
-    await click(".workspace-tabs-next");
+    assert.equal(
+      start.overflowControls,
+      0,
+      "overflow uses the existing clipped strip",
+    );
+    assert.ok(
+      start.tabs.some((tab) => !tab.full),
+      "many tabs retain clipping after reaching their minimum width",
+    );
+    assert.ok(
+      start.tabs.every((tab) => tab.width < results[0].state.tabs[0].width),
+      "more tabs shrink before overflowing",
+    );
+    const point = await evaluate(`(() => {
+      const r = document.querySelector('[role="tablist"]').getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    })()`);
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseWheel",
+      ...point,
+      deltaX: 220,
+      deltaY: 0,
+    });
+    await wait("document.querySelector('[role=tablist]').scrollLeft > 0");
     const moved = await geometry();
     assert.ok(moved.scroll > start.scroll);
     assert.equal(
       moved.selected,
       start.selected,
-      "strip navigation preserves resource selection",
+      "manual horizontal scrolling preserves resource selection",
     );
-    assert.equal(moved.previous, false, "hidden earlier tabs are discoverable");
+    assert.equal(moved.overflowControls, 0);
     await screenshot("tabs-many-scrolled.png");
-    await click(".workspace-tabs-previous");
-    assert.ok((await geometry()).scroll < moved.scroll);
     await evaluate(`document.querySelector('[aria-selected="true"]').focus()`);
     await send("Input.dispatchKeyEvent", {
       type: "keyDown",
@@ -152,9 +148,9 @@ await withPreviewBrowser(
     const end = await geometry();
     assert.ok(end.tabs.at(-1).full);
     assert.equal(
-      end.next,
-      true,
-      "end spacer does not masquerade as hidden tabs",
+      end.overflowControls,
+      0,
+      "keyboard navigation adds no overflow indicator",
     );
     await screenshot("tabs-many-last-selected.png");
     results.push({ many: { start, moved, end } });

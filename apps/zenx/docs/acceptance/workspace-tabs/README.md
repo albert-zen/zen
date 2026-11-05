@@ -7,3 +7,5 @@ These use the production AuxiliaryPanel and stylesheet, synthetic Chinese tab ti
 ![Two long tabs in the normal side panel, light appearance](tabs-two-darwin-1280-light.png)
 
 ![Two long tabs in the normal side panel, dark appearance](tabs-two-darwin-1280-dark.png)
+
+The revised design removes overflow buttons entirely. Tab widths still shrink as more tabs open, then retain the existing clipped, horizontally scrollable rail. The two embedded normal-width screenshots remain representative because neither displayed overflow controls. New capture runs verify the revised narrow/many-tab behavior without additional indicators.
