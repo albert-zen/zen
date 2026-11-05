@@ -13,9 +13,13 @@ import type {
   HyprlandAppShotState,
 } from "./app-shot-hyprland.js";
 import type { PortalAppShotCapture } from "./app-shot-portal.js";
-import type {
-  AppShotLinuxCaptureIdentity,
-  AppShotText,
+import {
+  isAppShotImageSize,
+  isRecord,
+  parseAppShotAccessibility,
+  type AppShotImageSize,
+  type AppShotLinuxCaptureIdentity,
+  type AppShotText,
 } from "./app-shot-native-contract.js";
 import type { AppShotActiveWindow } from "./app-shot-native.js";
 import {
@@ -55,6 +59,8 @@ export interface AppShotAccessibilityRead {
   pid: number;
   applicationName?: string;
   text: string;
+  format?: AppShotText["format"];
+  truncated?: boolean;
 }
 
 export interface AppShotService {
@@ -81,6 +87,7 @@ export interface AppShotDependencies {
     windowId: number;
     windowTitle: string;
     expectedIdentity?: AppShotActiveWindow;
+    imageSize?: AppShotImageSize;
     signal?: AbortSignal;
   }) => Promise<AppShotAccessibilityRead | undefined>;
   captureActiveNative?: (options?: {
@@ -286,13 +293,14 @@ export function createAppShotService(
           // CG metadata is optional; it never retargets the selected screenshot.
         }
       }
-      let accessibilityText: string | undefined;
+      let accessibility: AppShotText | undefined;
       if (options?.includeAccessibility && dependencies.readAccessibility) {
         try {
           const read = await dependencies.readAccessibility({
             windowId: selected.windowId,
             windowTitle: selected.title,
             expectedIdentity,
+            imageSize: appShotPngSize(bytes),
             signal: options.signal,
           });
           if (
@@ -304,11 +312,24 @@ export function createAppShotService(
             applicationName = read.applicationName
               ? plain(read.applicationName, 100)
               : undefined;
-            accessibilityText = read.text
-              .replaceAll("\0", "")
-              .slice(0, MAX_AX_TEXT);
-            if (/[\uD800-\uDBFF]/u.test(accessibilityText.at(-1) ?? ""))
-              accessibilityText = accessibilityText.slice(0, -1);
+            if (read.format === "element-tree") {
+              // Never slice JSON: the worker boundary already validated this complete payload.
+              if (read.text.length <= MAX_AX_TEXT)
+                accessibility = {
+                  text: read.text,
+                  format: read.format,
+                  truncated: read.truncated === true,
+                };
+            } else {
+              let text = read.text.replaceAll("\0", "").slice(0, MAX_AX_TEXT);
+              if (/[\uD800-\uDBFF]/u.test(text.at(-1) ?? ""))
+                text = text.slice(0, -1);
+              accessibility = {
+                text,
+                truncated:
+                  read.truncated === true || text.length < read.text.length,
+              };
+            }
           }
         } catch {
           // An AX failure cannot change the screenshot target or leak another app's text.
@@ -318,8 +339,8 @@ export function createAppShotService(
       const context = [
         `App Shot of external window "${plain(selected.title, 1000)}"${applicationName ? ` in ${applicationName}` : ""}.`,
         `Captured at: ${capturedAt}.`,
-        accessibilityText
-          ? `Accessibility text from this same window (read-only, truncated to ${MAX_AX_TEXT} characters): ${accessibilityText}`
+        accessibility?.text
+          ? appShotAccessibilityContext(accessibility)
           : options?.includeAccessibility
             ? "Screenshot only. Accessibility text was unavailable or could not be matched to this window."
             : "Screenshot only. Accessibility text was not requested.",
@@ -400,6 +421,7 @@ export function createElectronAppShotService(
                   ? await readLinuxAppShotAccessibility(
                       niriAppShotIdentity(shot),
                       captureOptions?.signal,
+                      { width: shot.width, height: shot.height },
                     )
                   : undefined,
               );
@@ -458,6 +480,7 @@ export function createElectronAppShotService(
                       readLinuxAppShotAccessibility(
                         nativeWaylandAppShotIdentity(shot),
                         captureOptions?.signal,
+                        { width: shot.width, height: shot.height },
                       ),
                     ...(!kde && !hyprland && isGnomeAppShotSession()
                       ? {
@@ -476,6 +499,7 @@ export function createElectronAppShotService(
                       readLinuxAppShotAccessibility(
                         gnomeAppShotIdentity(shot),
                         captureOptions?.signal,
+                        { width: shot.width, height: shot.height },
                       ),
                     capturePortal: () =>
                       capturePortalActiveAppShot({
@@ -523,11 +547,62 @@ export function sameObservedWindow(
   );
 }
 
+/** Captured PNG dimensions, never inferred from logical window geometry. */
+function appShotPngSize(bytes: Uint8Array): AppShotImageSize | undefined {
+  const png = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (
+    png.length < 33 ||
+    !png
+      .subarray(0, 8)
+      .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ||
+    png.readUInt32BE(8) !== 13 ||
+    png.toString("ascii", 12, 16) !== "IHDR"
+  )
+    return undefined;
+  const size = { width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
+  return isAppShotImageSize(size) ? size : undefined;
+}
+
+function appShotAccessibilityContext(read: AppShotText): string {
+  const label =
+    read.format === "element-tree"
+      ? "Accessibility semantic tree"
+      : "Accessibility text";
+  return `${label} from this same window (read-only${read.truncated ? ", truncated" : ""}): ${read.text}`;
+}
+
 export function windowsAppShotDraft(
   shot: AppShotWindowsCapture,
   includeAccessibility: boolean,
 ): AppShotCapture {
-  const text = includeAccessibility ? shot.accessibility?.text : undefined;
+  let accessibility = includeAccessibility ? shot.accessibility : undefined;
+  if (accessibility?.format === "element-tree") {
+    // Windows resizes its pixels after the AX read. Only the image envelope/root
+    // changes here; descendant positions remain explicitly unavailable.
+    try {
+      const text = accessibility.text;
+      accessibility = undefined;
+      const payload: unknown =
+        text.length <= APP_SHOT_MAX_TEXT ? JSON.parse(text) : undefined;
+      if (
+        isRecord(payload) &&
+        isAppShotImageSize(payload.imageSize) &&
+        parseAppShotAccessibility(payload, payload.imageSize)
+      ) {
+        const size = { width: shot.width, height: shot.height };
+        payload.imageSize = size;
+        (payload.root as Record<string, unknown>).bounds = {
+          x: 0,
+          y: 0,
+          ...size,
+        };
+        accessibility = parseAppShotAccessibility(payload, size);
+      }
+    } catch {
+      /* Invalid optional context remains screenshot-only. */
+    }
+  }
+  const text = accessibility?.text;
   return {
     name: filename(shot.identity.windowTitle),
     bytes: shot.png,
@@ -537,7 +612,7 @@ export function windowsAppShotDraft(
       `Captured at: ${new Date().toISOString()}.`,
       "Capture: visible desktop region at the foreground window bounds. Overlapping windows may appear in these pixels.",
       text
-        ? `Accessibility text from this same window (read-only${shot.accessibility?.truncated ? ", truncated" : ""}): ${text}`
+        ? appShotAccessibilityContext(accessibility!)
         : includeAccessibility
           ? "Screenshot only. Accessibility text was unavailable or could not be matched to this window."
           : "Screenshot only. Accessibility text was not requested.",
@@ -546,11 +621,12 @@ export function windowsAppShotDraft(
   };
 }
 
-/** T3's bounded name/value extraction in a disposable worker; never grants AX access. */
+/** T3's bounded semantic extraction in a disposable worker; never grants AX access. */
 async function readMacAppShotAccessibility(request: {
   windowId: number;
   windowTitle: string;
   expectedIdentity?: AppShotActiveWindow;
+  imageSize?: AppShotImageSize;
   signal?: AbortSignal;
 }): Promise<AppShotAccessibilityRead | undefined> {
   const expected = request.expectedIdentity;
@@ -566,6 +642,7 @@ async function readMacAppShotAccessibility(request: {
     {
       workerPath: join(app.getAppPath(), "out/main/app-shot-native-worker.js"),
       signal: request.signal,
+      imageSize: request.imageSize,
     },
   );
   if (
@@ -573,7 +650,7 @@ async function readMacAppShotAccessibility(request: {
     !sameObservedWindow(expected, await readMacWindowMetadata(request.windowId))
   )
     return undefined;
-  return { ...expected, text: read.text };
+  return { ...expected, ...read };
 }
 
 /** T3's bounded image envelope, preserving aspect ratio without upscaling. */
@@ -656,7 +733,7 @@ export function nativeWaylandAppShotDraft(
       includeAccessibility &&
       nativeWaylandAppShotIdentity(shot) &&
       accessibility?.text
-        ? `Accessibility text from this same window (read-only${accessibility.truncated ? ", truncated" : ""}): ${accessibility.text}`
+        ? appShotAccessibilityContext(accessibility)
         : includeAccessibility
           ? "Screenshot only. Accessibility text was unavailable or could not be matched to this window."
           : "Screenshot only. Accessibility text was not requested.",
@@ -684,12 +761,14 @@ export function niriAppShotIdentity(
 async function readLinuxAppShotAccessibility(
   identity: AppShotLinuxCaptureIdentity | undefined,
   signal?: AbortSignal,
+  imageSize?: AppShotImageSize,
 ): Promise<AppShotText | undefined> {
   if (!identity || signal?.aborted) return undefined;
   const { app } = await import("electron");
   const { readCapturedAppShotAccessibility } =
     await import("./app-shot-native-capture.js");
   return readCapturedAppShotAccessibility(identity, {
+    imageSize,
     workerPath: join(app.getAppPath(), "out/main/app-shot-native-worker.js"),
     signal,
   });
@@ -774,7 +853,7 @@ export function gnomeAppShotDraft(
         : "App Shot of the GNOME window selected at capture start. No verified window identity was supplied; metadata is omitted.",
       `Captured at: ${new Date().toISOString()}.`,
       includeAccessibility && gnomeAppShotIdentity(shot) && accessibility?.text
-        ? `Accessibility text from this same window (read-only${accessibility.truncated ? ", truncated" : ""}): ${accessibility.text}`
+        ? appShotAccessibilityContext(accessibility)
         : includeAccessibility
           ? "Screenshot only. Accessibility text was unavailable or could not be matched to this window."
           : "Screenshot only. Accessibility text was not requested.",
@@ -799,7 +878,7 @@ export function niriAppShotDraft(
         : "App Shot of the Niri window selected at capture start. Window identity changed or was unavailable afterward; metadata is omitted.",
       `Captured at: ${new Date().toISOString()}.`,
       includeAccessibility && niriAppShotIdentity(shot) && accessibility?.text
-        ? `Accessibility text from this same window (read-only${accessibility.truncated ? ", truncated" : ""}): ${accessibility.text}`
+        ? appShotAccessibilityContext(accessibility)
         : includeAccessibility
           ? "Screenshot only. Accessibility text was unavailable or could not be matched to this window."
           : "Screenshot only. Accessibility text was not requested.",

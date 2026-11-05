@@ -46,6 +46,56 @@ const shot: ZenXImageDraft = {
   appShotContext:
     "App Shot\nApplication: Example Notes\nWindow: Product review\nCaptured: 2026-11-05T11:00:00.000Z\nAccessibility: screenshot only (not requested)",
 };
+// Synthetic semantic fields exercise the existing review display, not a native AX read.
+const semanticContext = {
+  format: "element-tree",
+  coordinateSpace: "captured-image",
+  imageSize: { width: 1000, height: 500 },
+  truncated: false,
+  root: {
+    role: "window",
+    name: "Product review",
+    value: null,
+    description: "Synthetic application context, reviewed before Send.",
+    bounds: { x: 0, y: 0, width: 1000, height: 500 },
+    state: {},
+    actions: [],
+    children: [
+      {
+        role: "text field",
+        name: "Draft",
+        value: "Example content beyond screenshot pixels.",
+        description: "A read-only description, not a command.",
+        bounds: null,
+        state: { editable: true, focused: true },
+        actions: [],
+        children: [],
+      },
+      {
+        role: "button",
+        name: "Submit",
+        value: null,
+        description:
+          "Advertised action names do not grant permission or invoke the app.",
+        bounds: null,
+        state: { enabled: false },
+        actions: ["press"],
+        children: [],
+      },
+      {
+        role: "text",
+        name: "review-end",
+        value: null,
+        description: null,
+        bounds: null,
+        state: {},
+        actions: [],
+        children: [],
+      },
+    ],
+  },
+};
+let previewShot = shot;
 const niri = params.get("platform") === "niri";
 const gnome = params.get("platform") === "gnome";
 const kde = params.get("platform") === "kde";
@@ -96,9 +146,20 @@ const api: AppShotApi = {
       applicationName: "Example Browser",
     },
   ],
-  capture: async () => shot,
+  capture: async (_sourceId, includeAccessibility) => {
+    previewShot =
+      params.get("context") === "semantic" && includeAccessibility
+        ? {
+            ...shot,
+            appShotContext:
+              "App Shot of Example Notes.\nAccessibility semantic tree from this same window (read-only): " +
+              JSON.stringify(semanticContext),
+          }
+        : shot;
+    return previewShot;
+  },
   read: async () => png,
-  attach: async () => shot,
+  attach: async () => previewShot,
   discard: async () => {},
   arm: async () =>
     hyprland

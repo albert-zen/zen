@@ -24,27 +24,42 @@
 
 import {
   APP_SHOT_MAX_NODES,
+  APP_SHOT_MAX_DEPTH,
+  APP_SHOT_ACCESSIBILITY_LIMITS,
+  appShotString,
+  isAppShotImageSize,
+  serializeAppShotTree,
+  type AppShotAccessibilityPayload,
+  type AppShotElementNode,
+  type AppShotElementState,
+  type AppShotImageSize,
   APP_SHOT_MAX_TEXT,
   isAppShotBounds,
   isAppShotAccessibilityIdentity,
   isRecord,
   type AppShotAccessibilityBounds,
   type AppShotAccessibilityIdentity,
-  type AppShotText,
 } from "./app-shot-native-contract.js";
-
-export interface AppShotAccessibilityTree {
-  name?: string;
-  value?: string;
-  children: readonly AppShotAccessibilityTree[];
-}
 
 export interface AppShotAccessibilityElement {
   readonly name: string | null;
   readonly bounds: AppShotAccessibilityBounds | null;
   readonly pid?: number | null;
   readonly raw?: Readonly<Record<string, unknown>>;
-  tree(): Promise<AppShotAccessibilityTree>;
+  readonly role?: string;
+  readonly value?: string | null;
+  readonly description?: string | null;
+  readonly active?: boolean;
+  readonly busy?: boolean;
+  readonly editable?: boolean;
+  readonly focused?: boolean;
+  readonly selected?: boolean;
+  readonly enabled?: boolean;
+  readonly visible?: boolean;
+  readonly checked?: "on" | "off" | "mixed" | null;
+  readonly expanded?: boolean | null;
+  readonly actions?: readonly string[];
+  children(): Promise<readonly AppShotAccessibilityElement[]>;
 }
 
 interface AppShotAccessibilityApplication {
@@ -130,55 +145,226 @@ function matchesWindow(
   );
 }
 
-/** T3's name/value extraction, with explicit truncation and bounded stack growth. */
-export function appShotAccessibleText(
-  root: AppShotAccessibilityTree,
-): AppShotText {
+function flatCollector() {
   const seen = new Set<string>();
-  const stack = [root];
   let text = "";
-  let visited = 0;
   let truncated = false;
-  while (
-    stack.length > 0 &&
-    text.length < APP_SHOT_MAX_TEXT &&
-    visited < APP_SHOT_MAX_NODES
-  ) {
-    const node = stack.pop()!;
-    visited += 1;
-    for (const value of [node.name, node.value]) {
-      const candidate =
-        typeof value === "string" ? value.replaceAll("\0", "").trim() : "";
-      if (!candidate || seen.has(candidate)) continue;
+  return {
+    add(value: unknown) {
+      // A partial fit exhausts this collector even when a surrogate leaves one slot.
+      if (truncated) return;
+      if (text.length >= APP_SHOT_MAX_TEXT) {
+        if (value) truncated = true;
+        return;
+      }
+      let clipped = false;
+      const candidate = appShotString(value, APP_SHOT_MAX_TEXT + 1, () => {
+        clipped = true;
+      });
+      if (!candidate || seen.has(candidate)) {
+        if (clipped) truncated = true;
+        return;
+      }
       const separator = text ? "\n" : "";
       const remaining = APP_SHOT_MAX_TEXT - text.length - separator.length;
-      if (remaining <= 0) return { text, truncated: true };
-      const end =
-        candidate.length <= remaining
-          ? candidate.length
-          : /[\uD800-\uDBFF]/u.test(candidate[remaining - 1] ?? "")
-            ? remaining - 1
-            : remaining;
-      if (end === 0) return { text, truncated: true };
-      text += separator + candidate.slice(0, end);
-      if (end < candidate.length) return { text, truncated: true };
+      const portion = appShotString(candidate, Math.max(0, remaining));
+      if (portion) text += separator + portion;
+      if (clipped || portion.length < candidate.length) truncated = true;
       seen.add(candidate);
+    },
+    result: () => ({ text, truncated }),
+  };
+}
+
+/** Known native secure roles only. Provider omissions, especially UIA, are not a redaction guarantee. */
+function knownSecure(
+  element: AppShotAccessibilityElement,
+  platform: string,
+): boolean {
+  if (platform !== "darwin" && platform !== "linux") return false;
+  const raw = element.raw;
+  if (!raw) return false;
+  return (
+    (platform === "darwin" &&
+      (raw.ax_role === "AXSecureTextField" ||
+        raw.ax_subrole === "AXSecureTextField")) ||
+    (platform === "linux" &&
+      (raw.atspi_role === "password text" || raw.atspi_role === "role_num:40"))
+  );
+}
+
+/** One read-only traversal supplies both formats; no recursive native tree materialization. */
+export async function appShotAccessibleElements(
+  root: AppShotAccessibilityElement,
+  platform: AppShotAccessibilityIdentity["platform"],
+  imageSize: AppShotImageSize | undefined,
+  expired: () => boolean = () => false,
+): Promise<AppShotAccessibilityPayload | undefined> {
+  const flat = flatCollector();
+  const rich = isAppShotImageSize(imageSize);
+  const stack: {
+    element: AppShotAccessibilityElement;
+    depth: number;
+    parent?: AppShotElementNode;
+  }[] = [{ element: root, depth: 0 }];
+  let visited = 0;
+  let traversalTruncated = false;
+  let richTruncated = false;
+  let richTextTruncated = false;
+  let richRoot: AppShotElementNode | undefined;
+  // Reserve the exact envelope with truncated:false (one character longer than true).
+  let richLength = rich
+    ? JSON.stringify({
+        format: "element-tree",
+        coordinateSpace: "captured-image",
+        imageSize,
+        truncated: false,
+        root: null,
+      }).length - 4
+    : 0;
+  while (stack.length && visited < APP_SHOT_MAX_NODES) {
+    if (expired()) return undefined;
+    const { element, depth, parent } = stack.pop()!;
+    visited++;
+    if (knownSecure(element, platform)) {
+      traversalTruncated = true;
+      continue;
     }
-    const children = Array.isArray(node.children) ? node.children : [];
+    const name = element.name;
+    const value = element.value;
+    flat.add(name);
+    flat.add(value);
+    let node: AppShotElementNode | undefined;
+    if (rich && (depth === 0 || parent)) {
+      const field = (value: unknown, limit: number, textField = false) => {
+        return (
+          appShotString(value, limit, () => {
+            richTruncated = true;
+            if (textField) richTextTruncated = true;
+          }) || null
+        );
+      };
+      const nodeName = field(name, APP_SHOT_ACCESSIBILITY_LIMITS.name, true);
+      const nodeValue = field(value, APP_SHOT_ACCESSIBILITY_LIMITS.value, true);
+      const description = field(
+        element.description,
+        APP_SHOT_ACCESSIBILITY_LIMITS.description,
+      );
+      const state: AppShotElementState = {};
+      for (const key of [
+        "active",
+        "busy",
+        "editable",
+        "focused",
+        "selected",
+      ] as const)
+        if (element[key] === true) state[key] = true;
+      for (const key of ["enabled", "visible"] as const)
+        if (element[key] === false) state[key] = false;
+      const checked = element.checked;
+      if (checked === "on" || checked === "off" || checked === "mixed")
+        state.checked = checked;
+      const expanded = element.expanded;
+      if (typeof expanded === "boolean") state.expanded = expanded;
+      const actions: string[] = [];
+      const advertised = element.actions;
+      if (advertised && !Array.isArray(advertised))
+        throw new Error("Invalid accessibility actions");
+      if (advertised) {
+        if (advertised.length > APP_SHOT_ACCESSIBILITY_LIMITS.actions)
+          richTruncated = true;
+        for (
+          let index = 0;
+          index <
+          Math.min(advertised.length, APP_SHOT_ACCESSIBILITY_LIMITS.actions);
+          index++
+        ) {
+          const action = field(
+            advertised[index],
+            APP_SHOT_ACCESSIBILITY_LIMITS.action,
+          );
+          if (action && !actions.includes(action)) actions.push(action);
+        }
+      }
+      node = {
+        role:
+          field(element.role, APP_SHOT_ACCESSIBILITY_LIMITS.role) || "unknown",
+        name: nodeName,
+        value: nodeValue === nodeName ? null : nodeValue,
+        description:
+          description === nodeName || description === nodeValue
+            ? null
+            : description,
+        bounds:
+          depth === 0
+            ? { x: 0, y: 0, width: imageSize.width, height: imageSize.height }
+            : null,
+        state,
+        actions,
+        children: [],
+      };
+      const extra =
+        JSON.stringify(node).length + (parent?.children.length ? 1 : 0);
+      if (richLength + extra > APP_SHOT_MAX_TEXT) {
+        richTruncated = true;
+        node = undefined;
+      } else {
+        richLength += extra;
+        if (parent) parent.children.push(node);
+        else richRoot = node;
+      }
+    }
+    if (!node && (name || value)) richTextTruncated = true;
+    if (expired()) return undefined;
+    if (
+      depth >= APP_SHOT_MAX_DEPTH ||
+      visited + stack.length >= APP_SHOT_MAX_NODES
+    ) {
+      // Do not make another native child call just to discover whether this limit cut a leaf.
+      traversalTruncated = true;
+      continue;
+    }
+    const children = await element.children();
+    if (expired()) return undefined;
+    if (!Array.isArray(children))
+      throw new Error("Invalid accessibility children");
     const capacity = APP_SHOT_MAX_NODES - visited - stack.length;
     const count = Math.min(children.length, capacity);
-    if (count < children.length) truncated = true;
+    if (count < children.length) traversalTruncated = true;
     for (let index = count - 1; index >= 0; index--)
-      stack.push(children[index]!);
+      stack.push({
+        element: children[index]!,
+        depth: depth + 1,
+        ...(node ? { parent: node } : {}),
+      });
   }
-  return { text, truncated: truncated || stack.length > 0 };
+  const fallback = flat.result();
+  const truncated = traversalTruncated || stack.length > 0;
+  if (richRoot && !(richTextTruncated && fallback.text)) {
+    const payload: AppShotAccessibilityPayload = {
+      format: "element-tree",
+      coordinateSpace: "captured-image",
+      imageSize: imageSize!,
+      truncated: truncated || richTruncated,
+      root: richRoot,
+    };
+    if (serializeAppShotTree(payload)) return payload;
+  }
+  return fallback.text
+    ? {
+        format: "flat-text",
+        text: fallback.text,
+        truncated: truncated || fallback.truncated,
+      }
+    : undefined;
 }
 
 export async function readAppShotAccessibilityWithApi(
   App: AppShotAccessibilityApi,
   identity: AppShotAccessibilityIdentity,
   isAppNotFoundError: (error: unknown) => boolean = () => false,
-): Promise<AppShotText | undefined> {
+  imageSize?: AppShotImageSize,
+): Promise<AppShotAccessibilityPayload | undefined> {
   if (!isAppShotAccessibilityIdentity(identity)) return undefined;
   let expired = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -260,7 +446,12 @@ export async function readAppShotAccessibilityWithApi(
       (!linuxKey || linuxKey.pid !== owner.pid)
     )
       return undefined;
-    const tree = await window.tree();
+    const result = await appShotAccessibleElements(
+      window,
+      identity.platform,
+      imageSize,
+      () => expired,
+    );
     if (
       expired ||
       owner.app.pid !== owner.pid ||
@@ -296,8 +487,7 @@ export async function readAppShotAccessibilityWithApi(
       )
         return undefined;
     }
-    const result = appShotAccessibleText(tree);
-    return result.text ? result : undefined;
+    return result;
   };
   try {
     return await Promise.race([

@@ -27,7 +27,8 @@ import { fork as nodeFork } from "node:child_process";
 import {
   APP_SHOT_MAX_PNG_BYTES,
   APP_SHOT_MAX_PIXELS,
-  APP_SHOT_MAX_TEXT,
+  parseAppShotAccessibility,
+  type AppShotImageSize,
   isRecord,
   isAppShotBounds,
   isAppShotIdentity,
@@ -262,25 +263,19 @@ export async function captureAppShotRegion(
  */
 export async function readCapturedAppShotAccessibility(
   identity: AppShotAccessibilityIdentity,
-  options: AppShotNativeRunOptions = {},
+  options: AppShotNativeRunOptions & { imageSize?: AppShotImageSize } = {},
 ): Promise<AppShotText | undefined> {
   if (!isAppShotAccessibilityIdentity(identity)) return undefined;
   try {
     const value = await runAppShotNative(
       "accessibility",
-      { identity },
+      {
+        identity,
+        ...(options.imageSize ? { imageSize: options.imageSize } : {}),
+      },
       options,
     );
-    if (
-      !isRecord(value) ||
-      typeof value.text !== "string" ||
-      value.text.length > APP_SHOT_MAX_TEXT ||
-      typeof value.truncated !== "boolean"
-    )
-      return undefined;
-    return value.text
-      ? { text: value.text, truncated: value.truncated }
-      : undefined;
+    return parseAppShotAccessibility(value, options.imageSize);
   } catch {
     return undefined;
   }
@@ -295,6 +290,7 @@ export interface AppShotWindowsCaptureDependencies {
   captureRegion(region: AppShotBounds): Promise<AppShotRegionImage>;
   readAccessibility(
     identity: AppShotCaptureIdentity,
+    imageSize?: AppShotImageSize,
   ): Promise<AppShotText | undefined>;
 }
 
@@ -329,8 +325,12 @@ export async function captureWindowsActiveAppShot(
         signal: options.signal,
         workerPath: options.workerPath,
       }),
-    readAccessibility: (identity: AppShotCaptureIdentity) =>
+    readAccessibility: (
+      identity: AppShotCaptureIdentity,
+      imageSize?: AppShotImageSize,
+    ) =>
       readCapturedAppShotAccessibility(identity, {
+        imageSize,
         signal: options.signal,
         workerPath: options.workerPath,
       }),
@@ -361,10 +361,13 @@ export async function captureWindowsActiveAppShot(
   if (options.includeAccessibility) {
     // xa11y UIA bounds are logical; native foreground identity stays physical.
     try {
-      accessibility = await dependencies.readAccessibility({
-        ...active,
-        bounds: region,
-      });
+      accessibility = await dependencies.readAccessibility(
+        {
+          ...active,
+          bounds: region,
+        },
+        { width: image.width, height: image.height },
+      );
     } catch {
       /* Optional text. */
     }

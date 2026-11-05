@@ -28,6 +28,7 @@ import {
   APP_SHOT_MAX_PNG_BYTES,
   isAppShotBounds,
   isAppShotAccessibilityIdentity,
+  isAppShotImageSize,
   isRecord,
 } from "./app-shot-native-contract.js";
 
@@ -93,7 +94,8 @@ async function run(): Promise<unknown> {
   }
   if (
     !isAppShotAccessibilityIdentity(input.identity) ||
-    input.identity.platform !== process.platform
+    input.identity.platform !== process.platform ||
+    (input.imageSize !== undefined && !isAppShotImageSize(input.imageSize))
   )
     throw new Error("Invalid App Shot accessibility identity");
   const { readAppShotAccessibilityWithApi } =
@@ -106,6 +108,7 @@ async function run(): Promise<unknown> {
     (error) =>
       error instanceof xa11y.SelectorNotMatchedError &&
       error.selector === `application[pid=${identity.pid}]`,
+    isAppShotImageSize(input.imageSize) ? input.imageSize : undefined,
   );
 }
 

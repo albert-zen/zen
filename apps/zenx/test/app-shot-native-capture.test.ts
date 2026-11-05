@@ -13,8 +13,8 @@ import {
   type AppShotWindowsCaptureDependencies,
 } from "../src/main/app-shot-native-capture.js";
 import {
-  appShotAccessibleText,
-  readAppShotAccessibilityWithApi,
+  appShotAccessibleElements,
+  readAppShotAccessibilityWithApi as readAccessibilityWithApi,
   type AppShotAccessibilityApi,
   type AppShotAccessibilityElement,
 } from "../src/main/app-shot-accessibility.js";
@@ -459,17 +459,34 @@ describe("read-only Windows foreground API", () => {
   });
 });
 
+function readAppShotAccessibilityWithApi(
+  api: AppShotAccessibilityApi,
+  identity: Parameters<typeof readAccessibilityWithApi>[1],
+  isAppNotFoundError?: Parameters<typeof readAccessibilityWithApi>[2],
+) {
+  return readAccessibilityWithApi(api, identity, isAppNotFoundError, {
+    width: 1200,
+    height: 800,
+  });
+}
+
 function accessibilityFixture() {
   const window: AppShotAccessibilityElement = {
     name: identity.windowTitle,
     bounds: { ...identity.bounds },
-    tree: async () => ({
-      name: "Synthetic title",
-      value: "Synthetic text",
-      children: [],
-      selector: "must never escape",
-      actions: ["press"],
-    }),
+    role: "window",
+    children: async () => [
+      {
+        role: "text",
+        name: "Synthetic title",
+        value: "Synthetic text",
+        bounds: null,
+        children: async () => [],
+        selector: "must never escape",
+        raw: { nativeHandle: "must never escape" },
+        actions: ["press"],
+      },
+    ],
   };
   const app = {
     pid: identity.pid,
@@ -487,15 +504,33 @@ function accessibilityFixture() {
   return { window, app, api };
 }
 
-describe("same-window optional text", () => {
-  it("matches PID/title/bounds and never exports selectors or actions", async () => {
+describe("same-window optional semantic context", () => {
+  it("matches PID/title/bounds and exports descriptive actions without native identities", async () => {
     const fake = accessibilityFixture();
     const result = await readAppShotAccessibilityWithApi(fake.api, identity);
-    assert.deepEqual(result, {
-      text: "Synthetic title\nSynthetic text",
-      truncated: false,
+    assert.ok(result?.format === "element-tree");
+    assert.equal(result.coordinateSpace, "captured-image");
+    assert.deepEqual(result.imageSize, { width: 1200, height: 800 });
+    assert.equal(result.truncated, false);
+    assert.equal(result.root.role, "window");
+    assert.equal(result.root.name, identity.windowTitle);
+    assert.deepEqual(result.root.bounds, {
+      x: 0,
+      y: 0,
+      width: 1200,
+      height: 800,
     });
-    assert.doesNotMatch(JSON.stringify(result), /selector|actions|press/);
+    assert.equal(result.root.children.length, 1);
+    const child = result.root.children[0]!;
+    assert.equal(child.role, "text");
+    assert.equal(child.bounds, null);
+    assert.equal(child.name, "Synthetic title");
+    assert.equal(child.value, "Synthetic text");
+    assert.deepEqual(child.actions, ["press"]);
+    assert.doesNotMatch(
+      JSON.stringify(result),
+      /selector|raw|nativeHandle|must never escape/,
+    );
     const mac = await readAppShotAccessibilityWithApi(fake.api, {
       ...identity,
       platform: "darwin",
@@ -536,31 +571,56 @@ describe("same-window optional text", () => {
     );
   });
 
-  it("caps text at 32000 chars and visits at most 10000 nodes without splitting surrogates", () => {
-    const result = appShotAccessibleText({
-      name: "x".repeat(APP_SHOT_MAX_TEXT - 1) + "😀",
-      children: [],
-    });
-    assert.equal(result.text.length, APP_SHOT_MAX_TEXT - 1);
-    assert.equal(result.truncated, true);
+  it("caps text at 32000 chars and visits at most 10000 nodes without splitting surrogates", async () => {
+    const result = await appShotAccessibleElements(
+      {
+        name: "x".repeat(APP_SHOT_MAX_TEXT - 1) + "😀",
+        bounds: null,
+        children: async () => [],
+      },
+      "win32",
+      undefined,
+    );
+    assert.equal(result?.format, "flat-text");
+    assert.equal(result?.truncated, true);
+    if (result?.format === "flat-text")
+      assert.equal(result.text.length, APP_SHOT_MAX_TEXT - 1);
     const nodes = Array.from(
       { length: APP_SHOT_MAX_NODES + 1 },
       (_, index) => ({
         name: index === APP_SHOT_MAX_NODES ? "Must not read" : "",
-        children: [],
+        bounds: null,
+        children: async () => [],
       }),
     );
-    const limited = appShotAccessibleText({ children: nodes });
-    assert.equal(limited.text, "");
-    assert.equal(limited.truncated, true);
-    assert.equal(
-      appShotAccessibleText({
+    const limited = await appShotAccessibleElements(
+      { name: null, bounds: null, children: async () => nodes },
+      "win32",
+      { width: 1, height: 1 },
+    );
+    assert.equal(limited?.format, "element-tree");
+    assert.equal(limited?.truncated, true);
+    assert.doesNotMatch(JSON.stringify(limited), /Must not read/);
+    const deduped = await appShotAccessibleElements(
+      {
         name: "duplicate\0",
         value: "duplicate",
-        children: [{ value: "child", children: [] }],
-      }).text,
-      "duplicate\nchild",
+        bounds: null,
+        children: async () => [
+          {
+            name: null,
+            value: "child",
+            bounds: null,
+            children: async () => [],
+          },
+        ],
+      },
+      "win32",
+      undefined,
     );
+    assert.equal(deduped?.format, "flat-text");
+    if (deduped?.format === "flat-text")
+      assert.equal(deduped.text, "duplicate\nchild");
   });
 
   it("treats worker failure or invalid identity as screenshot-only", async () => {

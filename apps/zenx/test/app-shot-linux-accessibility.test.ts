@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import {
   APP_SHOT_MAX_ACCESSIBILITY_APPS,
   APP_SHOT_MAX_ACCESSIBILITY_WINDOWS,
-  readAppShotAccessibilityWithApi,
+  readAppShotAccessibilityWithApi as readAccessibilityWithApi,
   type AppShotAccessibilityApi,
   type AppShotAccessibilityElement,
 } from "../src/main/app-shot-accessibility.js";
@@ -25,6 +25,17 @@ const identity: AppShotLinuxCaptureIdentity = {
   bounds: { width: 1200, height: 800 },
 };
 
+function readAppShotAccessibilityWithApi(
+  api: AppShotAccessibilityApi,
+  identity: Parameters<typeof readAccessibilityWithApi>[1],
+  isAppNotFoundError?: Parameters<typeof readAccessibilityWithApi>[2],
+) {
+  return readAccessibilityWithApi(api, identity, isAppNotFoundError, {
+    width: 1200,
+    height: 800,
+  });
+}
+
 function windowFixture(
   name: string | null = identity.windowTitle,
   bounds: AppShotAccessibilityBounds | null = identity.bounds,
@@ -32,7 +43,7 @@ function windowFixture(
   const state = {
     name,
     bounds,
-    treeReads: 0,
+    contentReads: 0,
     pid: identity.pid,
     bus: ":1.471",
     path: "/org/a11y/atspi/accessible/42",
@@ -55,17 +66,50 @@ function windowFixture(
     get bounds() {
       return state.bounds;
     },
-    tree: async () => {
-      state.treeReads++;
-      return {
-        name: "Synthetic text",
-        children: [],
-        selector: "not exported",
-        actions: ["press"],
-      };
+    role: "window",
+    children: async () => {
+      state.contentReads++;
+      return [
+        {
+          role: "text",
+          name: "Synthetic text",
+          bounds: null,
+          children: async () => [],
+          selector: "not exported",
+          actions: ["press"],
+        },
+      ];
     },
   };
   return { state, window };
+}
+
+function assertWindowContext(
+  result: Awaited<ReturnType<typeof readAppShotAccessibilityWithApi>>,
+  name: string | null = identity.windowTitle,
+) {
+  assert.ok(result?.format === "element-tree");
+  assert.equal(result.coordinateSpace, "captured-image");
+  assert.deepEqual(result.imageSize, { width: 1200, height: 800 });
+  assert.equal(result.truncated, false);
+  assert.equal(result.root.role, "window");
+  assert.equal(result.root.name, name);
+  assert.deepEqual(result.root.bounds, {
+    x: 0,
+    y: 0,
+    width: 1200,
+    height: 800,
+  });
+  assert.equal(result.root.children.length, 1);
+  const child = result.root.children[0]!;
+  assert.equal(child.role, "text");
+  assert.equal(child.bounds, null);
+  assert.equal(child.name, "Synthetic text");
+  assert.deepEqual(child.actions, ["press"]);
+  assert.doesNotMatch(
+    JSON.stringify(result),
+    /selector|not exported|raw|bus_name|object_path|:1\.471|accessible\/42/,
+  );
 }
 
 function appFixture(
@@ -161,7 +205,7 @@ describe("trusted Linux accessibility identity", () => {
   });
 });
 
-describe("PID-scoped Linux AT-SPI text", () => {
+describe("PID-scoped Linux AT-SPI context", () => {
   it("matches unique title and logical dimensions despite missing or sentinel Wayland position", async () => {
     for (const position of [
       {},
@@ -171,22 +215,20 @@ describe("PID-scoped Linux AT-SPI text", () => {
       const fake = fixture();
       fake.target.state.bounds = { ...identity.bounds, ...position };
       const result = await readAppShotAccessibilityWithApi(fake.api, identity);
-      assert.deepEqual(result, { text: "Synthetic text", truncated: false });
-      assert.equal(fake.target.state.treeReads, 1);
+      assertWindowContext(result);
+      assert.equal(fake.target.state.contentReads, 1);
       assert.equal(fake.counts.list, 0);
-      assert.doesNotMatch(JSON.stringify(result), /selector|actions|press/);
     }
   });
 
   it("accepts frame or client dimensions within T3's two-pixel tolerance", async () => {
     const fake = fixture();
     fake.target.state.bounds = { width: 1182, height: 758 };
-    assert.deepEqual(
+    assertWindowContext(
       await readAppShotAccessibilityWithApi(fake.api, {
         ...identity,
         clientBounds: { width: 1180, height: 760 },
       }),
-      { text: "Synthetic text", truncated: false },
     );
   });
 
@@ -202,7 +244,7 @@ describe("PID-scoped Linux AT-SPI text", () => {
       }),
       undefined,
     );
-    assert.equal(fake.target.state.treeReads, 1);
+    assert.equal(fake.target.state.contentReads, 1);
   });
 
   it("rejects mismatched title, size, PID and unavailable metadata without app-list fallback", async () => {
@@ -218,7 +260,7 @@ describe("PID-scoped Linux AT-SPI text", () => {
         await readAppShotAccessibilityWithApi(fake.api, identity),
         undefined,
       );
-      assert.equal(fake.target.state.treeReads, 0);
+      assert.equal(fake.target.state.contentReads, 0);
       assert.equal(fake.counts.list, 0);
     }
     const fake = fixture();
@@ -227,7 +269,7 @@ describe("PID-scoped Linux AT-SPI text", () => {
       await readAppShotAccessibilityWithApi(fake.api, identity),
       undefined,
     );
-    assert.equal(fake.target.state.treeReads, 0);
+    assert.equal(fake.target.state.contentReads, 0);
     assert.equal(fake.counts.list, 0);
   });
 
@@ -242,8 +284,8 @@ describe("PID-scoped Linux AT-SPI text", () => {
       await readAppShotAccessibilityWithApi(fake.api, identity),
       undefined,
     );
-    assert.equal(fake.target.state.treeReads, 0);
-    assert.equal(second.state.treeReads, 0);
+    assert.equal(fake.target.state.contentReads, 0);
+    assert.equal(second.state.contentReads, 0);
     assert.equal(fake.counts.list, 0);
   });
 
@@ -262,7 +304,7 @@ describe("PID-scoped Linux AT-SPI text", () => {
         undefined,
       );
     }
-    assert.equal(fake.target.state.treeReads, 0);
+    assert.equal(fake.target.state.contentReads, 0);
   });
 
   it("discards text when PID/title/dimensions change during the read", async () => {
@@ -276,9 +318,11 @@ describe("PID-scoped Linux AT-SPI text", () => {
       },
     ]) {
       const fake = fixture();
-      fake.target.window.tree = async () => {
+      fake.target.window.children = async () => {
         mutate(fake);
-        return { name: "Must not escape", children: [] };
+        return [
+          { name: "Must not escape", bounds: null, children: async () => [] },
+        ];
       };
       assert.equal(
         await readAppShotAccessibilityWithApi(fake.api, identity),
@@ -297,7 +341,7 @@ describe("PID-scoped Linux AT-SPI text", () => {
       await readAppShotAccessibilityWithApi(fake.api, identity),
       undefined,
     );
-    assert.equal(fake.target.state.treeReads, 0);
+    assert.equal(fake.target.state.contentReads, 0);
   });
 });
 
@@ -306,11 +350,11 @@ describe("PID-scoped unnamed GTK4 windows", () => {
     for (const name of [null, "", " "]) {
       const fake = fixture();
       fake.target.state.name = name;
-      assert.deepEqual(
+      assertWindowContext(
         await readAppShotAccessibilityWithApi(fake.api, identity),
-        { text: "Synthetic text", truncated: false },
+        null,
       );
-      assert.equal(fake.target.state.treeReads, 1);
+      assert.equal(fake.target.state.contentReads, 1);
       assert.equal(fake.counts.list, 0);
     }
   });
@@ -320,8 +364,8 @@ describe("PID-scoped unnamed GTK4 windows", () => {
     const unnamed = windowFixture(null);
     fake.app.children = async () => [unnamed.window, fake.target.window];
     assert.ok(await readAppShotAccessibilityWithApi(fake.api, identity));
-    assert.equal(fake.target.state.treeReads, 1);
-    assert.equal(unnamed.state.treeReads, 0);
+    assert.equal(fake.target.state.contentReads, 1);
+    assert.equal(unnamed.state.contentReads, 0);
   });
 
   it("rejects duplicate unnamed windows and does not rescue ambiguous named matches", async () => {
@@ -339,9 +383,9 @@ describe("PID-scoped unnamed GTK4 windows", () => {
         await readAppShotAccessibilityWithApi(fake.api, identity),
         undefined,
       );
-      assert.equal(fake.target.state.treeReads, 0);
-      assert.equal(other.state.treeReads, 0);
-      assert.equal(unnamed.state.treeReads, 0);
+      assert.equal(fake.target.state.contentReads, 0);
+      assert.equal(other.state.contentReads, 0);
+      assert.equal(unnamed.state.contentReads, 0);
     }
   });
 
@@ -355,7 +399,7 @@ describe("PID-scoped unnamed GTK4 windows", () => {
         await readAppShotAccessibilityWithApi(fake.api, identity),
         undefined,
       );
-      assert.equal(fake.target.state.treeReads, 0);
+      assert.equal(fake.target.state.contentReads, 0);
       assert.equal(fake.counts.list, 0);
     }
   });
@@ -369,15 +413,17 @@ describe("PID-scoped unnamed GTK4 windows", () => {
       await readAppShotAccessibilityWithApi(fake.api, identity),
       undefined,
     );
-    assert.equal(fake.target.state.treeReads, 0);
+    assert.equal(fake.target.state.contentReads, 0);
   });
 
   it("rechecks unnamed metadata after reading and discards a newly named window", async () => {
     const fake = fixture();
     fake.target.state.name = null;
-    fake.target.window.tree = async () => {
+    fake.target.window.children = async () => {
       fake.target.state.name = "Different window";
-      return { name: "Must not escape", children: [] };
+      return [
+        { name: "Must not escape", bounds: null, children: async () => [] },
+      ];
     };
     assert.equal(
       await readAppShotAccessibilityWithApi(fake.api, identity),
@@ -394,15 +440,11 @@ describe("fresh Linux AX object postvalidation", () => {
       childReads++;
       return [{ ...fake.target.window }];
     };
-    assert.deepEqual(
+    assertWindowContext(
       await readAppShotAccessibilityWithApi(fake.api, identity),
-      {
-        text: "Synthetic text",
-        truncated: false,
-      },
     );
     assert.equal(childReads, 2);
-    assert.equal(fake.target.state.treeReads, 1);
+    assert.equal(fake.target.state.contentReads, 1);
     assert.equal(fake.counts.list, 0);
   });
 
@@ -423,7 +465,7 @@ describe("fresh Linux AX object postvalidation", () => {
       );
       assert.equal(cached.name, identity.windowTitle);
       assert.deepEqual(cached.bounds, identity.bounds);
-      assert.equal(fake.target.state.treeReads, 1);
+      assert.equal(fake.target.state.contentReads, 1);
     }
   });
 
@@ -462,7 +504,7 @@ describe("fresh Linux AX object postvalidation", () => {
         await readAppShotAccessibilityWithApi(fake.api, identity),
         undefined,
       );
-      assert.equal(fake.target.state.treeReads, 1);
+      assert.equal(fake.target.state.contentReads, 1);
     }
   });
 
@@ -481,7 +523,7 @@ describe("fresh Linux AX object postvalidation", () => {
         await readAppShotAccessibilityWithApi(fake.api, identity),
         undefined,
       );
-      assert.equal(fake.target.state.treeReads, 0);
+      assert.equal(fake.target.state.contentReads, 0);
     }
   });
 
@@ -512,7 +554,7 @@ describe("fresh Linux AX object postvalidation", () => {
         await readAppShotAccessibilityWithApi(fake.api, identity),
         undefined,
       );
-      assert.equal(fake.target.state.treeReads, 1);
+      assert.equal(fake.target.state.contentReads, 1);
       assert.equal(fake.counts.list, 0);
     }
   });
@@ -531,7 +573,7 @@ describe("fresh Linux AX object postvalidation", () => {
       await readAppShotAccessibilityWithApi(fake.api, identity),
       undefined,
     );
-    assert.equal(fake.target.state.treeReads, 1);
+    assert.equal(fake.target.state.contentReads, 1);
   });
 
   it("rejects an unnamed match if a preferred named match appears during the tree read", async () => {
@@ -547,8 +589,8 @@ describe("fresh Linux AX object postvalidation", () => {
       await readAppShotAccessibilityWithApi(fake.api, identity),
       undefined,
     );
-    assert.equal(fake.target.state.treeReads, 1);
-    assert.equal(named.state.treeReads, 0);
+    assert.equal(fake.target.state.contentReads, 1);
+    assert.equal(named.state.contentReads, 0);
   });
 
   it("keeps postvalidation inside the same 3-second deadline", async (context) => {
@@ -577,7 +619,7 @@ describe("fresh Linux AX object postvalidation", () => {
     finish();
     await Promise.resolve();
     await Promise.resolve();
-    assert.equal(fake.target.state.treeReads, 1);
+    assert.equal(fake.target.state.contentReads, 1);
     assert.equal(fake.counts.list, 0);
   });
 });
@@ -607,16 +649,15 @@ describe("bounded Flatpak proxy metadata fallback", () => {
         appFixture([unrelated.window], 800),
         appFixture([fake.target.window], 801),
       ];
-      assert.deepEqual(
+      assertWindowContext(
         await readAppShotAccessibilityWithApi(
           fake.api,
           identity,
           isAppNotFoundError,
         ),
-        { text: "Synthetic text", truncated: false },
       );
-      assert.equal(fake.target.state.treeReads, 1);
-      assert.equal(unrelated.state.treeReads, 0);
+      assert.equal(fake.target.state.contentReads, 1);
+      assert.equal(unrelated.state.contentReads, 0);
     }
   });
 
@@ -643,7 +684,7 @@ describe("bounded Flatpak proxy metadata fallback", () => {
         undefined,
       );
       assert.equal(fake.counts.list, 0);
-      assert.equal(fake.target.state.treeReads, 0);
+      assert.equal(fake.target.state.contentReads, 0);
     }
   });
 
@@ -676,7 +717,7 @@ describe("bounded Flatpak proxy metadata fallback", () => {
         undefined,
       );
       assert.equal(fake.counts.list, 0);
-      assert.equal(fake.target.state.treeReads, 0);
+      assert.equal(fake.target.state.contentReads, 0);
     }
   });
 
@@ -690,7 +731,7 @@ describe("bounded Flatpak proxy metadata fallback", () => {
       undefined,
     );
     assert.equal(fake.counts.list, 0);
-    assert.equal(fake.target.state.treeReads, 0);
+    assert.equal(fake.target.state.contentReads, 0);
   });
 
   it("does not use cross-app fallback for macOS or Windows", async () => {
@@ -723,8 +764,8 @@ describe("bounded Flatpak proxy metadata fallback", () => {
       await readAppShotAccessibilityWithApi(fake.api, identity),
       undefined,
     );
-    assert.equal(fake.target.state.treeReads, 0);
-    assert.equal(other.state.treeReads, 0);
+    assert.equal(fake.target.state.contentReads, 0);
+    assert.equal(other.state.contentReads, 0);
   });
 
   it("fails closed on incomplete metadata enumeration instead of declaring a partial list unique", async () => {
@@ -743,7 +784,7 @@ describe("bounded Flatpak proxy metadata fallback", () => {
       await readAppShotAccessibilityWithApi(fake.api, identity),
       undefined,
     );
-    assert.equal(fake.target.state.treeReads, 0);
+    assert.equal(fake.target.state.contentReads, 0);
   });
 
   it("rejects unreadable top-level metadata without harvesting any tree", async () => {
@@ -761,7 +802,7 @@ describe("bounded Flatpak proxy metadata fallback", () => {
       await readAppShotAccessibilityWithApi(fake.api, identity),
       undefined,
     );
-    assert.equal(fake.target.state.treeReads, 0);
+    assert.equal(fake.target.state.contentReads, 0);
   });
 
   it("bounds application enumeration before touching children", async () => {
@@ -801,7 +842,7 @@ describe("bounded Flatpak proxy metadata fallback", () => {
         await readAppShotAccessibilityWithApi(fake.api, identity),
         undefined,
       );
-      assert.equal(fake.target.state.treeReads, 0);
+      assert.equal(fake.target.state.contentReads, 0);
     }
   });
 
@@ -818,7 +859,7 @@ describe("bounded Flatpak proxy metadata fallback", () => {
       await readAppShotAccessibilityWithApi(fake.api, identity),
       undefined,
     );
-    assert.equal(fake.target.state.treeReads, 0);
+    assert.equal(fake.target.state.contentReads, 0);
   });
 
   it("uses the 3-second AX deadline and fences late metadata before it can start a tree read", async (context) => {
@@ -835,11 +876,11 @@ describe("bounded Flatpak proxy metadata fallback", () => {
     resolveApp(fake.app);
     await Promise.resolve();
     await Promise.resolve();
-    assert.equal(fake.target.state.treeReads, 0);
+    assert.equal(fake.target.state.contentReads, 0);
     assert.equal(fake.counts.list, 0);
   });
 
-  for (const stage of ["list", "children", "tree"] as const) {
+  for (const stage of ["list", "windows", "elements"] as const) {
     it(`fences late ${stage} completion after the AX deadline`, async (context) => {
       context.mock.timers.enable({ apis: ["setTimeout"] });
       const fake = fixture();
@@ -870,7 +911,7 @@ describe("bounded Flatpak proxy metadata fallback", () => {
             },
           ];
         };
-      } else if (stage === "children") {
+      } else if (stage === "windows") {
         fake.api.byPid = async () => appFixture([]);
         fake.api.list = async () => [
           {
@@ -882,10 +923,19 @@ describe("bounded Flatpak proxy metadata fallback", () => {
           },
         ];
       } else {
-        fake.target.window.tree = async () => {
-          fake.target.state.treeReads++;
+        fake.target.window.children = async () => {
+          fake.target.state.contentReads++;
           await wait();
-          return { name: "Late text must not escape", children: [] };
+          return [
+            {
+              get name() {
+                laterChildren++;
+                return "Late text must not escape";
+              },
+              bounds: null,
+              children: async () => [],
+            },
+          ];
         };
       }
       const read = readAppShotAccessibilityWithApi(fake.api, identity);
@@ -897,7 +947,10 @@ describe("bounded Flatpak proxy metadata fallback", () => {
       await Promise.resolve();
       await Promise.resolve();
       assert.equal(laterChildren, 0);
-      assert.equal(fake.target.state.treeReads, stage === "tree" ? 1 : 0);
+      assert.equal(
+        fake.target.state.contentReads,
+        stage === "elements" ? 1 : 0,
+      );
     });
   }
 });

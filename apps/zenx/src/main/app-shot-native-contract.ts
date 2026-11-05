@@ -65,12 +65,304 @@ export type AppShotAccessibilityIdentity =
 
 export const APP_SHOT_MAX_TEXT = 32_000;
 export const APP_SHOT_MAX_NODES = 10_000;
+export const APP_SHOT_MAX_DEPTH = 64;
+export const APP_SHOT_ACCESSIBILITY_LIMITS = {
+  role: 100,
+  name: 1000,
+  value: 8000,
+  description: 2000,
+  action: 100,
+  actions: 32,
+} as const;
 export const APP_SHOT_MAX_PNG_BYTES = 20 * 1024 * 1024;
 export const APP_SHOT_MAX_PIXELS = 64 * 1024 * 1024;
 
 export interface AppShotText {
   text: string;
   truncated: boolean;
+  /** Semantic JSON remains data within the existing untrusted attachment context. */
+  format?: "flat-text" | "element-tree";
+}
+
+export interface AppShotElementState {
+  active?: true;
+  busy?: true;
+  editable?: true;
+  focused?: true;
+  selected?: true;
+  enabled?: false;
+  visible?: false;
+  checked?: "on" | "off" | "mixed";
+  expanded?: boolean;
+}
+
+export interface AppShotElementNode {
+  role: string;
+  name: string | null;
+  value: string | null;
+  description: string | null;
+  /** Semantic-only stage: no native/screen position is exported. */
+  bounds: AppShotBounds | null;
+  state: AppShotElementState;
+  /** Advertised names only, never executable actions or target references. */
+  actions: string[];
+  children: AppShotElementNode[];
+}
+
+export type AppShotAccessibilityPayload =
+  | { format: "flat-text"; text: string; truncated: boolean }
+  | {
+      format: "element-tree";
+      coordinateSpace: "captured-image";
+      imageSize: AppShotImageSize;
+      truncated: boolean;
+      root: AppShotElementNode;
+    };
+
+export interface AppShotImageSize {
+  width: number;
+  height: number;
+}
+
+export function isAppShotImageSize(value: unknown): value is AppShotImageSize {
+  return (
+    isDataRecord(value) &&
+    exactKeys(value, ["width", "height"]) &&
+    Number.isSafeInteger(value.width) &&
+    Number(value.width) > 0 &&
+    Number.isSafeInteger(value.height) &&
+    Number(value.height) > 0 &&
+    Number(value.width) * Number(value.height) <= APP_SHOT_MAX_PIXELS
+  );
+}
+
+/** Scalar sanitation cannot bound the native call that materialized the string. */
+export function appShotString(
+  value: unknown,
+  max: number,
+  onTruncated?: () => void,
+): string {
+  if (typeof value !== "string") return "";
+  const clean = value.replaceAll("\0", "").trim();
+  if (clean.length > max) onTruncated?.();
+  let end = Math.min(max, clean.length);
+  if (end < clean.length && /[\uD800-\uDBFF]/u.test(clean[end - 1] ?? ""))
+    end--;
+  // Drop unpaired surrogates from malformed provider strings, not just cut pairs.
+  return clean
+    .slice(0, end)
+    .replace(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/gu,
+      "",
+    )
+    .trim();
+}
+
+/** Iterative serialization, bounded before allocation of an oversized result. */
+export function serializeAppShotTree(
+  payload: Extract<AppShotAccessibilityPayload, { format: "element-tree" }>,
+): string | undefined {
+  const parts: string[] = [];
+  const stack: (AppShotElementNode | string)[] = ["}", payload.root];
+  let text = `{"format":"element-tree","coordinateSpace":"captured-image","imageSize":${JSON.stringify(payload.imageSize)},"truncated":${payload.truncated},"root":`;
+  let length = text.length;
+  parts.push(text);
+  while (stack.length) {
+    const next = stack.pop()!;
+    if (typeof next === "string") text = next;
+    else {
+      const { children, ...fields } = next;
+      text = JSON.stringify(fields).slice(0, -1) + ',"children":[';
+      stack.push("]}");
+      for (let index = children.length - 1; index >= 0; index--) {
+        stack.push(children[index]!);
+        if (index > 0) stack.push(",");
+      }
+    }
+    length += text.length;
+    if (length > APP_SHOT_MAX_TEXT) return undefined;
+    parts.push(text);
+  }
+  return parts.join("");
+}
+
+/** IPC is data only: reject accessors and custom serialization hooks in injected values too. */
+function isDataRecord(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return (
+    (prototype === Object.prototype || prototype === null) &&
+    Reflect.ownKeys(value).every(
+      (key) =>
+        typeof key === "string" &&
+        Object.getOwnPropertyDescriptor(value, key)?.enumerable === true &&
+        "value" in Object.getOwnPropertyDescriptor(value, key)!,
+    )
+  );
+}
+
+function isDataArray(value: unknown, max: number): value is unknown[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= max &&
+    Object.getPrototypeOf(value) === Array.prototype &&
+    Reflect.ownKeys(value).length === value.length + 1 &&
+    Array.from({ length: value.length }, (_, index) =>
+      Object.getOwnPropertyDescriptor(value, index),
+    ).every(
+      (descriptor) => descriptor?.enumerable === true && "value" in descriptor,
+    )
+  );
+}
+
+function exactKeys(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): boolean {
+  const actual = Object.keys(value);
+  return (
+    actual.length === keys.length && actual.every((key) => keys.includes(key))
+  );
+}
+
+function validScalar(value: unknown, max: number, nullable = false): boolean {
+  return (
+    (nullable && value === null) ||
+    (typeof value === "string" &&
+      value.length > 0 &&
+      value.length <= max &&
+      appShotString(value, max) === value)
+  );
+}
+
+/** Total parent-side validation: rejects extra fields, cycles, depth and output excess. */
+export function parseAppShotAccessibility(
+  value: unknown,
+  imageSize?: AppShotImageSize,
+): AppShotText | undefined {
+  try {
+    if (!isDataRecord(value) || typeof value.truncated !== "boolean")
+      return undefined;
+    if (value.format === "flat-text") {
+      if (
+        !exactKeys(value, ["format", "text", "truncated"]) ||
+        !validScalar(value.text, APP_SHOT_MAX_TEXT)
+      )
+        return undefined;
+      return {
+        text: value.text as string,
+        truncated: value.truncated,
+        format: "flat-text",
+      };
+    }
+    if (
+      value.format !== "element-tree" ||
+      !exactKeys(value, [
+        "format",
+        "coordinateSpace",
+        "imageSize",
+        "truncated",
+        "root",
+      ]) ||
+      value.coordinateSpace !== "captured-image" ||
+      !isAppShotImageSize(value.imageSize) ||
+      !isAppShotImageSize(imageSize) ||
+      value.imageSize.width !== imageSize.width ||
+      value.imageSize.height !== imageSize.height
+    )
+      return undefined;
+    const pending = [{ node: value.root, depth: 0 }];
+    const seen = new Set<unknown>();
+    let count = 0;
+    let scalarSize = 0;
+    while (pending.length) {
+      const { node, depth } = pending.pop()!;
+      if (
+        !isDataRecord(node) ||
+        seen.has(node) ||
+        depth > APP_SHOT_MAX_DEPTH ||
+        ++count > APP_SHOT_MAX_NODES ||
+        !exactKeys(node, [
+          "role",
+          "name",
+          "value",
+          "description",
+          "bounds",
+          "state",
+          "actions",
+          "children",
+        ]) ||
+        (depth === 0
+          ? !isDataRecord(node.bounds) ||
+            !isAppShotBounds(node.bounds) ||
+            !exactKeys(node.bounds as unknown as Record<string, unknown>, [
+              "x",
+              "y",
+              "width",
+              "height",
+            ]) ||
+            node.bounds.x !== 0 ||
+            node.bounds.y !== 0 ||
+            node.bounds.width !== imageSize.width ||
+            node.bounds.height !== imageSize.height
+          : node.bounds !== null)
+      )
+        return undefined;
+      seen.add(node);
+      for (const key of ["role", "name", "value", "description"] as const) {
+        if (
+          !validScalar(
+            node[key],
+            APP_SHOT_ACCESSIBILITY_LIMITS[key],
+            key !== "role",
+          )
+        )
+          return undefined;
+        scalarSize += typeof node[key] === "string" ? node[key].length : 0;
+      }
+      if (scalarSize > APP_SHOT_MAX_TEXT || !isDataRecord(node.state))
+        return undefined;
+      const states = Object.entries(node.state);
+      if (states.length > 9) return undefined;
+      for (const [key, state] of states) {
+        if (
+          ["active", "busy", "editable", "focused", "selected"].includes(key)
+        ) {
+          if (state !== true) return undefined;
+        } else if (key === "enabled" || key === "visible") {
+          if (state !== false) return undefined;
+        } else if (key === "checked") {
+          if (!["on", "off", "mixed"].includes(state as string))
+            return undefined;
+        } else if (key !== "expanded" || typeof state !== "boolean")
+          return undefined;
+      }
+      if (
+        !isDataArray(node.actions, APP_SHOT_ACCESSIBILITY_LIMITS.actions) ||
+        node.actions.some(
+          (action) =>
+            !validScalar(action, APP_SHOT_ACCESSIBILITY_LIMITS.action),
+        ) ||
+        new Set(node.actions).size !== node.actions.length ||
+        !isDataArray(node.children, APP_SHOT_MAX_NODES) ||
+        node.children.length > APP_SHOT_MAX_NODES - count - pending.length
+      )
+        return undefined;
+      for (let index = node.children.length - 1; index >= 0; index--)
+        pending.push({ node: node.children[index], depth: depth + 1 });
+    }
+    const text = serializeAppShotTree(
+      value as unknown as Extract<
+        AppShotAccessibilityPayload,
+        { format: "element-tree" }
+      >,
+    );
+    return text
+      ? { text, truncated: value.truncated, format: "element-tree" }
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {

@@ -129,10 +129,18 @@ try {
         { theme: "dark", width: 1280, platform: "kde", helper: "ready" },
         { theme: "light", width: 390, platform: "hyprland" },
         { theme: "dark", width: 1280, platform: "hyprland", helper: "ready" },
+        { theme: "light", width: 390, platform: "darwin", context: "semantic" },
+        { theme: "dark", width: 1280, platform: "darwin", context: "semantic" },
       ];
-      for (const { theme, width, platform, helper = "setup" } of cases) {
+      for (const {
+        theme,
+        width,
+        platform,
+        helper = "setup",
+        context = "pixels",
+      } of cases) {
         const height = 900;
-        const name = `${platform}-${theme}-${width}`;
+        const name = `${platform}-${theme}-${width}${context === "semantic" ? "-semantic" : ""}`;
         const receipt = {
           name,
           theme,
@@ -140,6 +148,7 @@ try {
           height,
           platform,
           helper,
+          context,
           states: [],
         };
         evidence.cases.push(receipt);
@@ -149,7 +158,7 @@ try {
           deviceScaleFactor: 1,
           mobile: false,
         });
-        const destination = `${url}/app-shot.html?theme=${theme}&platform=${platform}&helper=${helper}`;
+        const destination = `${url}/app-shot.html?theme=${theme}&platform=${platform}&helper=${helper}&context=${context}`;
         await send("Page.navigate", { url: destination });
         await wait(
           `location.href===${JSON.stringify(destination)} && document.querySelectorAll('.app-shot-sources button').length===2`,
@@ -315,15 +324,44 @@ try {
           );
         }
 
+        if (context === "semantic") {
+          await click(".app-shot-option input");
+          await wait(
+            "document.querySelector('.app-shot-option input').checked",
+          );
+        }
         await click(".app-shot-sources button");
         await wait(`(${measure}).imageReady`);
         await stable();
         const review = await check(width, height);
         assert.match(review.context, /Example Notes/);
-        assert.match(review.context, /screenshot only/);
+        if (context === "semantic") {
+          assert.match(review.context, /"format":"element-tree"/);
+          assert.match(review.context, /"actions":\["press"\]/);
+          assert.match(review.context, /"bounds":null/);
+          assert.match(review.context, /review-end/);
+        } else assert.match(review.context, /screenshot only/);
         assert.equal(review.count, "已添加 0 张，未发送。");
         receipt.states.push({ phase: "review", ...review });
         await screenshot(`${name}-review.png`);
+        if (context === "semantic") {
+          const atEnd = await evaluate(`(() => {
+            const e = document.querySelector('.app-shot-context');
+            e.scrollTop = e.scrollHeight;
+            return e.scrollHeight - e.clientHeight - e.scrollTop < 1 && e.textContent.endsWith(']}}');
+          })()`);
+          assert.equal(
+            atEnd,
+            true,
+            "Full semantic JSON remains locally inspectable.",
+          );
+          receipt.states.push({
+            phase: "semantic-context-end",
+            contextEndReachable: true,
+            ...(await check(width, height)),
+          });
+          await screenshot(`${name}-context-end.png`);
+        }
         await click(".app-shot-preview .image-thumbnail");
         await wait(`(${measure}).expanded`);
         receipt.states.push({
