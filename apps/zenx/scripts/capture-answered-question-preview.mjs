@@ -43,9 +43,10 @@ for (const scene of [
       )
         await delay(50);
       const answer = await evaluate(
-        "document.querySelector('.answered-question-answer')?.textContent",
+        "[...document.querySelectorAll('.answered-question-answer')].map(e => e.textContent).join('\\n')",
       );
-      assert.match(answer, /一页摘要完整明细请保留重点案例/);
+      assert.match(answer, /^一页摘要\n请保留重点案例，周五前发给我。/);
+      assert.doesNotMatch(answer, /完整明细|暂不整理|重点、风险和下一步/);
       assert.match(answer, /\*\*标记\*\*/);
       assert.doesNotMatch(answer, /Reply to|scope:/);
       const point = await evaluate(
@@ -59,6 +60,12 @@ for (const scene of [
           "document.querySelector('.answered-question-popover')?.textContent",
         ),
         /暂不整理/,
+      );
+      assert.deepEqual(
+        await evaluate(
+          "[...document.querySelectorAll('.answered-question-popover li')].map(e => e.dataset.selected)",
+        ),
+        ["true", "false", "false"],
       );
       await screenshot(`question-hover-${scene.theme}-${scene.width}.png`);
       const click = async () => {
@@ -156,6 +163,17 @@ for (const scene of [
       await screenshot(
         `question-unavailable-${scene.theme}-${scene.width}.png`,
       );
+      await send("Page.navigate", { url: `${entry}&question-card` });
+      await waitFor(
+        "!!document.querySelector('.user-question-option[data-selected=\"true\"]')",
+      );
+      assert.equal(
+        await evaluate(
+          "document.querySelectorAll('.user-question-option[data-selected=\"true\"]').length",
+        ),
+        1,
+      );
+      await screenshot(`question-card-${scene.theme}-${scene.width}.png`);
       evidence.scenes.push({
         ...scene,
         hover: true,

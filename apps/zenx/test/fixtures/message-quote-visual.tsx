@@ -1,3 +1,4 @@
+import { AnsweredQuestionCardVisual } from "./answered-question-card-visual.js";
 import { answeredQuestionFixture } from "./answered-question-data.js";
 import { QuoteClipboardVisual } from "./quote-clipboard-visual.js";
 import React, { useRef, useState } from "react";
@@ -617,5 +618,11 @@ function Fixture() {
   );
 }
 createRoot(document.getElementById("root")!).render(
-  params.has("clipboard") ? <QuoteClipboardVisual /> : <Fixture />,
+  params.has("question-card") ? (
+    <AnsweredQuestionCardVisual />
+  ) : params.has("clipboard") ? (
+    <QuoteClipboardVisual />
+  ) : (
+    <Fixture />
+  ),
 );

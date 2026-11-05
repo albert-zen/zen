@@ -9,6 +9,27 @@ export function AnsweredQuestionBubble({
 }: {
   answer: AnsweredQuestionPresentation;
 }) {
+  return (
+    <div className="answered-question-list">
+      {answer.questions ? (
+        answer.questions.map((question, index) => (
+          <AnsweredQuestionPart
+            key={index}
+            answer={{ questions: [question] }}
+          />
+        ))
+      ) : (
+        <AnsweredQuestionPart answer={answer} />
+      )}
+    </div>
+  );
+}
+
+function AnsweredQuestionPart({
+  answer,
+}: {
+  answer: AnsweredQuestionPresentation;
+}) {
   const { t } = useTranslation("shell");
   const [open, setOpen] = useState(false);
   const pinned = useRef(false);
@@ -66,7 +87,7 @@ export function AnsweredQuestionBubble({
               setOpen(pinned.current);
             }}
           >
-            <Icon name="quote" size={13} />
+            <Icon name="question" size={14} />
             <span>{label}</span>
           </button>
         </PopoverTrigger>
@@ -84,7 +105,10 @@ export function AnsweredQuestionBubble({
           }}
         >
           <header>
-            <strong id={heading}>{t("answeredQuestion")}</strong>
+            <strong id={heading}>
+              <Icon name="question" size={15} />
+              {t("answeredQuestion")}
+            </strong>
             <button
               type="button"
               aria-label={t("closeAnsweredQuestion")}
@@ -97,17 +121,36 @@ export function AnsweredQuestionBubble({
             </button>
           </header>
           {answer.questions ? (
-            answer.questions.map(({ question }, index) => (
+            answer.questions.map(({ question, selectedOptionIds }, index) => (
               <section key={index}>
                 <p>{question.prompt}</p>
                 {question.options && question.options.length > 0 && (
-                  <ul>
+                  <ul className="user-question-options">
                     {question.options.map((option) => (
-                      <li key={option.id}>
-                        <span>{option.label}</span>
-                        {option.description && (
-                          <small>{option.description}</small>
-                        )}
+                      <li
+                        className="user-question-option answered-question-option"
+                        key={option.id}
+                        data-selected={selectedOptionIds.includes(option.id)}
+                      >
+                        <span
+                          className="user-question-option-mark"
+                          role="img"
+                          aria-label={t(
+                            selectedOptionIds.includes(option.id)
+                              ? "answeredQuestionSelected"
+                              : "answeredQuestionNotSelected",
+                          )}
+                        >
+                          {selectedOptionIds.includes(option.id) ? (
+                            <Icon name="check" size={12} />
+                          ) : null}
+                        </span>
+                        <div className="user-question-option-copy">
+                          <strong>{option.label}</strong>
+                          {option.description && (
+                            <small>{option.description}</small>
+                          )}
+                        </div>
                       </li>
                     ))}
                   </ul>
@@ -123,9 +166,9 @@ export function AnsweredQuestionBubble({
         {answer.questions
           ? answer.questions.map(({ selectedLabels, text }, index) => (
               <div className="answered-question-answer-part" key={index}>
-                {selectedLabels.map((label, index) => (
-                  <p key={index}>{label}</p>
-                ))}
+                {selectedLabels.length > 0 && (
+                  <p>{selectedLabels.join(" · ")}</p>
+                )}
                 {text !== undefined && <p>{text}</p>}
               </div>
             ))

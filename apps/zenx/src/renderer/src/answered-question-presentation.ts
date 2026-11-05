@@ -12,6 +12,7 @@ export interface AnsweredQuestionPresentation {
   questions?: readonly {
     question: UserQuestion;
     selectedLabels: readonly string[];
+    selectedOptionIds: readonly string[];
     text?: string;
   }[];
   /** Keep recorded text when the original question cannot safely explain it. */
@@ -80,6 +81,7 @@ export function indexAnsweredQuestions(
             )!;
             return {
               question,
+              selectedOptionIds: answer.optionIds,
               selectedLabels: (question.options ?? [])
                 .filter((option) => answer.optionIds.includes(option.id))
                 .map((option) => option.label),

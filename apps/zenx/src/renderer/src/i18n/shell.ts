@@ -1,5 +1,7 @@
 export const en = {
   answeredQuestion: "Original question",
+  answeredQuestionSelected: "Selected",
+  answeredQuestionNotSelected: "Not selected",
   showAnsweredQuestion: "Show original question and choices",
   closeAnsweredQuestion: "Close original question",
   answeredQuestionUnavailable:
@@ -994,6 +996,8 @@ export const en = {
 
 export const zhCN = {
   answeredQuestion: "原问题",
+  answeredQuestionSelected: "已选择",
+  answeredQuestionNotSelected: "未选择",
   showAnsweredQuestion: "查看原问题和选项",
   closeAnsweredQuestion: "关闭原问题",
   answeredQuestionUnavailable: "原问题和选项不可用，下方保留已记录的回答。",

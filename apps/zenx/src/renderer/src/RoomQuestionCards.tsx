@@ -79,7 +79,10 @@ export function RoomQuestionCards({
       aria-label={t("roomQuestionTitle")}
     >
       <header>
-        <h3>{t("roomQuestionTitle")}</h3>
+        <h3 className="user-question-heading">
+          <Icon name="question" size={15} />
+          {t("roomQuestionTitle")}
+        </h3>
         <button
           type="button"
           className="icon-button"

@@ -6,7 +6,10 @@ import {
   parseUserQuestionSpecification,
   type UserQuestionReply,
 } from "../../../src/user-question.js";
-import { indexAnsweredQuestions } from "../src/renderer/src/answered-question-presentation.js";
+import {
+  indexAnsweredQuestions,
+  type AnsweredQuestionPresentation,
+} from "../src/renderer/src/answered-question-presentation.js";
 
 const specification = parseUserQuestionSpecification({
   questions: [
@@ -100,7 +103,10 @@ test("missing, ambiguous, malformed or mismatched original preserves recorded an
     [{ ...call, arguments: { questions: [] } }],
     [{ ...call, threadId: "other-thread" }],
   ]) {
-    const view = indexAnsweredQuestions([...calls, message]).get(message.id)!;
+    const view: AnsweredQuestionPresentation = indexAnsweredQuestions([
+      ...calls,
+      message,
+    ]).get(message.id)!;
     assert.equal(view.questions, undefined);
     assert.equal(
       view.fallbackText,

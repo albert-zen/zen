@@ -38,13 +38,12 @@ export function answeredQuestionFixture(missing = false) {
     answers: [
       {
         questionId: "scope",
-        optionIds: ["summary", "details"],
-        text: "请保留重点案例。",
+        optionIds: ["summary"],
       },
       {
         questionId: "note",
         optionIds: [],
-        text: "点评不是已经发了吗，不过你提的点是对的，他们分享小程序后没有回应。\n这里的 **标记** 也是我输入的原文。",
+        text: "请保留重点案例，周五前发给我。\n这里的 **标记** 是我的原文。",
       },
     ],
   };
@@ -81,7 +80,7 @@ export function answeredQuestionFixture(missing = false) {
         },
         runtimeMessage(
           "synthetic-question-final",
-          "我会整理一页摘要和完整明细，并保留重点案例。",
+          "我会准备一页摘要，保留重点案例，周五前发给你。",
         ),
       ],
       "completed",

@@ -47,10 +47,23 @@ test("real ThreadView renders labels and text, reveals question on hover/click, 
     );
   try {
     await act(async () => render());
-    const answer = document.querySelector(".answered-question-answer")!;
-    assert.match(answer.textContent!, /一页摘要完整明细请保留重点案例/);
-    assert.match(answer.textContent!, /\*\*标记\*\*/);
-    assert.doesNotMatch(answer.textContent!, /Reply to|scope:|summary/);
+    const answers = [
+      ...document.querySelectorAll(".answered-question-answer"),
+    ].map((element) => element.textContent!);
+    assert.equal(answers.length, 2);
+    assert.equal(answers[0], "一页摘要");
+    assert.equal(
+      answers[1],
+      "请保留重点案例，周五前发给我。\n这里的 **标记** 是我的原文。",
+    );
+    assert.doesNotMatch(
+      answers.join(""),
+      /完整明细|暂不整理|重点、风险和下一步|Reply to|scope:|summary/,
+    );
+    assert.equal(
+      document.querySelectorAll(".answered-question-trigger").length,
+      2,
+    );
     const trigger = document.querySelector<HTMLButtonElement>(
       ".answered-question-trigger",
     )!;
@@ -63,6 +76,12 @@ test("real ThreadView renders labels and text, reveals question on hover/click, 
       document.querySelector(".answered-question-popover")!.textContent!,
       /暂不整理/,
     );
+    const choices = document.querySelectorAll(".answered-question-popover li");
+    assert.equal(choices.length, 3);
+    assert.equal(choices[0]?.getAttribute("data-selected"), "true");
+    assert.equal(choices[1]?.getAttribute("data-selected"), "false");
+    assert.equal(choices[2]?.getAttribute("data-selected"), "false");
+    assert.ok(choices[0]?.querySelector('[role="img"][aria-label="Selected"]'));
     await act(async () => trigger.click());
     await act(async () => {
       trigger.dispatchEvent(

@@ -38,7 +38,10 @@ export const UserQuestionCards = memo(function UserQuestionCards({
       aria-label={t("questionTitle")}
     >
       <header>
-        <h3>{t("questionTitle")}</h3>
+        <h3 className="user-question-heading">
+          <Icon name="question" size={15} />
+          {t("questionTitle")}
+        </h3>
         <button
           type="button"
           className="icon-button"
