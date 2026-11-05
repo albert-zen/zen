@@ -49,14 +49,21 @@ async function fixture(
     ): Promise<void>;
     armed(): string | null;
     disarmed: string[];
-    armRequests: Array<{ token: string; kind?: AppShotShortcutKind }>;
+    armRequests: Array<{
+      token: string;
+      kind?: AppShotShortcutKind;
+      includeAccessibility: boolean;
+    }>;
+    calls: string[];
   }) => Promise<void>,
   platform = "darwin",
+  setup?: (dom: JSDOM) => void,
 ) {
   await i18n.changeLanguage("en");
   const dom = new JSDOM('<html><body><div id="root"></div></body></html>', {
     url: "http://localhost",
   });
+  setup?.(dom);
   const previous = {
     window: globalThis.window,
     document: globalThis.document,
@@ -78,20 +85,38 @@ async function fixture(
   const abandoned: string[] = [];
   const discarded: string[] = [];
   const disarmed: string[] = [];
-  const armRequests: Array<{ token: string; kind?: AppShotShortcutKind }> = [];
+  const armRequests: Array<{
+    token: string;
+    kind?: AppShotShortcutKind;
+    includeAccessibility: boolean;
+  }> = [];
+  const calls: string[] = [];
   const listeners = new Set<(event: AppShotEvent) => void>();
   let armed: string | null = null;
   const api: AppShotApi = {
-    list: async () => [{ id: "source", title: "Example" }],
-    capture: async () => shot,
-    read: async () => new Uint8Array([1, 2, 3, 4]),
-    attach: async (id) =>
-      id === "second" ? { ...shot, id: "second", name: "Second.png" } : shot,
+    list: async () => {
+      calls.push("list");
+      return [{ id: "source", title: "Example" }];
+    },
+    capture: async () => {
+      calls.push("capture");
+      return shot;
+    },
+    read: async () => {
+      calls.push("read");
+      return new Uint8Array([1, 2, 3, 4]);
+    },
+    attach: async (id) => {
+      calls.push("attach");
+      return id === "second"
+        ? { ...shot, id: "second", name: "Second.png" }
+        : shot;
+    },
     discard: async (id) => {
       discarded.push(id);
     },
-    arm: async (token, _includeAccessibility, kind) => {
-      armRequests.push({ token, kind });
+    arm: async (token, includeAccessibility, kind) => {
+      armRequests.push({ token, kind, includeAccessibility });
       armed = token;
       return "⌘⇧2";
     },
@@ -169,6 +194,7 @@ async function fixture(
       armed: () => armed,
       disarmed,
       armRequests,
+      calls,
     });
   } finally {
     await act(async () => root.unmount());
@@ -897,4 +923,265 @@ test("Hyprland action-only state enables capture review without claiming keys or
       false,
     );
   }, "linux");
+});
+
+const shortcutPreferenceKey = "zenx.appShot.shortcutKind";
+function shortcutRadio(kind: AppShotShortcutKind): HTMLInputElement {
+  const radio = document.querySelector<HTMLInputElement>(
+    `input[type="radio"][value="${kind}"]`,
+  );
+  assert.ok(radio, `Missing shortcut choice ${kind}`);
+  return radio;
+}
+function applicationTextCheckbox(): HTMLInputElement {
+  const checkbox = document.querySelector<HTMLInputElement>(
+    'input[type="checkbox"]',
+  );
+  assert.ok(checkbox, "Missing application text choice");
+  return checkbox;
+}
+
+test("only the explicit shortcut kind survives Composer replacement and a fresh renderer", async () => {
+  for (const platform of ["darwin", "win32"]) {
+    let saved: string | null = null;
+    await fixture(
+      async ({ click, render, armed, armRequests, attached, calls }) => {
+        assert.deepEqual(calls, []);
+        await click("App Shot");
+        await act(async () => shortcutRadio("chord").click());
+        saved = window.localStorage.getItem(shortcutPreferenceKey);
+        assert.equal(saved, "chord");
+        await act(async () => applicationTextCheckbox().click());
+        await act(async () => shortcutCheckbox().click());
+        assert.equal(armRequests[0]?.includeAccessibility, true);
+        assert.ok(armed());
+        assert.deepEqual(Object.keys(window.localStorage), [
+          shortcutPreferenceKey,
+        ]);
+        const before = [...calls];
+        await render(false, "replacement");
+        assert.equal(armed(), null);
+        assert.equal(armRequests.length, 1);
+        assert.deepEqual(calls, before);
+        await click("App Shot");
+        assert.equal(shortcutRadio("chord").checked, true);
+        assert.equal(shortcutCheckbox().checked, false);
+        assert.equal(applicationTextCheckbox().checked, false);
+        assert.deepEqual(attached, []);
+        assert.deepEqual(calls, ["list", "list"]);
+      },
+      platform,
+    );
+    await fixture(
+      async ({ click, armed, armRequests, attached, calls }) => {
+        assert.deepEqual(calls, []);
+        assert.equal(armed(), null);
+        assert.equal(armRequests.length, 0);
+        await click("App Shot");
+        assert.equal(shortcutRadio("chord").checked, true);
+        assert.equal(shortcutCheckbox().checked, false);
+        assert.equal(applicationTextCheckbox().checked, false);
+        assert.deepEqual(attached, []);
+        assert.deepEqual(calls, ["list"]);
+      },
+      platform,
+      (dom) => dom.window.localStorage.setItem(shortcutPreferenceKey, saved!),
+    );
+  }
+});
+
+test("fresh Composers whitelist saved shortcut kinds and use platform defaults without writes", async () => {
+  for (const platform of ["darwin", "win32", "linux"]) {
+    for (const saved of [
+      null,
+      "both-shift",
+      "chord",
+      "",
+      "Ctrl+K",
+      "CHORD",
+      '{"kind":"chord","enabled":true}',
+    ]) {
+      await fixture(
+        async ({ click, armed, armRequests, attached, calls }) => {
+          assert.deepEqual(calls, []);
+          await click("App Shot");
+          const expected =
+            platform === "linux" || saved === "chord" ? "chord" : "both-shift";
+          assert.equal(shortcutRadio(expected).checked, true);
+          if (platform === "linux")
+            assert.ok(
+              !document.querySelector('input[value="both-shift"]'),
+              "Linux must not offer Both Shift",
+            );
+          assert.equal(shortcutCheckbox().checked, false);
+          assert.equal(applicationTextCheckbox().checked, false);
+          assert.equal(armed(), null);
+          assert.equal(armRequests.length, 0);
+          assert.deepEqual(attached, []);
+          assert.deepEqual(calls, ["list"]);
+          assert.equal(
+            window.localStorage.getItem(shortcutPreferenceKey),
+            saved,
+          );
+          if (platform === "linux" && saved === "both-shift") {
+            await act(async () => shortcutCheckbox().click());
+            assert.equal(armRequests[0]?.kind, "chord");
+            assert.equal(armRequests[0]?.includeAccessibility, false);
+          }
+        },
+        platform,
+        (dom) => {
+          if (saved !== null)
+            dom.window.localStorage.setItem(shortcutPreferenceKey, saved);
+        },
+      );
+    }
+  }
+});
+
+test("blocked, missing or throwing storage keeps a live choice and visibly reports unsaved changes", async () => {
+  for (const failure of ["getter", "missing", "read", "write"]) {
+    await fixture(
+      async ({ click, armRequests, attached, calls }) => {
+        await click("App Shot");
+        assert.equal(shortcutRadio("both-shift").checked, true);
+        await act(async () => shortcutRadio("chord").click());
+        assert.equal(shortcutRadio("chord").checked, true);
+        assert.match(
+          document.querySelector('[role="alert"]')?.textContent ?? "",
+          /could not be saved/,
+        );
+        assert.equal(armRequests.length, 0);
+        await click("Close App Shot");
+        await click("App Shot");
+        assert.equal(shortcutRadio("chord").checked, true);
+        assert.match(
+          document.querySelector('[role="alert"]')?.textContent ?? "",
+          /could not be saved/,
+        );
+        await act(async () => shortcutCheckbox().click());
+        assert.equal(armRequests[0]?.kind, "chord");
+        assert.equal(armRequests[0]?.includeAccessibility, false);
+        assert.match(
+          document.querySelector('[role="alert"]')?.textContent ?? "",
+          /could not be saved/,
+        );
+        await act(async () => i18n.changeLanguage("zh-CN"));
+        assert.match(
+          document.querySelector('[role="alert"]')?.textContent ?? "",
+          /未能保存/,
+        );
+        await act(async () => i18n.changeLanguage("en"));
+        assert.deepEqual(attached, []);
+        assert.deepEqual(calls, ["list", "list"]);
+      },
+      "darwin",
+      (dom) => {
+        const storage = dom.window.localStorage;
+        if (failure === "getter" || failure === "missing") {
+          Object.defineProperty(dom.window, "localStorage", {
+            get: () => {
+              if (failure === "getter") throw new Error("Storage unavailable");
+              return undefined;
+            },
+          });
+        } else {
+          const prototype = Object.getPrototypeOf(storage) as Storage;
+          if (failure === "read")
+            prototype.getItem = () => {
+              throw new Error("Storage blocked");
+            };
+          prototype.setItem = () => {
+            throw new Error("Storage full");
+          };
+        }
+      },
+    );
+  }
+});
+
+test("a failed save preserves the previous persisted choice until another explicit change succeeds", async () => {
+  await fixture(
+    async ({ click, render, armed, armRequests, calls }) => {
+      await click("App Shot");
+      const prototype = Object.getPrototypeOf(window.localStorage) as Storage;
+      const setItem = prototype.setItem;
+      prototype.setItem = () => {
+        throw new Error("Storage full");
+      };
+      await act(async () => shortcutRadio("chord").click());
+      assert.equal(shortcutRadio("chord").checked, true);
+      assert.equal(
+        window.localStorage.getItem(shortcutPreferenceKey),
+        "both-shift",
+      );
+      assert.match(
+        document.querySelector('[role="alert"]')?.textContent ?? "",
+        /could not be saved/,
+      );
+      prototype.setItem = setItem;
+      await act(async () => shortcutRadio("both-shift").click());
+      assert.ok(
+        !document.querySelector('[role="alert"]'),
+        "Successful explicit save clears the failure",
+      );
+      await act(async () => shortcutRadio("chord").click());
+      assert.equal(window.localStorage.getItem(shortcutPreferenceKey), "chord");
+      await render(false, "saved");
+      await click("App Shot");
+      assert.equal(shortcutRadio("chord").checked, true);
+      assert.equal(shortcutCheckbox().checked, false);
+      assert.equal(armed(), null);
+      assert.equal(armRequests.length, 0);
+      assert.deepEqual(calls, ["list", "list"]);
+    },
+    "darwin",
+    (dom) =>
+      dom.window.localStorage.setItem(shortcutPreferenceKey, "both-shift"),
+  );
+});
+
+test("another Composer and storage events cannot alter an existing shortcut session", async () => {
+  await fixture(
+    async ({ click, render, armed, armRequests, calls, attached }) => {
+      await render(false, "one", true);
+      await click("App Shot");
+      await act(async () => shortcutCheckbox().click());
+      const token = armed();
+      assert.equal(armRequests[0]?.kind, "both-shift");
+      await click("Close App Shot");
+      const buttons = [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          '[aria-label="App Shot"]',
+        ),
+      ];
+      await act(async () => buttons[1]!.click());
+      await act(async () => shortcutRadio("chord").click());
+      assert.equal(window.localStorage.getItem(shortcutPreferenceKey), "chord");
+      assert.equal(shortcutCheckbox().checked, false);
+      await act(async () =>
+        window.dispatchEvent(
+          new window.StorageEvent("storage", {
+            key: shortcutPreferenceKey,
+            newValue: "chord",
+            storageArea: window.localStorage,
+          }),
+        ),
+      );
+      await click("Close App Shot");
+      await click("App Shot");
+      assert.equal(shortcutRadio("both-shift").checked, true);
+      assert.equal(shortcutCheckbox().checked, true);
+      assert.equal(armed(), token);
+      assert.equal(armRequests.length, 1);
+      await act(async () => shortcutRadio("chord").click());
+      assert.equal(shortcutRadio("both-shift").checked, true);
+      await act(async () => shortcutCheckbox().click());
+      assert.equal(shortcutRadio("both-shift").checked, true);
+      assert.equal(armed(), null);
+      assert.equal(armRequests.length, 1);
+      assert.deepEqual(attached, []);
+      assert.deepEqual(calls, ["list", "list", "list"]);
+    },
+  );
 });

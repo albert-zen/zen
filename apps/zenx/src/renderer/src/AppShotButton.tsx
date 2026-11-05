@@ -14,6 +14,10 @@ import { AttachmentImage } from "./ImagePresentation.js";
 import { Icon } from "./icons.js";
 import { Dialog } from "./ui/controls.js";
 import { registerNativeViewOverlay } from "./native-view-overlays.js";
+import {
+  readAppShotShortcutPreference,
+  saveAppShotShortcutPreference,
+} from "./app-shot-shortcut-preference.js";
 
 export function AppShotButton({
   disabled,
@@ -53,9 +57,23 @@ export function AppShotButton({
   const shortcutOperation = useRef(0);
   const supportsBothShift =
     window.zenx.platform === "darwin" || window.zenx.platform === "win32";
-  const [shortcutKind, setShortcutKind] = useState<AppShotShortcutKind>(
-    supportsBothShift ? "both-shift" : "chord",
+  // Snapshot only: another Composer or a storage event must not alter a live
+  // shortcut session. Reading a choice never restores capture authority.
+  const [shortcutKind, setShortcutKind] = useState<AppShotShortcutKind>(() =>
+    readAppShotShortcutPreference(window.zenx.platform),
   );
+  const [shortcutSaveFailed, setShortcutSaveFailed] = useState(false);
+  const changeShortcutKind = (kind: AppShotShortcutKind) => {
+    if (
+      disabled ||
+      armed ||
+      shortcutBusy ||
+      (kind === "both-shift" && !supportsBothShift)
+    )
+      return;
+    setShortcutKind(kind);
+    setShortcutSaveFailed(!saveAppShotShortcutPreference(kind));
+  };
   const pending = useRef(false);
   const [configuration, setConfiguration] =
     useState<AppShotConfiguration | null>(null);
@@ -584,6 +602,14 @@ export function AppShotButton({
             {!managedByHyprland && (
               <fieldset disabled={armed || shortcutBusy}>
                 <legend>{t("appShotShortcutPreference")}</legend>
+                <p className="app-shot-hint">
+                  {t("appShotShortcutRemembered")}
+                </p>
+                {shortcutSaveFailed && (
+                  <p role="alert" className="settings-error">
+                    {t("appShotShortcutSaveFailed")}
+                  </p>
+                )}
                 {supportsBothShift && (
                   <label className="app-shot-option">
                     <input
@@ -591,7 +617,7 @@ export function AppShotButton({
                       name={`app-shot-shortcut-${token}`}
                       value="both-shift"
                       checked={shortcutKind === "both-shift"}
-                      onChange={() => setShortcutKind("both-shift")}
+                      onChange={() => changeShortcutKind("both-shift")}
                     />
                     {t("appShotBothShift")}
                   </label>
@@ -602,7 +628,7 @@ export function AppShotButton({
                     name={`app-shot-shortcut-${token}`}
                     value="chord"
                     checked={shortcutKind === "chord"}
-                    onChange={() => setShortcutKind("chord")}
+                    onChange={() => changeShortcutKind("chord")}
                   />
                   {t("appShotChord")}
                 </label>

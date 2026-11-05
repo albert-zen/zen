@@ -76,15 +76,19 @@ export const en = {
   appShotCancel: "Cancel",
   appShotGlobalShortcut: "Enable global shortcut for this composer",
   appShotShortcutPreference: "Shortcut preference",
+  appShotShortcutRemembered:
+    "Your shortcut choice is remembered on this device for new Composers. Enable capture separately in each Composer.",
+  appShotShortcutSaveFailed:
+    "Your shortcut choice could not be saved. It applies only to this Composer.",
   appShotBothShift: "Both Shift keys",
   appShotChord: "⌘/Ctrl+Shift+2",
   appShotShortcutWorking: "Updating shortcut…",
   appShotBothShiftHint:
     "Hold left and right Shift together, not a double tap. Only modifier state is observed; the keys are not reserved and typing is not recorded. May capture immediately if both are already held. Disable to stop. Nothing is sent until you review, attach and send.",
   appShotGlobalHint:
-    "Captures the foreground app for review while this composer remains open. Disable to release the shortcut. This preference is not saved; attaching and sending are separate actions.",
+    "Captures the foreground app for review while this composer remains open. Disable to release the shortcut. Enablement is not saved; attaching and sending are separate actions.",
   appShotLinuxShortcutHint:
-    "Opens the window chooser; it does not capture the foreground app automatically on Linux. Disable to release the shortcut. Availability depends on the desktop. This preference is not saved.",
+    "Opens the window chooser; it does not capture the foreground app automatically on Linux. Disable to release the shortcut. Availability depends on the desktop. Enablement is not saved.",
 
   historyLoading: "Loading earlier messages…",
   historyLoadEarlier: "Load earlier messages",
@@ -1156,15 +1160,18 @@ export const zhCN = {
   appShotCancel: "取消",
   appShotGlobalShortcut: "为当前输入框启用全局快捷键",
   appShotShortcutPreference: "快捷键偏好",
+  appShotShortcutRemembered:
+    "本机会为新输入框记住快捷键选择；每个输入框仍需单独启用捕获。",
+  appShotShortcutSaveFailed: "快捷键选择未能保存，仅对当前输入框生效。",
   appShotBothShift: "左右 Shift 同时按住",
   appShotChord: "⌘/Ctrl+Shift+2",
   appShotShortcutWorking: "正在更新快捷键…",
   appShotBothShiftHint:
     "同时按住左右 Shift，不是双击。只观察修饰键状态，不独占按键，也不记录输入内容；启用时若已同时按住，可能立即捕获。取消勾选即可停止。检查、添加到草稿并发送前，不会传给模型。",
   appShotGlobalHint:
-    "仅在当前输入框仍打开时捕获前台应用并供检查。取消勾选可释放快捷键。偏好不会长期保存；添加到草稿与发送是分开的操作。",
+    "仅在当前输入框仍打开时捕获前台应用并供检查。取消勾选可释放快捷键。启用状态不会保存；添加到草稿与发送是分开的操作。",
   appShotLinuxShortcutHint:
-    "打开窗口选择器，不会在 Linux 自动捕获前台应用。取消勾选可释放快捷键，是否可用取决于桌面环境。偏好不会长期保存。",
+    "打开窗口选择器，不会在 Linux 自动捕获前台应用。取消勾选可释放快捷键，是否可用取决于桌面环境。启用状态不会保存。",
 
   historyLoading: "正在加载更早的消息…",
   historyLoadEarlier: "加载更早的消息",

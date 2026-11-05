@@ -167,6 +167,57 @@ try {
           ...(await check(width, height)),
         });
         await screenshot(`${name}-picker.png`);
+        if (
+          platform === "darwin" &&
+          theme === "light" &&
+          width === 1280 &&
+          context === "pixels"
+        ) {
+          await click('input[type="radio"][value="chord"]');
+          await wait(`document.querySelector('input[value="chord"]').checked`);
+          // A fresh page keeps only the actual renderer preference, not React state.
+          await send("Page.navigate", { url: "about:blank" });
+          await wait('location.href === "about:blank"');
+          await send("Page.navigate", { url: destination });
+          await wait(
+            `location.href===${JSON.stringify(destination)} && document.querySelectorAll('.app-shot-sources button').length===2`,
+          );
+          assert.equal(
+            await evaluate(
+              `document.querySelector('input[value="chord"]').checked`,
+            ),
+            true,
+          );
+          assert.equal(
+            await evaluate(
+              `document.querySelector('.app-shot-shortcut input[type="checkbox"]').checked`,
+            ),
+            false,
+          );
+          assert.equal(
+            await evaluate(
+              `document.querySelector('.app-shot-option input[type="checkbox"]').checked`,
+            ),
+            false,
+          );
+          assert.match(
+            await evaluate(
+              'document.querySelector(".app-shot-shortcut fieldset").textContent',
+            ),
+            /每个输入框仍需单独启用/,
+          );
+          await reveal(".app-shot-shortcut fieldset");
+          const remembered = await check(width, height);
+          assert.equal(remembered.imageReady, false);
+          assert.equal(remembered.count, "已添加 0 张，未发送。");
+          receipt.states.push({
+            phase: "remembered-shortcut-disabled",
+            ...remembered,
+          });
+          await screenshot(`${name}-remembered-shortcut.png`);
+          // Leave the remaining synthetic scenarios at the normal platform choice.
+          await click('input[type="radio"][value="both-shift"]');
+        }
         if (platform === "niri") {
           await click(".app-shot-shortcut details summary");
           await wait(
