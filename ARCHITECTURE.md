@@ -1,5 +1,7 @@
 # ARCHITECTURE
 
+- **Human App Shot drafts** — The trusted desktop main frame admits explicit window selections or an opt-in composer-bound macOS shortcut into read-only, bounded capture; host-private source tokens and shortcut owners expire with their renderer, capture never grants Computer control, and review pixels stay in bounded expiring process memory until explicit Attach writes the existing content-addressed attachment store while captured text is appended as untrusted user data only at ordinary Send. This adds no runtime, permission, history or recovery authority.
+
 - **Browser per-document input probes** — Existing root attachments may assemble a bounded transient vector of disjoint isolated-world document snapshots, trusted context identities and exact native iframe-owner quads; renderer-root transforms are composed only at remote-frame boundaries, every ancestor focus/hit is verified, and the retained capture fence grants no independent input route or replay. Native dictionary insertion order is nonsemantic: comparisons validate exact field shapes and values while preserving ordered ancestry and geometry.
 
 - **Browser preselected mouse route** — A Host-private, single-use receipt binds a fully verified screenshot point to its exact renderer-root widget beneath the existing root lease; it freezes the native session, context epoch and renderer-root CSS point for one press/release pair, keeps keys on the root route, and quarantines the whole owned root after uncertain held input without fallback or replay.
