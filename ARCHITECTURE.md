@@ -1791,3 +1791,5 @@ An opt-in WIP virtual transcript viewport may mount only the visible canonical t
 The virtual transcript keeps ordinary native selection and per-message copy on the mounted presentation, while LegendList bounds historical DOM; it does not materialize the full conversation for page-wide Select All or add an editing bridge.
 
 图片预览通过 renderer 临时浮层几何登记与原生浏览器 viewport 协调遮挡，只控制原生视图可见性，不另建页面、权限、会话状态或 mount 所有权；隐藏期间沿用现有后台合成路径。
+
+- **Windows foreground smoke sampler** — The disposable test harness compiles a read-only Win32 sampler once during setup, then takes fresh bounded HWND/PID observations without activating windows or emitting input; its temporary assembly is removed after the final ownership check and adds no product runtime state.
