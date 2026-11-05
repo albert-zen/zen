@@ -17,8 +17,17 @@ for (const scene of [
   await withPreviewBrowser(
     directory,
     async ({ send, evaluate, url, screenshot }) => {
+      const waitFor = async (expression) => {
+        const deadline = Date.now() + 3000;
+        while (Date.now() < deadline) {
+          if (await evaluate(expression)) return;
+          await delay(30);
+        }
+        assert(await evaluate(expression), `Timed out: ${expression}`);
+      };
       await send("Emulation.setDeviceMetricsOverride", {
-        ...scene,
+        width: scene.width,
+        height: scene.height,
         deviceScaleFactor: 1,
         mobile: false,
       });
@@ -92,13 +101,7 @@ for (const scene of [
         code: "Escape",
         windowsVirtualKeyCode: 27,
       });
-      await delay(100);
-      assert.equal(
-        await evaluate(
-          "!!document.querySelector('.answered-question-popover')",
-        ),
-        false,
-      );
+      await waitFor("!document.querySelector('.answered-question-popover')");
       assert.equal(
         await evaluate(
           "document.activeElement?.classList.contains('answered-question-trigger')",
@@ -119,21 +122,11 @@ for (const scene of [
         code: "Enter",
         windowsVirtualKeyCode: 13,
       });
-      await delay(100);
-      assert.equal(
-        await evaluate(
-          "!!document.querySelector('.answered-question-popover')",
-        ),
-        true,
+      await waitFor(
+        "!!document.querySelector('.answered-question-popover[data-state=\"open\"]')",
       );
       await evaluate("window.quoteFixture.navigate()");
-      await delay(100);
-      assert.equal(
-        await evaluate(
-          "!!document.querySelector('.answered-question-popover')",
-        ),
-        false,
-      );
+      await waitFor("!document.querySelector('.answered-question-popover')");
       await send("Page.navigate", { url: `${entry}&missing-question` });
       for (
         let i = 0;
