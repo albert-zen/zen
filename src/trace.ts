@@ -13,7 +13,7 @@ import {
   type FileHandle,
 } from "node:fs/promises";
 import path from "node:path";
-import { TraceRequestImageStore } from "./trace-request-image-store.js";
+import { TraceRequestStore } from "./trace-request-store.js";
 import {
   assertOwnedRegularFile,
   assertRealDirectory,
@@ -151,7 +151,7 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
   readonly directory: string;
   readonly #queues = new Map<string, Promise<unknown>>();
   readonly #next = new Map<string, number>();
-  readonly #requestImages: TraceRequestImageStore;
+  readonly #requests: TraceRequestStore;
   readonly #artifactQueues = new Map<string, Promise<unknown>>();
   readonly #segments = new Map<string, string>();
   // A single recently read Thread, not a read-authority or lifecycle cache.
@@ -179,7 +179,7 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
     options: { onFailure?: (issue: TraceIssue) => void } = {},
   ) {
     this.directory = path.resolve(directory);
-    this.#requestImages = new TraceRequestImageStore(this.directory);
+    this.#requests = new TraceRequestStore(this.directory);
     this.#onFailure = options.onFailure;
   }
   async summarySourceRevision(threadId: string): Promise<string> {
@@ -447,7 +447,7 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
       return await this.#readRawArtifact(ref);
     } catch (error) {
       if (!isCode(error, "ENOENT")) throw error;
-      const bytes = await this.#requestImages.read(ref);
+      const bytes = await this.#requests.read(ref);
       if (bytes === undefined) throw error;
       return bytes;
     }
@@ -471,7 +471,7 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
       return await this.#readRawArtifactRange(ref, offset, limit);
     } catch (error) {
       if (!isCode(error, "ENOENT")) throw error;
-      const bytes = await this.#requestImages.read(ref, { offset, limit });
+      const bytes = await this.#requests.read(ref, { offset, limit });
       if (bytes === undefined) throw error;
       return bytes;
     }
@@ -754,7 +754,7 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
           if (!isCode(error, "ENOENT")) throw error;
         }
         await this.#assertDirectories("artifacts");
-        if (compactRequest && (await this.#requestImages.store(ref, payload)))
+        if (compactRequest && (await this.#requests.store(ref, payload)))
           return { ref, raw: false };
         const target = this.#artifactPath(ref.sha256),
           temporary = `${target}.${randomUUID()}.tmp`;
