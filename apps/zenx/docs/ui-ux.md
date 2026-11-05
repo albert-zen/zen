@@ -1143,3 +1143,29 @@ advance only after all destinations accept. Old recalled client identities are
 terminal; a later explicit new answer receives a fresh identity. Restoration
 never sends, navigates, steals focus, enables shared Host publication or promises
 cross-window automatic insertion.
+
+### Quote bubble source navigation (2026-11-05)
+
+Message and selected-text reference bubbles reveal their complete stored excerpt
+on hover or keyboard focus. Activating the bubble navigates directly to its exact
+source; the same compact card retains its title, Close and Open source action.
+Do not display the explanatory transport sentence, source UUIDs or workspace path
+in excerpt cards. Excerpt cards also omit legacy display names such as “名称 ZenX”;
+only the exact excerpt and navigation controls are shown. Identity remains in the structured reference, never inferred
+from visible text. File and Thread pointer cards keep their existing details.
+
+Source navigation materializes the canonical virtual row and required disclosures,
+centers the matching rendered excerpt when scroll boundaries permit, and paints a
+brief static highlight without editing message text or browser selection. Repeated
+activation restarts the highlight; subsequent interaction clears it. Missing
+sources keep the excerpt readable with an explicit unavailable status. Cross-source
+excerpts retain access to every source, while direct activation opens the first.
+Navigation, dismissal and newer reference identities invalidate stale async reads.
+
+### Answered-question transcript bubbles
+
+A native answered-question message pairs each question’s compact quote-style pill with only its selected option labels and actual free-text answer. Multiple questions use separate pairs, with no added answer headings or unselected options in the message body. Question pills and disclosure titles use a question icon, distinct from message quotes. Information-card question headings use the same question icon. The read-only disclosure reuses the information card’s option rows, typography and selected-check styling; it does not introduce editable controls. The disclosure separates the prompt from all options and marks exact selected option IDs with an accessible check state, not color alone. Hover previews the complete authored question and choices; click or keyboard activation keeps the same disclosure open, with Escape, close and outside dismissal. Selected options display their authored labels in authored order, with independently entered free text preserved verbatim. Multiple questions and selections remain visible. Missing or ambiguous original content is explicitly unavailable and preserves the recorded answer; plain historical prose is never guessed into a structured question. This is display-only and does not alter stored inputs, model context, copying, routing, or answer admission.
+
+Question information cards show the default open request heading once, while retaining distinct sending, uncertain, rejected and terminal status messages. Choice-question text fields are labeled as optional additional details; free-answer fields use their actual question as the accessible label without repeating a generic answer heading. Each field keeps its own question binding and draft, including a text-only alternative to a choice.
+
+Healthy question cards have no manual refresh action. Native/Room question events, connection recovery and returning to the app refresh the list automatically; transient read failures receive at most two delayed retries (1s, 3s). Read failure appears as one compact row: “Loading failed” beside a reload-icon “Retry” button with an explicit accessible name. It does not expose technical details in the card. Recovery only reads lists, keeps independent drafts and uncertain response identities, and retires when the view changes or unmounts.

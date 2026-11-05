@@ -491,7 +491,9 @@ test("legacy leading quote renders exact multiline reference instead of UUID JSO
     assert.match(sent.textContent!, /Follow up/);
     assert.ok(!sent.textContent!.includes("thread ID:"));
     assert.ok(!sent.textContent!.includes("\\n"));
-    await click(sent.querySelector(".reference-token-details")!);
+    await act(async () =>
+      (sent.querySelector(".reference-token-details") as HTMLElement).focus(),
+    );
     assert.equal(
       document.querySelector(".reference-exact-excerpt")!.textContent,
       longQuote.excerpt,
@@ -581,13 +583,13 @@ test("cross-thread sent quote source action routes exact parent/child message th
           '[data-sent-message-id="sent-item"]',
         )!;
         await click(sent.querySelector(".reference-token-details")!);
-        await click(document.querySelector(".reference-open-source")!);
         assert.deepEqual(requests, [
           {
             target: {
               kind: "thread",
               id: sourceThreadId,
               itemId: "exact-source-item",
+              excerpt: longQuote.excerpt,
             },
             ownerThreadId: "thread-a",
             current: true,
@@ -604,4 +606,81 @@ test("cross-thread sent quote source action routes exact parent/child message th
       },
     );
   }
+});
+
+test("quote focus reveals only exact excerpt and source action without navigating or exposing metadata", async () => {
+  const requests: unknown[] = [];
+  await withView(
+    append(
+      base(),
+      referenceMessage("Question", [longQuote], "hover-client"),
+      "hover-client",
+    ),
+    async () => {
+      const button = document.querySelector<HTMLButtonElement>(
+        ".user-bubble .reference-token-details",
+      )!;
+      await act(async () => button.focus());
+      const card = document.querySelector(".reference-details-popover")!;
+      assert.equal(
+        card.querySelector(".reference-exact-excerpt")!.textContent,
+        longQuote.excerpt,
+      );
+      assert.equal(card.querySelector(".reference-content-policy"), null);
+      assert.equal(
+        card.querySelector("dl"),
+        null,
+        "excerpt cards hide even legacy display names",
+      );
+      assert.ok(!card.textContent!.includes(quote.threadId));
+      assert.ok(!card.textContent!.includes(quote.cwd));
+      assert.ok(card.querySelector(".reference-open-source"));
+      assert.equal(requests.length, 0);
+      await click(card.querySelector("header button")!);
+      assert.equal(document.querySelector(".reference-details-popover"), null);
+    },
+    "Preserved draft",
+    async (target) => {
+      requests.push(target);
+    },
+  );
+});
+
+test("dismissal invalidates a pending source read and repeated activation does not duplicate it", async () => {
+  const reference = { ...quote, threadId: "other-exact-thread" };
+  let finish!: () => void;
+  let current: (() => boolean) | undefined;
+  let requests = 0;
+  await withView(
+    append(
+      base(),
+      referenceMessage("Question", [reference], "pending-client"),
+      "pending-client",
+    ),
+    async () => {
+      const button = document.querySelector<HTMLButtonElement>(
+        ".user-bubble .reference-token-details",
+      )!;
+      await act(async () => button.focus());
+      await click(button);
+      await click(button);
+      assert.equal(requests, 1);
+      assert.equal(current?.(), true);
+      await click(
+        document.querySelector(".reference-details-popover header button")!,
+      );
+      assert.equal(current?.(), false);
+      await act(async () => finish());
+      assert.equal(document.querySelector(".reference-details-popover"), null);
+      assert.equal(requests, 1);
+    },
+    "Preserved draft",
+    async (_target, owner) => {
+      requests++;
+      current = owner.isCurrent;
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+    },
+  );
 });

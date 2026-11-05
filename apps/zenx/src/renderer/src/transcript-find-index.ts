@@ -114,6 +114,20 @@ function inputBlocks(
   canonical: TurnCanonicalPresentation | undefined,
   parse: typeof markdownFindBlocks = markdownFindBlocks,
 ): string[] {
+  const answer = canonical?.answeredQuestions?.get(item.id);
+  if (answer) {
+    // Match the literal answer paragraphs, not hidden question IDs or templates.
+    return (
+      answer.questions
+        ? answer.questions.flatMap((part) => [
+            part.selectedLabels.join(" · "),
+            ...(part.text === undefined ? [] : [part.text]),
+          ])
+        : [answer.fallbackText ?? ""]
+    )
+      .map(normalizeFindText)
+      .filter(Boolean);
+  }
   const input = canonical?.inputs.get(item.id);
   const parts = input
     ? input.text !== undefined

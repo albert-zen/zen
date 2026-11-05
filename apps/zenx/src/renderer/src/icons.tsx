@@ -44,6 +44,7 @@ export type IconName =
   | "panel-right"
   | "pin"
   | "pin-off"
+  | "question"
   | "quote"
   | "reasoning"
   | "reply"
@@ -185,6 +186,13 @@ const paths: Record<IconName, ReactNode> = {
     <>
       <path d="M2.2 4.8h11.6v8.5H2.2zM1.6 2.3h12.8v2.5H1.6z" />
       <path d="M6 8h4" />
+    </>
+  ),
+  question: (
+    <>
+      <circle cx="8" cy="8" r="6" />
+      <path d="M6.3 5.8a1.8 1.8 0 0 1 3.5.5c0 1.4-1.8 1.5-1.8 2.8" />
+      <circle cx="8" cy="11.5" r=".65" fill="currentColor" stroke="none" />
     </>
   ),
   check: <path d="m2.4 8.4 3.4 3.4 7.8-7.8" />,
