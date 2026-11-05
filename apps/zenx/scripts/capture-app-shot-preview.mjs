@@ -4,7 +4,10 @@ import { execFileSync } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { delay, withPreviewBrowser } from "./preview-browser.mjs";
-import { settleAppShotPreview } from "./app-shot-preview-stability.mjs";
+import {
+  appShotPreviewClickPosition,
+  settleAppShotPreview,
+} from "./app-shot-preview-stability.mjs";
 
 assert.equal(process.env.GITHUB_ACTIONS, "true", "Capture is CI-only.");
 assert.equal(process.platform, "linux", "Capture targets Ubuntu CI.");
@@ -63,14 +66,9 @@ try {
       };
       const stable = () => evaluate(`(${settleAppShotPreview.toString()})()`);
       const click = async (selector) => {
-        const position = await evaluate(`(() => {
-          const e=document.querySelector(${JSON.stringify(selector)});
-          if (!e || e.disabled) throw Error('Missing or disabled fixture button');
-          e.scrollIntoView({block:'center'});
-          const r=e.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2;
-          if (!r.width || !r.height || !e.contains(document.elementFromPoint(x,y))) throw Error('Fixture button is obscured');
-          return {x,y};
-        })()`);
+        const position = await evaluate(
+          `(${appShotPreviewClickPosition.toString()})(${JSON.stringify(selector)}, ${settleAppShotPreview.toString()})`,
+        );
         for (const type of ["mousePressed", "mouseReleased"])
           await send("Input.dispatchMouseEvent", {
             type,

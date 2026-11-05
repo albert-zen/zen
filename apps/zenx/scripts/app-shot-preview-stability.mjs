@@ -34,3 +34,27 @@ export async function settleAppShotPreview(timeoutMs = 2000) {
     await frames();
   }
 }
+
+/** Settle before measuring a synthetic click; never retries or dispatches input. */
+export async function appShotPreviewClickPosition(selector, settle) {
+  await settle();
+  let element = document.querySelector(selector);
+  if (!element || element.disabled)
+    throw new Error("Missing or disabled fixture button");
+  element.scrollIntoView({ block: "center", behavior: "instant" });
+  await settle();
+  // Scrolling and the preceding disclosure can change layout or replace a node.
+  element = document.querySelector(selector);
+  if (!element || element.disabled)
+    throw new Error("Missing or disabled fixture button");
+  const r = element.getBoundingClientRect();
+  const x = r.x + r.width / 2;
+  const y = r.y + r.height / 2;
+  if (
+    !r.width ||
+    !r.height ||
+    !element.contains(document.elementFromPoint(x, y))
+  )
+    throw new Error("Fixture button is obscured");
+  return { x, y };
+}
