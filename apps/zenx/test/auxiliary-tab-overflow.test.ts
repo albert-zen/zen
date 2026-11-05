@@ -174,6 +174,25 @@ test("automatic tab reveal preserves whole leading tabs, end slack, and keyboard
   };
   try {
     await act(async () => root.render(React.createElement(Harness)));
+    const previousTabs = () =>
+      document.querySelector<HTMLButtonElement>(".workspace-tabs-previous");
+    const nextTabs = () =>
+      document.querySelector<HTMLButtonElement>(".workspace-tabs-next");
+    assert.ok(nextTabs(), "overflow has an explicit navigation affordance");
+    assert.equal(previousTabs()!.disabled, true);
+    assert.equal(nextTabs()!.disabled, false);
+    await act(async () => nextTabs()!.click());
+    assert.ok(
+      scroll > 0,
+      "next reveals hidden tabs without requiring a trackpad",
+    );
+    assert.equal(
+      document.querySelector('[aria-selected="true"]')?.id,
+      "aux-tab-" + ids[0],
+      "browsing the strip does not select another resource",
+    );
+    await act(async () => previousTabs()!.click());
+    assert.equal(scroll, 0);
     document.getElementById("outside")!.focus();
     await act(async () => select(ids[3]!));
     assert.equal(
@@ -257,6 +276,7 @@ test("automatic tab reveal preserves whole leading tabs, end slack, and keyboard
       "no trailing space when tabs fit",
     );
     assert.equal(scroll, 0);
+    assert.equal(nextTabs(), null, "no redundant arrows when every tab fits");
   } finally {
     await act(async () => root.unmount());
     globalThis.ResizeObserver = previousObserver;

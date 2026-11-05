@@ -234,6 +234,49 @@ export function AuxiliaryPanel({
   }, [finishResize]);
   const panel = useRef<HTMLElement>(null);
   const tabRail = useRef<HTMLDivElement>(null);
+  const [tabOverflow, setTabOverflow] = useState({
+    before: false,
+    after: false,
+  });
+  const measureTabOverflow = useCallback(() => {
+    const rail = tabRail.current;
+    const items = rail?.querySelectorAll<HTMLElement>(".workspace-content-tab");
+    if (!rail || rail.clientWidth <= 0) return;
+    const viewport = rail.getBoundingClientRect();
+    // The end spacer only aligns whole tabs; it is not hidden content.
+    const next = {
+      before: Boolean(
+        items?.length &&
+        items[0]!.getBoundingClientRect().left < viewport.left + 1,
+      ),
+      after: Boolean(
+        items?.length &&
+        items[items.length - 1]!.getBoundingClientRect().right >
+          viewport.right - 1,
+      ),
+    };
+    setTabOverflow((previous) =>
+      previous.before === next.before && previous.after === next.after
+        ? previous
+        : next,
+    );
+  }, []);
+  const scrollTabs = (direction: -1 | 1) => {
+    const rail = tabRail.current;
+    if (!rail) return;
+    const viewport = rail.getBoundingClientRect();
+    const bounds = [
+      ...rail.querySelectorAll<HTMLElement>(".workspace-content-tab"),
+    ].map((item) => item.getBoundingClientRect());
+    const target =
+      direction > 0
+        ? bounds.find((item) => item.right > viewport.right - 1)
+        : bounds.find(
+            (item) => item.left >= viewport.left - rail.clientWidth + 1,
+          );
+    if (target) rail.scrollLeft += target.left - viewport.left - 2;
+    measureTabOverflow();
+  };
   const pointerDrag = useRef<{
     source: string;
     pointerId: number;
@@ -1020,6 +1063,7 @@ export function AuxiliaryPanel({
           Math.min(next, rail.scrollWidth - rail.clientWidth),
         );
       }
+      measureTabOverflow();
     };
     reveal();
     const observer =
@@ -1031,7 +1075,7 @@ export function AuxiliaryPanel({
     return () => {
       observer?.disconnect();
     };
-  }, [active, open, signature, width, expanded]);
+  }, [active, open, signature, width, expanded, measureTabOverflow]);
   useLayoutEffect(() => {
     const target = pendingTabFocus.current;
     if (target === null || showChooser || active !== target) return;
@@ -1480,8 +1524,21 @@ export function AuxiliaryPanel({
       />
       <header className="auxiliary-heading">
         <div className="workspace-tab-rail">
+          {tabOverflow.before || tabOverflow.after ? (
+            <button
+              type="button"
+              className="icon-button workspace-tabs-previous"
+              aria-label={i18n.t("panels:previousWorkspaceTabs")}
+              title={i18n.t("panels:previousWorkspaceTabs")}
+              disabled={!tabOverflow.before}
+              onClick={() => scrollTabs(-1)}
+            >
+              <Icon name="chevron-left" />
+            </button>
+          ) : null}
           <div
             ref={tabRail}
+            onScroll={measureTabOverflow}
             role="tablist"
             aria-label={i18n.t("panels:workspaceTabs")}
           >
@@ -1678,6 +1735,18 @@ export function AuxiliaryPanel({
               </span>
             ))}
           </div>
+          {tabOverflow.before || tabOverflow.after ? (
+            <button
+              type="button"
+              className="icon-button workspace-tabs-next"
+              aria-label={i18n.t("panels:nextWorkspaceTabs")}
+              title={i18n.t("panels:nextWorkspaceTabs")}
+              disabled={!tabOverflow.after}
+              onClick={() => scrollTabs(1)}
+            >
+              <Icon name="chevron-right" />
+            </button>
+          ) : null}
           <button
             type="button"
             className="icon-button workspace-add-tab"
