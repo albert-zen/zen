@@ -64,8 +64,17 @@ async function resizeWindow(width, height) {
   // not identical to getContentSize().height; responsive bounds use the width.
   await until(async () => {
     const [outerWidth, outerHeight] = window.getSize();
-    if (outerWidth !== width || outerHeight !== height) return false;
-    const [contentWidth] = window.getContentSize();
+    const [contentWidth, contentHeight] = window.getContentSize();
+    result.lastResize = {
+      requested: { width, height },
+      outerWidth,
+      outerHeight,
+      contentWidth,
+      contentHeight,
+    };
+    // macOS may constrain the requested height to its visible screen. This
+    // barrier owns horizontal hit coordinates, not an OS height guarantee.
+    if (outerWidth !== width) return false;
     return evaluate(`window.innerWidth === ${contentWidth}`);
   }, "native resize delivered to renderer");
 }
