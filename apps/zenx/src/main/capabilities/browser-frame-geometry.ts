@@ -95,32 +95,56 @@ export async function resolveBrowserFrameAncestorEvidence(
         awaitPromise: false,
       }),
     )?.value;
-  const initial = record(await readChain());
-  const ancestors = initial?.ancestors;
-  if (
-    !initial ||
-    typeof initial.documentKey !== "string" ||
-    initial.documentKey.length < 32 ||
-    initial.documentKey.length > 16384 ||
-    typeof initial.rootDocumentKey !== "string" ||
-    initial.rootDocumentKey.length < 32 ||
-    initial.rootDocumentKey.length > 16384 ||
-    !Array.isArray(ancestors) ||
-    ancestors.length === 0 ||
-    ancestors.length > 128 ||
-    ancestors.some(
-      (entry, index) =>
-        !record(entry) ||
-        typeof record(entry)?.nodeId !== "string" ||
-        String(record(entry)?.nodeId).length === 0 ||
-        String(record(entry)?.nodeId).length > 128 ||
-        (index === 0
-          ? record(entry)?.edge !== "owner"
-          : !["slot", "light", "host"].includes(String(record(entry)?.edge))),
+  const chainIdentity = (value: unknown) => {
+    const facts = record(value);
+    const ancestors = facts?.ancestors;
+    if (
+      !facts ||
+      Object.keys(facts).length !== 3 ||
+      !["rootDocumentKey", "documentKey", "ancestors"].every((key) =>
+        Object.hasOwn(facts, key),
+      ) ||
+      typeof facts.documentKey !== "string" ||
+      facts.documentKey.length < 32 ||
+      facts.documentKey.length > 16384 ||
+      typeof facts.rootDocumentKey !== "string" ||
+      facts.rootDocumentKey.length < 32 ||
+      facts.rootDocumentKey.length > 16384 ||
+      !Array.isArray(ancestors) ||
+      ancestors.length === 0 ||
+      ancestors.length > 128 ||
+      ancestors.some((value, index) => {
+        const entry = record(value);
+        return (
+          !entry ||
+          Object.keys(entry).length !== 2 ||
+          !Object.hasOwn(entry, "nodeId") ||
+          !Object.hasOwn(entry, "edge") ||
+          typeof entry.nodeId !== "string" ||
+          entry.nodeId.length === 0 ||
+          entry.nodeId.length > 128 ||
+          typeof entry.edge !== "string" ||
+          (index === 0
+            ? entry.edge !== "owner"
+            : !["slot", "light", "host"].includes(entry.edge))
+        );
+      })
     )
-  )
-    throw new Error("Browser iframe ancestor evidence is malformed");
-  const expected = JSON.stringify(initial);
+      throw new Error("Browser iframe ancestor evidence is malformed");
+    // Native debugger transports may reorder dictionary keys. Identity is the
+    // exact validated content and ordered chain, never object insertion order.
+    return {
+      ancestors,
+      fingerprint: JSON.stringify([
+        facts.rootDocumentKey,
+        facts.documentKey,
+        ancestors.map((entry) => [record(entry)!.nodeId, record(entry)!.edge]),
+      ]),
+    };
+  };
+  const initial = chainIdentity(await readChain());
+  const ancestors = initial.ancestors;
+  const expected = initial.fingerprint;
   const backendIds: number[] = [];
   const release = async () => {
     const ids = [...owned];
@@ -177,7 +201,7 @@ export async function resolveBrowserFrameAncestorEvidence(
     return node.backendNodeId as number;
   };
   const confirm = async () => {
-    if (JSON.stringify(await readChain()) !== expected)
+    if (chainIdentity(await readChain()).fingerprint !== expected)
       throw new Error(
         "Browser iframe ancestor chain changed during native verification",
       );
@@ -189,7 +213,7 @@ export async function resolveBrowserFrameAncestorEvidence(
         const object = readResult(
           await send("Runtime.callFunctionOn", {
             objectId: ownerObjectId,
-            functionDeclaration: `function(index, expected) { ${ancestorChainBody} if (JSON.stringify(facts) !== expected) throw new Error('Browser iframe ancestor chain changed'); return nodes[index] ?? null; }`,
+            functionDeclaration: `function(index, expected) { ${ancestorChainBody} if (JSON.stringify([facts.rootDocumentKey, facts.documentKey, facts.ancestors.map(({ nodeId, edge }) => [nodeId, edge])]) !== expected) throw new Error('Browser iframe ancestor chain changed'); return nodes[index] ?? null; }`,
             arguments: [{ value: index }, { value: expected }],
             returnByValue: false,
             awaitPromise: false,
