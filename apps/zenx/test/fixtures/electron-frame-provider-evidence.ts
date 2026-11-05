@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { BrowserInputOutcomeUnknownError } from "../../src/main/capabilities/browser-targeted-input.js";
 
 export interface NativeFrameIdentity {
   url: string;
@@ -322,4 +323,52 @@ export function assertNativeFramePresentation(
     // https://github.com/electron/electron/blob/v43.0.0/shell/browser/ui/cocoa/electron_ns_window.mm#L257
     // https://github.com/electron/electron/blob/v43.0.0/shell/browser/native_window_mac.mm#L1180
   }
+}
+
+/** The two production adapters expose different, exact post-dispatch boundaries. */
+export function assertNativeInputQuarantineError(
+  provider: "workspace-browser" | "electron-browser",
+  error: unknown,
+): void {
+  let inputError = error;
+  if (provider === "workspace-browser") {
+    assert.ok(error instanceof Error);
+    assert.equal(Object.getPrototypeOf(error), Error.prototype);
+    assert.ok(error.cause instanceof BrowserInputOutcomeUnknownError);
+    assert.equal(
+      error.message,
+      `Browser action outcome is unknown after dispatch: ${error.cause.message}. Inspect before continuing; do not repeat it automatically`,
+    );
+    inputError = error.cause;
+  }
+  assert.ok(inputError instanceof BrowserInputOutcomeUnknownError);
+  assert.equal(inputError.inputMayRemainPressed, true);
+}
+
+/** Preserve the original boundary before any assertion can replace its error. */
+export function nativeInputErrorReceipt(
+  error: unknown,
+): Record<string, unknown>[] {
+  const chain: Record<string, unknown>[] = [];
+  let current = error;
+  for (let depth = 0; depth < 3 && current !== undefined; depth++) {
+    if (!(current instanceof Error)) {
+      chain.push({ value: String(current).slice(0, 2048) });
+      break;
+    }
+    chain.push({
+      name: current.name.slice(0, 128),
+      message: current.message.slice(0, 2048),
+      stack: current.stack?.slice(0, 4096),
+      typedInputOutcomeUnknown:
+        current instanceof BrowserInputOutcomeUnknownError,
+      ...(current instanceof BrowserInputOutcomeUnknownError
+        ? {
+            inputMayRemainPressed: current.inputMayRemainPressed,
+          }
+        : {}),
+    });
+    current = current.cause;
+  }
+  return chain;
 }

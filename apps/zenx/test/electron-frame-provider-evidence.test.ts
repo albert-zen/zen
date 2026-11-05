@@ -5,12 +5,16 @@ import {
   assertNativeFramePlacement,
   assertNativeInputRoute,
   assertNativeFramePresentation,
+  assertNativeInputQuarantineError,
+  nativeInputErrorReceipt,
   nativeFrameCommandReceipt,
   nativeViewOwnerIndices,
   type NativeChildRoute,
   type NativeInputAttempt,
   type NativeFramePresentation,
 } from "./fixtures/electron-frame-provider-evidence.js";
+
+import { BrowserInputOutcomeUnknownError } from "../src/main/capabilities/browser-targeted-input.js";
 
 const urls = [
   "http://127.0.0.1:3001/root",
@@ -442,4 +446,70 @@ test("native view ownership includes nested foreign parents and refuses incomple
   let deep: View = { children: [] };
   for (let index = 0; index < 17; index++) deep = { children: [deep] };
   assert.throws(() => nativeViewOwnerIndices([deep], target), /tree depth/);
+});
+
+test("native unknown-input assertions preserve each provider's exact typed boundary", () => {
+  const cause = new Error("Document replaced after native press");
+  const unknown = new BrowserInputOutcomeUnknownError(cause);
+  const wrap = (error: Error) =>
+    new Error(
+      `Browser action outcome is unknown after dispatch: ${error.message}. Inspect before continuing; do not repeat it automatically`,
+      { cause: error },
+    );
+  const wrapped = wrap(unknown);
+  assertNativeInputQuarantineError("workspace-browser", wrapped);
+  assertNativeInputQuarantineError("electron-browser", unknown);
+  assert.throws(() =>
+    assertNativeInputQuarantineError("workspace-browser", unknown),
+  );
+  assert.throws(() =>
+    assertNativeInputQuarantineError("electron-browser", wrapped),
+  );
+  assert.throws(() =>
+    assertNativeInputQuarantineError("workspace-browser", wrap(wrapped)),
+  );
+  assert.throws(() =>
+    assertNativeInputQuarantineError(
+      "workspace-browser",
+      wrap(new Error(unknown.message)),
+    ),
+  );
+  assert.throws(() =>
+    assertNativeInputQuarantineError(
+      "electron-browser",
+      new Error(unknown.message),
+    ),
+  );
+  assert.throws(() =>
+    assertNativeInputQuarantineError(
+      "workspace-browser",
+      new Error("unknown", { cause: unknown }),
+    ),
+  );
+  assert.throws(() =>
+    assertNativeInputQuarantineError(
+      "workspace-browser",
+      new AggregateError([unknown], wrapped.message, { cause: unknown }),
+    ),
+  );
+  const released = new BrowserInputOutcomeUnknownError(cause, false);
+  assert.throws(() =>
+    assertNativeInputQuarantineError("workspace-browser", wrap(released)),
+  );
+  assert.throws(() =>
+    assertNativeInputQuarantineError("electron-browser", released),
+  );
+  const receipt = nativeInputErrorReceipt(wrapped);
+  assert.equal(receipt.length, 3);
+  assert.equal(receipt[0]!.message, wrapped.message);
+  assert.equal(receipt[1]!.typedInputOutcomeUnknown, true);
+  assert.equal(receipt[1]!.inputMayRemainPressed, true);
+  assert.equal(receipt[2]!.message, cause.message);
+  assert.equal(wrapped.cause, unknown);
+  assert.equal(unknown.cause, cause);
+  const cyclic = new Error("x".repeat(10000));
+  cyclic.cause = cyclic;
+  const bounded = nativeInputErrorReceipt(cyclic);
+  assert.equal(bounded.length, 3);
+  assert.ok(JSON.stringify(bounded).length < 20000);
 });

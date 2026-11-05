@@ -22,7 +22,6 @@ import {
 } from "../../src/main/capabilities/browser-provider.js";
 import { BrowserFrameInputObserver } from "../../src/main/capabilities/browser-frame-input.js";
 import { observeFramePreparation } from "../../scripts/browser-frame-capture-diagnostics.mjs";
-import { BrowserInputOutcomeUnknownError } from "../../src/main/capabilities/browser-targeted-input.js";
 import { createElectronWorkspaceBrowser } from "../../src/main/workspace-browser-electron.js";
 import {
   remoteFrameContractPage,
@@ -32,6 +31,8 @@ import {
   assertNativeFramePlacement,
   assertNativeInputRoute,
   assertNativeFramePresentation,
+  assertNativeInputQuarantineError,
+  nativeInputErrorReceipt,
   nativeFrameCommandReceipt,
   nativeViewOwnerIndices,
   type NativeInputAttempt,
@@ -669,8 +670,9 @@ async function main() {
                   point.y,
                 ),
                 (error) => {
-                  assert.ok(error instanceof BrowserInputOutcomeUnknownError);
-                  assert.equal(error.inputMayRemainPressed, true);
+                  receipt.interruptedPressError =
+                    nativeInputErrorReceipt(error);
+                  assertNativeInputQuarantineError(provider, error);
                   return true;
                 },
               );
