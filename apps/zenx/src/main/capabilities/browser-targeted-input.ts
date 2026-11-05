@@ -404,6 +404,81 @@ const record = (value: unknown): Record<string, unknown> | undefined =>
     ? (value as Record<string, unknown>)
     : undefined;
 
+/** Compare complete bounded JSON evidence, independent of native dictionary order. */
+function browserInputEvidenceJson(
+  value: unknown,
+  depth = 0,
+  ancestors = new Set<object>(),
+  budget = { nodes: 0, characters: 0 },
+): string {
+  // The existing snapshot has at most 31 frame candidates with 128 KiB witnesses.
+  // These bounds include all candidate fields without permitting an unbounded walk.
+  if (depth > 32 || ++budget.nodes > 32768)
+    throw new Error("Browser input evidence exceeds bounded plain JSON");
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  ) {
+    if (typeof value === "string" && value.length > 8388608 - budget.characters)
+      throw new Error("Browser input evidence exceeds bounded plain JSON");
+    const result = JSON.stringify(value);
+    budget.characters += result.length;
+    if (budget.characters > 8388608)
+      throw new Error("Browser input evidence exceeds bounded plain JSON");
+    return result;
+  }
+  if (typeof value !== "object" || ancestors.has(value))
+    throw new Error("Browser input evidence is not bounded plain JSON");
+  const array = Array.isArray(value);
+  const prototype = Object.getPrototypeOf(value);
+  const keys = Object.keys(value);
+  if (keys.length > 32768 - budget.nodes)
+    throw new Error("Browser input evidence exceeds bounded plain JSON");
+  if (
+    (!array &&
+      prototype !== null &&
+      Object.getPrototypeOf(prototype) !== null) ||
+    Reflect.ownKeys(value).length !== keys.length + (array ? 1 : 0) ||
+    (array &&
+      (keys.length !== value.length ||
+        keys.some((key, index) => key !== String(index)))) ||
+    keys.some(
+      (key) =>
+        !Object.hasOwn(Object.getOwnPropertyDescriptor(value, key)!, "value"),
+    )
+  )
+    throw new Error("Browser input evidence is not bounded plain JSON");
+  ancestors.add(value);
+  try {
+    if (!array) keys.sort();
+    const entries = keys.map((key) => {
+      if (key.length > 8388608 - budget.characters)
+        throw new Error("Browser input evidence exceeds bounded plain JSON");
+      const prefix = array ? "" : JSON.stringify(key) + ":";
+      budget.characters += prefix.length + 1;
+      if (budget.characters > 8388608)
+        throw new Error("Browser input evidence exceeds bounded plain JSON");
+      return (
+        prefix +
+        browserInputEvidenceJson(
+          Object.getOwnPropertyDescriptor(value, key)!.value,
+          depth + 1,
+          ancestors,
+          budget,
+        )
+      );
+    });
+    budget.characters += 2;
+    if (budget.characters > 8388608)
+      throw new Error("Browser input evidence exceeds bounded plain JSON");
+    return (array ? "[" : "{") + entries.join(",") + (array ? "]" : "}");
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
 /** Native quad corners retain their layout order, including reflected transforms. */
 export function requireBrowserInputContentQuad(value: unknown): number[] {
   if (
@@ -450,7 +525,7 @@ async function resolveBrowserInputFrameEvidence(
   const probe = snapshot.pointerPoint
     ? browserInputProbeScript({ kind: "click", ...snapshot.pointerPoint })
     : browserInputSnapshotScript;
-  const expected = JSON.stringify(snapshot);
+  const expected = browserInputEvidenceJson(snapshot);
   const owned = new Set<string>();
   const evidence: {
     candidate: BrowserInputFrameAncestorCandidate;
@@ -512,7 +587,7 @@ async function resolveBrowserInputFrameEvidence(
         awaitPromise: false,
       }),
     )?.value;
-    if (JSON.stringify(current) !== expected)
+    if (browserInputEvidenceJson(current) !== expected)
       throw new Error(
         "Browser iframe observation changed during geometry verification; inspect again",
       );
@@ -522,7 +597,7 @@ async function resolveBrowserInputFrameEvidence(
       const expression = `(() => {
         const state = globalThis[Symbol.for("zenx-browser-targeted-input-v2")];
         const entry = state?.frameAncestorCandidates?.get(${JSON.stringify(candidate.ownerId)});
-        return state?.document === document && state.id + "|" + location.href === ${JSON.stringify(snapshot.documentKey)} && entry?.element?.isConnected && entry.element.contentDocument === entry.document && JSON.stringify(entry.candidate) === ${JSON.stringify(JSON.stringify(candidate))} ? entry.element : null;
+        return state?.document === document && state.id + "|" + location.href === ${JSON.stringify(snapshot.documentKey)} && entry?.element?.isConnected && entry.element.contentDocument === entry.document && (${browserInputEvidenceJson.toString()})(entry.candidate) === ${JSON.stringify(browserInputEvidenceJson(candidate))} ? entry.element : null;
       })()`;
       const object = resultValue(
         await send("Runtime.evaluate", {
@@ -583,7 +658,7 @@ async function resolveBrowserInputFrameEvidence(
     if (updates.length) {
       const expression = `(() => {
         const current = ${probe};
-        if (JSON.stringify(current) !== ${JSON.stringify(expected)}) throw new Error('Browser iframe changed before geometry registration');
+        if ((${browserInputEvidenceJson.toString()})(current) !== ${JSON.stringify(expected)}) throw new Error('Browser iframe changed before geometry registration');
         const state = globalThis[Symbol.for("zenx-browser-targeted-input-v2")];
         const updates = ${JSON.stringify(updates.map((entry) => ({ ownerId: entry.candidate.ownerId, contentQuad: entry.contentQuad })))};
         for (const update of updates) {

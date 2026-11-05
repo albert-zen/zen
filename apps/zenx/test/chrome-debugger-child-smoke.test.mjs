@@ -245,7 +245,7 @@ test("synthetic host validates handshake and matches real command result by exac
   assert.equal(port.closed, true);
 });
 
-test("CI adds one explicit debugger-only acceptance step without registry or native-host claims", async () => {
+test("CI uses one extension routing and provider acceptance step without registry or native-host claims", async () => {
   const ci = await readFile(
     new URL("../../../.github/workflows/ci.yml", import.meta.url),
     "utf8",

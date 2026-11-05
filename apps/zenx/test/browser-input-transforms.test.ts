@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
+import { build } from "esbuild";
+import { fileURLToPath } from "node:url";
 import {
   assertBrowserInputSnapshot,
   browserInputProbeScript,
@@ -14,7 +16,22 @@ import {
   type BrowserInputSnapshot,
 } from "../src/main/capabilities/browser-targeted-input.js";
 
-function fixture(slotted: boolean | "closed" = false) {
+function reorderDictionaryKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return Array.from(value, reorderDictionaryKeys);
+  if (value !== null && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, child]) => [key, reorderDictionaryKeys(child)]),
+    );
+  return value;
+}
+
+function fixture(
+  slotted: boolean | "closed" = false,
+  reorderedTransport = false,
+  resolveEvidence = resolveBrowserInputEvidence,
+) {
   const dom = new JSDOM("<!doctype html><body></body>", {
     runScripts: "outside-only",
     url: "https://fixture.test/",
@@ -71,6 +88,7 @@ function fixture(slotted: boolean | "closed" = false) {
   const hooks: {
     before?: (method: string, params: Record<string, unknown>) => void;
     afterPress?: () => void;
+    snapshot?: (value: BrowserInputSnapshot) => void;
   } = {};
   const backendNodes = new Map<number, Element>();
   const ids = new WeakMap<Element, number>();
@@ -78,7 +96,10 @@ function fixture(slotted: boolean | "closed" = false) {
   let sequence = 0;
   let quarantined = false;
   const input: Record<string, unknown>[] = [];
-  const send = async (method: string, params: Record<string, unknown>) => {
+  const nativeSend = async (
+    method: string,
+    params: Record<string, unknown>,
+  ) => {
     calls.push({ method, params });
     hooks.before?.(method, params);
     if (method === "Runtime.evaluate") {
@@ -153,16 +174,31 @@ function fixture(slotted: boolean | "closed" = false) {
     // Width/height intentionally describe the border box, not child coordinates.
     return { model: { content: [...model.quad()], width: 210, height: 130 } };
   };
-  const raw = (action?: { kind: "click"; x: number; y: number }) =>
-    dom.window.eval(
-      action ? browserInputProbeScript(action) : browserInputSnapshotScript,
+  const transmit = (value: unknown) => {
+    if (!reorderedTransport) return value;
+    const reordered = reorderDictionaryKeys(value);
+    assert.deepEqual(
+      reordered,
+      JSON.parse(JSON.stringify(value)),
+      "Transport preserves every response key, value, and array position",
     );
+    return reordered;
+  };
+  const send = async (method: string, params: Record<string, unknown>) =>
+    transmit(await nativeSend(method, params));
+  const raw = (action?: { kind: "click"; x: number; y: number }) => {
+    const value = transmit(
+      dom.window.eval(
+        action ? browserInputProbeScript(action) : browserInputSnapshotScript,
+      ),
+    );
+    hooks.snapshot?.(value as BrowserInputSnapshot);
+    return value;
+  };
   const read = async (action?: { kind: "click"; x: number; y: number }) =>
-    requireBrowserInputSnapshot(
-      await resolveBrowserInputEvidence(raw(action), send),
-    );
+    requireBrowserInputSnapshot(await resolveEvidence(raw(action), send));
   const inspect = async () =>
-    (await resolveBrowserInputEvidence({ inputSnapshot: raw() }, send)) as {
+    (await resolveEvidence({ inputSnapshot: raw() }, send)) as {
       inputSnapshot?: BrowserInputSnapshot;
     };
   const ready = async () => {
@@ -216,6 +252,282 @@ function fixture(slotted: boolean | "closed" = false) {
     },
   };
 }
+
+test("same-origin affine evidence survives reordered native dictionary keys at candidate and registration boundaries", async () => {
+  const f = fixture(false, true);
+  try {
+    await assert.rejects(
+      f.read(),
+      /geometry observation initialized or changed/,
+    );
+    assert.equal(f.objects.size, 0);
+    const observed = await f.read();
+    assert.equal(observed.frameDocuments?.length, 1);
+    await f.dispatch(observed, { kind: "click", x: 70, y: 62 });
+    assert.ok(
+      f.points.length > 0 && f.points.every(([x, y]) => x === 10 && y === 11),
+    );
+    assert.deepEqual(
+      f.input.map(({ x, y, type }) => ({ x, y, type })),
+      [
+        { x: 70, y: 62, type: "mousePressed" },
+        { x: 70, y: 62, type: "mouseReleased" },
+      ],
+    );
+    assert.equal(f.objects.size, 0);
+  } finally {
+    f.dom.window.close();
+  }
+});
+
+test("bundled native evidence comparisons stay self-contained when executed in the renderer", async () => {
+  const built = await build({
+    entryPoints: [
+      fileURLToPath(
+        new URL(
+          "../src/main/capabilities/browser-targeted-input.ts",
+          import.meta.url,
+        ),
+      ),
+    ],
+    bundle: true,
+    write: false,
+    platform: "node",
+    format: "esm",
+    keepNames: true,
+  });
+  const module = await import(
+    `data:text/javascript;base64,${Buffer.from(built.outputFiles[0]!.text).toString("base64")}`
+  );
+  const f = fixture(false, true, module.resolveBrowserInputEvidence);
+  try {
+    await assert.rejects(
+      f.read(),
+      /geometry observation initialized or changed/,
+    );
+    assert.equal((await f.read()).frameDocuments?.length, 1);
+    assert.equal(f.objects.size, 0);
+  } finally {
+    f.dom.window.close();
+  }
+});
+
+test("reordered same-origin candidate equality retains all identity and unexpected fields", async (t) => {
+  for (const field of [
+    "ownerId",
+    "parentDocumentKey",
+    "documentKey",
+    "extra",
+    "missing",
+    "__proto__",
+  ])
+    await t.test(field, async () => {
+      const f = fixture(false, true);
+      try {
+        let changed = false;
+        f.hooks.before = (method, params) => {
+          if (
+            !changed &&
+            method === "Runtime.evaluate" &&
+            String(params.expression).includes("frameAncestorCandidates?.get")
+          ) {
+            changed = true;
+            const state = f.dom.window.eval(
+              'globalThis[Symbol.for("zenx-browser-targeted-input-v2")]',
+            );
+            assert.ok(
+              state !== null &&
+                typeof state === "object" &&
+                "frameAncestorCandidates" in state,
+            );
+            assert.ok(
+              state.frameAncestorCandidates instanceof f.dom.window.Map,
+            );
+            const entry: unknown = state.frameAncestorCandidates
+              .values()
+              .next().value;
+            assert.ok(
+              entry !== null &&
+                typeof entry === "object" &&
+                "candidate" in entry,
+            );
+            const candidate = entry.candidate;
+            assert.ok(candidate !== null && typeof candidate === "object");
+            for (const key of ["ownerId", "parentDocumentKey", "documentKey"])
+              assert.equal(
+                typeof Object.getOwnPropertyDescriptor(candidate, key)?.value,
+                "string",
+              );
+            if (field === "missing")
+              assert.ok(Reflect.deleteProperty(candidate, "documentKey"));
+            else
+              Object.defineProperty(candidate, field, {
+                value: "changed-identity",
+                enumerable: true,
+                configurable: true,
+              });
+          }
+        };
+        await assert.rejects(
+          f.read(),
+          /candidate changed before native geometry verification/,
+        );
+        assert.ok(changed);
+        assert.equal(f.input.length, 0);
+        assert.equal(f.objects.size, 0);
+      } finally {
+        f.dom.window.close();
+      }
+    });
+});
+
+test("reordered same-origin snapshot equality keeps extra and missing JSON fields", async (t) => {
+  for (const [label, change] of [
+    [
+      "extra",
+      (value: BrowserInputSnapshot) => {
+        Object.assign(value, { extra: "unknown evidence" });
+      },
+    ],
+    [
+      "prototype-named key",
+      (value: BrowserInputSnapshot) => {
+        Object.defineProperty(value, "__proto__", {
+          value: "unknown evidence",
+          enumerable: true,
+        });
+      },
+    ],
+    [
+      "missing",
+      (value: BrowserInputSnapshot) => {
+        delete value.frameDocuments;
+      },
+    ],
+    [
+      "viewport",
+      (value: BrowserInputSnapshot) => {
+        value.viewport.scrollX += 1;
+      },
+    ],
+  ] as const)
+    await t.test(label, async () => {
+      const f = fixture(false, true);
+      try {
+        f.hooks.snapshot = change;
+        await assert.rejects(
+          f.read(),
+          /observation changed during geometry verification/,
+        );
+        assert.equal(f.input.length, 0);
+        assert.equal(f.objects.size, 0);
+      } finally {
+        f.dom.window.close();
+      }
+    });
+});
+
+test("reordered geometry registration rechecks the complete live snapshot after all wrapper cleanup", async () => {
+  const f = fixture(false, true);
+  try {
+    let changed = false;
+    f.hooks.before = (method, params) => {
+      if (
+        method === "Runtime.evaluate" &&
+        String(params.expression).includes(
+          "Browser iframe changed before geometry registration",
+        )
+      ) {
+        assert.equal(
+          f.objects.size,
+          0,
+          "The final renderer check follows exact owned cleanup",
+        );
+        assert.equal(changed, false, "A failed registration is not replayed");
+        changed = true;
+        const state = f.dom.window.eval(
+          'globalThis[Symbol.for("zenx-browser-targeted-input-v2")]',
+        );
+        assert.ok(
+          state !== null &&
+            typeof state === "object" &&
+            "layoutRevision" in state &&
+            typeof state.layoutRevision === "number" &&
+            Number.isSafeInteger(state.layoutRevision) &&
+            state.layoutRevision >= 0,
+        );
+        state.layoutRevision++;
+      }
+    };
+    await assert.rejects(f.read(), /geometry evaluation failed/);
+    assert.ok(changed);
+    assert.equal(f.input.length, 0);
+    assert.equal(f.objects.size, 0);
+    const state = f.dom.window.eval(
+      'globalThis[Symbol.for("zenx-browser-targeted-input-v2")]',
+    );
+    assert.ok(
+      state !== null && typeof state === "object" && "nativeFrames" in state,
+    );
+    assert.ok(state.nativeFrames instanceof f.dom.window.WeakMap);
+    assert.equal(state.nativeFrames.has(f.frame), false);
+  } finally {
+    f.dom.window.close();
+  }
+});
+
+test("same-origin evidence rejects non-JSON and unbounded content instead of dropping or coercing it", async (t) => {
+  for (const [label, extra] of [
+    ["undefined", () => undefined],
+    ["nonfinite", () => Infinity],
+    ["function", () => () => "not JSON"],
+    ["symbol", () => Symbol("not JSON")],
+    [
+      "cycle",
+      () => {
+        const value: { self?: unknown } = {};
+        value.self = value;
+        return value;
+      },
+    ],
+    ["nonplain", () => new Date(0)],
+    [
+      "getter",
+      () =>
+        Object.defineProperty({}, "value", {
+          enumerable: true,
+          get() {
+            throw new Error("Getter must not execute");
+          },
+        }),
+    ],
+    ["sparse array", () => Array(2)],
+    ["array property", () => Object.assign([1], { extra: true })],
+    [
+      "deep",
+      () => {
+        let value: unknown = null;
+        for (let i = 0; i < 34; i++) value = { next: value };
+        return value;
+      },
+    ],
+    ["many nodes", () => Array(32769).fill(null)],
+    ["oversized", () => "x".repeat(8388609)],
+  ] as const)
+    await t.test(label, async () => {
+      const f = fixture(false, true);
+      try {
+        f.hooks.snapshot = (value) => {
+          Object.assign(value, { extra: extra() });
+        };
+        await assert.rejects(f.read(), /bounded plain JSON/);
+        assert.equal(f.input.length, 0);
+        assert.equal(f.objects.size, 0);
+      } finally {
+        f.dom.window.close();
+      }
+    });
+});
 
 test("native content quad registration requires a fresh observation and maps scale without changing Input coordinates", async () => {
   const f = fixture();
@@ -415,46 +727,68 @@ test("malformed, projective, singular and ill-conditioned native quads fail clos
     assert.throws(() => requireBrowserInputContentQuad(quad), /quad/);
 });
 
-test("nested ordinary frame mapping starts from the transformed parent's real child point", async () => {
-  const f = fixture();
-  try {
-    const inner = f.child.createElement("iframe");
-    inner.style.cssText = "width:40px;height:30px;border:0;padding:0";
-    f.child.body.append(inner);
-    const document = inner.contentDocument!;
-    document.body.innerHTML = "<canvas></canvas>";
-    Object.defineProperties(document.defaultView!, {
-      innerWidth: { value: 40 },
-      innerHeight: { value: 30 },
-    });
-    inner.getBoundingClientRect = () => ({
-      x: 20,
-      y: 10,
-      left: 20,
-      top: 10,
-      width: 40,
-      height: 30,
-      right: 60,
-      bottom: 40,
-      toJSON() {},
-    });
-    f.child.elementFromPoint = () => inner;
-    const points: number[][] = [];
-    document.elementFromPoint = (x, y) => {
-      points.push([x, y]);
-      return document.querySelector("canvas");
-    };
-    const observed = await f.ready();
-    assert.equal(observed.frameDocuments?.length, 2);
-    await f.dispatch(observed, { kind: "click", x: 130, y: 100 });
-    assert.ok(
-      points.length > 0 && points.every(([x, y]) => x === 20 && y === 20),
-      "Native outer coordinates are not offset twice",
-    );
-  } finally {
-    f.dom.window.close();
-  }
-});
+for (const reorderedTransport of [false, true])
+  test(`nested ordinary frame mapping preserves child points and ordered evidence with reordered transport ${reorderedTransport}`, async () => {
+    const f = fixture(false, reorderedTransport);
+    try {
+      const inner = f.child.createElement("iframe");
+      inner.style.cssText = "width:40px;height:30px;border:0;padding:0";
+      f.child.body.append(inner);
+      const document = inner.contentDocument!;
+      document.body.innerHTML = "<canvas></canvas>";
+      Object.defineProperties(document.defaultView!, {
+        innerWidth: { value: 40 },
+        innerHeight: { value: 30 },
+      });
+      inner.getBoundingClientRect = () => ({
+        x: 20,
+        y: 10,
+        left: 20,
+        top: 10,
+        width: 40,
+        height: 30,
+        right: 60,
+        bottom: 40,
+        toJSON() {},
+      });
+      f.child.elementFromPoint = () => inner;
+      const points: number[][] = [];
+      document.elementFromPoint = (x, y) => {
+        points.push([x, y]);
+        return document.querySelector("canvas");
+      };
+      const observed = await f.ready();
+      assert.equal(observed.frameDocuments?.length, 2);
+      if (reorderedTransport) {
+        f.hooks.snapshot = (value) => {
+          value.frameAncestorCandidates?.reverse();
+        };
+        await assert.rejects(
+          f.read(),
+          /observation changed during geometry verification/,
+        );
+        assert.equal(f.input.length, 0);
+        assert.equal(f.objects.size, 0);
+        f.hooks.snapshot = (value) => {
+          value.frameDocuments?.reverse();
+        };
+        await assert.rejects(
+          f.read(),
+          /frame evidence is unavailable or malformed/,
+        );
+        assert.equal(f.input.length, 0);
+        assert.equal(f.objects.size, 0);
+        delete f.hooks.snapshot;
+      }
+      await f.dispatch(observed, { kind: "click", x: 130, y: 100 });
+      assert.ok(
+        points.length > 0 && points.every(([x, y]) => x === 20 && y === 20),
+        "Native outer coordinates are not offset twice",
+      );
+    } finally {
+      f.dom.window.close();
+    }
+  });
 
 test("slot ancestry is included when the iframe itself has no transform", async () => {
   const f = fixture(true);

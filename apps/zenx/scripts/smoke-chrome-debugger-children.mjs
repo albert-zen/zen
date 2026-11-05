@@ -16,6 +16,13 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import WebSocket, { WebSocketServer } from "ws";
 import { observeOwnedChild } from "../src/main/owned-child-process.js";
+import { ChromeExtensionBridge } from "../src/main/chrome-extension-bridge.js";
+import {
+  FixtureBridgeRelay,
+  prepareSentinelExpression,
+  runExtensionProviderAcceptance,
+  serveProviderFixture,
+} from "./chrome-extension-provider-smoke.mjs";
 
 const runFile = promisify(execFile);
 const sourceDirectory = fileURLToPath(
@@ -150,7 +157,7 @@ export function browserArguments(profile, extension, rootUrl) {
     `--load-extension=${extension}`,
     `--disable-extensions-except=${extension}`,
     "--site-per-process",
-    `--host-resolver-rules=${HOSTS.map((host) => `MAP ${host} 127.0.0.1`).join(",")}`,
+    `--host-resolver-rules=${[...HOSTS, "localhost", "nested.localhost"].map((host) => `MAP ${host} 127.0.0.1`).join(",")}`,
     "--no-first-run",
     "--no-default-browser-check",
     rootUrl,
@@ -415,6 +422,9 @@ export async function runChromeDebuggerSmoke() {
     observation,
     http,
     nativeServer,
+    providerBridge,
+    providerNativeUrl,
+    providerRelay,
     phase = "prepare",
     failure,
     cleanupFailure;
@@ -436,6 +446,7 @@ export async function runChromeDebuggerSmoke() {
   };
   try {
     http = createServer((request, response) => {
+      if (serveProviderFixture(request, response)) return;
       const index = ["/root", "/child", "/nested"].indexOf(request.url);
       if (index < 0 || request.headers.host !== new URL(urls[index]).host) {
         response.writeHead(404).end();
@@ -466,12 +477,16 @@ export async function runChromeDebuggerSmoke() {
           `chrome-extension://${EXTENSION_ID}`,
           `chrome-extension://${EXTENSION_ID}/`,
         ].includes(request.headers.origin) ||
-        connections.length >= 2
+        (providerNativeUrl === undefined
+          ? connections.length >= 2
+          : providerRelay !== undefined)
       ) {
         socket.close(1008, "Fixture scope mismatch");
         return;
       }
-      connections.push(new FixtureNativeConnection(socket));
+      if (providerNativeUrl === undefined)
+        connections.push(new FixtureNativeConnection(socket));
+      else providerRelay = new FixtureBridgeRelay(socket, providerNativeUrl);
     });
     const extension = path.join(directory, "extension");
     report.productionWorkerSha256 = await prepareExtension(
@@ -781,10 +796,70 @@ export async function runChromeDebuggerSmoke() {
         );
         checks.freshTransportAcceptsNewRoot =
           checks.oldTransportSessionRejected = true;
-        report.nativePortConnections = connections.length;
+        // Retire diagnostic auto-attach before the real worker creates a fresh
+        // Native Port. Never replay hello or transfer an old root to the bridge.
+        setPhase("provider:fresh-native-port");
+        await next.success(
+          tabId,
+          successor,
+          "Target.setAutoAttach",
+          autoAttach(false),
+        );
+        const sentinel = await next.success(
+          tabId,
+          successor,
+          "Runtime.evaluate",
+          {
+            expression: prepareSentinelExpression,
+            returnByValue: true,
+          },
+        );
+        assert.deepEqual(sentinel.result.value, {
+          visible: "visible",
+          focused: true,
+          active: "provider-sentinel",
+          value: "owned-visible-sentinel",
+          events: [],
+        });
+        const runtimeDirectory = path.join(directory, "bridge-runtime");
+        providerBridge = await ChromeExtensionBridge.start({
+          runtimeDirectory,
+        });
+        const descriptor = JSON.parse(
+          await readFile(
+            path.join(runtimeDirectory, "chrome-bridge.json"),
+            "utf8",
+          ),
+        );
+        providerNativeUrl = descriptor.nativeWebSocketUrl;
+        next.socket.close();
+        await until(() => next.closed, "prior native transport retirement");
+        await until(
+          () => {
+            if (stopping) throw new Error("Debugger fixture has stopped");
+            if (providerRelay?.failure) throw providerRelay.failure;
+            return providerBridge.status().state === "connected";
+          },
+          "fresh production Native Port handshake with real bridge",
+          RECONNECT_DEADLINE_MS,
+        );
+        assert.ok(providerRelay);
+        report.providerAcceptance = await runExtensionProviderAcceptance({
+          bridge: providerBridge,
+          relay: providerRelay,
+          sentinelTabId: tabId,
+          browserPid: browser.pid,
+          rootPort: new URL(urls[0]).port,
+          setPhase,
+          publishReceipt: (receipt) => {
+            report.providerAcceptance = receipt;
+          },
+          oldNativeSessions: new Set([child, nested, resubscribed, newChild]),
+        });
+        report.nativePortConnections = connections.length + 1;
       })(),
-      100_000,
-      "real debugger child acceptance",
+      200_000,
+      "real debugger child and provider acceptance",
     );
     report.outcome = "passed";
   } catch (error) {
@@ -806,6 +881,10 @@ export async function runChromeDebuggerSmoke() {
       connection.failure ??= new Error("Debugger fixture cleanup started");
       connection.socket.close();
     }
+    providerRelay?.close();
+    await cleanup(async () => {
+      await providerBridge?.close();
+    });
     await cleanup(async () => {
       if (
         browser &&

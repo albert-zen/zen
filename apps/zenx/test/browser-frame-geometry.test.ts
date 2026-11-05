@@ -444,6 +444,210 @@ function ancestorTransport(f: ReturnType<typeof ownerFixture>) {
   return { send, objects, roots, hooks, released };
 }
 
+/** Native debugger dictionaries need not preserve renderer insertion order. */
+function reorderNativeDictionaryKeys(value: unknown): unknown {
+  if (Array.isArray(value))
+    return Array.from(value, reorderNativeDictionaryKeys);
+  if (value !== null && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, child]) => [key, reorderNativeDictionaryKeys(child)]),
+    );
+  return value;
+}
+
+test("ancestor identity survives native dictionary-key reordering without changing ordered facts", async () => {
+  const f = ownerFixture(true);
+  try {
+    const native = ancestorTransport(f);
+    let changedSerializations = 0;
+    const evidence = await resolveBrowserFrameAncestorEvidence(
+      "owner",
+      async (method, params) => {
+        const original = await native.send(method, params);
+        const reordered = reorderNativeDictionaryKeys(original);
+        assert.deepEqual(
+          reordered,
+          JSON.parse(JSON.stringify(original)),
+          "Transport preserves every response value, key, and array position",
+        );
+        if (JSON.stringify(original) !== JSON.stringify(reordered))
+          changedSerializations++;
+        return reordered;
+      },
+    );
+    await evidence.recheckNative();
+    assert.ok(
+      changedSerializations > 0,
+      "The transport actually reordered keys",
+    );
+    assert.equal(native.objects.size, 1);
+    assert.ok(native.released.length > 0);
+  } finally {
+    f.dom.window.close();
+  }
+});
+
+type AncestorFacts = {
+  rootDocumentKey: string;
+  documentKey: string;
+  ancestors: { nodeId: string; edge: string; extra?: string }[];
+  extra?: string;
+};
+
+const ancestorFactChanges: [string, (facts: AncestorFacts) => void][] = [
+  [
+    "root document",
+    (facts) => {
+      facts.rootDocumentKey += "-replacement";
+    },
+  ],
+  [
+    "owner document",
+    (facts) => {
+      facts.documentKey += "-replacement";
+    },
+  ],
+  [
+    "node identity",
+    (facts) => {
+      facts.ancestors[1]!.nodeId += "-replacement";
+    },
+  ],
+  [
+    "edge identity",
+    (facts) => {
+      facts.ancestors[1]!.edge = "light";
+    },
+  ],
+  [
+    "ordered ancestry",
+    (facts) => {
+      [facts.ancestors[1], facts.ancestors[2]] = [
+        facts.ancestors[2]!,
+        facts.ancestors[1]!,
+      ];
+    },
+  ],
+  [
+    "chain length",
+    (facts) => {
+      facts.ancestors.pop();
+    },
+  ],
+  [
+    "unexpected fact",
+    (facts) => {
+      facts.extra = "unrecognized evidence";
+    },
+  ],
+  [
+    "unexpected ancestor fact",
+    (facts) => {
+      facts.ancestors[1]!.extra = "unrecognized evidence";
+    },
+  ],
+];
+
+test("reordered ancestor facts still reject missing, nonstring, and oversized identity values", async () => {
+  for (const change of [
+    (facts: AncestorFacts) => {
+      Reflect.deleteProperty(facts, "documentKey");
+    },
+    (facts: AncestorFacts) => {
+      Reflect.deleteProperty(facts.ancestors[1]!, "edge");
+    },
+    (facts: AncestorFacts) => {
+      Object.assign(facts.ancestors[1]!, { edge: ["light"] });
+    },
+    (facts: AncestorFacts) => {
+      facts.ancestors[1]!.nodeId = "x".repeat(129);
+    },
+    (facts: AncestorFacts) => {
+      facts.rootDocumentKey = "x".repeat(16385);
+    },
+    (facts: AncestorFacts) => {
+      facts.ancestors = [];
+    },
+    (facts: AncestorFacts) => {
+      facts.ancestors = Array.from({ length: 129 }, () => ({
+        nodeId: "node",
+        edge: "light",
+      }));
+    },
+  ]) {
+    const f = ownerFixture(true);
+    try {
+      const native = ancestorTransport(f);
+      await assert.rejects(
+        resolveBrowserFrameAncestorEvidence("owner", async (method, params) => {
+          const response = reorderNativeDictionaryKeys(
+            await native.send(method, params),
+          );
+          if (
+            method === "Runtime.callFunctionOn" &&
+            params.returnByValue === true
+          )
+            change(
+              (response as { result: { value: AncestorFacts } }).result.value,
+            );
+          return response;
+        }),
+        /evidence is malformed/,
+      );
+      assert.equal(native.objects.size, 1);
+    } finally {
+      f.dom.window.close();
+    }
+  }
+});
+
+for (const readToChange of [1, 2, 3])
+  test(`reordered native ancestry preserves every identity field at chain read ${readToChange}`, async (t) => {
+    for (const [label, change] of ancestorFactChanges)
+      await t.test(label, async () => {
+        const f = ownerFixture(true);
+        try {
+          const native = ancestorTransport(f);
+          let reads = 0;
+          await assert.rejects(
+            resolveBrowserFrameAncestorEvidence(
+              "owner",
+              async (method, params) => {
+                const response = reorderNativeDictionaryKeys(
+                  await native.send(method, params),
+                );
+                if (
+                  method === "Runtime.callFunctionOn" &&
+                  params.returnByValue === true &&
+                  ++reads === readToChange
+                )
+                  change(
+                    (response as { result: { value: AncestorFacts } }).result
+                      .value,
+                  );
+                return response;
+              },
+            ),
+            /ancestor.*(?:changed|malformed|unavailable)/,
+          );
+          assert.equal(
+            reads,
+            readToChange,
+            "Fail at the changed observation without a repair or retry",
+          );
+          assert.equal(
+            native.objects.size,
+            1,
+            "Release only created wrappers on rejection",
+          );
+        } finally {
+          f.dom.window.close();
+        }
+      });
+  });
+
 test("native ancestor classification allows an explicit open-slot path and cleans every created wrapper", async () => {
   const f = ownerFixture(true);
   try {
