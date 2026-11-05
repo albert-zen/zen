@@ -1,0 +1,24 @@
+name: Windows foreground sampler diagnostic
+on:
+  push:
+    branches: [fix/windows-foreground-sampler-20261105]
+    paths:
+      - apps/zenx/scripts/diagnose-win32-foreground.mjs
+      - .github/workflows/windows-foreground-diagnostic.yml
+permissions:
+  contents: read
+jobs:
+  sample:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node apps/zenx/scripts/diagnose-win32-foreground.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: foreground-diagnostic
+          path: ${{ runner.temp }}/foreground-diagnostic
