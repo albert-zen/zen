@@ -17,7 +17,12 @@ import type {
   PortalAppShotShortcutHandle,
   PortalAppShotShortcutOptions,
 } from "./app-shot-portal-shortcut.js";
-import type { AppShotShortcutState } from "../app-shot.js";
+import {
+  APP_SHOT_MODIFIER_SHORTCUTS,
+  isAppShotShortcutKind,
+  type AppShotModifier,
+  type AppShotShortcutState,
+} from "../app-shot.js";
 import { imageDraft } from "./image-attachments.js";
 import { isTrustedImZenXSetupSender } from "./imzenx-setup-ipc.js";
 import type {
@@ -88,6 +93,7 @@ export interface AppShotIpcDependencies<
   registerShortcut(accelerator: string, callback: () => void): boolean;
   unregisterShortcut(accelerator: string): void;
   startModifierPair?(options: {
+    modifier: AppShotModifier;
     onTrigger(): void;
     onFailure(error: unknown): void;
     signal: AbortSignal;
@@ -387,15 +393,17 @@ export class AppShotIpcController<
       typeof token !== "string" ||
       !/^[\x21-\x7e]{1,80}$/u.test(token) ||
       typeof includeAccessibility !== "boolean" ||
-      (kind !== "both-shift" && kind !== "chord")
+      !isAppShotShortcutKind(kind)
     )
       throw new Error("Invalid App Shot shortcut request");
     if (
-      kind === "both-shift" &&
+      kind !== "chord" &&
       this.#deps.platform !== "darwin" &&
       this.#deps.platform !== "win32"
     )
-      throw new Error("Both Shift is available only on macOS and Windows");
+      throw new Error(
+        "Physical modifier pairs are available only on macOS and Windows",
+      );
     const previous = this.#owner;
     const cleanup = this.#clearOwner();
     const owner: Owner<Renderer, Frame> = {
@@ -424,10 +432,11 @@ export class AppShotIpcController<
       await cleanup;
       if (this.#owner !== owner || !this.#still(caller, session))
         throw new Error("App Shot shortcut was cancelled");
-      if (kind === "both-shift") {
+      if (kind !== "chord") {
         if (!this.#deps.startModifierPair)
-          throw new Error("Both Shift is unavailable");
+          throw new Error("App Shot modifier shortcut is unavailable");
         owner.modifierPair = this.#deps.startModifierPair({
+          modifier: APP_SHOT_MODIFIER_SHORTCUTS[kind],
           signal: owner.abort.signal,
           onTrigger: () => {
             if (this.#owner === owner) void this.onShortcut();
@@ -498,8 +507,15 @@ export class AppShotIpcController<
           throw new Error("App Shot shortcut is unavailable");
         this.#registered = true;
       }
-      return kind === "both-shift"
-        ? "Left Shift + Right Shift"
+      const mac = this.#deps.platform === "darwin";
+      const pairLabels = {
+        "both-shift": "Shift",
+        "both-control": "Control",
+        "both-alt": mac ? "Option" : "Alt",
+        "both-meta": mac ? "Command" : "Windows",
+      };
+      return kind !== "chord"
+        ? `Left ${pairLabels[kind]} + Right ${pairLabels[kind]}`
         : this.#deps.platform === "darwin"
           ? "⌘⇧2"
           : "Ctrl+Shift+2";
@@ -534,7 +550,7 @@ export class AppShotIpcController<
     void this.#clearOwner().catch(() => {});
     if (!valid) return;
     const message =
-      error instanceof Error ? error.message : "Both Shift stopped";
+      error instanceof Error ? error.message : "App Shot shortcut stopped";
     this.#deps.sendCaptured(owner.caller.renderer, {
       token: owner.token,
       disarmed: true,

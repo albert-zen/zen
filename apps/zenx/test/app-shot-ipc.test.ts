@@ -5,7 +5,11 @@ import {
   type AppShotIpcDependencies,
 } from "../src/main/app-shot-ipc.js";
 import type { PortalAppShotShortcutOptions } from "../src/main/app-shot-portal-shortcut.js";
-import type { AppShotEvent } from "../src/app-shot.js";
+import {
+  APP_SHOT_MODIFIER_SHORTCUTS,
+  type AppShotEvent,
+  type AppShotModifier,
+} from "../src/app-shot.js";
 import type { GnomeAppShotSupport } from "../src/main/app-shot-gnome.js";
 import type { AppShotCapture, AppShotService } from "../src/main/app-shot.js";
 import type { ZenXImageDraft } from "../src/main/image-attachments.js";
@@ -56,6 +60,7 @@ function fixture(
   let focused = false;
   const events: AppShotEvent[] = [];
   type ModifierOptions = {
+    modifier?: AppShotModifier;
     onTrigger(): void;
     onFailure(error: unknown): void;
     signal: AbortSignal;
@@ -413,36 +418,47 @@ test("staged bytes expire after five minutes without touching permanent storage"
   }
 });
 
-test("both Shift is opt-in on macOS and Windows and can trigger during startup", async () => {
+test("each physical pair is opt-in on macOS and Windows and can trigger during startup", async () => {
   for (const platform of ["darwin", "win32"]) {
-    const f = fixture(platform);
-    assert.equal(f.modifierStarts.length, 0);
-    let stops = 0;
-    f.setModifierStart(async (options) => {
-      options.onTrigger();
-      return {
-        async stop() {
-          stops++;
-        },
-      };
-    });
-    assert.equal(
-      await f.controller.arm(f.caller(), "pair", true, "both-shift"),
-      "Left Shift + Right Shift",
-    );
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(f.events.length, 1);
-    assert.equal(f.events[0]?.token, "pair");
-    assert.ok(f.events[0]?.image);
-    assert.equal(f.imports, 0);
-    assert.equal(f.shortcut, undefined);
-    await f.controller.disarm(f.caller(), "pair");
-    assert.equal(stops, 1);
-    assert.equal(f.modifierStarts[0]?.signal.aborted, true);
-    f.modifierStarts[0]!.onTrigger();
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(f.activeCaptures, 1);
-    f.controller.dispose();
+    for (const [kind, modifier] of Object.entries(
+      APP_SHOT_MODIFIER_SHORTCUTS,
+    )) {
+      const f = fixture(platform);
+      assert.equal(f.modifierStarts.length, 0);
+      let stops = 0;
+      f.setModifierStart(async (options) => {
+        options.onTrigger();
+        return {
+          async stop() {
+            stops++;
+          },
+        };
+      });
+      const label = {
+        shift: "Shift",
+        control: "Control",
+        alt: platform === "darwin" ? "Option" : "Alt",
+        meta: platform === "darwin" ? "Command" : "Windows",
+      }[modifier];
+      assert.equal(
+        await f.controller.arm(f.caller(), "pair", true, kind),
+        `Left ${label} + Right ${label}`,
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(f.modifierStarts[0]?.modifier, modifier);
+      assert.equal(f.events.length, 1);
+      assert.equal(f.events[0]?.token, "pair");
+      assert.ok(f.events[0]?.image);
+      assert.equal(f.imports, 0);
+      assert.equal(f.shortcut, undefined);
+      await f.controller.disarm(f.caller(), "pair");
+      assert.equal(stops, 1);
+      assert.equal(f.modifierStarts[0]?.signal.aborted, true);
+      f.modifierStarts[0]!.onTrigger();
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(f.activeCaptures, 1);
+      f.controller.dispose();
+    }
   }
 });
 
@@ -543,10 +559,11 @@ test("startup rejection and navigation leave no modifier ownership", async () =>
 
 test("Linux chord opens the chooser without capturing or claiming a foreground window", async () => {
   const f = fixture("linux");
-  await assert.rejects(
-    f.controller.arm(f.caller(), "pair", false, "both-shift"),
-    /macOS and Windows/u,
-  );
+  for (const kind of Object.keys(APP_SHOT_MODIFIER_SHORTCUTS))
+    await assert.rejects(
+      f.controller.arm(f.caller(), "pair", false, kind),
+      /macOS and Windows/u,
+    );
   assert.equal(f.modifierStarts.length, 0);
   await f.controller.arm(f.caller(), "chooser", true, "chord");
   await f.controller.onShortcut();
@@ -853,4 +870,37 @@ test("Hyprland managed action survives initial, live and configure state without
   assert.equal(f.activeCaptures, 1);
   assert.equal(f.portalStops, 1);
   f.controller.dispose();
+});
+
+test("invalid shortcut enums never launch or replace the current owner", async () => {
+  for (const platform of ["darwin", "win32", "linux"]) {
+    const f = fixture(platform);
+    await f.controller.arm(f.caller(), "current", false);
+    for (const invalid of [
+      "shift",
+      "both-super",
+      "constructor",
+      "__proto__",
+      "BOTH-META",
+      "0xa0",
+      0xa0,
+      [0xa0, 0xa1],
+      { kind: "both-alt" },
+      null,
+    ]) {
+      await assert.rejects(
+        f.controller.arm(f.caller(), "invalid", false, invalid),
+        /Invalid App Shot shortcut request/,
+      );
+      assert.equal(f.modifierStarts.length, 0);
+      assert.equal(f.modifierStops, 0);
+      assert.ok(
+        f.shortcut,
+        "Rejected request must retain the previous chord owner",
+      );
+      assert.deepEqual(f.events, []);
+    }
+    await f.controller.disarm(f.caller(), "current");
+    f.controller.dispose();
+  }
 });

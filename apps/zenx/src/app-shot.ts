@@ -1,7 +1,37 @@
 import type { AppShotSource } from "./main/app-shot.js";
 import type { ZenXImageDraft } from "./main/image-attachments.js";
 
-export type AppShotShortcutKind = "both-shift" | "chord";
+/** Fixed physical pairs only; these values never carry native masks or key codes. */
+export const APP_SHOT_MODIFIER_SHORTCUTS = {
+  "both-shift": "shift",
+  "both-control": "control",
+  "both-alt": "alt",
+  "both-meta": "meta",
+} as const;
+
+export type AppShotModifier =
+  (typeof APP_SHOT_MODIFIER_SHORTCUTS)[keyof typeof APP_SHOT_MODIFIER_SHORTCUTS];
+export type AppShotShortcutKind =
+  keyof typeof APP_SHOT_MODIFIER_SHORTCUTS | "chord";
+
+export function isAppShotModifier(value: unknown): value is AppShotModifier {
+  return (
+    value === "shift" ||
+    value === "control" ||
+    value === "alt" ||
+    value === "meta"
+  );
+}
+
+export function isAppShotShortcutKind(
+  value: unknown,
+): value is AppShotShortcutKind {
+  return (
+    value === "chord" ||
+    (typeof value === "string" &&
+      Object.hasOwn(APP_SHOT_MODIFIER_SHORTCUTS, value))
+  );
+}
 
 export interface AppShotShortcutState {
   registered: boolean;

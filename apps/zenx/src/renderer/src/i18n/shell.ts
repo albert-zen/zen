@@ -81,10 +81,19 @@ export const en = {
   appShotShortcutSaveFailed:
     "Your shortcut choice could not be saved. It applies only to this Composer.",
   appShotBothShift: "Both Shift keys",
+  appShotBothControl: "Both Control keys",
+  appShotBothOption: "Both Option keys",
+  appShotBothAlt: "Both Alt keys",
+  appShotBothCommand: "Both Command keys",
+  appShotBothWindows: "Both Windows keys",
+  appShotWindowsMenuWarning:
+    "Windows keys may also open the system menu. App Shot cannot reserve or suppress them.",
+  appShotAltMenuWarning:
+    "Alt keys may also activate app menu bars. App Shot cannot reserve or suppress them.",
   appShotChord: "⌘/Ctrl+Shift+2",
   appShotShortcutWorking: "Updating shortcut…",
-  appShotBothShiftHint:
-    "Hold left and right Shift together, not a double tap. Only modifier state is observed; the keys are not reserved and typing is not recorded. May capture immediately if both are already held. Disable to stop. Nothing is sent until you review, attach and send.",
+  appShotModifierPairHint:
+    "Hold the left and right keys of the chosen modifier together, not a double tap. Only modifier state is observed; the keys are not reserved and typing is not recorded. May capture immediately if both are already held. Disable to stop. Nothing is sent until you review, attach and send.",
   appShotGlobalHint:
     "Captures the foreground app for review while this composer remains open. Disable to release the shortcut. Enablement is not saved; attaching and sending are separate actions.",
   appShotLinuxShortcutHint:
@@ -1164,10 +1173,19 @@ export const zhCN = {
     "本机会为新输入框记住快捷键选择；每个输入框仍需单独启用捕获。",
   appShotShortcutSaveFailed: "快捷键选择未能保存，仅对当前输入框生效。",
   appShotBothShift: "左右 Shift 同时按住",
+  appShotBothControl: "左右 Control 同时按住",
+  appShotBothOption: "左右 Option 同时按住",
+  appShotBothAlt: "左右 Alt 同时按住",
+  appShotBothCommand: "左右 Command 同时按住",
+  appShotBothWindows: "左右 Windows 同时按住",
+  appShotWindowsMenuWarning:
+    "Windows 键也可能打开系统菜单；应用快照无法独占或拦截它们。",
+  appShotAltMenuWarning:
+    "Alt 键也可能激活应用菜单栏；应用快照无法独占或拦截它们。",
   appShotChord: "⌘/Ctrl+Shift+2",
   appShotShortcutWorking: "正在更新快捷键…",
-  appShotBothShiftHint:
-    "同时按住左右 Shift，不是双击。只观察修饰键状态，不独占按键，也不记录输入内容；启用时若已同时按住，可能立即捕获。取消勾选即可停止。检查、添加到草稿并发送前，不会传给模型。",
+  appShotModifierPairHint:
+    "同时按住所选修饰键的左右两枚按键，不是双击。只观察修饰键状态，不独占按键，也不记录输入内容；启用时若已同时按住，可能立即捕获。取消勾选即可停止。检查、添加到草稿并发送前，不会传给模型。",
   appShotGlobalHint:
     "仅在当前输入框仍打开时捕获前台应用并供检查。取消勾选可释放快捷键。启用状态不会保存；添加到草稿与发送是分开的操作。",
   appShotLinuxShortcutHint:

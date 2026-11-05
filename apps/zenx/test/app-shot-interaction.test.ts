@@ -5,6 +5,7 @@ import { JSDOM } from "jsdom";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { AppShotButton } from "../src/renderer/src/AppShotButton.js";
+import { isAppShotShortcutKind } from "../src/app-shot.js";
 import type {
   AppShotApi,
   AppShotEvent,
@@ -995,6 +996,9 @@ test("fresh Composers whitelist saved shortcut kinds and use platform defaults w
     for (const saved of [
       null,
       "both-shift",
+      "both-control",
+      "both-alt",
+      "both-meta",
       "chord",
       "",
       "Ctrl+K",
@@ -1006,12 +1010,16 @@ test("fresh Composers whitelist saved shortcut kinds and use platform defaults w
           assert.deepEqual(calls, []);
           await click("App Shot");
           const expected =
-            platform === "linux" || saved === "chord" ? "chord" : "both-shift";
+            platform === "linux"
+              ? "chord"
+              : isAppShotShortcutKind(saved)
+                ? saved
+                : "both-shift";
           assert.equal(shortcutRadio(expected).checked, true);
           if (platform === "linux")
             assert.ok(
-              !document.querySelector('input[value="both-shift"]'),
-              "Linux must not offer Both Shift",
+              !document.querySelector('input[value^="both-"]'),
+              "Linux must not offer physical modifier pairs",
             );
           assert.equal(shortcutCheckbox().checked, false);
           assert.equal(applicationTextCheckbox().checked, false);
@@ -1023,7 +1031,7 @@ test("fresh Composers whitelist saved shortcut kinds and use platform defaults w
             window.localStorage.getItem(shortcutPreferenceKey),
             saved,
           );
-          if (platform === "linux" && saved === "both-shift") {
+          if (platform === "linux" && saved?.startsWith("both-")) {
             await act(async () => shortcutCheckbox().click());
             assert.equal(armRequests[0]?.kind, "chord");
             assert.equal(armRequests[0]?.includeAccessibility, false);
@@ -1184,4 +1192,111 @@ test("another Composer and storage events cannot alter an existing shortcut sess
       assert.deepEqual(calls, ["list", "list", "list"]);
     },
   );
+});
+
+test("all physical pair choices use platform labels, warn about Windows menus and save only on change", async () => {
+  for (const platform of ["darwin", "win32"]) {
+    for (const [kind, macLabel, windowsLabel] of [
+      ["both-shift", "Both Shift keys", "Both Shift keys"],
+      ["both-control", "Both Control keys", "Both Control keys"],
+      ["both-alt", "Both Option keys", "Both Alt keys"],
+      ["both-meta", "Both Command keys", "Both Windows keys"],
+    ] as const) {
+      await fixture(
+        async ({ click, render, armed, armRequests, calls, attached }) => {
+          await click("App Shot");
+          assert.equal(
+            document.querySelectorAll('input[type="radio"]').length,
+            5,
+          );
+          assert.equal(
+            shortcutRadio(kind).closest("label")?.textContent,
+            platform === "darwin" ? macLabel : windowsLabel,
+          );
+          // Explicitly visit another choice first, including when the desired pair is the default.
+          await act(async () => shortcutRadio("chord").click());
+          await act(async () => shortcutRadio(kind).click());
+          assert.equal(
+            window.localStorage.getItem(shortcutPreferenceKey),
+            kind,
+          );
+          assert.equal(armRequests.length, 0);
+          assert.match(document.body.textContent!, /already held/);
+          if (platform === "win32" && kind === "both-meta")
+            assert.match(
+              document.body.textContent!,
+              /may also open the system menu/,
+            );
+          else if (platform === "win32" && kind === "both-alt")
+            assert.match(
+              document.body.textContent!,
+              /may also activate app menu bars/,
+            );
+          else
+            assert.doesNotMatch(
+              document.body.textContent!,
+              /may also (?:open the system menu|activate app menu bars)/,
+            );
+          await act(async () => shortcutCheckbox().click());
+          assert.equal(armRequests[0]?.kind, kind);
+          assert.equal(shortcutRadio(kind).closest("fieldset")?.disabled, true);
+          await act(async () => shortcutRadio("chord").click());
+          assert.equal(shortcutRadio(kind).checked, true);
+          await act(async () =>
+            window.dispatchEvent(
+              new window.StorageEvent("storage", {
+                key: shortcutPreferenceKey,
+                newValue: "chord",
+              }),
+            ),
+          );
+          assert.equal(shortcutRadio(kind).checked, true);
+          assert.equal(armRequests.length, 1);
+          await render(false, "replacement");
+          await click("App Shot");
+          assert.equal(shortcutRadio(kind).checked, true);
+          assert.equal(shortcutCheckbox().checked, false);
+          assert.equal(applicationTextCheckbox().checked, false);
+          assert.equal(armed(), null);
+          assert.equal(armRequests.length, 1);
+          assert.deepEqual(Object.keys(window.localStorage), [
+            shortcutPreferenceKey,
+          ]);
+          assert.deepEqual(attached, []);
+          assert.deepEqual(calls, ["list", "list"]);
+        },
+        platform,
+      );
+    }
+  }
+});
+
+test("physical pair choices cannot change during pending capture or shortcut startup", async () => {
+  await fixture(async ({ api, click, armRequests }) => {
+    await click("App Shot");
+    const ready = deferred<string>();
+    api.arm = async () => ready.promise;
+    await act(async () => shortcutRadio("both-control").click());
+    await act(async () => shortcutCheckbox().click());
+    assert.equal(shortcutRadio("both-alt").closest("fieldset")?.disabled, true);
+    await act(async () => shortcutRadio("both-alt").click());
+    assert.equal(shortcutRadio("both-control").checked, true);
+    await act(async () => shortcutCheckbox().click());
+    await act(async () => ready.resolve("Left Control + Right Control"));
+    const captured = deferred<ZenXImageDraft>();
+    api.capture = async () => captured.promise;
+    await click("Example");
+    assert.equal(
+      shortcutRadio("both-meta").closest("fieldset")?.disabled,
+      true,
+    );
+    await act(async () => shortcutRadio("both-meta").click());
+    assert.equal(shortcutRadio("both-control").checked, true);
+    assert.equal(
+      window.localStorage.getItem(shortcutPreferenceKey),
+      "both-control",
+    );
+    assert.equal(armRequests.length, 0);
+    await act(async () => captured.resolve(shot));
+  });
 });

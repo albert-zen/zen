@@ -12,9 +12,20 @@ import {
   type AppShotModifierPairOptions,
 } from "../src/main/app-shot-shortcut.js";
 import {
+  createWindowsModifierPairEdgeDetector,
+  windowsModifierPairPressed,
   createWindowsShiftPairEdgeDetector,
   windowsShiftPairPressed,
 } from "../src/main/app-shot-shortcut-worker.js";
+
+import type { AppShotModifier } from "../src/app-shot.js";
+
+const modifierPairs = [
+  { modifier: "shift", masks: [0x2, 0x4], keys: [0xa0, 0xa1] },
+  { modifier: "control", masks: [0x1, 0x2000], keys: [0xa2, 0xa3] },
+  { modifier: "alt", masks: [0x20, 0x40], keys: [0xa4, 0xa5] },
+  { modifier: "meta", masks: [0x8, 0x10], keys: [0x5b, 0x5c] },
+] as const;
 
 class FakeChild extends EventEmitter {
   readonly stdout = new PassThrough();
@@ -82,7 +93,11 @@ function harness(
   };
 }
 
-function runNativeLogic(flags: number[], parentMatches = true) {
+function runNativeLogic(
+  flags: number[],
+  parentMatches = true,
+  modifier: unknown = "shift",
+) {
   const lines: string[] = [];
   const delays: number[] = [];
   let reads = 0;
@@ -90,7 +105,7 @@ function runNativeLogic(flags: number[], parentMatches = true) {
   runInNewContext(
     MAC_APP_SHOT_MODIFIER_PAIR_JXA + "; run(argv);",
     {
-      argv: ["42", String(flags.length)],
+      argv: ["42", String(flags.length), modifier],
       ObjC: { import: () => {} },
       $: {
         NSApplication: {
@@ -181,6 +196,7 @@ describe("App Shot modifier monitor lifecycle", () => {
       MAC_APP_SHOT_MODIFIER_PAIR_JXA,
       String(process.pid),
       "0",
+      "shift",
     ]);
     h.child.stderr.write("rea");
     h.child.stderr.write("dy\r\ntri");
@@ -500,7 +516,7 @@ describe("App Shot Windows physical modifier worker", () => {
     const h = harness({ platform: "win32", workerPath });
     const pending = h.start();
     assert.deepEqual(h.launches, [
-      { file: workerPath, args: ["app-shot-modifier-monitor"] },
+      { file: workerPath, args: ["app-shot-modifier-monitor", "0", "shift"] },
     ]);
     h.child.emit("message", "ready");
     const monitor = await pending;
@@ -559,6 +575,148 @@ describe("App Shot Windows physical modifier worker", () => {
       assert.equal(h.child.closed, true);
       assert.equal(h.triggers, 0);
       assert.equal(h.launches.length, 1);
+    }
+  });
+});
+
+describe("App Shot fixed modifier-pair choices", () => {
+  for (const {
+    modifier,
+    masks: [left, right],
+    keys: [leftKey, rightKey],
+  } of modifierPairs) {
+    it(`${modifier}: macOS samples only the chosen physical mask pair`, () => {
+      const other = modifierPairs
+        .filter((pair) => pair.modifier !== modifier)
+        .flatMap((pair) => [...pair.masks])
+        .reduce((bits, mask) => bits | mask, 0);
+      const result = runNativeLogic(
+        [0, left, 0, right, 0, other],
+        true,
+        modifier,
+      );
+      assert.deepEqual(result.lines, ["ready", "smoke:6"]);
+      assert.equal(result.reads, 6);
+      assert.ok(result.delays.every((seconds) => seconds === 0.05));
+      for (const first of [left, right]) {
+        assert.deepEqual(
+          runNativeLogic(
+            [first, left | right, left | right, first, left | right],
+            true,
+            modifier,
+          ).lines,
+          ["ready", "trigger", "trigger", "smoke:5"],
+        );
+      }
+      assert.deepEqual(
+        runNativeLogic([left | right, left | right], true, modifier).lines,
+        ["ready", "trigger", "smoke:2"],
+      );
+    });
+
+    it(`${modifier}: Windows reads only the chosen two virtual keys and high bits`, () => {
+      const read = (pressed: number[], state = -32768) => {
+        const queried: number[] = [];
+        const result = windowsModifierPairPressed((key) => {
+          queried.push(key);
+          return pressed.includes(key) ? state : 0;
+        }, modifier);
+        assert.ok(queried.every((key) => key === leftKey || key === rightKey));
+        return { result, queried };
+      };
+      assert.equal(read([leftKey]).result, false);
+      assert.equal(read([rightKey]).result, false);
+      assert.equal(read([leftKey, rightKey], 1).result, false);
+      assert.deepEqual(read([leftKey, rightKey]), {
+        result: true,
+        queried: [leftKey, rightKey],
+      });
+      assert.equal(
+        read(
+          modifierPairs
+            .filter((pair) => pair.modifier !== modifier)
+            .flatMap((pair) => [...pair.keys]),
+        ).result,
+        false,
+      );
+      for (const first of [leftKey, rightKey]) {
+        const samples = [
+          [leftKey, rightKey],
+          [leftKey, rightKey],
+          [],
+          [first],
+          [leftKey, rightKey],
+          [first],
+          [leftKey, rightKey],
+        ];
+        let index = 0;
+        const edge = createWindowsModifierPairEdgeDetector(
+          () => read(samples[index++]!).result,
+        );
+        assert.deepEqual(
+          samples.map(() => edge()),
+          [true, false, false, false, true, false, true],
+        );
+      }
+    });
+
+    it(`${modifier}: launches only the fixed enum and rejects Linux without a worker`, async () => {
+      for (const platform of ["darwin", "win32"] as const) {
+        const h = harness({
+          platform,
+          modifier,
+          workerPath: "C:\\zenx\\worker.js",
+        });
+        const pending = h.start();
+        assert.equal(h.launches[0]?.args.at(-1), modifier);
+        if (platform === "darwin") h.child.stderr.write("ready\ntrigger\n");
+        else {
+          h.child.emit("message", "ready");
+          h.child.emit("message", "trigger");
+        }
+        const monitor = await pending;
+        assert.equal(h.triggers, 1);
+        await monitor.stop();
+        assert.equal(h.child.closed, true);
+      }
+      const unsupported = harness({ platform: "linux", modifier });
+      await assert.rejects(unsupported.start(), /unavailable/);
+      assert.equal(unsupported.launches.length, 0);
+    });
+  }
+
+  it("rejects unknown names, inherited property names and numeric masks before launching or reading", async () => {
+    for (const value of [
+      "super",
+      "constructor",
+      "__proto__",
+      "SHIFT",
+      "0xa0",
+      0xa0,
+      [0xa0, 0xa1],
+      null,
+    ]) {
+      const modifier = value as AppShotModifier;
+      for (const platform of ["darwin", "win32"] as const) {
+        const h = harness({
+          platform,
+          modifier,
+          workerPath: "C:\\zenx\\worker.js",
+        });
+        await assert.rejects(h.start(), /modifier/i);
+        assert.equal(h.launches.length, 0);
+      }
+      let reads = 0;
+      assert.throws(
+        () =>
+          windowsModifierPairPressed(() => {
+            reads++;
+            return 0;
+          }, modifier),
+        /modifier/i,
+      );
+      assert.equal(reads, 0);
+      assert.throws(() => runNativeLogic([0], true, value), /modifier/i);
     }
   });
 });

@@ -55,7 +55,7 @@ export function AppShotButton({
   const [shortcutBusy, setShortcutBusy] = useState(false);
   const shortcutRequested = useRef(false);
   const shortcutOperation = useRef(0);
-  const supportsBothShift =
+  const supportsModifierPairs =
     window.zenx.platform === "darwin" || window.zenx.platform === "win32";
   // Snapshot only: another Composer or a storage event must not alter a live
   // shortcut session. Reading a choice never restores capture authority.
@@ -67,13 +67,30 @@ export function AppShotButton({
     if (
       disabled ||
       armed ||
+      busy ||
       shortcutBusy ||
-      (kind === "both-shift" && !supportsBothShift)
+      (kind !== "chord" && !supportsModifierPairs)
     )
       return;
     setShortcutKind(kind);
     setShortcutSaveFailed(!saveAppShotShortcutPreference(kind));
   };
+  const modifierChoices = [
+    ["both-shift", "appShotBothShift"],
+    ["both-control", "appShotBothControl"],
+    [
+      "both-alt",
+      window.zenx.platform === "darwin"
+        ? "appShotBothOption"
+        : "appShotBothAlt",
+    ],
+    [
+      "both-meta",
+      window.zenx.platform === "darwin"
+        ? "appShotBothCommand"
+        : "appShotBothWindows",
+    ],
+  ] as const;
   const pending = useRef(false);
   const [configuration, setConfiguration] =
     useState<AppShotConfiguration | null>(null);
@@ -600,7 +617,7 @@ export function AppShotButton({
               </details>
             )}
             {!managedByHyprland && (
-              <fieldset disabled={armed || shortcutBusy}>
+              <fieldset disabled={disabled || armed || busy || shortcutBusy}>
                 <legend>{t("appShotShortcutPreference")}</legend>
                 <p className="app-shot-hint">
                   {t("appShotShortcutRemembered")}
@@ -610,18 +627,19 @@ export function AppShotButton({
                     {t("appShotShortcutSaveFailed")}
                   </p>
                 )}
-                {supportsBothShift && (
-                  <label className="app-shot-option">
-                    <input
-                      type="radio"
-                      name={`app-shot-shortcut-${token}`}
-                      value="both-shift"
-                      checked={shortcutKind === "both-shift"}
-                      onChange={() => changeShortcutKind("both-shift")}
-                    />
-                    {t("appShotBothShift")}
-                  </label>
-                )}
+                {supportsModifierPairs &&
+                  modifierChoices.map(([kind, label]) => (
+                    <label className="app-shot-option" key={kind}>
+                      <input
+                        type="radio"
+                        name={`app-shot-shortcut-${token}`}
+                        value={kind}
+                        checked={shortcutKind === kind}
+                        onChange={() => changeShortcutKind(kind)}
+                      />
+                      {t(label)}
+                    </label>
+                  ))}
                 <label className="app-shot-option">
                   <input
                     type="radio"
@@ -661,11 +679,21 @@ export function AppShotButton({
                       ? "appShotPortalHint"
                       : window.zenx.platform === "linux"
                         ? "appShotLinuxShortcutHint"
-                        : shortcutKind === "both-shift"
-                          ? "appShotBothShiftHint"
+                        : shortcutKind !== "chord"
+                          ? "appShotModifierPairHint"
                           : "appShotGlobalHint",
               )}
             </p>
+            {window.zenx.platform === "win32" &&
+              (shortcutKind === "both-meta" || shortcutKind === "both-alt") && (
+                <p className="app-shot-hint">
+                  {t(
+                    shortcutKind === "both-meta"
+                      ? "appShotWindowsMenuWarning"
+                      : "appShotAltMenuWarning",
+                  )}
+                </p>
+              )}
             {portalState && (
               <>
                 <p role="status" className="app-shot-hint">

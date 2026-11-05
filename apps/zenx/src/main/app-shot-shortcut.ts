@@ -1,8 +1,9 @@
 import { fork, spawn, type ChildProcess } from "node:child_process";
 import { win32 } from "node:path";
+import { isAppShotModifier, type AppShotModifier } from "../app-shot.js";
 
 /**
- * Observes only the two physical Shift modifier bits. It does not install an
+ * Observes only the chosen two physical modifier bits. It does not install an
  * event tap, request Accessibility access, read key contents or inject input.
  * Ready/trigger go to stderr because that is where JXA console.log writes.
  *
@@ -17,6 +18,12 @@ ObjC.import("unistd");
 function run(argv) {
   const ownerPid = Number(argv[0]);
   const sampleLimit = Number(argv[1]);
+  const modifier = argv[2] === undefined ? "shift" : argv[2];
+  const masks = { shift: [0x2, 0x4], control: [0x1, 0x2000], alt: [0x20, 0x40], meta: [0x8, 0x10] };
+  if (typeof modifier !== "string" || !Object.prototype.hasOwnProperty.call(masks, modifier)) {
+    throw Error("Invalid App Shot modifier");
+  }
+  const pair = masks[modifier];
   if (!Number.isInteger(ownerPid) || ownerPid <= 1 ||
       !Number.isInteger(sampleLimit) || sampleLimit < 0 || sampleLimit > 20) {
     throw Error("Invalid modifier monitor arguments");
@@ -26,7 +33,7 @@ function run(argv) {
   console.log("ready");
   while (Number($.getppid()) === ownerPid) {
     const flags = Number($.CGEventSourceFlagsState(0));
-    const pressed = (flags & 0x2) !== 0 && (flags & 0x4) !== 0;
+    const pressed = (flags & pair[0]) !== 0 && (flags & pair[1]) !== 0;
     if (pressed && !wasPressed) console.log("trigger");
     wasPressed = pressed;
     samples++;
@@ -43,6 +50,8 @@ export interface AppShotModifierPair {
 }
 
 export interface AppShotModifierPairOptions {
+  /** Omitted by existing Both Shift callers; never an arbitrary chord or mask. */
+  modifier?: AppShotModifier;
   /** May fire immediately after the ready message, before start's await resumes. */
   onTrigger: () => void;
   /** Called once on failure after ready. Startup failures reject start instead. */
@@ -84,6 +93,9 @@ export async function startAppShotModifierPair(
   options: AppShotModifierPairOptions,
   dependencies: AppShotModifierPairDependencies = {},
 ): Promise<AppShotModifierPair> {
+  const modifier = options.modifier === undefined ? "shift" : options.modifier;
+  if (!isAppShotModifier(modifier))
+    throw new Error("Invalid App Shot modifier");
   const platform = options.platform ?? process.platform;
   if (platform !== "darwin" && platform !== "win32")
     throw new Error(
@@ -121,7 +133,11 @@ export async function startAppShotModifierPair(
       }));
   const child =
     platform === "win32"
-      ? forkWorker(options.workerPath!, ["app-shot-modifier-monitor"])
+      ? forkWorker(options.workerPath!, [
+          "app-shot-modifier-monitor",
+          "0",
+          modifier,
+        ])
       : launch("/usr/bin/osascript", [
           "-l",
           "JavaScript",
@@ -129,6 +145,7 @@ export async function startAppShotModifierPair(
           MAC_APP_SHOT_MODIFIER_PAIR_JXA,
           String(process.pid),
           "0",
+          modifier,
         ]);
 
   return await new Promise<AppShotModifierPair>((resolve, reject) => {

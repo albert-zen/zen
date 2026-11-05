@@ -117,6 +117,7 @@ try {
         ...["light", "dark"].flatMap((theme) =>
           [1280, 390].map((width) => ({ theme, width, platform: "darwin" })),
         ),
+        { theme: "light", width: 390, platform: "win32" },
         { theme: "light", width: 390, platform: "niri" },
         { theme: "dark", width: 1280, platform: "niri" },
         { theme: "dark", width: 390, platform: "portal" },
@@ -168,13 +169,64 @@ try {
         });
         await screenshot(`${name}-picker.png`);
         if (
-          platform === "darwin" &&
+          (platform === "win32" || (platform === "darwin" && width === 1280)) &&
           theme === "light" &&
-          width === 1280 &&
           context === "pixels"
         ) {
+          const pairLabels = [
+            ["both-shift", "Shift"],
+            ["both-control", "Control"],
+            ["both-alt", platform === "darwin" ? "Option" : "Alt"],
+            ["both-meta", platform === "darwin" ? "Command" : "Windows"],
+          ];
+          for (const [kind, label] of pairLabels) {
+            const selector = `input[type="radio"][value="${kind}"]`;
+            await click(selector);
+            assert.equal(
+              await evaluate(
+                `document.querySelector(${JSON.stringify(selector)}).checked`,
+              ),
+              true,
+            );
+            assert.equal(
+              await evaluate(
+                `document.querySelector(${JSON.stringify(selector)}).closest('label').textContent.includes(${JSON.stringify(label)})`,
+              ),
+              true,
+            );
+            assert.equal(
+              await evaluate(
+                `document.querySelector('.app-shot-shortcut input[type="checkbox"]').checked`,
+              ),
+              false,
+            );
+            if (
+              platform === "win32" &&
+              (kind === "both-alt" || kind === "both-meta")
+            ) {
+              const warning =
+                kind === "both-alt" ? "激活应用菜单栏" : "打开系统菜单";
+              assert.equal(
+                await evaluate(
+                  `document.querySelector('.app-shot-shortcut').textContent.includes(${JSON.stringify(warning)})`,
+                ),
+                true,
+              );
+              await reveal(".app-shot-shortcut > p:last-of-type");
+              receipt.states.push({
+                phase: kind + "-menu-warning",
+                ...(await check(width, height)),
+              });
+              await screenshot(`${name}-${kind}-warning.png`);
+            }
+          }
+          // The pre-existing chord stays selectable, then save a non-default pair.
           await click('input[type="radio"][value="chord"]');
           await wait(`document.querySelector('input[value="chord"]').checked`);
+          await click('input[type="radio"][value="both-meta"]');
+          await wait(
+            `document.querySelector('input[value="both-meta"]').checked`,
+          );
           // A fresh page keeps only the actual renderer preference, not React state.
           await send("Page.navigate", { url: "about:blank" });
           await wait('location.href === "about:blank"');
@@ -184,7 +236,7 @@ try {
           );
           assert.equal(
             await evaluate(
-              `document.querySelector('input[value="chord"]').checked`,
+              `document.querySelector('input[value="both-meta"]').checked`,
             ),
             true,
           );
@@ -206,12 +258,12 @@ try {
             ),
             /每个输入框仍需单独启用/,
           );
-          await reveal(".app-shot-shortcut fieldset");
+          await reveal('input[type="radio"][value="both-meta"]');
           const remembered = await check(width, height);
           assert.equal(remembered.imageReady, false);
           assert.equal(remembered.count, "已添加 0 张，未发送。");
           receipt.states.push({
-            phase: "remembered-shortcut-disabled",
+            phase: "remembered-meta-pair-disabled",
             ...remembered,
           });
           await screenshot(`${name}-remembered-shortcut.png`);

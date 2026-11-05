@@ -8,6 +8,10 @@ import {
   startAppShotModifierPair,
 } from "../src/main/app-shot-shortcut.js";
 
+import type { AppShotModifier } from "../src/app-shot.js";
+
+const modifiers = ["shift", "control", "alt", "meta"] as const;
+
 const nativeSkip =
   process.env.ZENX_APP_SHOT_NATIVE_SMOKE !== "1"
     ? "Opt in with ZENX_APP_SHOT_NATIVE_SMOKE=1 on a native macOS runner"
@@ -21,43 +25,46 @@ const execute = promisify(execFile);
 // These tests never synthesize keys, capture windows, or change TCC grants.
 // They validate API loading, finite native sampling, parent loss and disposal,
 // not physical keyboard delivery, Screen Recording, or complete App Shot UX.
-it(
-  "App Shot native smoke: reads the real modifier API for four finite samples",
-  { skip: nativeSkip, timeout: 10_000 },
-  async (context) => {
-    const result = await execute(
-      "/usr/bin/osascript",
-      [
-        "-l",
-        "JavaScript",
-        "-e",
-        MAC_APP_SHOT_MODIFIER_PAIR_JXA,
-        String(process.pid),
-        "4",
-      ],
-      {
-        timeout: 5000,
-        killSignal: "SIGKILL",
-        maxBuffer: 4096,
-        encoding: "utf8",
-      },
-    );
-    const lines = result.stderr.trim().split(/\r?\n/u);
-    assert.equal(result.stdout.trim(), "");
-    assert.equal(lines[0], "ready");
-    assert.equal(lines.at(-1), "smoke:4");
-    assert.ok(lines.slice(1, -1).every((line) => line === "trigger"));
-    context.diagnostic(
-      JSON.stringify({
-        platform: process.platform,
-        nativeApi: "CGEventSourceFlagsState",
-        samples: 4,
-        keyboardInjection: false,
-        physicalChordVerified: false,
-      }),
-    );
-  },
-);
+for (const modifier of modifiers)
+  it(
+    `App Shot native smoke: ${modifier} API loads for four finite samples (not physical acceptance)`,
+    { skip: nativeSkip, timeout: 10_000 },
+    async (context) => {
+      const result = await execute(
+        "/usr/bin/osascript",
+        [
+          "-l",
+          "JavaScript",
+          "-e",
+          MAC_APP_SHOT_MODIFIER_PAIR_JXA,
+          String(process.pid),
+          "4",
+          modifier,
+        ],
+        {
+          timeout: 5000,
+          killSignal: "SIGKILL",
+          maxBuffer: 4096,
+          encoding: "utf8",
+        },
+      );
+      const lines = result.stderr.trim().split(/\r?\n/u);
+      assert.equal(result.stdout.trim(), "");
+      assert.equal(lines[0], "ready");
+      assert.equal(lines.at(-1), "smoke:4");
+      assert.ok(lines.slice(1, -1).every((line) => line === "trigger"));
+      context.diagnostic(
+        JSON.stringify({
+          platform: process.platform,
+          nativeApi: "CGEventSourceFlagsState",
+          modifier,
+          samples: 4,
+          keyboardInjection: false,
+          physicalChordVerified: false,
+        }),
+      );
+    },
+  );
 
 it(
   "App Shot native smoke: rejects a mismatched parent without sampling",
@@ -148,13 +155,16 @@ function forkWindowsWorker(
   });
 }
 
-function observeWindowsWorker(disconnectOnReady: boolean): Promise<unknown[]> {
+function observeWindowsWorker(
+  disconnectOnReady: boolean,
+  modifier: AppShotModifier = "shift",
+): Promise<unknown[]> {
   return new Promise((resolve, reject) => {
     const child = forkWindowsWorker(
       windowsWorkerPath,
       disconnectOnReady
-        ? ["app-shot-modifier-monitor"]
-        : ["app-shot-modifier-smoke", "4"],
+        ? ["app-shot-modifier-monitor", "0", modifier]
+        : ["app-shot-modifier-smoke", "4", modifier],
     );
     const messages: unknown[] = [];
     let failure: Error | undefined;
@@ -242,25 +252,29 @@ function observeWindowsWorker(disconnectOnReady: boolean): Promise<unknown[]> {
   });
 }
 
-it(
-  "App Shot native smoke: reads real GetAsyncKeyState for four finite samples",
-  { skip: windowsSkip, timeout: 10_000 },
-  async (context) => {
-    const messages = await observeWindowsWorker(false);
-    assert.equal(messages[0], "ready");
-    assert.deepEqual(messages.at(-1), { type: "smoke", samples: 4 });
-    assert.ok(messages.slice(1, -1).every((message) => message === "trigger"));
-    context.diagnostic(
-      JSON.stringify({
-        platform: process.platform,
-        nativeApi: "GetAsyncKeyState",
-        samples: 4,
-        keyboardInjection: false,
-        physicalChordVerified: false,
-      }),
-    );
-  },
-);
+for (const modifier of modifiers)
+  it(
+    `App Shot native smoke: ${modifier} GetAsyncKeyState loads for four finite samples (not physical acceptance)`,
+    { skip: windowsSkip, timeout: 10_000 },
+    async (context) => {
+      const messages = await observeWindowsWorker(false, modifier);
+      assert.equal(messages[0], "ready");
+      assert.deepEqual(messages.at(-1), { type: "smoke", samples: 4 });
+      assert.ok(
+        messages.slice(1, -1).every((message) => message === "trigger"),
+      );
+      context.diagnostic(
+        JSON.stringify({
+          platform: process.platform,
+          nativeApi: "GetAsyncKeyState",
+          modifier,
+          samples: 4,
+          keyboardInjection: false,
+          physicalChordVerified: false,
+        }),
+      );
+    },
+  );
 
 it(
   "App Shot native smoke: Windows worker exits after its parent IPC disconnects",

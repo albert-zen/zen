@@ -177,7 +177,12 @@ const api: AppShotApi = {
 };
 Object.assign(window, {
   zenx: {
-    platform: niri || portal ? "linux" : "darwin",
+    platform:
+      niri || portal
+        ? "linux"
+        : params.get("platform") === "win32"
+          ? "win32"
+          : "darwin",
     appShot: api,
     imageAttachments: { read: async () => png },
   },
