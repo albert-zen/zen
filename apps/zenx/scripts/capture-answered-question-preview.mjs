@@ -173,6 +173,24 @@ for (const scene of [
         ),
         1,
       );
+      assert.equal(
+        await evaluate(
+          "document.querySelectorAll('.user-question-status').length",
+        ),
+        0,
+      );
+      assert.equal(
+        await evaluate(
+          "document.querySelectorAll('.user-question-text > span').length",
+        ),
+        1,
+      );
+      assert.deepEqual(
+        await evaluate(
+          "[...document.querySelectorAll('.user-question-text textarea')].map(e => !!e.getAttribute('aria-label'))",
+        ),
+        [true, true],
+      );
       await screenshot(`question-card-${scene.theme}-${scene.width}.png`);
       evidence.scenes.push({
         ...scene,

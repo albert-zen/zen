@@ -160,59 +160,71 @@ function QuestionCard({
   });
   return (
     <article className="user-question-card" data-question-call-id={callItemId}>
-      <p className="user-question-status" role="status">
-        {t(`questionState.${status}`)}
-      </p>
+      {status !== "open" && (
+        <p className="user-question-status" role="status">
+          {t(`questionState.${status}`)}
+        </p>
+      )}
       {question.specification.questions.map((q) => {
         const answer = draft.answers.find((a) => a.questionId === q.id);
         return (
           <fieldset key={q.id} disabled={unavailable}>
             <legend>{q.prompt}</legend>
-            <ul className="user-question-options">
-              {q.options?.map((option) => {
-                const selected = answer?.optionIds.includes(option.id) ?? false;
-                return (
-                  <li key={option.id}>
-                    <label
-                      className="user-question-option"
-                      data-selected={selected ? "true" : undefined}
-                    >
-                      <input
-                        type={q.multiSelect ? "checkbox" : "radio"}
-                        name={JSON.stringify([threadId, callItemId, q.id])}
-                        checked={selected}
-                        onChange={() =>
-                          edit(q.id, {
-                            optionIds: q.multiSelect
-                              ? selected
-                                ? answer!.optionIds.filter(
-                                    (id) => id !== option.id,
-                                  )
-                                : [...(answer?.optionIds ?? []), option.id]
-                              : [option.id],
-                          })
-                        }
-                      />
-                      <span
-                        className="user-question-option-mark"
-                        aria-hidden="true"
+            {q.options?.length ? (
+              <ul className="user-question-options">
+                {q.options?.map((option) => {
+                  const selected =
+                    answer?.optionIds.includes(option.id) ?? false;
+                  return (
+                    <li key={option.id}>
+                      <label
+                        className="user-question-option"
+                        data-selected={selected ? "true" : undefined}
                       >
-                        {selected ? <Icon name="check" size={12} /> : null}
-                      </span>
-                      <span className="user-question-option-copy">
-                        <strong>{option.label}</strong>
-                        {option.description ? (
-                          <small>{option.description}</small>
-                        ) : null}
-                      </span>
-                    </label>
-                  </li>
-                );
-              })}
-            </ul>
+                        <input
+                          type={q.multiSelect ? "checkbox" : "radio"}
+                          name={JSON.stringify([threadId, callItemId, q.id])}
+                          checked={selected}
+                          onChange={() =>
+                            edit(q.id, {
+                              optionIds: q.multiSelect
+                                ? selected
+                                  ? answer!.optionIds.filter(
+                                      (id) => id !== option.id,
+                                    )
+                                  : [...(answer?.optionIds ?? []), option.id]
+                                : [option.id],
+                            })
+                          }
+                        />
+                        <span
+                          className="user-question-option-mark"
+                          aria-hidden="true"
+                        >
+                          {selected ? <Icon name="check" size={12} /> : null}
+                        </span>
+                        <span className="user-question-option-copy">
+                          <strong>{option.label}</strong>
+                          {option.description ? (
+                            <small>{option.description}</small>
+                          ) : null}
+                        </span>
+                      </label>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : null}
             <label className="user-question-text">
-              <span>{t("questionFreeText")}</span>
+              {q.options?.length ? (
+                <span>{t("questionOptionalDetails")}</span>
+              ) : null}
               <textarea
+                aria-label={
+                  q.options?.length
+                    ? `${q.prompt} · ${t("questionOptionalDetails")}`
+                    : q.prompt
+                }
                 rows={1}
                 maxLength={8192}
                 value={answer?.text ?? ""}

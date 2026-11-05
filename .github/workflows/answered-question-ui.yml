@@ -9,6 +9,7 @@ on:
       - apps/zenx/src/renderer/src/ThreadView.tsx
       - apps/zenx/src/renderer/src/i18n/shell.ts
       - apps/zenx/test/answered-question*.test.ts
+      - apps/zenx/test/user-question-cards-interaction.test.ts
       - apps/zenx/test/fixtures/answered-question-data.ts
       - apps/zenx/test/fixtures/answered-question-card-visual.tsx
       - apps/zenx/src/renderer/src/UserQuestionCards.tsx
@@ -36,7 +37,7 @@ jobs:
       - run: npm ci
       - run: npm run build --workspace @zenx/plugin-sdk
       - name: Native answer provenance and real renderer interactions
-        run: node --import tsx --test apps/zenx/test/answered-question-presentation.test.ts apps/zenx/test/answered-question-interaction.test.ts apps/zenx/test/turn-canonical-presentation.test.ts
+        run: node --import tsx --test apps/zenx/test/answered-question-presentation.test.ts apps/zenx/test/answered-question-interaction.test.ts apps/zenx/test/turn-canonical-presentation.test.ts apps/zenx/test/user-question-cards-interaction.test.ts
       - name: Build production renderer with synthetic question history
         run: node apps/zenx/scripts/build-quote-preview.mjs "${{ runner.temp }}/answered-question"
       - name: Hover, click, keyboard, navigation and historical fallback

@@ -226,55 +226,65 @@ function RoomQuestionCard({
         return (
           <fieldset key={q.id} disabled={disabled || changed}>
             <legend>{q.prompt}</legend>
-            <ul className="user-question-options">
-              {q.options?.map((option) => {
-                const selected = answer?.optionIds.includes(option.id) ?? false;
-                return (
-                  <li key={option.id}>
-                    <label
-                      className="user-question-option"
-                      data-selected={selected ? "true" : undefined}
-                    >
-                      <input
-                        type={q.multiSelect ? "checkbox" : "radio"}
-                        name={JSON.stringify([
-                          question.roomId,
-                          question.id,
-                          q.id,
-                        ])}
-                        checked={selected}
-                        onChange={() =>
-                          edit(q.id, {
-                            optionIds: q.multiSelect
-                              ? selected
-                                ? answer!.optionIds.filter(
-                                    (id) => id !== option.id,
-                                  )
-                                : [...(answer?.optionIds ?? []), option.id]
-                              : [option.id],
-                          })
-                        }
-                      />
-                      <span
-                        className="user-question-option-mark"
-                        aria-hidden="true"
+            {q.options?.length ? (
+              <ul className="user-question-options">
+                {q.options?.map((option) => {
+                  const selected =
+                    answer?.optionIds.includes(option.id) ?? false;
+                  return (
+                    <li key={option.id}>
+                      <label
+                        className="user-question-option"
+                        data-selected={selected ? "true" : undefined}
                       >
-                        {selected ? <Icon name="check" size={12} /> : null}
-                      </span>
-                      <span className="user-question-option-copy">
-                        <strong>{option.label}</strong>
-                        {option.description ? (
-                          <small>{option.description}</small>
-                        ) : null}
-                      </span>
-                    </label>
-                  </li>
-                );
-              })}
-            </ul>
+                        <input
+                          type={q.multiSelect ? "checkbox" : "radio"}
+                          name={JSON.stringify([
+                            question.roomId,
+                            question.id,
+                            q.id,
+                          ])}
+                          checked={selected}
+                          onChange={() =>
+                            edit(q.id, {
+                              optionIds: q.multiSelect
+                                ? selected
+                                  ? answer!.optionIds.filter(
+                                      (id) => id !== option.id,
+                                    )
+                                  : [...(answer?.optionIds ?? []), option.id]
+                                : [option.id],
+                            })
+                          }
+                        />
+                        <span
+                          className="user-question-option-mark"
+                          aria-hidden="true"
+                        >
+                          {selected ? <Icon name="check" size={12} /> : null}
+                        </span>
+                        <span className="user-question-option-copy">
+                          <strong>{option.label}</strong>
+                          {option.description ? (
+                            <small>{option.description}</small>
+                          ) : null}
+                        </span>
+                      </label>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : null}
             <label className="user-question-text">
-              <span>{t("questionFreeText")}</span>
+              {q.options?.length ? (
+                <span>{t("questionOptionalDetails")}</span>
+              ) : null}
               <textarea
+                aria-label={
+                  q.options?.length
+                    ? `${q.prompt} · ${t("questionOptionalDetails")}`
+                    : q.prompt
+                }
                 rows={1}
                 maxLength={8192}
                 value={answer?.text ?? ""}

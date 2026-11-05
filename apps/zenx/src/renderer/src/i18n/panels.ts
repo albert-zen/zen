@@ -66,6 +66,7 @@ export const en = {
   roomQuestionReceiptNote:
     "A saved Room response is not proof that an Agent received it.",
   questionFreeText: "Your answer or additional details",
+  questionOptionalDetails: "Additional details (optional)",
   questionSend: "Send answers",
   questionCancel: "Cancel request",
   questionCheck: "Check response",
@@ -1204,6 +1205,7 @@ export const zhCN = {
   roomQuestionReapply: "重新提交保留的回答",
   roomQuestionReceiptNote: "回答已存入聊天室不代表 Agent 已收到。",
   questionFreeText: "你的回答或补充说明",
+  questionOptionalDetails: "补充说明（可选）",
   questionSend: "发送回答",
   questionCancel: "取消本组问题",
   questionCheck: "检查回答状态",
