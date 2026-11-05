@@ -85,6 +85,8 @@ export function PluginInformationHost({
   const trigger = useRef<HTMLButtonElement>(null);
   const toolbar = useRef<HTMLDivElement>(null);
   const contentId = useId();
+  // Width changes rebuild observers; keep transition history across that rebind.
+  const hasMeasuredLayout = useRef(false);
   const previousResourceOpen = useRef(false);
   const previousPrimaryActive = useRef(false);
   const [layout, setLayout] = useState({
@@ -117,7 +119,6 @@ export function PluginInformationHost({
         ? 0
         : element.getBoundingClientRect().bottom;
     };
-    let measured = false;
     const measure = () => {
       const bounds = workspace.getBoundingClientRect();
       const resourceOpen = panel?.dataset.open === "true";
@@ -150,17 +151,21 @@ export function PluginInformationHost({
             !primaryActive
           ),
       };
-      if (measured && resourceOpen && !previousResourceOpen.current)
+      if (
+        hasMeasuredLayout.current &&
+        resourceOpen &&
+        !previousResourceOpen.current
+      )
         setOpen(false);
       if (
-        measured &&
+        hasMeasuredLayout.current &&
         previousPrimaryActive.current &&
         !primaryActive &&
         resourceOpen &&
         panel?.dataset.expanded === "true"
       )
         setOpen(false);
-      measured = true;
+      hasMeasuredLayout.current = true;
       previousResourceOpen.current = resourceOpen;
       previousPrimaryActive.current = primaryActive;
       setLayout((current) =>
