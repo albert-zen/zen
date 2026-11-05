@@ -56,6 +56,19 @@ async function until(check, label) {
 }
 const query = (selector) =>
   `document.querySelector(${JSON.stringify(selector)})`;
+async function resizeWindow(width, height) {
+  window.setSize(width, height);
+  // setSize returns before Chromium necessarily consumes the native resize.
+  // Do not locate or dispatch the next input against the previous width.
+  await until(async () => {
+    const [outerWidth] = window.getSize();
+    const [contentWidth] = window.getContentSize();
+    // macOS may constrain the requested height to its visible screen. This
+    // barrier owns horizontal hit coordinates, not an OS height guarantee.
+    if (outerWidth !== width) return false;
+    return evaluate(`window.innerWidth === ${contentWidth}`);
+  }, "native resize delivered to renderer");
+}
 async function click(selector, label = selector, systemPointer = false) {
   window.show();
   window.focus();
@@ -949,7 +962,7 @@ async function run() {
     '[data-tab-id="primary-conversation"] [role="tab"]',
     "Return to the main-conversation Tab",
   );
-  window.setSize(1000, 820);
+  await resizeWindow(1000, 820);
   await click(
     ".information-toolbar button",
     "Open information at narrow main-conversation width",
@@ -964,18 +977,18 @@ async function run() {
     "Reopen narrow overlay repeatedly",
   );
   await capture("08-narrow-reopened", "overlay");
-  window.setSize(1600, 1000);
+  await resizeWindow(1600, 1000);
   await capture("08a-open-overlay-to-dock", "dock");
   assert.equal(result.cases.at(-1).geometry.composerIdentity, true);
-  window.setSize(1000, 820);
+  await resizeWindow(1000, 820);
   await capture("08b-open-dock-to-overlay", "overlay");
   // Native layout at our exact responsive boundary, not only a spacious window.
-  window.setSize(1184, 820);
+  await resizeWindow(1184, 820);
   await capture("08c-920px-allocation-dock", "dock");
   assert.equal(result.cases.at(-1).geometry.workspace.width, 920);
   assert.equal(result.cases.at(-1).geometry.chat.width, 556);
   assert.ok(result.cases.at(-1).geometry.composer.width >= 480);
-  window.setSize(1183, 820);
+  await resizeWindow(1183, 820);
   await capture("08d-919px-allocation-overlay", "overlay");
   assert.equal(result.cases.at(-1).geometry.workspace.width, 919);
   assert.equal(result.cases.at(-1).geometry.composerIdentity, true);
@@ -1000,7 +1013,7 @@ async function run() {
     ".information-toolbar button",
     "Dismiss overlay before switching conversation",
   );
-  window.setSize(1600, 1000);
+  await resizeWindow(1600, 1000);
   await click(
     ".information-toolbar button",
     "Reopen before switching conversation",

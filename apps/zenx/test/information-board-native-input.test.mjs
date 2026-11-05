@@ -390,3 +390,34 @@ test("rejected controlled selection fails readback without retrying or bypassing
   assert.deepEqual(f.events, ["focus", "input", "change"]);
   assert.deepEqual(f.result.steps, []);
 });
+
+test("native resize waits for width while allowing OS-constrained height", async () => {
+  let native = [1600, 1000];
+  const browser = { innerWidth: 1600, innerHeight: 970 };
+  let requests = 0;
+  const helpers = await actualHelpers(["resizeWindow"], {
+    window: {
+      setSize(width, height) {
+        requests++;
+        assert.deepEqual([width, height], [1000, 820]);
+      },
+      getSize: () => native,
+      getContentSize: () => [1000, 790],
+    },
+    evaluate: async (expression) =>
+      runInNewContext(expression, { window: browser }),
+    until: async (check) => {
+      assert.equal(await check(), false, "old native size is not ready");
+      native = [1000, 790];
+      assert.equal(await check(), false, "old renderer size is not ready");
+      browser.innerWidth = 1000;
+      assert.equal(
+        await check(),
+        true,
+        "native titlebar height is not the renderer viewport height",
+      );
+    },
+  });
+  await helpers.resizeWindow(1000, 820);
+  assert.equal(requests, 1, "resize is not replayed");
+});
