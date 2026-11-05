@@ -1,3 +1,4 @@
+import { projectionFileRevision } from "./projection-source-revision.js";
 import type { TraceClock } from "./trace-clock.js";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
@@ -120,6 +121,8 @@ export interface RuntimeTrace {
   recordBatch?(events: readonly TraceEvent[]): Promise<TraceReceipt[]>;
 }
 export interface TraceReader {
+  /** Cheap display-cache invalidation only; never replaces fresh integrity checks before dispatch. */
+  summarySourceRevision?(threadId: string): Promise<string>;
   /** Optional immutable view; must perform the same fresh source checks as read. */
   readSnapshot?(
     threadId: string,
@@ -179,6 +182,27 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
     this.#requestImages = new TraceRequestImageStore(this.directory);
     this.#onFailure = options.onFailure;
   }
+  async summarySourceRevision(threadId: string): Promise<string> {
+    const directory = this.#threadPath(threadId);
+    try {
+      await this.#assertDirectories("threads", threadId);
+      const names = (await readdir(directory))
+        .filter((name) => name.endsWith(".jsonl"))
+        .sort();
+      const revisions = await Promise.all(
+        names.map(async (name) => [
+          name,
+          await projectionFileRevision(path.join(directory, name)),
+        ]),
+      );
+      await this.#assertDirectories("threads", threadId);
+      return JSON.stringify(revisions);
+    } catch (error) {
+      if (isCode(error, "ENOENT")) return "missing";
+      throw error;
+    }
+  }
+
   status(): TraceStatus {
     return {
       durability: this.#lastError === undefined ? "healthy" : "degraded",

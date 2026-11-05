@@ -1,3 +1,4 @@
+import { projectionFileRevision } from "./projection-source-revision.js";
 import { createHash } from "node:crypto";
 import { link, lstat, mkdir, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
@@ -62,6 +63,10 @@ export class DomainThreadJournal implements ThreadJournal {
   readonly #options: DomainThreadJournalOptions;
   readonly #owner: StorageWriterOwnership | undefined;
   readonly #live = new Map<string, CanonicalItem[]>();
+  readonly #publishedSummaryRevisions = new Map<
+    string,
+    { lastItemId: string; revision: string }
+  >();
   readonly #chains = new Map<string, Promise<unknown>>();
   readonly #operations = new Set<Promise<unknown>>();
   readonly #uncertain = new Set<string>();
@@ -221,6 +226,7 @@ export class DomainThreadJournal implements ThreadJournal {
         await this.#writeFence(first.threadId);
         await this.#items.create(first.threadId, semantic);
         this.#live.set(first.threadId, structuredClone(previous));
+        await this.#rememberSummaryRevision(first.threadId);
       } catch (error) {
         this.#uncertain.add(first.threadId);
         this.#live.delete(first.threadId);
@@ -286,6 +292,7 @@ export class DomainThreadJournal implements ThreadJournal {
         await this.#writeFence(item.threadId);
         await this.#items.create(item.threadId, semantic);
         this.#live.set(item.threadId, [item]);
+        await this.#rememberSummaryRevision(item.threadId);
         return semantic;
       }
       return this.#items.withAppendSnapshot(item.threadId, async (snapshot) => {
@@ -332,6 +339,7 @@ export class DomainThreadJournal implements ThreadJournal {
           throw new ThreadJournalAppendOutcomeUnknownError(error); // fact may be committed; compile-only reconciliation, never effect replay.
         }
         this.#live.set(item.threadId, [...previous, item]);
+        await this.#rememberSummaryRevision(item.threadId);
         // These exact items were read/reconciled in this serialized append and
         // the new suffix is durable now. No follow-up full-log scan is needed.
         return [...contexts, ...semantic];
@@ -594,6 +602,44 @@ export class DomainThreadJournal implements ThreadJournal {
       });
     else await verify();
   }
+  async summarySourceRevision(
+    threadId: string,
+    expectedLastItemId?: string,
+  ): Promise<string | undefined> {
+    if (expectedLastItemId !== undefined) {
+      const published = this.#publishedSummaryRevisions.get(threadId);
+      return published?.lastItemId === expectedLastItemId
+        ? published.revision
+        : undefined;
+    }
+    const trace = await this.trace.summarySourceRevision?.(threadId);
+    if (trace === undefined) return undefined;
+    return JSON.stringify(
+      await Promise.all([
+        projectionFileRevision(this.#path(threadId)),
+        projectionFileRevision(
+          path.join(this.#directory, "legacy", `${threadId}.jsonl`),
+        ),
+        projectionFileRevision(
+          path.join(this.#directory, "items", `${threadId}.jsonl`),
+        ),
+        trace,
+      ]),
+    );
+  }
+
+  async #rememberSummaryRevision(threadId: string): Promise<void> {
+    this.#publishedSummaryRevisions.delete(threadId);
+    try {
+      const lastItemId = this.#live.get(threadId)?.at(-1)?.id;
+      const revision = await this.summarySourceRevision(threadId);
+      if (lastItemId !== undefined && revision !== undefined)
+        this.#publishedSummaryRevisions.set(threadId, { lastItemId, revision });
+    } catch {
+      // Disposable cache receipts must not weaken or fail a durable publication.
+    }
+  }
+
   async listThreadIds(): Promise<string[]> {
     let legacy: string[] = [];
     try {
@@ -799,7 +845,9 @@ export class DomainThreadJournal implements ThreadJournal {
     await this.#options.onMigrationPhase?.("fenced");
     await this.#items.create(threadId, semantic);
     await this.#options.onMigrationPhase?.("published");
-    this.#live.set(threadId, source.items);
+    // Migration is also reached by read-only product queries. It must not
+    // retain every legacy history in the writer cache; a subsequent append
+    // already obtains its exact original prefix from serialized reconciliation.
   }
   async #writeFence(threadId: string, archiveSha256?: string): Promise<void> {
     const fence: Fence = {

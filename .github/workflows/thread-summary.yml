@@ -1,0 +1,53 @@
+name: Sidebar summary checkpoint verification
+on:
+  pull_request:
+    paths:
+      - .github/workflows/thread-summary.yml
+      - scripts/measure-thread-summary.ts
+      - src/app-server.ts
+      - src/domain-journal.ts
+      - src/journal.ts
+      - src/projection-source-revision.ts
+      - src/thread-summary.ts
+      - src/trace.ts
+      - test/thread-summary.test.ts
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: thread-summary-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  thread-summary:
+    name: Source-checked summaries and legacy migration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Summary, storage, deletion and migration regressions
+        run: >-
+          node --import tsx --test
+          test/thread-summary.test.ts
+          test/journal.test.ts
+          test/domain-journal.test.ts
+          test/thread-deletion.test.ts
+      - name: Synthetic 32-Thread sidebar source-read benchmark
+        run: |
+          node --expose-gc --import tsx scripts/measure-thread-summary.ts prepare "${{ runner.temp }}/thread-summary-fixture" 32 256 | tee "${{ runner.temp }}/thread-summary-prepare.jsonl"
+          for sample in 1 2 3; do
+            node --expose-gc --import tsx scripts/measure-thread-summary.ts measure "${{ runner.temp }}/thread-summary-fixture" | tee -a "${{ runner.temp }}/thread-summary-measure.jsonl"
+          done
+      - name: Retain synthetic Host timings and source-read counts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: thread-summary-${{ github.sha }}
+          path: ${{ runner.temp }}/thread-summary-*.jsonl
+          if-no-files-found: warn
+          retention-days: 14
