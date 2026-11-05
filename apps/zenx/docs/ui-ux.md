@@ -1150,7 +1150,8 @@ Message and selected-text reference bubbles reveal their complete stored excerpt
 on hover or keyboard focus. Activating the bubble navigates directly to its exact
 source; the same compact card retains its title, Close and Open source action.
 Do not display the explanatory transport sentence, source UUIDs or workspace path
-in excerpt cards. Identity remains in the structured reference, never inferred
+in excerpt cards. Excerpt cards also omit legacy display names such as “名称 ZenX”;
+only the exact excerpt and navigation controls are shown. Identity remains in the structured reference, never inferred
 from visible text. File and Thread pointer cards keep their existing details.
 
 Source navigation materializes the canonical virtual row and required disclosures,

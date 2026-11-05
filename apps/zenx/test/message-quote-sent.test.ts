@@ -627,6 +627,11 @@ test("quote focus reveals only exact excerpt and source action without navigatin
         longQuote.excerpt,
       );
       assert.equal(card.querySelector(".reference-content-policy"), null);
+      assert.equal(
+        card.querySelector("dl"),
+        null,
+        "excerpt cards hide even legacy display names",
+      );
       assert.ok(!card.textContent!.includes(quote.threadId));
       assert.ok(!card.textContent!.includes(quote.cwd));
       assert.ok(card.querySelector(".reference-open-source"));

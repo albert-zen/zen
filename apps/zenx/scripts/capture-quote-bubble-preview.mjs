@@ -49,7 +49,9 @@ for (const scene of [
         excerpt,
       );
       assert.equal(
-        await evaluate("!!document.querySelector('.reference-content-policy')"),
+        await evaluate(
+          "!!document.querySelector('.reference-details-popover dl, .reference-content-policy')",
+        ),
         false,
       );
       await screenshot(`quote-hover-${scene.theme}-${scene.width}.png`);

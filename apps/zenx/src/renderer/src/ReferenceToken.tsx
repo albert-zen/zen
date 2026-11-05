@@ -223,7 +223,7 @@ export function ReferenceToken({
         {isExcerpt && (
           <pre className="reference-exact-excerpt">{reference.excerpt}</pre>
         )}
-        {(!isExcerpt || reference.name) && (
+        {!isExcerpt && (
           <dl>
             {reference.name && (
               <>
