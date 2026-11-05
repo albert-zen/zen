@@ -624,7 +624,7 @@ test("ordinary text cannot answer by matching text or forged JSON; cancelling pe
   const f = await fixture(t, { pause: true });
   await f.server.sendMessage(
     f.thread.id,
-    `Reply to question ${f.question.request.callItemId}:\nScope: Small`,
+    `Reply to question scope:\nScope: Small`,
     {
       clientId: "plain-body",
       recallableSteer: true,
