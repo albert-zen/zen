@@ -25,6 +25,7 @@ import {
   assertBrowserObservation,
   type BrowserScrollDirection,
   browserInspectScript,
+  browserInputLifecycleEventInvalidates,
   browserDomCapture,
   redactBrowserUrl,
   resolveBrowserObservedTarget,
@@ -124,6 +125,8 @@ interface UserBrowserAttachmentEpoch extends UserBrowserAttachmentOwner {
   unsettledMutation?: string;
   /** Exact attachment-session dialog state; never persisted or auto-dismissed. */
   nativeDialogOpen?: boolean;
+  /** Input-only child lifecycle evidence, independent of document/ownership fences. */
+  inputLifecycleRevision: number;
   /** Closing this exact route stops disposable observation traffic before detach. */
   observationClosing?: boolean;
 }
@@ -2935,7 +2938,9 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
                   ...params,
                   ...(method === "Runtime.evaluate"
                     ? { contextId: before.executionContextId }
-                    : {}),
+                    : method === "DOM.resolveNode"
+                      ? { executionContextId: before.executionContextId }
+                      : {}),
                 },
                 signal,
               );
@@ -3014,7 +3019,14 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     const fence = await this.#executionDocument(targetId, owner, signal);
     if (fence.identity !== expectedDocumentIdentity)
       throw new UserBrowserDocumentChangedBeforeDispatchError();
+    const inputLifecycleRevision = fence.attachmentEpoch.inputLifecycleRevision;
     const assertFence = () => {
+      if (
+        fence.attachmentEpoch.inputLifecycleRevision !== inputLifecycleRevision
+      )
+        throw new Error(
+          "Browser frame lifecycle changed during targeted input; inspect again",
+        );
       const quarantine = this.#inputQuarantines.get(targetId);
       if (quarantine !== undefined) throw new Error(quarantine);
       throwIfAborted(signal);
@@ -3066,7 +3078,9 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
                       ...params,
                       ...(method === "Runtime.evaluate"
                         ? { contextId: fence.executionContextId }
-                        : {}),
+                        : method === "DOM.resolveNode"
+                          ? { executionContextId: fence.executionContextId }
+                          : {}),
                     },
                     signal,
                     undefined,
@@ -3650,6 +3664,8 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     method:
       | "Runtime.evaluate"
       | "DOM.describeNode"
+      | "DOM.resolveNode"
+      | "Runtime.callFunctionOn"
       | "Runtime.releaseObject"
       | "Input.dispatchMouseEvent"
       | "Input.dispatchKeyEvent",
@@ -4399,6 +4415,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       setupDeadline:
         performance.now() + USER_BROWSER_ATTACHMENT_SETUP_TIMEOUT_MS,
       firstInspectClaimed: false,
+      inputLifecycleRevision: 0,
       attach: "known-failure",
       enable: "known-failure",
       runtimeEnable: "known-failure",
@@ -4804,6 +4821,18 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     const method = message.method;
     const params = asRecord(message.params);
     if (typeof method !== "string" || params === undefined) return;
+    if (
+      typeof message.sessionId === "string" &&
+      browserInputLifecycleEventInvalidates(method, params)
+    ) {
+      const epoch = this.#sessionEpochs.get(message.sessionId);
+      if (
+        epoch !== undefined &&
+        epoch.cdpSessionId === message.sessionId &&
+        this.#attachmentClosures.get(epoch.targetId) === epoch
+      )
+        epoch.inputLifecycleRevision += 1;
+    }
     if (
       typeof message.sessionId === "string" &&
       this.#sessionTargets.has(message.sessionId)

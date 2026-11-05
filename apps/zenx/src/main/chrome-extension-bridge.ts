@@ -18,6 +18,8 @@ const ALLOWED_TAB_COMMANDS = new Set([
   "Network.enable",
   "Network.getResponseBody",
   "DOM.describeNode",
+  "DOM.resolveNode",
+  "Runtime.callFunctionOn",
   "Runtime.releaseObject",
   "Input.dispatchMouseEvent",
   "Input.dispatchKeyEvent",
@@ -43,6 +45,7 @@ const ALLOWED_TAB_EVENTS = new Set([
   "Inspector.detached",
   "Page.backForwardCacheNotUsed",
   "Page.frameNavigated",
+  "Page.documentOpened",
   "Page.frameDetached",
   "Page.frameStartedLoading",
   "Page.frameStartedNavigating",
@@ -966,9 +969,10 @@ function mainFrameUrlFromEvent(
     const frame = asRecord(params.frame);
     return frame?.parentId === undefined ? stringValue(frame?.url) : undefined;
   }
-  return method === "Page.navigatedWithinDocument"
-    ? stringValue(params.url)
-    : undefined;
+  // Same-document events include child frames and do not identify a main frame.
+  // Forward the lifecycle event unchanged, but use the extension's authoritative
+  // tab-updated metadata instead of assigning a child's URL to the owning tab.
+  return undefined;
 }
 
 function sendJson(socket: WebSocket, value: unknown): void {

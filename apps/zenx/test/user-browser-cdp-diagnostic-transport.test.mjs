@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
+import { browserInputLifecycleEventInvalidates } from "../src/main/capabilities/browser-provider.ts";
 import { UserBrowserCdpDiagnosticObserver } from "../src/main/capabilities/user-browser-cdp-diagnostics.ts";
 import { UserBrowserCdpOutcomeUnknownError } from "../src/main/capabilities/user-browser-provider.ts";
 
@@ -61,6 +62,7 @@ function fixture(mode = "enabled") {
     Set,
     Promise,
     AbortSignal,
+    browserInputLifecycleEventInvalidates,
     UserBrowserCdpOutcomeUnknownError,
     USER_BROWSER_MAX_PENDING_CDP_REQUESTS: 128,
     USER_BROWSER_MAX_TARGET_EVIDENCE: 128,
@@ -128,6 +130,24 @@ function fixture(mode = "enabled") {
     state: () => ({ ...client.testState() }),
   };
 }
+
+test("unrelated-route lifecycle events preserve the pending command and timer", async () => {
+  const f = fixture();
+  const pending = f.send("route-a");
+  f.reply({
+    method: "Page.frameStartedLoading",
+    sessionId: "route-b",
+    params: { frameId: "other-frame" },
+  });
+  assert.deepEqual(f.state(), { pending: 1, late: 0, closed: false });
+  assert.equal(f.sends.length, 1);
+  assert.equal(f.timerHistory.length, 1);
+  assert.equal(f.timers.size, 1);
+  f.reply({ id: 1, sessionId: "route-a", result: { executionContextId: 42 } });
+  assert.deepEqual(await pending, { executionContextId: 42 });
+  assert.equal(f.timers.size, 0);
+  assert.equal(f.observer.counters.observerErrors, 0);
+});
 
 for (const mode of ["disabled", "enabled", "throwing"]) {
   test(`${mode}: normal response preserves result, one send and original timer`, async () => {

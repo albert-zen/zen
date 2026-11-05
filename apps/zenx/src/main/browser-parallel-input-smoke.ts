@@ -310,7 +310,21 @@ export function targetedInputContractPage(requestUrl: string): string {
 const mode=${JSON.stringify(mode)};
 const host=document.querySelector('#contract-host');
 let root=host;
-if(mode==='shadow'||mode==='closed-shadow')root=host.attachShadow({mode:mode==='shadow'?'open':'closed'});
+let contractFrame;
+if(mode==='same-origin-frame'||mode==='same-origin-closed-shadow'){
+  contractFrame=document.createElement('iframe');contractFrame.id='contract-frame';
+  contractFrame.style.cssText='width:620px;height:480px;border:5px solid #345;padding:11px 7px';
+  host.append(contractFrame);root=contractFrame.contentDocument.body;root.style.margin='0';
+  // Main-world poison is a witness that provider probes stay in isolated wrappers.
+  const child=contractFrame.contentWindow;child.mainWorldProbeCalls=0;
+  child.getComputedStyle=()=>{child.mainWorldProbeCalls++;throw Error('Main-world style probe used')};
+  contractFrame.contentDocument.elementFromPoint=()=>{child.mainWorldProbeCalls++;throw Error('Main-world hit probe used')};
+}
+if(mode==='shadow'||mode==='closed-shadow'||mode==='same-origin-closed-shadow'){
+  const shadowHost=contractFrame?contractFrame.contentDocument.createElement('div'):host;
+  if(contractFrame){shadowHost.style.cssText='position:absolute;left:0;top:0;width:620px;height:480px';root.append(shadowHost)}
+  root=shadowHost.attachShadow({mode:mode==='shadow'?'open':'closed'});
+}
 if(mode==='deep-shadow'){
   let container=host;
   for(let depth=0;depth<40;depth++){
@@ -334,7 +348,9 @@ const events=[];
 const eventTypes=['pointerdown','pointerup','keydown','keyup'];
 // Register the fixture witness before the consuming handler and before inspection.
 // The witness observes real trusted events; it never changes them or tracker state.
-for(const type of eventTypes)window.addEventListener(type,event=>events.push({type,trusted:event.isTrusted,target:event.composedPath().find(node=>node.id)?.id||''}),true);
+const witness=(mode==='closed-shadow'||mode==='same-origin-closed-shadow')?root:contractFrame?contractFrame.contentWindow:window;
+const witnessEvent=event=>events.push({type:event.type,trusted:event.isTrusted,target:event.composedPath().find(node=>node.id)?.id||''});
+for(const type of eventTypes)witness.addEventListener(type,witnessEvent,true);
 if(mode==='stop-propagation'||mode==='stop-immediate'){
   for(const type of eventTypes)window.addEventListener(type,event=>{
     if(mode==='stop-immediate')event.stopImmediatePropagation();else event.stopPropagation();
@@ -348,8 +364,9 @@ for(const element of root.querySelectorAll('input:not([type]),input[type=file],i
   for(const type of ['pointerdown','mousedown','click','keydown','keyup'])element.addEventListener(type,event=>event.preventDefault());
 }
 window.contract={mode,events,clicks:0,widgets:{},
-  point(id){const element=node(id);if(!element)throw Error('Missing fixture node '+id);const hit=id.startsWith('label-')?element.querySelector('span'):element;const r=hit.getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}},
-  focus(id){const element=node(id);element.focus();if(element.isContentEditable){const range=document.createRange();range.selectNodeContents(element);range.collapse(false);const selection=getSelection();selection.removeAllRanges();selection.addRange(range)}return {outer:document.activeElement?.id,inner:element.getRootNode().activeElement?.id||document.activeElement?.id}},
+  reopenFrame(){if(!contractFrame)throw Error('Frame fixture required');const html=root.innerHTML;const doc=contractFrame.contentDocument;doc.open();doc.write('<!doctype html><body style="margin:0;min-height:900px">'+html+'</body>');doc.close();root=doc.body;for(const type of eventTypes)doc.defaultView.addEventListener(type,witnessEvent,true);node('text-a').focus()},
+  point(id){const element=node(id);if(!element)throw Error('Missing fixture node '+id);const hit=id.startsWith('label-')?element.querySelector('span'):element;const r=hit.getBoundingClientRect();const frame=contractFrame?.getBoundingClientRect();return {x:r.left+r.width/2+(frame?frame.left+contractFrame.clientLeft+7:0),y:r.top+r.height/2+(frame?frame.top+contractFrame.clientTop+11:0)}},
+  focus(id){const element=node(id);element.focus();if(element.isContentEditable){const range=element.ownerDocument.createRange();range.selectNodeContents(element);range.collapse(false);const selection=element.ownerDocument.defaultView.getSelection();selection.removeAllRanges();selection.addRange(range)}return {outer:document.activeElement?.id,inner:element.getRootNode().activeElement?.id||document.activeElement?.id}},
   state(){return {mode,events:[...events],clicks:this.clicks,widgets:{...this.widgets},values:{'text-a':node('text-a')?.value,'text-b':node('text-b')?.value,editor:node('editor')?.textContent.replaceAll(String.fromCharCode(160),' ')},a:node('text-a')?.value,b:node('text-b')?.value,visibility:document.visibilityState,outer:document.activeElement?.id}},
 };
 if(node('canvas'))node('canvas').onclick=event=>{if(!event.isTrusted)throw Error('Untrusted fixture click');contract.clicks++;event.currentTarget.focus()};
@@ -434,14 +451,29 @@ export async function runTargetedInputContractSmoke(options: {
   };
   const state = async () =>
     await rpc.evaluate<ContractState>("window.contract.state()");
+  let withheldCaptures = 0;
   const inspect = async () => {
-    const observation = await backend.inspect(sessionId, tabId);
-    assert.equal(observation.screenshot.status, "captured");
-    assert.ok(
-      observation.inputViewport,
-      "Contract requires a real coherent screenshot",
-    );
-    return observation;
+    const inputIndex = inputs.length;
+    // A frame's first layout may invalidate a captured image. Wait only through
+    // fresh read-only inspections; never replay input or loosen provider fences.
+    return await poll(async () => {
+      const observation = await backend.inspect(sessionId, tabId);
+      assert.equal(observation.screenshot.status, "captured");
+      assert.equal(
+        inputs.length,
+        inputIndex,
+        "Inspection must not dispatch input",
+      );
+      await guard();
+      if (!observation.inputViewport) {
+        withheldCaptures++;
+        options.onPhase?.(
+          `input-contracts:withheld-capture:${withheldCaptures}`,
+        );
+        return undefined;
+      }
+      return observation;
+    }, "contract coherent screenshot (read-only capture settlement)");
   };
   const focus = async (id: string) =>
     await rpc.evaluate<{ outer: string; inner: string }>(
@@ -552,10 +584,13 @@ export async function runTargetedInputContractSmoke(options: {
       "stop-immediate",
       "shadow",
       "light-native",
+      "same-origin-frame",
+      "same-origin-closed-shadow",
       "closed-shadow",
       "deep-shadow",
       "ordinary-dom",
     ]) {
+      const withheldBefore = withheldCaptures;
       options.onPhase?.(`input-contracts:${mode}:navigate`);
       await guard();
       await backend.navigate(
@@ -581,6 +616,15 @@ export async function runTargetedInputContractSmoke(options: {
         "Contract page must stay inactive",
       );
       const cases: Record<string, unknown>[] = [];
+      if (mode === "closed-shadow" || mode === "same-origin-closed-shadow") {
+        // Establish trusted closed-root observation before an authorizing capture.
+        // This is an explicit read, never replay of a refused input operation.
+        const discovery = await backend.inspect(sessionId, tabId);
+        cases.push({
+          case: "closed-root-observer-discovery",
+          screenshot: discovery.screenshot.status,
+        });
+      }
       if (mode === "stop-propagation" || mode === "stop-immediate") {
         // Repeat actions on the SAME attachment to prove no held-input quarantine.
         for (let iteration = 0; iteration < 2; iteration++) {
@@ -593,7 +637,13 @@ export async function runTargetedInputContractSmoke(options: {
             pair: await paired("key", "text-a"),
           });
         }
-      } else if (mode === "shadow" || mode === "light-native") {
+      } else if (
+        mode === "shadow" ||
+        mode === "light-native" ||
+        mode === "same-origin-frame" ||
+        mode === "closed-shadow" ||
+        mode === "same-origin-closed-shadow"
+      ) {
         cases.push({
           case: "ordinary-canvas",
           pair: await paired("click", "canvas"),
@@ -606,27 +656,32 @@ export async function runTargetedInputContractSmoke(options: {
           case: "ordinary-text",
           pair: await paired("key", "text-a"),
         });
-        if (mode === "shadow") {
+        if (
+          mode === "shadow" ||
+          mode === "same-origin-frame" ||
+          mode === "closed-shadow" ||
+          mode === "same-origin-closed-shadow"
+        ) {
           const a = await focus("text-a");
           const old = await inspect();
           const b = await focus("text-b");
           assert.equal(
             a.outer,
             b.outer,
-            "Focus regression needs the SAME outer shadow host",
+            "Focus regression needs the SAME outer host",
           );
           assert.equal(a.inner, "text-a");
           assert.equal(b.inner, "text-b");
           cases.push(
             await rejected(
-              "shadow-focus-A-to-B-stale",
+              `${mode}-focus-A-to-B-stale`,
               () =>
                 backend.keyPress!(sessionId, tabId, old.observationId, "Space"),
               /changed|stale|inspect again/iu,
             ),
           );
           cases.push({
-            case: "fresh-shadow-focus-B",
+            case: `fresh-${mode}-focus-B`,
             pair: await paired("key", "text-b"),
           });
         }
@@ -695,45 +750,69 @@ export async function runTargetedInputContractSmoke(options: {
           ),
         );
       }
-      if (mode === "closed-shadow") {
-        for (const type of ["file", "color", "date", "select"]) {
-          const id = `native-${type}`;
-          const position = await point(id);
-          await focus(id);
-          const observed = await inspect();
-          assert.equal(observed.focusedInputAvailable, false);
-          cases.push(
-            await rejected(
-              `${id}-closed-pointer`,
-              () =>
-                backend.pointerClick!(
-                  sessionId,
-                  tabId,
-                  observed.observationId,
-                  position.x,
-                  position.y,
-                ),
-              "shadow-surface",
-            ),
-          );
-          cases.push(
-            await rejected(
-              `${id}-closed-Space`,
-              () =>
-                backend.keyPress!(
-                  sessionId,
-                  tabId,
-                  observed.observationId,
-                  "Space",
-                ),
-              "shadow-surface",
-            ),
-          );
-        }
+      if (mode === "same-origin-frame") {
+        assert.equal(
+          await rpc.evaluate(
+            "document.querySelector('#contract-frame').contentWindow.mainWorldProbeCalls",
+          ),
+          0,
+          "Input observation must not invoke poisoned child main-world APIs",
+        );
+        const position = await point("text-a");
+        const observed = await inspect();
+        await rpc.evaluate(
+          "document.querySelector('#contract-frame').contentDocument.querySelector('#text-a').style.marginLeft = '8px'",
+        );
+        cases.push(
+          await rejected(
+            "child-document-mutation-stales-capture",
+            () =>
+              backend.pointerClick!(
+                sessionId,
+                tabId,
+                observed.observationId,
+                position.x,
+                position.y,
+              ),
+            /changed|stale|inspect again/iu,
+          ),
+        );
+        cases.push({
+          case: "fresh-child-after-mutation",
+          pair: await paired("click", "canvas"),
+        });
+        await rpc.evaluate("window.contract.reopenFrame()");
+        cases.push({
+          case: "fresh-child-after-document-open",
+          pair: await paired("key", "text-a"),
+        });
+        const beforeScroll = await inspect();
+        options.onPhase?.("input-contracts:same-origin-frame:reopened-scroll");
+        // This page is deliberately hidden: animation frames may be suspended.
+        // Read actual scroll geometry synchronously; the provider's next probe
+        // must reject the old capture without a timer or synthetic event.
+        const reopenedScroll = await rpc.evaluate<number>(
+          "(() => { const child = document.querySelector('#contract-frame').contentWindow; child.scrollTo(0, 20); return child.scrollY; })()",
+        );
+        assert.equal(reopenedScroll, 20);
+        cases.push(
+          await rejected(
+            "reopened-child-scroll-stales-capture",
+            () =>
+              backend.keyPress!(
+                sessionId,
+                tabId,
+                beforeScroll.observationId,
+                "Space",
+              ),
+            /changed|stale|inspect again/iu,
+          ),
+        );
       }
       await guard();
       reports.push({
         scenario: mode,
+        withheldCaptures: withheldCaptures - withheldBefore,
         layer: "headed-real-cdp-contract",
         status: "passed",
         cases,
@@ -765,10 +844,12 @@ function traceOwnedCdpTransport(
     "Page.createIsolatedWorld",
     "Page.captureScreenshot",
     "Page.frameNavigated",
+    "Page.documentOpened",
     "Page.navigatedWithinDocument",
     "Page.frameStoppedLoading",
     "Runtime.enable",
     "Runtime.evaluate",
+    "Runtime.callFunctionOn",
     "Runtime.releaseObject",
     "Runtime.executionContextCreated",
     "Runtime.executionContextDestroyed",

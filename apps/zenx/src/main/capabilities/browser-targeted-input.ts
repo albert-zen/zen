@@ -33,6 +33,13 @@ export interface BrowserInputViewport {
   visualOffsetX: number;
   visualOffsetY: number;
 }
+export interface BrowserInputFrameDocument {
+  ownerId: string;
+  parentDocumentKey: string;
+  documentKey: string;
+  viewport: BrowserInputViewport;
+  geometry: { x: number; y: number; width: number; height: number };
+}
 export interface BrowserInputSnapshot {
   documentKey: string;
   viewport: BrowserInputViewport;
@@ -46,6 +53,7 @@ export interface BrowserInputSnapshot {
   pointerBackendNodeId?: number;
   inputRevision: number;
   layoutRevision: number;
+  frameDocuments?: BrowserInputFrameDocument[];
 }
 export interface BrowserInputObservation {
   snapshot: BrowserInputSnapshot;
@@ -62,16 +70,24 @@ export class BrowserInputUnsupportedError extends Error {
   }
 }
 
-/** Open-root traversal only; actual closed roots are checked by trusted CDP metadata. */
+/** Only observed same-origin documents and trusted shadow roots are traversed. */
 const browserInputElementResolutionScript = `
-  const unsupported = 'iframe,frame,object,embed';
+  const unsupported = 'frame,object,embed';
   const canHostShadow = element => element.namespaceURI === 'http://www.w3.org/1999/xhtml' && (element.localName.includes('-') || /^(article|aside|blockquote|body|div|footer|h[1-6]|header|main|nav|p|section|span)$/.test(element.localName));
   const nativeSurface = element => !!(element?.closest(unsupported) || element?.closest('label')?.control?.matches(unsupported));
   const resolveFocus = () => {
     let element = document.activeElement;
     for (let depth = 0; element && depth < 32; depth++) {
       if (nativeSurface(element)) return { unsupported: 'native-surface' };
-      const root = element.shadowRoot;
+      if (element.localName === 'iframe') {
+        const frame = state.activeFrames.get(element);
+        if (!frame || element.contentDocument !== frame.document) return { unsupported: 'native-surface' };
+        const next = frame.document.activeElement;
+        if (!next || next === frame.document.body || next === frame.document.documentElement) return {};
+        element = next;
+        continue;
+      }
+      const root = element.shadowRoot ?? state.closedRoots.get(element);
       if (!root) return { element };
       if (!state.shadowRoots.has(root)) return { unsupported: 'shadow-surface' };
       const next = root.activeElement;
@@ -84,7 +100,17 @@ const browserInputElementResolutionScript = `
     let element = document.elementFromPoint(x, y);
     for (let depth = 0; element && depth < 32; depth++) {
       if (nativeSurface(element)) return { unsupported: 'native-surface' };
-      const root = element.shadowRoot;
+      if (element.localName === 'iframe') {
+        const frame = state.activeFrames.get(element);
+        if (!frame || element.contentDocument !== frame.document) return { unsupported: 'native-surface' };
+        x -= frame.geometry.x;
+        y -= frame.geometry.y;
+        if (x < 0 || y < 0 || x >= frame.geometry.width || y >= frame.geometry.height) return { unsupported: 'native-surface' };
+        element = frame.document.elementFromPoint(x, y);
+        if (!element || element.ownerDocument !== frame.document) return { unsupported: 'native-surface' };
+        continue;
+      }
+      const root = element.shadowRoot ?? state.closedRoots.get(element);
       if (!root) return { element };
       if (!state.shadowRoots.has(root) || typeof root.elementFromPoint !== 'function') break;
       const next = root.elementFromPoint(x, y);
@@ -95,58 +121,146 @@ const browserInputElementResolutionScript = `
   };
 `;
 
-/** Runs in the provider's isolated world; the page cannot forge the registry. */
+/** Runs in the provider's isolated world; the page cannot forge the registry.
+ * Child documents share this registry, never their main-world globals. */
 export const browserInputSnapshotScript = `(() => {
   const key = Symbol.for("zenx-browser-targeted-input-v2");
+  const randomId = () => [...crypto.getRandomValues(new Uint32Array(4))].map(n => n.toString(16).padStart(8, "0")).join("");
   let state = globalThis[key];
-  if (!state || state.document !== document) {
-    state = { document, id: [...crypto.getRandomValues(new Uint32Array(4))].map(n => n.toString(16).padStart(8, "0")).join(""), nodes: new WeakMap(), next: 1, inputRevision: 0, layoutRevision: 0, shadowRoots: new WeakSet(), shadowRootCount: 0 };
+  if (!state || state.document !== document || !(state.documents instanceof Map)) {
+    // Older isolated registries may survive an attachment replacement. Retire
+    // their observer and mint new IDs; their old listener counters are never read.
+    state?.observer?.disconnect();
+    state = { document, id: randomId(), nodes: new WeakMap(), next: 1, inputRevision: 0, layoutRevision: 0, shadowRoots: new WeakSet(), shadowRootCount: 0, documents: new Map() };
     globalThis[key] = state;
-    for (const type of ["pointerdown", "pointerup", "keydown", "keyup", "wheel"]) document.addEventListener(type, event => { if (event.isTrusted) state.inputRevision++; }, true);
-    for (const type of ["scroll", "resize"]) window.addEventListener(type, () => state.layoutRevision++, true);
-    const decoration = node => node instanceof Element && (node.matches('[data-zenx-agent-pointer]') || node.closest('[data-zenx-agent-pointer]'));
-    state.recordMutations = records => {
+  }
+  state.closedRoots ??= new WeakMap();
+  const nodeId = node => {
+    let id = state.nodes.get(node);
+    if (!id) { id = state.id + ":" + state.next++; state.nodes.set(node, id); }
+    return id;
+  };
+  const viewport = view => ({ width: view.innerWidth, height: view.innerHeight, deviceScaleFactor: view.devicePixelRatio, scrollX: view.scrollX, scrollY: view.scrollY, visualScale: view.visualViewport?.scale ?? 1, visualOffsetX: view.visualViewport?.offsetLeft ?? 0, visualOffsetY: view.visualViewport?.offsetTop ?? 0 });
+  const unzoomed = value => Object.values(value).every(Number.isFinite) && value.width > 0 && value.height > 0 && value.deviceScaleFactor > 0 && value.visualScale === 1 && value.visualOffsetX === 0 && value.visualOffsetY === 0;
+  const decoration = node => node?.nodeType === 1 && (node.matches('[data-zenx-agent-pointer]') || node.closest('[data-zenx-agent-pointer]'));
+  const observeDocument = doc => {
+    let entry = state.documents.get(doc);
+    if (entry) {
+      // document.open() can retain Document identity while erasing listeners.
+      // Re-adding the same callbacks/capture flag is idempotent in the DOM.
+      for (const { target, type, listener } of entry.listeners) target.addEventListener(type, listener, true);
+      return entry;
+    }
+    const view = doc.defaultView;
+    const listeners = [];
+    entry = { document: doc, id: doc === document ? state.id : randomId(), roots: new WeakSet(), shadowRootCount: 0, listeners };
+    entry.recordMutations = records => {
       if (records.some(record => !decoration(record.target) && !(record.type === 'childList' && [...record.addedNodes, ...record.removedNodes].length > 0 && [...record.addedNodes, ...record.removedNodes].every(decoration)))) state.layoutRevision++;
     };
-    state.observer = new MutationObserver(state.recordMutations);
-    state.observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
-  }
-  // Document subtree observation does not cross shadow boundaries. Discover
-  // bounded open roots before capture, reusing the same transient observer.
-  // Untracked roots remain locally unsupported, rather than trusting stale pixels.
-  const roots = [document];
+    entry.observer = new MutationObserver(entry.recordMutations);
+    entry.observer.observe(doc, { subtree: true, childList: true, attributes: true, characterData: true });
+    entry.listen = (target, type, listener) => { target.addEventListener(type, listener, true); listeners.push({ target, type, listener }); };
+    for (const type of ["pointerdown", "pointerup", "keydown", "keyup", "wheel"]) entry.listen(doc, type, event => { if (event.isTrusted) state.inputRevision++; });
+    for (const type of ["scroll", "resize"]) entry.listen(view, type, () => state.layoutRevision++);
+    state.documents.set(doc, entry);
+    return entry;
+  };
+  state.observeShadowRoot = root => {
+    const entry = state.documents.get(root.ownerDocument);
+    if (!entry) return false;
+    if (!entry.roots.has(root)) {
+      if (state.shadowRootCount >= 128) return false;
+      entry.roots.add(root);
+      entry.shadowRootCount++;
+      state.shadowRootCount++;
+      state.layoutRevision++;
+      entry.observer.observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
+      entry.listen(root, 'scroll', () => state.layoutRevision++);
+    }
+    return true;
+  };
+  // Mapping is intentionally limited to ordinary untransformed CSS boxes. An
+  // axis-aligned bounding rect alone cannot identify rotated/scaled content.
+  const frameGeometry = (element, childViewport) => {
+    const view = element.ownerDocument.defaultView;
+    let ancestor = element;
+    for (let depth = 0; ancestor; depth++) {
+      if (depth >= 128) return;
+      const style = view.getComputedStyle(ancestor);
+      if (['transform', 'translate', 'rotate', 'scale', 'perspective', 'offsetPath'].some(property => style[property] && style[property] !== 'none') || (style.zoom && style.zoom !== '1' && style.zoom !== 'normal')) return;
+      ancestor = ancestor.parentElement ?? ancestor.getRootNode()?.host;
+    }
+    const style = view.getComputedStyle(element);
+    const pixel = property => { const value = Number.parseFloat(style[property] || '0'); return Number.isFinite(value) && value >= 0 ? value : NaN; };
+    const left = pixel('borderLeftWidth') + pixel('paddingLeft');
+    const top = pixel('borderTopWidth') + pixel('paddingTop');
+    const right = pixel('borderRightWidth') + pixel('paddingRight');
+    const bottom = pixel('borderBottomWidth') + pixel('paddingBottom');
+    const rect = element.getBoundingClientRect();
+    const geometry = { x: rect.left + left, y: rect.top + top, width: rect.width - left - right, height: rect.height - top - bottom };
+    if (!Object.values(geometry).every(Number.isFinite) || geometry.width <= 0 || geometry.height <= 0 || Math.abs(geometry.width - childViewport.width) > 0.01 || Math.abs(geometry.height - childViewport.height) > 0.01) return;
+    return geometry;
+  };
+  const roots = [{ root: document, doc: document, depth: 0 }];
+  const activeDocuments = new Set([document]);
+  const frameDocuments = [];
+  state.activeFrames = new WeakMap();
+  state.shadowRoots = new WeakSet();
+  observeDocument(document);
   let budget = 8192;
   for (let index = 0; index < roots.length && budget > 0; index++) {
-    const walker = document.createTreeWalker(roots[index], NodeFilter.SHOW_ELEMENT);
+    const { root, doc, depth } = roots[index];
+    const entry = state.documents.get(doc);
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
     let element;
     while (budget-- > 0 && (element = walker.nextNode())) {
-      const root = element.shadowRoot;
-      if (!root) continue;
-      if (!state.shadowRoots.has(root)) {
-        if (state.shadowRootCount >= 128) continue;
-        state.shadowRoots.add(root);
-        state.shadowRootCount++;
-        state.layoutRevision++;
-        state.observer.observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
-        root.addEventListener('scroll', () => state.layoutRevision++, true);
+      const shadow = element.shadowRoot ?? state.closedRoots.get(element);
+      if (shadow) {
+        if (state.observeShadowRoot(shadow)) {
+          state.shadowRoots.add(shadow);
+          roots.push({ root: shadow, doc, depth });
+        }
       }
-      roots.push(root);
+      if (element.localName !== 'iframe' || depth >= 8 || activeDocuments.size >= 32) continue;
+      try {
+        const child = element.contentDocument;
+        const view = child?.defaultView;
+        if (!child || !view || view.document !== child || activeDocuments.has(child)) continue;
+        // Access itself enforces same-origin, including sandboxed opaque frames.
+        const url = view.location.href;
+        const childViewport = viewport(view);
+        if (!unzoomed(childViewport)) continue;
+        const geometry = frameGeometry(element, childViewport);
+        if (!geometry) continue;
+        const childEntry = observeDocument(child);
+        activeDocuments.add(child);
+        state.activeFrames.set(element, { document: child, geometry });
+        frameDocuments.push({ ownerId: nodeId(element), parentDocumentKey: entry.id + "|" + doc.defaultView.location.href, documentKey: childEntry.id + "|" + url, viewport: childViewport, geometry });
+        roots.push({ root: child, doc: child, depth: depth + 1 });
+      } catch {
+        // Cross-origin/OOPIF and inaccessible frames stay explicitly unsupported.
+      }
     }
   }
-  state.recordMutations(state.observer.takeRecords());
+  for (const [doc, entry] of state.documents) {
+    entry.recordMutations(entry.observer.takeRecords());
+    if (activeDocuments.has(doc)) continue;
+    entry.observer.disconnect();
+    for (const { target, type, listener } of entry.listeners) target.removeEventListener(type, listener, true);
+    state.shadowRootCount -= entry.shadowRootCount;
+    state.documents.delete(doc);
+  }
   ${browserInputElementResolutionScript}
   const focus = resolveFocus();
   const focused = focus.element;
   state.focusNode = focused;
   let focusId = null;
-  if (focused && focused !== document.body && focused !== document.documentElement) {
-    focusId = state.nodes.get(focused);
-    if (!focusId) { focusId = state.id + ":" + state.next++; state.nodes.set(focused, focusId); }
-  }
+  if (focused && focused !== focused.ownerDocument.body && focused !== focused.ownerDocument.documentElement) focusId = nodeId(focused);
   return {
     documentKey: state.id + "|" + location.href,
-    viewport: { width: innerWidth, height: innerHeight, deviceScaleFactor: devicePixelRatio, scrollX, scrollY, visualScale: globalThis.visualViewport?.scale ?? 1, visualOffsetX: globalThis.visualViewport?.offsetLeft ?? 0, visualOffsetY: globalThis.visualViewport?.offsetTop ?? 0 },
+    viewport: viewport(globalThis),
     focusId, ...(focusId && canHostShadow(focused) ? { focusNeedsShadowEvidence: true } : {}), ...(focus.unsupported ? { focusUnsupported: focus.unsupported } : {}), inputRevision: state.inputRevision, layoutRevision: state.layoutRevision,
+    frameDocuments,
   };
 })()`;
 
@@ -177,7 +291,12 @@ export function includesBrowserInputSnapshot(expression: string): boolean {
 }
 
 type BrowserInputCommand = (
-  method: "Runtime.evaluate" | "DOM.describeNode" | "Runtime.releaseObject",
+  method:
+    | "Runtime.evaluate"
+    | "DOM.describeNode"
+    | "DOM.resolveNode"
+    | "Runtime.callFunctionOn"
+    | "Runtime.releaseObject",
   params: Record<string, unknown>,
 ) => Promise<unknown>;
 const record = (value: unknown): Record<string, unknown> | undefined =>
@@ -227,6 +346,7 @@ export async function resolveBrowserInputEvidence(
     backendNodeId?: number;
     reason?: BrowserInputUnsupportedReason;
   }[] = [];
+  const liveObjects = new Set<string>();
   const readValue = (response: unknown) => {
     const result = record(response);
     if (!result || result.exceptionDetails !== undefined)
@@ -235,16 +355,73 @@ export async function resolveBrowserInputEvidence(
   };
   let released = false;
   const release = async () => {
-    if (released) return;
     released = true;
+    const objectIds = [...liveObjects];
+    liveObjects.clear();
     await Promise.all(
-      owned.map(async ({ objectId }) => {
+      objectIds.map(async (objectId) => {
         try {
           await releaseOwnedObject(objectId);
         } catch {
           /* Best-effort exact-session cleanup; unknown release is never retried. */
         }
       }),
+    );
+  };
+  const registerClosedRoot = async (
+    entry: (typeof owned)[number],
+    root: Record<string, unknown>,
+  ) => {
+    if (
+      root.nodeType !== 11 ||
+      !Number.isSafeInteger(root.backendNodeId) ||
+      (root.backendNodeId as number) <= 0
+    )
+      throw new Error(
+        "Browser closed shadow identity is unavailable or malformed",
+      );
+    const response = record(
+      await send("DOM.resolveNode", { backendNodeId: root.backendNodeId }),
+    );
+    const object = record(response?.object);
+    if (typeof object?.objectId === "string" && object.objectId)
+      liveObjects.add(object.objectId);
+    if (
+      object?.subtype !== "node" ||
+      typeof object.objectId !== "string" ||
+      !object.objectId
+    )
+      throw new Error(
+        "Browser closed shadow wrapper is unavailable or malformed",
+      );
+    const result = readValue(
+      await send("Runtime.callFunctionOn", {
+        objectId: object.objectId,
+        functionDeclaration: `function(documentKey, nodeId, role) {
+          const state = globalThis[Symbol.for("zenx-browser-targeted-input-v2")];
+          const host = state?.[role === 'focus' ? 'focusNode' : 'hitNode'];
+          if (state?.document !== document || state.id + '|' + location.href !== documentKey || !host?.isConnected || state.nodes.get(host) !== nodeId || this.nodeType !== 11 || this.mode !== 'closed' || this.host !== host || this.ownerDocument !== host.ownerDocument || !this.isConnected || !state.documents.has(host.ownerDocument)) throw new Error('Browser closed shadow candidate changed before registration');
+          if (!state.observeShadowRoot(this)) return false;
+          state.closedRoots.set(host, this);
+          return true;
+        }`,
+        arguments: [
+          { value: snapshot.documentKey },
+          { value: entry.id },
+          { value: entry.role },
+        ],
+        returnByValue: true,
+        awaitPromise: false,
+      }),
+    );
+    if (result?.value === false)
+      throw new BrowserInputUnsupportedError("shadow-surface");
+    if (result?.value !== true)
+      throw new Error("Browser closed shadow registration was not confirmed");
+    // This observer did not exist when the authorizing screenshot was taken.
+    // Keep its bounded registry entry, but never reuse that screenshot for input.
+    throw new Error(
+      "Browser closed shadow observation initialized; inspect again before targeted input",
     );
   };
   const describe = async (entry: (typeof owned)[number]) => {
@@ -305,6 +482,10 @@ export async function resolveBrowserInputEvidence(
       )
     )
       throw new Error("Browser input node attributes are malformed");
+    const closed = Array.isArray(roots)
+      ? roots.map(record).find((root) => root?.shadowRootType === "closed")
+      : undefined;
+    if (closed) await registerClosedRoot(entry, closed);
     // Ordinary HTML controls (including native pickers) accept CDP input on
     // the observed page. Embedded documents still need inner-target evidence.
     if (["iframe", "frame", "object", "embed"].includes(node.localName))
@@ -345,6 +526,7 @@ export async function resolveBrowserInputEvidence(
         );
       const entry = { objectId: result.objectId, role, id };
       owned.push(entry);
+      liveObjects.add(result.objectId);
       await describe(entry);
     }
     // Finish cleanup before the final identity/surface checks. The final query
@@ -450,6 +632,54 @@ export function requireBrowserInputSnapshot(
     throw new Error(
       "Browser targeted input requires a valid, unzoomed CSS viewport; inspect again",
     );
+  if (snapshot.frameDocuments !== undefined) {
+    const frames = snapshot.frameDocuments;
+    if (!Array.isArray(frames) || frames.length > 31)
+      throw new Error(
+        "Browser input frame evidence is unavailable or malformed",
+      );
+    const documents = new Set([snapshot.documentKey]);
+    const owners = new Set<string>();
+    for (const frame of frames) {
+      if (
+        !frame ||
+        typeof frame.ownerId !== "string" ||
+        frame.ownerId.length === 0 ||
+        frame.ownerId.length > 128 ||
+        owners.has(frame.ownerId) ||
+        typeof frame.documentKey !== "string" ||
+        frame.documentKey.length < 32 ||
+        frame.documentKey.length > 16_384 ||
+        documents.has(frame.documentKey) ||
+        !documents.has(frame.parentDocumentKey) ||
+        !frame.geometry ||
+        !["x", "y", "width", "height"].every((key) =>
+          Number.isFinite((frame.geometry as Record<string, number>)[key]),
+        ) ||
+        frame.geometry.width <= 0 ||
+        frame.geometry.height <= 0
+      )
+        throw new Error(
+          "Browser input frame evidence is unavailable or malformed",
+        );
+      requireBrowserInputSnapshot({
+        documentKey: frame.documentKey,
+        viewport: frame.viewport,
+        focusId: null,
+        inputRevision: 0,
+        layoutRevision: 0,
+      });
+      if (
+        Math.abs(frame.geometry.width - frame.viewport.width) > 0.01 ||
+        Math.abs(frame.geometry.height - frame.viewport.height) > 0.01
+      )
+        throw new Error(
+          "Browser input frame geometry is unavailable or malformed",
+        );
+      documents.add(frame.documentKey);
+      owners.add(frame.ownerId);
+    }
+  }
   return snapshot;
 }
 
@@ -461,6 +691,8 @@ export function assertBrowserInputSnapshot(
   if (
     actual.documentKey !== expected.documentKey ||
     JSON.stringify(actual.viewport) !== JSON.stringify(expected.viewport) ||
+    JSON.stringify(actual.frameDocuments ?? []) !==
+      JSON.stringify(expected.frameDocuments ?? []) ||
     actual.layoutRevision !== expected.layoutRevision ||
     actual.inputRevision !==
       expected.inputRevision + (options.inputDelta ?? 0) ||
@@ -471,6 +703,30 @@ export function assertBrowserInputSnapshot(
     throw new Error(
       "Browser page, viewport, focus or input changed; inspect again before targeted input",
     );
+}
+
+function sameBrowserInputFrameDocuments(
+  before: BrowserInputSnapshot,
+  after: BrowserInputSnapshot,
+  allowLayoutChange: boolean,
+): boolean {
+  const identity = (frame: BrowserInputFrameDocument) => ({
+    ownerId: frame.ownerId,
+    parentDocumentKey: frame.parentDocumentKey,
+    documentKey: frame.documentKey,
+  });
+  return (
+    JSON.stringify(
+      (before.frameDocuments ?? []).map((frame) =>
+        allowLayoutChange ? identity(frame) : frame,
+      ),
+    ) ===
+    JSON.stringify(
+      (after.frameDocuments ?? []).map((frame) =>
+        allowLayoutChange ? identity(frame) : frame,
+      ),
+    )
+  );
 }
 
 export function browserInputPoint(
@@ -627,6 +883,12 @@ export async function dispatchBrowserTargetedInput(
     // of interference, so explicit host ownership fences remain authoritative.
     if (
       pressed.documentKey !== initial.documentKey ||
+      !sameBrowserInputFrameDocuments(
+        initial,
+        pressed,
+        action.kind === "key",
+      ) ||
+      (action.kind === "key" && pressed.focusUnsupported !== undefined) ||
       pressed.inputRevision < initial.inputRevision ||
       pressed.inputRevision > initial.inputRevision + 1 ||
       (action.kind === "click" &&

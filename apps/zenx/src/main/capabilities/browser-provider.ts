@@ -541,7 +541,7 @@ function browserTargetedInputTools(): ZenXPluginManifestV2["tools"] {
     {
       name: "browser_pointer_click",
       description:
-        "Click CSS viewport coordinates in the exact observed browser tab without requesting window activation. Requires a real screenshot and inputViewport from the latest inspection. Convert screenshot pixels with x * inputViewport.width / screenshot.width and likewise y. No frames, dragging, OS input or automatic foreground fallback. Detected page, viewport, focus, or user input changes reject. Open shadow roots resolve within bounded limits; ordinary div/span containers remain supported after exact-node metadata checks, while known closed or unresolved shadow surfaces reject locally. Ordinary tab input stays targeted without selecting an active tab. Trusted input can trigger site dialogs or popups; HTML select and file/date/color controls are supported; an OS dialog needs an appropriate provider capability, never implicit global input or forced activation. Unknown input is never replayed.",
+        "Click CSS viewport coordinates in the exact observed browser tab without requesting window activation. Requires a real screenshot and inputViewport from the latest inspection. Convert screenshot pixels with x * inputViewport.width / screenshot.width and likewise y. No dragging, OS input or automatic foreground fallback. Detected page, frame lifecycle, viewport, focus, or user input changes reject. Observed same-origin frames with mapped geometry and bounded open or closed author shadow roots are supported after trusted observation; discovering a closed root requires re-inspection before input. Cross-origin/OOPIF, unmappable geometry and unresolved surfaces reject locally. Ordinary div/span containers remain supported after exact-node metadata checks. Ordinary tab input stays targeted without selecting an active tab. Trusted input can trigger site dialogs or popups; HTML select and file/date/color controls are supported; an OS dialog needs an appropriate provider capability, never implicit global input or forced activation. Unknown input is never replayed.",
       inputSchema: browserTargetSchema(
         {
           ...common(),
@@ -558,7 +558,7 @@ function browserTargetedInputTools(): ZenXPluginManifestV2["tools"] {
     {
       name: "browser_key_press",
       description:
-        "Press one named unmodified key in the exact browser tab's already-focused observed element, without requesting window activation. Requires focusedInputAvailable and a fresh inspection; never selects a current tab or focuses an element implicitly. Open shadow focus resolves to its real node; ordinary focused contenteditable containers remain supported after exact-node metadata checks, while known closed or unresolved shadow focus is unavailable. Ordinary tab input stays targeted without selecting an active tab. Trusted input can trigger site dialogs or popups; HTML select and file/date/color controls are supported; an OS dialog needs an appropriate provider capability, never implicit global input or forced activation. Unknown input is never replayed.",
+        "Press one named unmodified key in the exact browser tab's already-focused observed element, without requesting window activation. Requires focusedInputAvailable and a fresh inspection; never selects a current tab or focuses an element implicitly. Focus resolves inside observed same-origin frames and bounded open or closed author shadow roots after trusted observation; discovering a closed root requires re-inspection before input. Cross-origin/OOPIF, unmappable geometry and unresolved focus are unavailable. Detected frame lifecycle changes reject. Ordinary focused contenteditable containers remain supported after exact-node metadata checks. Ordinary tab input stays targeted without selecting an active tab. Trusted input can trigger site dialogs or popups; HTML select and file/date/color controls are supported; an OS dialog needs an appropriate provider capability, never implicit global input or forced activation. Unknown input is never replayed.",
       inputSchema: browserTargetSchema(
         { ...common(), key: { type: "string", enum: [...browserInputKeys] } },
         ["observationId", "key"],
@@ -1304,6 +1304,7 @@ interface BrowserTab {
   observation?: BrowserObservation;
   inputQuarantine?: string;
   inputInFlight?: boolean;
+  inputLifecycleRevision: number;
   nativeDialogOpen?: boolean;
 }
 
@@ -1388,6 +1389,28 @@ export function browserDomCapture(
         : { textTotal: inspected.textTotal }),
     },
   };
+}
+
+/** Input-only lifecycle evidence; never changes document or attachment authority. */
+export function browserInputLifecycleEventInvalidates(
+  method: string,
+  params: { context?: { auxData?: { isDefault?: boolean } } } = {},
+): boolean {
+  // Creating an isolated observation world is ordinary preparation, not a page
+  // lifecycle change. A new default context can replace a child document.
+  if (method === "Runtime.executionContextCreated")
+    return params.context?.auxData?.isDefault === true;
+  return (
+    method === "Page.frameNavigated" ||
+    method === "Page.documentOpened" ||
+    method === "Page.frameDetached" ||
+    method === "Page.frameStartedNavigating" ||
+    method === "Page.frameStartedLoading" ||
+    method === "Page.navigatedWithinDocument" ||
+    method === "Page.backForwardCacheNotUsed" ||
+    method === "Runtime.executionContextDestroyed" ||
+    method === "Runtime.executionContextsCleared"
+  );
 }
 
 export interface BrowserObservation {
@@ -1808,17 +1831,24 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
         window,
         incarnation,
         documentVersion: 0,
+        inputLifecycleRevision: 0,
       };
       this.#tabs.set(tabId, tab);
-      window.webContents.debugger.on("message", (_event, method) => {
+      window.webContents.debugger.on("message", (_event, method, params) => {
+        if (browserInputLifecycleEventInvalidates(method, params))
+          tab.inputLifecycleRevision += 1;
         if (method === "Page.javascriptDialogOpening")
           tab.nativeDialogOpen = true;
         if (method === "Page.javascriptDialogClosed")
           tab.nativeDialogOpen = false;
       });
+      window.webContents.debugger.on("detach", () => {
+        tab.inputLifecycleRevision += 1;
+      });
       window.webContents.on(
         "did-start-navigation",
         (_event, _url, isInPlace, isMainFrame) => {
+          tab.inputLifecycleRevision += 1;
           if (isMainFrame && !isInPlace) this.#invalidateDocument(tab);
         },
       );
@@ -2021,12 +2051,20 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
         "A real, coherent screenshot is required for browser targeted input; inspect again",
       );
     const version = tab.documentVersion;
+    const inputLifecycleRevision = tab.inputLifecycleRevision;
+    const assertInputLifecycle = () => {
+      if (tab.inputLifecycleRevision !== inputLifecycleRevision)
+        throw new Error(
+          "Browser frame lifecycle changed during targeted input; inspect again",
+        );
+    };
     let dispatched = false;
     tab.inputInFlight = true;
     try {
       await dispatchBrowserTargetedInput(
         {
           assertCurrent: () => {
+            assertInputLifecycle();
             if (tab.nativeDialogOpen)
               throw new Error(
                 "Browser targeted input cannot operate this open dialog; use an available dialog or Computer capability with its own authorization",
@@ -2056,6 +2094,7 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
             tab.observation = undefined;
           },
           dispatch: async (method, params, onDispatched) => {
+            assertInputLifecycle();
             const pending = tab.window.webContents.debugger.sendCommand(
               method,
               params,
@@ -3249,7 +3288,9 @@ export async function evaluateBrowserDocument<T>(
           ...params,
           ...(method === "Runtime.evaluate"
             ? { contextId: world.executionContextId }
-            : {}),
+            : method === "DOM.resolveNode"
+              ? { executionContextId: world.executionContextId }
+              : {}),
         });
       },
     )) as T;

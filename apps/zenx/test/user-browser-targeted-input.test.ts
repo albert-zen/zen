@@ -818,11 +818,12 @@ test("an unknown renderer exception cannot masquerade as a successful native-sur
   }
 });
 
-test("attached actual closed-root metadata disables focus and rejects pointer with zero Input", async () => {
+test("attached closed-root discovery is context-pinned and requires fresh inspection before input", async () => {
   const f = await fixture();
+  let registered = false;
   try {
     f.cdp.interceptRequests((request, emit) => {
-      if (request.method === "DOM.describeNode")
+      if (request.method === "DOM.describeNode" && !registered)
         emit({
           id: request.id,
           result: {
@@ -835,14 +836,34 @@ test("attached actual closed-root metadata disables focus and rejects pointer wi
                   : 101),
               localName: "div",
               attributes: [],
-              shadowRoots: [{ shadowRootType: "closed" }],
+              shadowRoots: [
+                { nodeType: 11, backendNodeId: 501, shadowRootType: "closed" },
+              ],
             },
           },
         });
+      if (request.method === "DOM.resolveNode") {
+        assert.equal(request.params.backendNodeId, 501);
+        assert.ok(Number.isSafeInteger(request.params.executionContextId));
+        assert.equal(request.sessionId, f.cdp.latestSessionId());
+        emit({
+          id: request.id,
+          result: {
+            object: { subtype: "node", objectId: "owned-closed-root" },
+          },
+        });
+      }
+      if (request.method === "Runtime.callFunctionOn") {
+        assert.equal(request.params.objectId, "owned-closed-root");
+        assert.equal(request.params.executionContextId, undefined);
+        registered = true;
+        emit({ id: request.id, result: { result: { value: true } } });
+      }
     });
     const observation = await f.backend.inspect("work", "target-1");
-    assert.equal(observation.focusedInputAvailable, false);
-    assert.ok(observation.inputViewport);
+    assert.equal(registered, true);
+    assert.equal(observation.focusedInputAvailable, undefined);
+    assert.equal(observation.inputViewport, undefined);
     await assert.rejects(
       f.backend.keyPress!(
         "work",
@@ -850,9 +871,7 @@ test("attached actual closed-root metadata disables focus and rejects pointer wi
         observation.observationId,
         "Space",
       ),
-      (error) =>
-        error instanceof BrowserInputUnsupportedError &&
-        error.reason === "shadow-surface",
+      /coherent screenshot/,
     );
     await assert.rejects(
       f.backend.pointerClick!(
@@ -862,12 +881,34 @@ test("attached actual closed-root metadata disables focus and rejects pointer wi
         1,
         1,
       ),
-      (error) =>
-        error instanceof BrowserInputUnsupportedError &&
-        error.reason === "shadow-surface",
+      /coherent screenshot/,
     );
     assert.equal(f.cdp.count("Input.dispatchMouseEvent"), 0);
     assert.equal(f.cdp.count("Input.dispatchKeyEvent"), 0);
+    assert.equal(
+      f.cdp
+        .commandRequests()
+        .filter(
+          (request) =>
+            request.method === "Runtime.releaseObject" &&
+            request.params.objectId === "owned-closed-root",
+        ).length,
+      1,
+    );
+    const fresh = await f.backend.inspect("work", "target-1");
+    assert.ok(fresh.inputViewport);
+    assert.equal(fresh.focusedInputAvailable, true);
+    await f.backend.keyPress!("work", "target-1", fresh.observationId, "Space");
+    assert.equal(f.cdp.count("Input.dispatchKeyEvent"), 2);
+    const pointer = await f.backend.inspect("work", "target-1");
+    await f.backend.pointerClick!(
+      "work",
+      "target-1",
+      pointer.observationId,
+      1,
+      1,
+    );
+    assert.equal(f.cdp.count("Input.dispatchMouseEvent"), 2);
   } finally {
     await f.close();
   }

@@ -437,6 +437,9 @@ try {
     tabId: opened.tabId,
     endpoint,
     origin: `http://127.0.0.1:${String(port)}`,
+    onPhase: (phase) => {
+      inputPhase = phase;
+    },
     guard: async () => {
       assert.equal(foregroundWindowHandle(), foregroundBeforeOpen);
       const snapshot = await browserTargetSnapshot(
