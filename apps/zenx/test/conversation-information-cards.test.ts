@@ -107,7 +107,7 @@ test("information reads bounded current-owner facts and edits the exact trigger 
     assert.match(document.body.textContent!, /Daily reviewEnabled/);
     assert.match(document.body.textContent!, /Paused checkPaused/);
     assert.doesNotMatch(document.body.textContent!, /Other private trigger/);
-    assert.match(document.body.textContent!, /No background commands/);
+    assert.doesNotMatch(document.body.textContent!, /No background commands/);
     const edit = document.querySelector<HTMLButtonElement>(
       '[aria-label="Edit · Daily review"]',
     )!;
@@ -343,13 +343,9 @@ test("streaming a long conversation does not clone or redraw the information cat
         retained: false,
       },
     ];
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>(
-          ".background-shell-heading > button:last-child",
-        )!
-        .click(),
-    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+    });
     assert.match(
       document.querySelector(".background-shell-list")!.textContent!,
       /synthetic live commandRunning/,
@@ -461,6 +457,7 @@ test("trigger retry is failure-only and switches fence repeated, failed, and ret
           theme: "light",
           navigate: () => {},
           types: ["triggers"],
+          manageMode: true,
         }),
       ),
     );
@@ -532,6 +529,165 @@ test("trigger retry is failure-only and switches fence repeated, failed, and ret
       1,
       "retained old-owner callback cannot mutate a trigger",
     );
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
+
+test("empty facts hide cards while mounted providers automatically reveal new content", async () => {
+  await i18n.changeLanguage("en");
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "https://zenx.local/",
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  let triggers: unknown[] = [];
+  const visibility: boolean[] = [];
+  Object.assign(dom.window, {
+    zenx: {
+      plugins: {
+        executeCommand: async () => ({ triggers }),
+        readHandle: async () => null,
+      },
+    },
+  });
+  const snapshot = {
+    ...workspaceLauncherSnapshot,
+    plugins: workspaceLauncherSnapshot.plugins.map((p) => ({
+      ...p,
+      admissionId: "live",
+    })),
+    commands: [
+      {
+        key: "zenx-triggers:sidebar-facts",
+        pluginId: "zenx-triggers",
+        id: "sidebar-facts",
+        title: "Facts",
+        tool: "zenx_triggers_sidebar_facts",
+      },
+    ],
+  };
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    await act(async () =>
+      root.render(
+        React.createElement(ConversationInformationCards, {
+          threadId: "owner",
+          threads: [],
+          snapshot,
+          registry: createPluginUiRegistry(),
+          theme: "light",
+          navigate() {},
+          types: ["triggers"],
+          onVisibilityChange: (value) => visibility.push(value),
+        }),
+      ),
+    );
+    assert.equal(visibility.at(-1), false);
+    assert.equal(
+      document.querySelector(".conversation-information-section"),
+      null,
+    );
+    triggers = [
+      {
+        id: "new",
+        threadId: "owner",
+        kind: "timer",
+        active: true,
+        label: "Automatically appeared",
+      },
+    ];
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5100));
+    });
+    assert.equal(visibility.at(-1), true);
+    assert.match(document.body.textContent!, /Automatically appeared/);
+    assert.equal(
+      document
+        .querySelector(".information-trigger-list strong")!
+        .getAttribute("title"),
+      "Automatically appeared",
+    );
+    assert.equal(
+      document.querySelector(".information-trigger-list small")!.className,
+      "sr-only",
+    );
+    triggers = [];
+    await act(async () => {
+      dom.window.dispatchEvent(new dom.window.Event("focus"));
+    });
+    assert.equal(visibility.at(-1), false);
+    assert.equal(
+      document.querySelector(".conversation-information-section"),
+      null,
+    );
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
+
+test("lineage visibility follows the provider's loaded descendants, not only global summaries", async () => {
+  await i18n.changeLanguage("en");
+  const { registerSubagentsUi } =
+    await import("../src/renderer/src/subagents-ui.js");
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "https://zenx.local/",
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  let loaded: unknown[] = [];
+  const visibility: boolean[] = [];
+  Object.assign(dom.window, {
+    zenx: {
+      plugins: {
+        executeCommand: async (_plugin: string, command: string) =>
+          command === "list" ? { threads: loaded } : {},
+        readHandle: async () => null,
+      },
+    },
+  });
+  const registry = createPluginUiRegistry();
+  registerSubagentsUi(registry);
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    await act(async () =>
+      root.render(
+        React.createElement(ConversationInformationCards, {
+          threadId: "owner",
+          threads: [],
+          snapshot: workspaceLauncherSnapshot,
+          registry,
+          theme: "light",
+          navigate() {},
+          types: ["lineage"],
+          onVisibilityChange: (value) => visibility.push(value),
+        }),
+      ),
+    );
+    assert.equal(visibility.at(-1), false);
+    assert.equal(document.querySelector(".subagents-panel"), null);
+    loaded = [
+      {
+        threadId: "provider-child",
+        parentThreadId: "owner",
+        name: "Provider-only child",
+        status: "idle",
+        archived: false,
+      },
+    ];
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5100));
+    });
+    assert.equal(visibility.at(-1), true);
+    assert.match(document.body.textContent!, /Provider-only child/);
   } finally {
     await act(async () => root.unmount());
     dom.window.close();

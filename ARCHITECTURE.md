@@ -15,6 +15,8 @@
 
 - **Native information admission** — The native information service admits the current trusted main-frame document and live Thread/Room member choices into the existing sidebar CAS operations, minting component identities and bindings without a new owner or persistence domain.
 
+- **Information component presentation** — Unimplemented legacy PR/artifact layout types remain parseable and inspectable in customization but do not create default or ordinary-view cards; this static implementation distinction neither infers provider emptiness nor rewrites saved layouts, content, visibility authority or question attention. Existing renderer providers report disposable content visibility through React context/callbacks; empty cards stay mounted behind hidden presentation so their bounded native reads can discover content, without introducing a content cache, permission or another placement authority.
+
 - **Information panel visibility** — Per-Thread/Room visibility and consumed foreground question attention tokens are disposable window-local presentation memory, separate from the durable sidebar layout and question authority; new selected-Thread questions may reveal the panel without changing focus, while background questions never navigate or open it.
 
 - **Editable conversation information layout** — Typed component instances, defaults and revision-checked local edits belong to the existing Thread/Room sidebar presentation store and Trace recovery; PAW uses its actual Room binding rather than a third owner, Host-bound sources retain their provider authority, reads of defaults never write state, and layout edits own neither provider content nor question state and create no execution, scheduling or foreground authority.

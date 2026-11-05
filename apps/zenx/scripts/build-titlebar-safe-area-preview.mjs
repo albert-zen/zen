@@ -53,6 +53,7 @@ const sources = [
   "src/renderer/src/Sidebar.tsx",
   "src/renderer/src/sidebar-expansion.ts",
   "src/renderer/src/auxiliary-panel.tsx",
+  "src/renderer/src/plugin-information-host.tsx",
   "../../packages/zenx-subagents-plugin/src/manifest.ts",
   "src/thread-sidebar-state.ts",
   "src/renderer/src/styles.css",
@@ -61,6 +62,7 @@ const sources = [
   "scripts/build-titlebar-safe-area-preview.mjs",
   "scripts/capture-titlebar-safe-area-preview.mjs",
   "scripts/capture-workspace-tab-overflow.mjs",
+  "scripts/capture-information-entry-preview.mjs",
 ];
 await writeFile(
   path.join(directory, "source.json"),

@@ -1,6 +1,7 @@
 import React, {
   memo,
   useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -10,6 +11,7 @@ import React, {
 import { useTranslation } from "react-i18next";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
+import { SubagentsInformationVisibilityContext } from "./subagents-ui.js";
 import { BackgroundShellStatus } from "./BackgroundShellStatus.js";
 import {
   GenericPluginUiHost,
@@ -37,6 +39,8 @@ type ConversationInformationProps = {
   types?: readonly InformationType[];
   triggerConfig?: { filter: "all" | "timer" | "event"; showPaused: boolean };
   embedded?: boolean;
+  manageMode?: boolean;
+  onVisibilityChange?: (visible: boolean) => void;
 };
 
 /** Keep App's latest navigation closure without making token deltas redraw cards. */
@@ -72,6 +76,8 @@ function ConversationInformationContent({
   types,
   triggerConfig,
   embedded,
+  onVisibilityChange,
+  manageMode = false,
 }: ConversationInformationProps) {
   const { t } = useTranslation("panels");
   const lineageContext = useMemo(
@@ -102,8 +108,31 @@ function ConversationInformationContent({
   const subagents = snapshot.panels.find(
     (panel) => panel.pluginId === "zenx-subagents",
   );
+  const [lineageVisible, setLineageVisible] = useState(false);
+  const [shellVisible, setShellVisible] = useState(false);
+  const lineageVisibility = useMemo(
+    () => ({ report: setLineageVisible, manageMode }),
+    [manageMode],
+  );
+  // Keep providers mounted even when their empty presentation is hidden.
+  // New observations can then reveal content without changing saved placement.
+  useEffect(() => {
+    if (!admissionId) return;
+    const timer = setInterval(() => void refresh(), 5_000);
+    return () => clearInterval(timer);
+  }, [admissionId, refresh]);
   const [busyTrigger, setBusyTrigger] = useState<string | null>(null);
   const [triggerError, setTriggerError] = useState<string | null>(null);
+  const triggersVisible =
+    show("triggers") && (triggers.length > 0 || !!triggerError);
+  const visible =
+    !!attention ||
+    triggersVisible ||
+    (show("lineage") && !!subagents && lineageVisible) ||
+    (show("shell") && shellVisible);
+  useEffect(() => {
+    onVisibilityChange?.(visible);
+  }, [onVisibilityChange, visible]);
   const busy = useRef(false);
   const current = useRef<{
     threadId: string;
@@ -160,7 +189,7 @@ function ConversationInformationContent({
   return (
     <div className="conversation-information-cards">
       {attention}
-      {show("triggers") ? (
+      {show("triggers") && (triggersVisible || manageMode) ? (
         <section
           className="conversation-information-section"
           aria-label={t("threadTriggers")}
@@ -184,7 +213,7 @@ function ConversationInformationContent({
               ) : null}
             </header>
           ) : null}
-          {state.status !== "ready" ? (
+          {state.status !== "ready" && !triggers.length ? (
             <p role="status">
               {state.status === "loading"
                 ? t("boardLoading")
@@ -198,7 +227,9 @@ function ConversationInformationContent({
                     <strong title={trigger.label ?? trigger.id}>
                       {trigger.label ?? trigger.id}
                     </strong>
-                    <small>{t(trigger.active ? "enabled" : "paused")}</small>
+                    <small className="sr-only">
+                      {t(trigger.active ? "enabled" : "paused")}
+                    </small>
                   </span>
                   <button
                     type="button"
@@ -246,26 +277,34 @@ function ConversationInformationContent({
         </section>
       ) : null}
       {show("lineage") && subagents ? (
-        <section className="conversation-information-section">
-          <GenericPluginUiHost
-            registry={registry}
-            snapshot={snapshot}
-            pluginId={subagents.pluginId}
-            surfaceId={subagents.surfaceId}
-            context={lineageContext}
-            theme={theme}
-            navigate={navigate}
-            executeCommand={window.zenx.plugins.executeCommand}
-            readHandle={window.zenx.plugins.readHandle}
-          />
+        <section
+          className="conversation-information-section"
+          hidden={!lineageVisible && !manageMode}
+        >
+          <SubagentsInformationVisibilityContext.Provider
+            value={lineageVisibility}
+          >
+            <GenericPluginUiHost
+              registry={registry}
+              snapshot={snapshot}
+              pluginId={subagents.pluginId}
+              surfaceId={subagents.surfaceId}
+              context={lineageContext}
+              theme={theme}
+              navigate={navigate}
+              executeCommand={window.zenx.plugins.executeCommand}
+              readHandle={window.zenx.plugins.readHandle}
+            />
+          </SubagentsInformationVisibilityContext.Provider>
         </section>
-      ) : show("lineage") ? (
+      ) : show("lineage") && manageMode ? (
         <p role="status">{t("unavailable")}</p>
       ) : null}
       {show("shell") ? (
         <section
           className="conversation-information-section"
           aria-label={t("backgroundShellTitle")}
+          hidden={!shellVisible && !manageMode}
         >
           {!embedded && (
             <header>
@@ -278,6 +317,8 @@ function ConversationInformationContent({
           <BackgroundShellStatus
             threadId={threadId}
             presentation="information"
+            onVisibilityChange={setShellVisible}
+            manageMode={manageMode}
           />
         </section>
       ) : null}

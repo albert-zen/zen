@@ -112,9 +112,10 @@ test("live count is independent of ended conversation; disclosure navigates exac
     await act(async () => {
       await new Promise((r) => setTimeout(r, 1100));
     });
-    assert.match(
-      view.dom.window.document.body.textContent!,
-      /No background commands running/,
+    assert.equal(
+      view.dom.window.document.querySelector(".background-shell-status"),
+      null,
+      "empty observations disappear automatically",
     );
     assert.equal(
       view.dom.window.document.querySelectorAll(".background-shell-list button")
@@ -124,16 +125,11 @@ test("live count is independent of ended conversation; disclosure navigates exac
     );
     assert(calls.length >= 2);
     assert(calls.every((c) => c.operation === "list"));
-    await view.click(".background-shell-disclosure");
-    assert.equal(
-      view.dom.window.document.querySelector(".background-shell-status"),
-      null,
-    );
   } finally {
     await view.close();
   }
 });
-test("read failure invalidates count and exposes original details; Refresh reads only and recovers", async () => {
+test("read failure retains observed work, exposes details and automatically recovers", async () => {
   let failure = false;
   const calls: any[] = [];
   const view = await mount(async (input) => {
@@ -145,7 +141,9 @@ test("read failure invalidates count and exposes original details; Refresh reads
   try {
     await view.render();
     failure = true;
-    await view.click(".background-shell-heading > button:last-child");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+    });
     assert.doesNotMatch(
       view.dom.window.document.body.textContent!,
       /1 background command running/,
@@ -161,7 +159,9 @@ test("read failure invalidates count and exposes original details; Refresh reads
     assert.equal(view.dom.window.document.querySelector("b"), null);
     assert.doesNotMatch(view.dom.window.document.body.textContent!, /Retry/);
     failure = false;
-    await view.click(".background-shell-heading > button:last-child");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+    });
     assert.match(
       view.dom.window.document.body.textContent!,
       /1 background command running/,
@@ -423,9 +423,10 @@ test("information projection lists only pending commands, never ended history", 
     await act(async () => {
       await new Promise((r) => setTimeout(r, 1100));
     });
-    assert.match(
-      view.dom.window.document.body.textContent!,
-      /No background commands running/,
+    assert.equal(
+      view.dom.window.document.querySelector(".background-shell-status"),
+      null,
+      "empty observations disappear automatically",
     );
     assert.equal(
       view.dom.window.document.querySelectorAll(".background-shell-list button")

@@ -125,6 +125,55 @@ async function pressKey(keyCode, label) {
   window.webContents.sendInputEvent({ type: "keyUp", keyCode });
   result.steps.push(label);
 }
+async function verifyInformationOsInput() {
+  result.informationOsInput = { status: "running", permissionChanges: false };
+  await resizeWindow(1600, 1000);
+  await click(
+    '[data-tab-id="primary-conversation"] [role="tab"]',
+    "Select maximized main conversation with actual OS pointer",
+    true,
+  );
+  for (let repeat = 0; repeat < 2; repeat++) {
+    await click(
+      ".information-toolbar button",
+      "Open maximized main information with actual OS pointer",
+      true,
+    );
+    await capture(`16-${repeat}-os-main-information`, "dock");
+    await click(
+      ".information-toolbar button",
+      "Close maximized main information with actual OS pointer",
+      true,
+    );
+    await capture(`16-${repeat}-os-main-information-closed`, "closed");
+  }
+  await click(
+    '.auxiliary-heading button[aria-label="Restore side panel"]',
+    "Restore split workspace for actual OS information pointer",
+    true,
+  );
+  await resizeWindow(1440, 1000);
+  for (let repeat = 0; repeat < 2; repeat++) {
+    await click(
+      ".information-toolbar button",
+      "Reopen information beside split workspace with actual OS pointer",
+      true,
+    );
+    await capture(`17-${repeat}-os-split-information`, "overlay");
+    await click(
+      ".information-toolbar button",
+      "Close split information with actual OS pointer",
+      true,
+    );
+    await capture(`17-${repeat}-os-split-information-closed`, "closed");
+  }
+  result.informationOsInput = {
+    status: "passed",
+    permissionChanges: false,
+    repeatedMaximizedMainToggle: true,
+    repeatedSplitOverlayToggle: true,
+  };
+}
 async function focusWithNativeTab(selector, label) {
   for (let index = 0; index < 160; index++) {
     if (await evaluate(`document.activeElement===${query(selector)}`)) {
@@ -141,7 +190,7 @@ async function settledLayout() {
   await until(
     () =>
       evaluate(
-        "!document.querySelector('[aria-label=\"Refresh information\"]')?.disabled",
+        "document.querySelector('.editable-information-panel')?.dataset.busy==='false'",
       ),
     "native layout write settled",
   );
@@ -233,7 +282,7 @@ async function capture(name, mode) {
   );
   await pause(250);
   const geometry = await evaluate(
-    `(()=>{const rect=s=>{const e=document.querySelector(s);if(!e)return null;const r=e.getBoundingClientRect(),c=getComputedStyle(e);return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height,display:c.display,visibility:c.visibility,color:c.color,background:c.backgroundColor}};return {chat:rect('.agent-surface'),composer:rect('#thread-composer'),card:rect('.information-dock'),popover:rect('.information-popover'),workspace:rect('.workspace'),resource:rect('.auxiliary-panel'),titlebar:rect('.window-titlebar-session'),resourceHeading:document.querySelector('.auxiliary-panel')?.dataset.open==='true'?rect('.auxiliary-heading'):null,informationToggle:rect('.information-toolbar button'),workspaceToggle:rect('.auxiliary-close-button'),expanded:document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded'),overflow:document.documentElement.scrollWidth>innerWidth,composerIdentity:window.__informationComposer===document.querySelector('#thread-composer'),draft:document.querySelector('#thread-composer')?.value}})()`,
+    `(()=>{const rect=s=>{const e=document.querySelector(s);if(!e)return null;const r=e.getBoundingClientRect(),c=getComputedStyle(e);return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height,display:c.display,visibility:c.visibility,color:c.color,background:c.backgroundColor}};return {chat:rect('.agent-surface'),composer:rect('#thread-composer'),card:rect('.information-dock'),popover:rect('.information-popover'),workspace:rect('.workspace'),resource:rect('.auxiliary-panel'),titlebar:rect('.window-titlebar-session'),resourceHeading:document.querySelector('.auxiliary-panel')?.dataset.open==='true'?rect('.auxiliary-heading'):null,resourceExpanded:document.querySelector('.auxiliary-panel')?.dataset.expanded,primaryActive:document.querySelector('.auxiliary-panel')?.dataset.primaryActive,informationSlot:rect('.auxiliary-information-slot'),informationEntryHidden:document.querySelector('.information-toolbar')?.hidden,informationToggle:rect('.information-toolbar button'),workspaceToggle:rect('.auxiliary-close-button'),expanded:document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded'),overflow:document.documentElement.scrollWidth>innerWidth,composerIdentity:window.__informationComposer===document.querySelector('#thread-composer'),draft:document.querySelector('#thread-composer')?.value}})()`,
   );
   if (mode === "dock") {
     assert.ok(
@@ -295,7 +344,44 @@ async function capture(name, mode) {
     result.fullscreenSplitResizer = resizeState;
   }
   assert.equal(geometry.overflow, false, "no page-level horizontal overflow");
-  if (mode !== "closed") assert.equal(geometry.expanded, "true");
+  if (mode !== "closed") {
+    assert.equal(geometry.expanded, "true");
+    assert.equal(geometry.informationEntryHidden, false);
+    if (geometry.resourceHeading && geometry.resourceExpanded === "false") {
+      assert.ok(
+        Math.abs(
+          geometry.informationToggle.right -
+            (geometry.resourceHeading.left - 8),
+        ) <= 1,
+        "split information entry belongs at the main conversation edge, not inside resource controls",
+      );
+      assert.equal(
+        geometry.informationSlot.width,
+        0,
+        "split resource controls have no information slot",
+      );
+      assert.ok(
+        geometry.informationToggle.left >= geometry.titlebar.left &&
+          geometry.informationToggle.right <= geometry.titlebar.right &&
+          geometry.informationToggle.top >= geometry.titlebar.top &&
+          geometry.informationToggle.bottom <= geometry.titlebar.bottom,
+        "split information entry remains in its own conversation title row",
+      );
+    }
+    if (geometry.resourceExpanded === "true") {
+      assert.equal(geometry.primaryActive, "true");
+      const slot = geometry.informationSlot,
+        button = geometry.informationToggle;
+      assert.ok(
+        slot.width > 0 &&
+          slot.left <= button.left + 1 &&
+          slot.right >= button.right - 1 &&
+          slot.top <= button.top + 1 &&
+          slot.bottom >= button.bottom - 1,
+        "maximized main title row excludes the whole native information hit target",
+      );
+    }
+  }
   if (geometry.workspaceToggle && mode !== "closed") {
     assert.equal(
       geometry.informationToggle.background,
@@ -739,7 +825,7 @@ async function run() {
     await settledLayout();
   }
   await click(
-    '[aria-label="Customize information"]',
+    '[aria-label="Done"]',
     "Leave customization with every widget hidden",
   );
   assert.equal(
@@ -775,10 +861,7 @@ async function run() {
     "Show retained second Board after reset",
   );
   await settledLayout();
-  await click(
-    '[aria-label="Customize information"]',
-    "Review independent native fields",
-  );
+  await click('[aria-label="Done"]', "Review independent native fields");
   await until(
     () =>
       evaluate("document.querySelectorAll('.board-field input').length===2"),
@@ -828,10 +911,7 @@ async function run() {
     "Restore standard provider layout",
   );
   await settledLayout();
-  await click(
-    '[aria-label="Customize information"]',
-    "Return to information reading",
-  );
+  await click('[aria-label="Done"]', "Return to information reading");
   await evaluate("document.querySelector('.information-content').scrollTop=0");
   await click(
     "#thread-browser-toggle",
@@ -1157,7 +1237,7 @@ async function run() {
   );
   await screenshot("12-native-room-member-layout.png");
   await click(
-    '[aria-label="Customize information"]',
+    '[aria-label="Done"]',
     "Leave Room layout settings before answering workspace questions",
   );
   const roomQuestions = (room, options) =>
@@ -1247,7 +1327,7 @@ async function run() {
     await settledLayout();
   }
   await click(
-    '[aria-label="Customize information"]',
+    '[aria-label="Done"]',
     "Keep Room questions outside hidden widgets",
   );
   assert.equal(
@@ -1449,12 +1529,22 @@ async function run() {
       ".information-toolbar button",
       "Open information to inspect ended command removal",
     );
+  await until(async () => {
+    const listing = await evaluate(
+      "window.zenx.shellPanel.request({operation:'list',threadId:'information-main'})",
+    );
+    const task = listing.sessions.find((session) => session.taskId === taskId);
+    return (
+      !!task &&
+      ["completed", "failed", "timed_out", "cancelled"].includes(task.status)
+    );
+  }, "Host confirms the exact background command has ended");
   await until(
     () =>
       evaluate(
-        "document.querySelector('.background-shell-list')===null && document.querySelector('.background-shell-status')?.textContent.includes('No background commands')",
+        "(()=>{const panel=document.querySelector('.editable-information-panel[data-owner=\"thread:information-main\"]');const shell=panel?.querySelector('[data-widget-id=\"default:shell\"]');return !!shell&&shell.hidden&&shell.getClientRects().length===0&&!panel.querySelector('.background-shell-list,.background-shell-status')})()",
       ),
-    "ended command no longer appears as live work",
+    "ended command and its empty information card are not visible",
   );
   await screenshot("15-ended-command-removed.png");
   result.cases.push({
@@ -1669,8 +1759,13 @@ async function run() {
         clicks: result.systemSidebarClicks.length,
       };
       await screenshot("15-macos-system-sidebar-click.png");
+      await verifyInformationOsInput();
     } catch (error) {
-      result.sidebarOsInput = {
+      const failedScenario =
+        result.informationOsInput?.status === "running"
+          ? "informationOsInput"
+          : "sidebarOsInput";
+      result[failedScenario] = {
         status: /Accessibility permission is not granted/.test(String(error))
           ? "blocked"
           : "failed",

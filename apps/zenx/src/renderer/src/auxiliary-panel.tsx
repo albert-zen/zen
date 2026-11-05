@@ -1713,6 +1713,9 @@ export function AuxiliaryPanel({
         >
           <Icon name={expanded ? "minimize" : "maximize"} />
         </button>
+        {/* Split mode keeps information in the main conversation titlebar.
+            Only a maximized main tab uses this native no-drag hit region. */}
+        <span className="auxiliary-information-slot" aria-hidden="true" />
         <button
           type="button"
           className="icon-button auxiliary-close-button"

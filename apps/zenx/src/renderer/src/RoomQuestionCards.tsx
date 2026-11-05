@@ -381,8 +381,18 @@ function RoomQuestionCard({
         ) : null}
       </div>
       <small className="user-question-draft-note">
-        {t("roomQuestionReceiptNote")} {t("questionDraftNote")}
+        {t("roomQuestionReceiptNote")}
       </small>
+      {!disabled &&
+      !changed &&
+      draft.answers.some(
+        (answer) => answer.optionIds.length > 0 || Boolean(answer.text?.trim()),
+      ) ? (
+        <details className="user-question-draft-note">
+          <summary>{t("questionDraftStorage")}</summary>
+          <small>{t("questionDraftNote")}</small>
+        </details>
+      ) : null}
     </article>
   );
 }

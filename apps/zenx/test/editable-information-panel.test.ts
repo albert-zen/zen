@@ -14,6 +14,10 @@ import type { NativeInformationUpdate } from "../src/native-information.js";
 import { createPluginUiRegistry } from "../src/renderer/src/plugin-ui-host.js";
 import { workspaceLauncherSnapshot } from "./workspace-launcher-snapshot.js";
 import { i18n } from "../src/renderer/src/i18n.js";
+import {
+  defaultInformationLayout,
+  parseInformationWidget,
+} from "../src/information-layout.js";
 
 async function fixture(kind: "thread" | "room" = "thread") {
   await i18n.changeLanguage("en");
@@ -69,35 +73,38 @@ async function fixture(kind: "thread" | "room" = "thread") {
       return result;
     },
   };
+  let hasTriggers = true;
   Object.assign(dom.window, {
     zenx: {
       information: api,
       threadSidebar: { onChanged: () => () => {} },
       plugins: {
         executeCommand: async () => ({
-          triggers: [
-            {
-              id: "timer",
-              threadId: "member",
-              kind: "timer",
-              active: true,
-              label: "Synthetic timer",
-            },
-            {
-              id: "paused",
-              threadId: "member",
-              kind: "signal",
-              active: false,
-              label: "Synthetic paused event",
-            },
-            {
-              id: "foreign",
-              threadId: "foreign",
-              kind: "timer",
-              active: true,
-              label: "Private foreign fact",
-            },
-          ],
+          triggers: hasTriggers
+            ? [
+                {
+                  id: "timer",
+                  threadId: "member",
+                  kind: "timer",
+                  active: true,
+                  label: "Synthetic timer",
+                },
+                {
+                  id: "paused",
+                  threadId: "member",
+                  kind: "signal",
+                  active: false,
+                  label: "Synthetic paused event",
+                },
+                {
+                  id: "foreign",
+                  threadId: "foreign",
+                  kind: "timer",
+                  active: true,
+                  label: "Private foreign fact",
+                },
+              ]
+            : [],
         }),
         readHandle: async () => null,
       },
@@ -177,8 +184,8 @@ async function fixture(kind: "thread" | "room" = "thread") {
     for (let attempt = 0; attempt < 200; attempt++) {
       if (
         !document.querySelector<HTMLButtonElement>(
-          '[aria-label="Refresh information"]',
-        )?.disabled
+          '.editable-information-panel[data-busy="true"]',
+        )
       )
         break;
       await act(async () => {
@@ -213,6 +220,14 @@ async function fixture(kind: "thread" | "room" = "thread") {
     api,
     updates,
     readCount: () => reads,
+    setHasTriggers: (value: boolean) => {
+      hasTriggers = value;
+    },
+    focus: async () =>
+      act(async () => {
+        dom.window.dispatchEvent(new dom.window.Event("focus"));
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      }),
     render,
     hide: () =>
       act(async () =>
@@ -264,13 +279,13 @@ test("actual editable panel uses native CAS for hide/show/remove/reorder/reset a
       0,
       "reading default layout must not persist it",
     );
-    assert.match(
+    assert.doesNotMatch(
       document.body.textContent!,
-      /no admitted Thread-to-pull-request provider/,
+      /no admitted Thread-to-pull-request provider|no admitted related-artifact index/,
     );
-    assert.match(
-      document.body.textContent!,
-      /no admitted related-artifact index/,
+    assert.equal(
+      document.querySelector('[aria-label="Refresh information"]'),
+      null,
     );
     assert.doesNotMatch(document.body.textContent!, /Private foreign fact/);
     await f.click("Customize information");
@@ -284,11 +299,13 @@ test("actual editable panel uses native CAS for hide/show/remove/reorder/reset a
     ])
       await f.click("Hide", row);
     assert.equal(
-      document.querySelectorAll(".information-widget-body").length,
+      document.querySelectorAll(
+        '.information-widget[data-visible="true"] .information-widget-body',
+      ).length,
       0,
     );
     assert.ok(document.querySelector("#asking-attention"));
-    assert.match(document.body.textContent!, /All components are hidden/);
+    assert.match(document.body.textContent!, /No components to display/);
     await f.click("Show", f.row("triggers"));
     assert.match(f.row("triggers").textContent!, /Synthetic timer/);
     await f.click("Remove placement · Background commands");
@@ -392,7 +409,7 @@ test("actual Room layout uses its live member source and an empty Room does not 
     )!;
     assert.equal(member.value, "member");
     f.clearMembers();
-    await f.click("Refresh information");
+    await f.focus();
     assert.equal(member.value, "");
     assert.doesNotMatch(document.body.textContent!, /Synthetic timer/);
     const add = document.querySelector<HTMLSelectElement>(
@@ -484,7 +501,7 @@ test("a pre-write read cannot clear an unknown-write error or authorize reapply 
   try {
     await f.click("Customize information");
     const releaseRead = f.holdRead();
-    await f.click("Refresh information");
+    await f.focus();
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
     });
@@ -512,6 +529,152 @@ test("a pre-write read cannot clear an unknown-write error or authorize reapply 
     assert.equal(reapply().disabled, false);
     assert.equal(f.updates.length, 1);
     await f.click("Discard edit");
+  } finally {
+    await f.close();
+  }
+});
+
+test("ordinary empty cards stay out of view, observe new content, and respect an explicit hide", async () => {
+  const f = await fixture();
+  const visibleRows = () => [
+    ...document.querySelectorAll<HTMLElement>(
+      ".information-widget:not([hidden])",
+    ),
+  ];
+  try {
+    assert.deepEqual(
+      visibleRows().map((row) => row.dataset.widgetId),
+      ["default:triggers"],
+    );
+    assert.ok(
+      f.row("shell")?.hidden,
+      "empty shell provider remains mounted for automatic observation",
+    );
+    assert.ok(
+      f.row("board")?.hidden,
+      "an unavailable Board is not a content card",
+    );
+    f.setHasTriggers(false);
+    await f.focus();
+    assert.equal(visibleRows().length, 0);
+    assert.ok(
+      document.querySelector("#asking-attention"),
+      "question attention is never hidden with empty widgets",
+    );
+    assert.equal(
+      document.querySelector('[aria-label="Refresh information"]'),
+      null,
+    );
+    f.setHasTriggers(true);
+    await f.focus();
+    assert.deepEqual(
+      visibleRows().map((row) => row.dataset.widgetId),
+      ["default:triggers"],
+    );
+    await f.click("Hide · Thread triggers");
+    assert.equal(visibleRows().length, 0);
+    await f.focus();
+    assert.equal(
+      visibleRows().length,
+      0,
+      "data refresh must not undo explicit human hide",
+    );
+    await f.click("Customize information");
+    await f.click("Show", f.row("triggers"));
+    await f.click("Done");
+    assert.equal(f.row("triggers").hidden, false);
+    await f.click("Thread triggers", f.row("triggers"));
+    assert.equal(
+      f.row("triggers").querySelector<HTMLElement>(".information-widget-body")
+        ?.hidden,
+      true,
+    );
+    f.setHasTriggers(false);
+    await f.focus();
+    assert.equal(
+      f.row("triggers").hidden,
+      true,
+      "collapsed cards still observe becoming empty",
+    );
+    f.setHasTriggers(true);
+    await f.focus();
+    assert.equal(
+      f.row("triggers").hidden,
+      false,
+      "collapsed provider remains mounted and discovers content",
+    );
+    assert.equal(
+      f.row("triggers").querySelector<HTMLElement>(".information-widget-body")
+        ?.hidden,
+      true,
+      "content arrival preserves human collapse",
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("saved placeholder-only layouts are quiet without migration and remain removable in Customize", async () => {
+  const f = await fixture();
+  try {
+    const legacy = {
+      ...defaultInformationLayout(f.scope as { kind: "thread"; id: string }),
+      widgets: ["pull-requests", "artifacts"].map((type) =>
+        parseInformationWidget({
+          id: `legacy:${type}`,
+          type,
+          binding: { kind: "owner" },
+          visible: true,
+          collapsed: false,
+          config: {},
+        }),
+      ),
+    };
+    await f.store.update({
+      owner: f.scope,
+      expectedRevision: 0,
+      patch: { informationLayout: legacy },
+    });
+    await f.focus();
+    const before = await f.store.read(f.scope);
+    assert.equal(
+      document.querySelectorAll(".information-widget:not([hidden])").length,
+      0,
+    );
+    assert.doesNotMatch(
+      document.body.textContent!,
+      /no admitted|No components to display/,
+    );
+    assert.equal(
+      f.updates.length,
+      0,
+      "quiet rendering is not a saved visibility mutation",
+    );
+    await f.click("Customize information");
+    assert.match(
+      document.body.textContent!,
+      /no admitted Thread-to-pull-request provider/,
+    );
+    const choices = [
+      ...document.querySelectorAll<HTMLSelectElement>(
+        '[aria-label="Component"] option',
+      ),
+    ].map((option) => option.value);
+    assert.ok(
+      !choices.includes("pull-requests") && !choices.includes("artifacts"),
+    );
+    assert.deepEqual(
+      await f.store.read(f.scope),
+      before,
+      "opening customization is read-only",
+    );
+    await f.click("Remove placement · Related pull requests");
+    assert.equal(
+      (await f.store.read(f.scope)).informationLayout!.widgets.length,
+      1,
+    );
+    await f.click("Done");
+    assert.doesNotMatch(document.body.textContent!, /no admitted/);
   } finally {
     await f.close();
   }

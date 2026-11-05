@@ -5,6 +5,7 @@ import test from "node:test";
 import { readFile } from "node:fs/promises";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
+import { flushSync } from "react-dom";
 import { JSDOM } from "jsdom";
 import { PluginInformationHost } from "../src/renderer/src/plugin-information-host.js";
 import { createPluginUiRegistry } from "../src/renderer/src/plugin-ui-host.js";
@@ -50,7 +51,7 @@ const snapshot: ZenXPluginSnapshot = {
   ],
 };
 
-test("Board uses one headerless toggle, measures Browser coexistence and retires hidden owners", async () => {
+test("Board uses one toggle and explicit close, measures Browser coexistence and retires hidden owners", async () => {
   const dom = new JSDOM(
     '<div class="app-shell"><header class="window-titlebar"><div class="window-titlebar-session"></div></header><main class="workspace"><aside class="auxiliary-panel" data-open="true"><header class="auxiliary-heading"></header></aside><div id="root"></div></main></div>',
     { url: "https://zenx.local" },
@@ -79,6 +80,7 @@ test("Board uses one headerless toggle, measures Browser coexistence and retires
   let titlebarBottom = 88;
   let headerBottom = 104;
   let workspaceWidth = 1000;
+  let resourcePanelWidth = 480;
   const workspace = document.querySelector<HTMLElement>(".workspace")!;
   const heading = document.querySelector<HTMLElement>(".auxiliary-heading")!;
   const titlebar = document.querySelector<HTMLElement>(
@@ -107,7 +109,7 @@ test("Board uses one headerless toggle, measures Browser coexistence and retires
     return React.createElement(PluginInformationHost, {
       snapshot: current,
       registry,
-      resourcePanelWidth: 480,
+      resourcePanelWidth,
       owner: { kind: "thread", threadId },
       revealSignal,
       theme,
@@ -176,6 +178,12 @@ test("Board uses one headerless toggle, measures Browser coexistence and retires
         ?.getAttribute("aria-label"),
       "Fixture",
     );
+    await click(".information-popover .information-dismiss-toolbar button");
+    await act(async () => waitForFocus(trigger));
+    assert.equal(document.querySelector(".information-popover"), null);
+    assert.equal(document.activeElement, trigger);
+    await click(".information-toolbar button");
+    assert.match(document.body.textContent!, /Fixture content/);
     headerBottom = 160;
     await act(async () => {
       for (const callback of callbacks) callback([]);
@@ -255,10 +263,16 @@ test("Board uses one headerless toggle, measures Browser coexistence and retires
       document.querySelector(".information-dock"),
       "wide chat reserves a docked card",
     );
+    await click(".information-dock .information-dismiss-toolbar button");
+    assert.equal(document.querySelector(".information-dock"), null);
+    assert.equal(document.activeElement, trigger);
+    await click(".information-toolbar button");
+    assert.match(document.body.textContent!, /Fixture content/);
     const panel = document.querySelector<HTMLElement>(".auxiliary-panel")!;
-    panel.dataset.open = "false";
     await act(async () => {
-      for (const callback of callbacks) callback([]);
+      panel.dataset.open = "false";
+      resourcePanelWidth = 0;
+      flushSync(() => root.render(React.createElement(Harness)));
     });
     assert.equal(
       document.querySelector<HTMLElement>(".information-dock")!.style.top,
@@ -275,14 +289,17 @@ test("Board uses one headerless toggle, measures Browser coexistence and retires
       "100px",
     );
     titlebarBottom = 88;
-    panel.dataset.open = "true";
     await act(async () => {
-      for (const callback of callbacks) callback([]);
+      panel.dataset.open = "true";
+      resourcePanelWidth = 480;
+      // AuxiliaryPanel can report its new width in the same commit that opens
+      // it. Rebind measurement before MutationObserver gets a delivery turn.
+      flushSync(() => root.render(React.createElement(Harness)));
     });
     assert.equal(
       trigger.getAttribute("aria-pressed"),
       "false",
-      "opening the workspace hides information once",
+      "opening the workspace hides information even when its width synchronously rebinds measurement",
     );
     workspaceWidth = 1000;
     await act(async () => {
@@ -293,6 +310,15 @@ test("Board uses one headerless toggle, measures Browser coexistence and retires
       document.querySelector(".information-popover"),
       "manual reopen beside workspace uses an overlay",
     );
+    await act(async () => {
+      resourcePanelWidth = 520;
+      flushSync(() => root.render(React.createElement(Harness)));
+    });
+    assert.equal(
+      trigger.getAttribute("aria-pressed"),
+      "true",
+      "later width changes do not close manually reopened information",
+    );
     panel.dataset.expanded = "true";
     panel.dataset.primaryActive = "true";
     await act(async () => {
@@ -302,19 +328,30 @@ test("Board uses one headerless toggle, measures Browser coexistence and retires
       document.querySelector(".information-dock"),
       "maximized main-conversation tab uses the whole available width",
     );
-    panel.dataset.primaryActive = "false";
     await act(async () => {
-      for (const callback of callbacks) callback([]);
+      panel.dataset.primaryActive = "false";
+      resourcePanelWidth = 1000;
+      flushSync(() => root.render(React.createElement(Harness)));
     });
     assert.equal(
       trigger.getAttribute("aria-pressed"),
       "false",
       "switching from main conversation to a resource closes its dock",
     );
+    assert.equal(
+      document.querySelector<HTMLElement>(".information-toolbar")!.hidden,
+      true,
+      "a maximized resource does not expose the main conversation's information entry",
+    );
     panel.dataset.primaryActive = "true";
     await act(async () => {
       for (const callback of callbacks) callback([]);
     });
+    assert.equal(
+      document.querySelector<HTMLElement>(".information-toolbar")!.hidden,
+      false,
+      "returning to the maximized main tab restores its entry",
+    );
     await click(".information-toolbar button");
     workspaceWidth = 700;
     await act(async () => {
@@ -384,9 +421,27 @@ test("information reserves its slot, uses neutral pressed state and keeps primar
     new URL("../src/renderer/src/App.tsx", import.meta.url),
     "utf8",
   );
+  const auxiliary = await readFile(
+    new URL("../src/renderer/src/auxiliary-panel.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    auxiliary,
+    /<header className="auxiliary-heading">[\s\S]*?<span className="auxiliary-information-slot" aria-hidden="true" \/>[\s\S]*?className="icon-button auxiliary-close-button"[\s\S]*?<\/header>/,
+    "the no-drag rectangle must be inside the later native drag heading, not an earlier overlapping sibling",
+  );
   assert.match(
     css,
-    /\.workspace:has\(> \.information-toolbar\)[\s\S]*?\.auxiliary-close-button\s*\{\s*margin-inline-start: 44px;/,
+    /\.workspace:has\(> \.information-toolbar\)\s*> \.auxiliary-panel\[data-open="true"\]\[data-expanded="true"\]\[data-primary-active="true"\][\s\S]*?> \.auxiliary-information-slot\s*\{\s*display: block;/,
+  );
+  assert.match(
+    css,
+    /\.workspace:has\(> \.auxiliary-panel\[data-open="true"\]:not\(\[data-expanded="true"\]\)\)\s*> \.information-toolbar\s*\{\s*right: calc\(var\(--workspace-panel-width, 0px\) \+ 8px\);/,
+    "split entry follows the conversation/resource divider rather than resource controls",
+  );
+  assert.match(
+    css,
+    /\.auxiliary-information-slot\s*\{[^}]*flex: 0 0 40px;[^}]*height: 36px;[^}]*-webkit-app-region: no-drag;/,
   );
   assert.match(
     css,
