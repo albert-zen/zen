@@ -107,6 +107,8 @@ for (const scene of [
       );
       await send("Input.dispatchKeyEvent", {
         type: "keyDown",
+        text: "\r",
+        unmodifiedText: "\r",
         key: "Enter",
         code: "Enter",
         windowsVirtualKeyCode: 13,
