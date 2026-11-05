@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AppShotIpcController } from "../src/main/app-shot-ipc.js";
+import type { PortalAppShotShortcutOptions } from "../src/main/app-shot-portal-shortcut.js";
 import type { AppShotEvent } from "../src/app-shot.js";
 import type { AppShotCapture, AppShotService } from "../src/main/app-shot.js";
 import type { ZenXImageDraft } from "../src/main/image-attachments.js";
@@ -24,7 +25,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function fixture(platform = "darwin", niri = false) {
+function fixture(platform = "darwin", niri = false, portal = false) {
   type Renderer = { owned: boolean; url: string; frame: object; calls: number };
   const renderer: Renderer = {
     owned: true,
@@ -39,6 +40,7 @@ function fixture(platform = "darwin", niri = false) {
   let importWait: Promise<void> | undefined;
   let prepared = 0;
   let focusCount = 0;
+  let focused = false;
   const events: AppShotEvent[] = [];
   type ModifierOptions = {
     onTrigger(): void;
@@ -56,10 +58,37 @@ function fixture(platform = "darwin", niri = false) {
       modifierStops++;
     },
   });
-  let activeCapture: () => Promise<typeof capture> = async () => capture;
+  let activeCapture: () => Promise<AppShotCapture | undefined> = async () =>
+    capture;
+  const portalStarts: PortalAppShotShortcutOptions[] = [];
+  let portalStops = 0;
+  const portalHandle = {
+    registered: false,
+    shortcutDescription: undefined as string | undefined,
+    canConfigure: true,
+    stop() {
+      portalStops++;
+    },
+    async configure() {
+      portalHandle.registered = true;
+      portalHandle.shortcutDescription = "Super+F8";
+      portalStarts.at(-1)?.onStateChanged?.(portalHandle);
+    },
+  };
   let manualCapture: () => Promise<AppShotCapture> = async () => capture;
   const controller = new AppShotIpcController<Renderer, object>({
     platform,
+    ...(portal
+      ? {
+          portalSupport: async () => true,
+          startPortalShortcut: async (
+            options: PortalAppShotShortcutOptions,
+          ) => {
+            portalStarts.push(options);
+            return portalHandle;
+          },
+        }
+      : {}),
     niriBinding: niri
       ? 'Ctrl+Shift+2 repeat=false { spawn "gdbus"; }'
       : undefined,
@@ -91,7 +120,7 @@ function fixture(platform = "darwin", niri = false) {
     createService(target): AppShotService {
       target.calls++;
       return {
-        hasNativeActiveCapture: niri,
+        hasNativeActiveCapture: niri || portal,
         async listSources() {
           return [{ id: "source", title: "Window" }];
         },
@@ -138,12 +167,23 @@ function fixture(platform = "darwin", niri = false) {
     sendCaptured(_renderer, payload) {
       events.push(payload);
     },
+    isFocused() {
+      return focused;
+    },
     focus() {
       focusCount++;
     },
   });
   return {
     controller,
+    portalHandle,
+    portalStarts,
+    setFocused(value: boolean) {
+      focused = value;
+    },
+    get portalStops() {
+      return portalStops;
+    },
     abandoned,
     waitForImport(value: Promise<void>) {
       importWait = value;
@@ -179,7 +219,7 @@ function fixture(platform = "darwin", niri = false) {
     get focusCount() {
       return focusCount;
     },
-    setActiveCapture(value: () => Promise<typeof capture>) {
+    setActiveCapture(value: () => Promise<AppShotCapture | undefined>) {
       activeCapture = value;
     },
     setManualCapture(value: () => Promise<AppShotCapture>) {
@@ -514,8 +554,14 @@ test("invalid shortcut kinds cannot register a global listener", async () => {
 
 test("Niri opt-in owns a bus action without registering or writing a compositor shortcut", async () => {
   const f = fixture("linux", true);
-  assert.equal(f.controller.configuration(f.caller()).nativeForeground, true);
-  assert.match(f.controller.configuration(f.caller()).niriBinding!, /gdbus/);
+  assert.equal(
+    (await f.controller.configuration(f.caller())).nativeForeground,
+    true,
+  );
+  assert.match(
+    (await f.controller.configuration(f.caller())).niriBinding!,
+    /gdbus/,
+  );
   await f.controller.arm(f.caller(), "niri", false, "chord");
   assert.equal(f.shortcut, undefined);
   assert.equal(f.modifierStarts.length, 1);
@@ -533,10 +579,10 @@ test("Niri opt-in owns a bus action without registering or writing a compositor 
   f.controller.dispose();
 });
 
-test("Niri configuration is available only to the trusted main frame", () => {
+test("Niri configuration is available only to the trusted main frame", async () => {
   const f = fixture("linux", true);
-  assert.throws(
-    () => f.controller.configuration({ renderer: f.renderer, frame: {} }),
+  await assert.rejects(
+    f.controller.configuration({ renderer: f.renderer, frame: {} }),
     /trusted/,
   );
   f.controller.dispose();
@@ -560,4 +606,83 @@ test("App Shot retires a staged attachment if its owner or review disappears dur
     assert.deepEqual(f.abandoned, ["image"]);
     f.controller.dispose();
   }
+});
+
+test("Wayland shortcut consent remains disabled until configured, reports the actual chord and closes on revoke", async () => {
+  const f = fixture("linux", false, true);
+  assert.deepEqual(await f.controller.configuration(f.caller()), {
+    nativeForeground: true,
+    portalShortcut: true,
+  });
+  assert.equal(f.portalStarts.length, 0);
+  assert.equal(f.activeCaptures, 0);
+  const initial = await f.controller.arm(f.caller(), "portal", false, "chord");
+  assert.deepEqual(initial, {
+    registered: false,
+    shortcutDescription: undefined,
+    canConfigure: true,
+  });
+  await f.controller.onShortcut();
+  assert.equal(f.activeCaptures, 0);
+  const configured = await f.controller.configureShortcut(f.caller(), "portal");
+  assert.equal(configured.shortcutDescription, "Super+F8");
+  await f.controller.onShortcut();
+  assert.equal(f.activeCaptures, 1);
+  assert.equal(f.imports, 0);
+  await f.controller.disarm(f.caller(), "portal");
+  assert.equal(f.portalStops, 1);
+  assert.equal(f.portalStarts[0]!.signal!.aborted, true);
+  await assert.rejects(
+    f.controller.configureShortcut(f.caller(), "portal"),
+    /No current/,
+  );
+  f.controller.dispose();
+});
+
+test("Wayland absent capture capability opens picker, while denial never falls back", async () => {
+  const f = fixture("linux", false, true);
+  f.portalHandle.registered = true;
+  await f.controller.arm(f.caller(), "portal", false, "chord");
+  f.setActiveCapture(async () => undefined);
+  await f.controller.onShortcut();
+  assert.equal(f.events.at(-1)?.openPicker, true);
+  f.events.length = 0;
+  f.setActiveCapture(async () => {
+    throw new Error("Desktop denied screenshot");
+  });
+  await f.controller.onShortcut();
+  assert.match(f.events.at(-1)?.error ?? "", /denied/);
+  assert.equal(
+    f.events.some((event) => event.openPicker),
+    false,
+  );
+  f.controller.dispose();
+});
+
+test("Wayland configuration is bound to the exact renderer, token and current owner", async () => {
+  const f = fixture("linux", false, true);
+  await f.controller.arm(f.caller(), "portal", false, "chord");
+  await assert.rejects(
+    f.controller.configureShortcut(f.caller(), "other"),
+    /No current/,
+  );
+  const hold = deferred<void>();
+  f.portalHandle.configure = () => hold.promise;
+  const configuring = f.controller.configureShortcut(f.caller(), "portal");
+  f.controller.forget(f.renderer);
+  hold.resolve(undefined);
+  await assert.rejects(configuring, /cancelled/);
+  assert.equal(f.portalStops, 1);
+  f.controller.dispose();
+});
+
+test("a portal shortcut in the focused ZenX Composer opens one chooser instead of taking pixels", async () => {
+  const f = fixture("linux", false, true);
+  f.portalHandle.registered = true;
+  f.setFocused(true);
+  await f.controller.arm(f.caller(), "portal", false, "chord");
+  await f.controller.onShortcut();
+  assert.equal(f.activeCaptures, 0);
+  assert.equal(f.events.at(-1)?.openPicker, true);
+  f.controller.dispose();
 });

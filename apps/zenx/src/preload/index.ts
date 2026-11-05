@@ -349,6 +349,8 @@ contextBridge.exposeInMainWorld("zenx", {
       await ipcRenderer.invoke(ipcChannels.threadSummariesList, options),
   },
   appShot: {
+    configureShortcut: async (token: string) =>
+      await ipcRenderer.invoke(ipcChannels.appShotConfigureShortcut, token),
     configuration: async () =>
       await ipcRenderer.invoke(ipcChannels.appShotConfiguration),
     read: async (id: string) =>

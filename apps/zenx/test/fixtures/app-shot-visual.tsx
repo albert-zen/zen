@@ -47,6 +47,7 @@ const shot: ZenXImageDraft = {
     "App Shot\nApplication: Example Notes\nWindow: Product review\nCaptured: 2026-11-05T11:00:00.000Z\nAccessibility: screenshot only (not requested)",
 };
 const niri = params.get("platform") === "niri";
+const portal = params.get("platform") === "portal";
 const api: AppShotApi = {
   configuration: async () =>
     niri
@@ -55,7 +56,9 @@ const api: AppShotApi = {
           niriBinding:
             'Ctrl+Shift+2 repeat=false { spawn "gdbus" "call" "--session" "--dest" "io.github.albert_zen.ZenX.AppShot" "--object-path" "/io/github/albert_zen/ZenX/AppShot" "--method" "io.github.albert_zen.ZenX.AppShot.Capture"; }',
         }
-      : { nativeForeground: true },
+      : portal
+        ? { nativeForeground: false, portalShortcut: true }
+        : { nativeForeground: true },
   list: async () => [
     { id: "notes", title: "Product review", applicationName: "Example Notes" },
     {
@@ -68,13 +71,18 @@ const api: AppShotApi = {
   read: async () => png,
   attach: async () => shot,
   discard: async () => {},
-  arm: async () => "⌘⇧2",
+  arm: async () => (portal ? { registered: false, canConfigure: true } : "⌘⇧2"),
+  configureShortcut: async () => ({
+    registered: true,
+    shortcutDescription: "Super+F8",
+    canConfigure: true,
+  }),
   disarm: async () => {},
   onCapture: () => () => {},
 };
 Object.assign(window, {
   zenx: {
-    platform: niri ? "linux" : "darwin",
+    platform: niri || portal ? "linux" : "darwin",
     appShot: api,
     imageAttachments: { read: async () => png },
   },

@@ -3,17 +3,25 @@ import type { ZenXImageDraft } from "./main/image-attachments.js";
 
 export type AppShotShortcutKind = "both-shift" | "chord";
 
+export interface AppShotShortcutState {
+  registered: boolean;
+  shortcutDescription?: string;
+  canConfigure: boolean;
+}
+
 export interface AppShotEvent {
   token: string;
   image?: ZenXImageDraft;
   error?: string;
   disarmed?: true;
   openPicker?: true;
+  shortcutState?: AppShotShortcutState;
 }
 
 export interface AppShotConfiguration {
   nativeForeground: boolean;
   niriBinding?: string;
+  portalShortcut?: true;
 }
 
 export interface AppShotApi {
@@ -30,7 +38,8 @@ export interface AppShotApi {
     token: string,
     includeAccessibility: boolean,
     kind?: AppShotShortcutKind,
-  ): Promise<string>;
+  ): Promise<string | AppShotShortcutState>;
+  configureShortcut?(token: string): Promise<AppShotShortcutState>;
   disarm(token: string): Promise<void>;
   onCapture(listener: (event: AppShotEvent) => void): () => void;
 }

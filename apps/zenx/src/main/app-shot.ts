@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync, lstatSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { niriSocketPath, type NiriAppShotCapture } from "./app-shot-niri.js";
@@ -51,7 +53,7 @@ export interface AppShotService {
   captureActive(options?: {
     includeAccessibility?: boolean;
     signal?: AbortSignal;
-  }): Promise<AppShotCapture>;
+  }): Promise<AppShotCapture | undefined>;
 }
 
 export interface AppShotDependencies {
@@ -70,7 +72,7 @@ export interface AppShotDependencies {
   captureActiveNative?: (options?: {
     includeAccessibility?: boolean;
     signal?: AbortSignal;
-  }) => Promise<AppShotCapture>;
+  }) => Promise<AppShotCapture | undefined>;
   getActiveWindow?: () => Promise<AppShotActiveWindow>;
   getWindowMetadata?: (windowId: number) => Promise<AppShotActiveWindow>;
 }
@@ -382,7 +384,25 @@ export function createElectronAppShotService(
                 captureOptions?.includeAccessibility === true,
               );
             }
-          : undefined,
+          : process.platform === "linux" && isWaylandAppShotSession()
+            ? async (captureOptions) => {
+                const { app } = await import("electron");
+                const { capturePortalActiveAppShot } =
+                  await import("./app-shot-portal.js");
+                const shot = await capturePortalActiveAppShot({
+                  appId: app.isPackaged
+                    ? "io.github.albert_zen.ZenX"
+                    : "io.github.albert_zen.ZenX.Development",
+                  signal: captureOptions?.signal,
+                });
+                return shot
+                  ? portalAppShotDraft(
+                      shot,
+                      captureOptions?.includeAccessibility === true,
+                    )
+                  : undefined;
+              }
+            : undefined,
     readAccessibility:
       process.platform === "darwin" ? readMacAppShotAccessibility : undefined,
     getActiveWindow:
@@ -506,6 +526,57 @@ export function niriAppShotDraft(
       `Captured at: ${new Date().toISOString()}.`,
       includeAccessibility
         ? "Screenshot only. Niri accessibility text is not implemented in this stage."
+        : "Screenshot only. Accessibility text was not requested.",
+      "This is a draft attachment, not permission to control the app.",
+    ].join("\n"),
+  };
+}
+
+/** T3's session detection, including launchers that omit the usual Wayland variables. */
+export function isWaylandAppShotSession(
+  env: NodeJS.ProcessEnv = process.env,
+  probe = {
+    entries: (directory: string) => readdirSync(directory),
+    socket: (path: string) => lstatSync(path).isSocket(),
+    unixSockets: () => readFileSync("/proc/net/unix", "utf8"),
+  },
+): boolean {
+  const session = env["XDG_SESSION_TYPE"]?.toLowerCase();
+  if (session === "wayland" || Boolean(env["WAYLAND_DISPLAY"])) return true;
+  if (session === "x11") return false;
+  const directory = env["XDG_RUNTIME_DIR"];
+  if (!directory || !isAbsolute(directory)) return false;
+  try {
+    const sockets = new Set(
+      probe
+        .unixSockets()
+        .split("\n")
+        .map((line) => line.trim().split(/\s+/).at(-1)),
+    );
+    return probe.entries(directory).some((name) => {
+      if (!/^wayland-\d+$/.test(name)) return false;
+      const path = join(directory, name);
+      return sockets.has(path) && probe.socket(path);
+    });
+  } catch {
+    return false;
+  }
+}
+
+/** Generic portal pixels cannot be correlated with a guessed window or AX tree. */
+export function portalAppShotDraft(
+  shot: { png: Uint8Array; width: number; height: number },
+  includeAccessibility: boolean,
+): AppShotCapture {
+  return {
+    name: "App Shot.png",
+    bytes: shot.png,
+    mediaType: "image/png",
+    context: [
+      "App Shot of the active window selected by the desktop screenshot portal. The portal supplied no verified application or window identity.",
+      `Captured at: ${new Date().toISOString()}.`,
+      includeAccessibility
+        ? "Screenshot only. Accessibility text cannot be matched to generic portal pixels."
         : "Screenshot only. Accessibility text was not requested.",
       "This is a draft attachment, not permission to control the app.",
     ].join("\n"),

@@ -102,6 +102,8 @@ try {
         ),
         { theme: "light", width: 390, platform: "niri" },
         { theme: "dark", width: 1280, platform: "niri" },
+        { theme: "dark", width: 390, platform: "portal" },
+        { theme: "light", width: 1280, platform: "portal" },
       ];
       for (const { theme, width, platform } of cases) {
         const height = 900;
@@ -142,6 +144,37 @@ try {
             ...(await check(width, height)),
           });
           await screenshot(`${name}-manual-binding.png`);
+        }
+
+        if (platform === "portal") {
+          await click('.app-shot-shortcut input[type="checkbox"]');
+          await wait(
+            "document.querySelector('.app-shot-shortcut').textContent.includes('应用快照未启用')",
+          );
+          assert.equal(
+            (await check(width, height)).count,
+            "已添加 0 张，未发送。",
+          );
+          receipt.states.push({
+            phase: "portal-unassigned",
+            ...(await check(width, height)),
+          });
+          await screenshot(`${name}-portal-unassigned.png`);
+          await click(
+            ".app-shot-shortcut .app-shot-actions button:first-child",
+          );
+          await wait(
+            "document.querySelector('.app-shot-shortcut').textContent.includes('Super+F8')",
+          );
+          receipt.states.push({
+            phase: "portal-assigned",
+            ...(await check(width, height)),
+          });
+          await screenshot(`${name}-portal-assigned.png`);
+          await click('.app-shot-shortcut input[type="checkbox"]');
+          await wait(
+            "!document.querySelector('.app-shot-shortcut input[type=checkbox]').checked",
+          );
         }
 
         await click(".app-shot-sources button");

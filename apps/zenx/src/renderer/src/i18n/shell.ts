@@ -1,4 +1,13 @@
 export const en = {
+  appShotPortalEnable: "Ask the desktop to enable this Composer's shortcut",
+  appShotPortalHint:
+    "Your desktop may ask you to approve or choose a shortcut and may remember that choice. Disable closes this Composer's session. Capture stays in review; Attach and Send remain separate. Unsupported capture opens the window chooser; denial does not fall back.",
+  appShotPortalAssigned: "Desktop shortcut: {{shortcut}}",
+  appShotPortalAssignedUnknown: "Assigned by the desktop",
+  appShotPortalNotAssigned:
+    "No desktop shortcut is assigned. App Shot is not armed.",
+  appShotPortalConfigure: "Configure desktop shortcut",
+  appShotPortalStop: "Stop shortcut setup",
   appShotNiriEnable: "Enable Niri capture action for this composer",
   appShotNiriHint:
     "Registering this action does not reserve keys. Add the binding below to your own Niri configuration, then use it in an external app. Any same-session process can invoke the action while enabled. Disable to unregister. Review, Attach and Send remain separate.",
@@ -1038,6 +1047,14 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  appShotPortalEnable: "请求桌面为当前输入框启用快捷键",
+  appShotPortalHint:
+    "桌面可能要求你批准或选择快捷键，并可能记住这次选择。取消启用会关闭当前输入框的会话。捕获仍需检查，添加与发送分开；不支持前台捕获时打开选窗器，拒绝授权不会自动降级。",
+  appShotPortalAssigned: "桌面快捷键：{{shortcut}}",
+  appShotPortalAssignedUnknown: "由桌面分配",
+  appShotPortalNotAssigned: "桌面尚未分配快捷键，应用快照未启用。",
+  appShotPortalConfigure: "配置桌面快捷键",
+  appShotPortalStop: "停止快捷键设置",
   appShotNiriEnable: "为当前输入框启用 Niri 捕获动作",
   appShotNiriHint:
     "注册动作不等于保留按键。请自行添加下方 Niri 配置后，在外部应用使用快捷键。启用期间，同一会话内的其他进程也可调用该动作。取消启用会撤销注册；检查、添加和发送仍为独立步骤。",

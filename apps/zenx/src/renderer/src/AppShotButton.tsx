@@ -6,6 +6,7 @@ import type {
   AppShotApi,
   AppShotConfiguration,
   AppShotShortcutKind,
+  AppShotShortcutState,
 } from "../../app-shot.js";
 import type { AppShotSource } from "../../main/app-shot.js";
 import type { ZenXImageDraft } from "../../main/image-attachments.js";
@@ -25,6 +26,7 @@ export function AppShotButton({
 }) {
   const { t } = useTranslation("shell");
   const token = useRef(crypto.randomUUID()).current;
+  const shortcutToken = useRef<string>(token);
   const button = useRef<HTMLButtonElement>(null);
   const overlay = useRef<HTMLDivElement>(null);
   const live = useRef(true);
@@ -43,6 +45,9 @@ export function AppShotButton({
   const [error, setError] = useState<string | null>(null);
   const [includeAccessibility, setIncludeAccessibility] = useState(false);
   const [armed, setArmed] = useState(false);
+  const [portalState, setPortalState] = useState<AppShotShortcutState | null>(
+    null,
+  );
   const [shortcutBusy, setShortcutBusy] = useState(false);
   const shortcutRequested = useRef(false);
   const shortcutOperation = useRef(0);
@@ -57,30 +62,43 @@ export function AppShotButton({
 
   useEffect(() => {
     let current = true;
+    if (!open) return;
     setConfiguration(null);
     if (api.configuration)
       void api.configuration().then(
         (value) => {
           if (current) setConfiguration(value);
         },
-        () => {
-          /* Capture/registration reports the concrete availability error. */
+        (cause) => {
+          if (current)
+            setError(cause instanceof Error ? cause.message : String(cause));
         },
       );
     return () => {
       current = false;
     };
-  }, [api]);
+  }, [api, open]);
 
   useEffect(() => {
     live.current = true;
     const dispose = api.onCapture((event) => {
-      if (!live.current || event.token !== token) return;
+      if (
+        !live.current ||
+        !shortcutRequested.current ||
+        event.token !== shortcutToken.current
+      ) {
+        // All mounted Composers share this event channel. Only retire a late
+        // image from this component's own registration, never another owner's.
+        if (event.image && event.token.startsWith(`${token}:`))
+          void api.discard(event.image.id).catch(() => {});
+        return;
+      }
       if (event.disarmed) {
         shortcutOperation.current++;
         shortcutRequested.current = false;
         setShortcutBusy(false);
         setArmed(false);
+        setPortalState(null);
         if (event.error && !latest.current.disabled) {
           setError(event.error);
           setOpen(true);
@@ -89,6 +107,11 @@ export function AppShotButton({
       }
       if (latest.current.disabled) {
         if (event.image) void api.discard(event.image.id).catch(() => {});
+        return;
+      }
+      if (event.shortcutState) {
+        setPortalState(event.shortcutState);
+        setArmed(event.shortcutState.registered);
         return;
       }
       if (event.openPicker) {
@@ -128,7 +151,7 @@ export function AppShotButton({
       dispose();
       for (const image of [currentImage.current, ...waitingImages.current])
         if (image) void api.discard(image.id).catch(() => {});
-      void api.disarm(token).catch(() => {});
+      void api.disarm(shortcutToken.current).catch(() => {});
     };
   }, [api, token]);
 
@@ -149,7 +172,8 @@ export function AppShotButton({
     setImage(null);
     setBusy(false);
     setArmed(false);
-    void api.disarm(token).catch(() => {});
+    setPortalState(null);
+    void api.disarm(shortcutToken.current).catch(() => {});
   }, [api, disabled, token]);
 
   useEffect(() => {
@@ -189,7 +213,7 @@ export function AppShotButton({
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (
-        (armed && shortcutKind === "chord") ||
+        (armed && shortcutKind === "chord" && !configuration?.portalShortcut) ||
         event.repeat ||
         !event.shiftKey ||
         (!event.ctrlKey && !event.metaKey) ||
@@ -204,7 +228,7 @@ export function AppShotButton({
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [armed, shortcutKind]);
+  }, [armed, shortcutKind, configuration?.portalShortcut]);
 
   const close = () => {
     operation.current++;
@@ -279,21 +303,44 @@ export function AppShotButton({
       }
     }
   };
-  const toggleShortcut = async () => {
+  const toggleShortcut = async (requested?: boolean) => {
     if (latest.current.disabled) return;
     const generation = ++shortcutOperation.current;
-    const next = !shortcutRequested.current;
+    const next = requested ?? !shortcutRequested.current;
     shortcutRequested.current = next;
     setArmed(next);
     setShortcutBusy(true);
     setError(null);
     try {
-      if (next) await api.arm(token, includeAccessibility, shortcutKind);
-      else await api.disarm(token);
+      if (next) {
+        // Every registration gets a new token, so queued events from a revoked
+        // session cannot revive its state after a later enable.
+        const registrationToken = `${token}:${crypto.randomUUID()}`;
+        shortcutToken.current = registrationToken;
+        const result = await api.arm(
+          registrationToken,
+          includeAccessibility,
+          shortcutKind,
+        );
+        if (
+          !live.current ||
+          shortcutOperation.current !== generation ||
+          latest.current.disabled
+        )
+          return;
+        if (typeof result !== "string") {
+          setPortalState(result);
+          setArmed(result.registered);
+        }
+      } else {
+        setPortalState(null);
+        await api.disarm(shortcutToken.current);
+      }
     } catch (cause) {
       if (live.current && shortcutOperation.current === generation) {
         shortcutRequested.current = false;
         setArmed(false);
+        setPortalState(null);
         setError(String(cause instanceof Error ? cause.message : cause));
       }
     } finally {
@@ -301,6 +348,31 @@ export function AppShotButton({
         setShortcutBusy(false);
     }
   };
+  const configureShortcut = async () => {
+    if (!api.configureShortcut || latest.current.disabled || shortcutBusy)
+      return;
+    const generation = ++shortcutOperation.current;
+    setShortcutBusy(true);
+    setError(null);
+    try {
+      const result = await api.configureShortcut(shortcutToken.current);
+      if (
+        live.current &&
+        shortcutOperation.current === generation &&
+        !latest.current.disabled
+      ) {
+        setPortalState(result);
+        setArmed(result.registered);
+      }
+    } catch (cause) {
+      if (live.current && shortcutOperation.current === generation)
+        setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (live.current && shortcutOperation.current === generation)
+        setShortcutBusy(false);
+    }
+  };
+
   return (
     <>
       <button
@@ -464,25 +536,64 @@ export function AppShotButton({
                 type="checkbox"
                 checked={armed}
                 disabled={disabled}
-                onChange={() => void toggleShortcut()}
+                onChange={(event) => void toggleShortcut(event.target.checked)}
               />
               {t(
                 configuration?.niriBinding
                   ? "appShotNiriEnable"
-                  : "appShotGlobalShortcut",
+                  : configuration?.portalShortcut
+                    ? "appShotPortalEnable"
+                    : "appShotGlobalShortcut",
               )}
             </label>
             <p className="app-shot-hint">
               {t(
                 configuration?.niriBinding
                   ? "appShotNiriHint"
-                  : window.zenx.platform === "linux"
-                    ? "appShotLinuxShortcutHint"
-                    : shortcutKind === "both-shift"
-                      ? "appShotBothShiftHint"
-                      : "appShotGlobalHint",
+                  : configuration?.portalShortcut
+                    ? "appShotPortalHint"
+                    : window.zenx.platform === "linux"
+                      ? "appShotLinuxShortcutHint"
+                      : shortcutKind === "both-shift"
+                        ? "appShotBothShiftHint"
+                        : "appShotGlobalHint",
               )}
             </p>
+            {portalState && (
+              <>
+                <p role="status" className="app-shot-hint">
+                  {portalState.registered
+                    ? t("appShotPortalAssigned", {
+                        shortcut:
+                          portalState.shortcutDescription ??
+                          t("appShotPortalAssignedUnknown"),
+                      })
+                    : t("appShotPortalNotAssigned")}
+                </p>
+                <div className="app-shot-actions">
+                  {portalState.canConfigure && api.configureShortcut && (
+                    <button
+                      type="button"
+                      className="quiet-button"
+                      disabled={disabled || shortcutBusy}
+                      onClick={() => void configureShortcut()}
+                    >
+                      {t("appShotPortalConfigure")}
+                    </button>
+                  )}
+                  {!portalState.registered && (
+                    <button
+                      type="button"
+                      className="quiet-button"
+                      disabled={disabled}
+                      onClick={() => void toggleShortcut(false)}
+                    >
+                      {t("appShotPortalStop")}
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
             {configuration?.niriBinding && (
               <details>
                 <summary>{t("appShotNiriBinding")}</summary>

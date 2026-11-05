@@ -1,4 +1,5 @@
 export const ipcChannels = {
+  appShotConfigureShortcut: "zenx:app-shot:configure-shortcut",
   appShotConfiguration: "zenx:app-shot:configuration",
   appShotRead: "zenx:app-shot:read",
   appShotAttach: "zenx:app-shot:attach",

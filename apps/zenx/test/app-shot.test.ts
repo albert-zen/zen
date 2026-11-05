@@ -142,6 +142,7 @@ describe("App Shot capture", () => {
       }),
     });
     const activeShot = await service.captureActive();
+    assert.ok(activeShot);
     assert.equal(activeShot.name, "Chosen.png");
     assert.match(activeShot.context, /Application: Editor/);
     active = 7;
@@ -283,4 +284,55 @@ it("Niri image-only identity drift never invents metadata or claims text availab
   assert.match(draft.context, /metadata is omitted/);
   assert.match(draft.context, /accessibility text is not implemented/);
   assert.match(draft.context, /not permission to control/);
+});
+
+it("generic portal draft preserves pixels without inventing a window or AX identity", async () => {
+  const { portalAppShotDraft } = await import("../src/main/app-shot.js");
+  const bytes = new Uint8Array([1]);
+  const result = portalAppShotDraft({ png: bytes, width: 1, height: 1 }, true);
+  assert.equal(result.bytes, bytes);
+  assert.match(result.context, /no verified application or window identity/);
+  assert.match(result.context, /cannot be matched/);
+});
+
+it("Wayland detection follows explicit variables or confirms a live runtime socket", async () => {
+  const { isWaylandAppShotSession } = await import("../src/main/app-shot.js");
+  const probe = {
+    entries: () => ["wayland-1", "wayland-2.lock"],
+    socket: () => true,
+    unixSockets: () => "a b c /run/user/1/wayland-1\n",
+  };
+  assert.equal(
+    isWaylandAppShotSession(
+      { XDG_SESSION_TYPE: "x11", WAYLAND_DISPLAY: "wayland-0" },
+      probe,
+    ),
+    true,
+  );
+  assert.equal(
+    isWaylandAppShotSession(
+      { XDG_SESSION_TYPE: "x11", XDG_RUNTIME_DIR: "/run/user/1" },
+      probe,
+    ),
+    false,
+  );
+  assert.equal(
+    isWaylandAppShotSession({ XDG_RUNTIME_DIR: "/run/user/1" }, probe),
+    true,
+  );
+  assert.equal(
+    isWaylandAppShotSession(
+      { XDG_RUNTIME_DIR: "/run/user/1" },
+      { ...probe, socket: () => false },
+    ),
+    false,
+  );
+  assert.equal(
+    isWaylandAppShotSession(
+      { XDG_RUNTIME_DIR: "/run/user/1" },
+      { ...probe, unixSockets: () => "" },
+    ),
+    false,
+  );
+  assert.equal(isWaylandAppShotSession({}, probe), false);
 });

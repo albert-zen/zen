@@ -40,8 +40,13 @@ async function fixture(
     click(label: string): Promise<void>;
     attached: ZenXImageDraft[];
     abandoned: string[];
+    discarded: string[];
     emit(event: AppShotEvent): void;
-    render(disabled?: boolean, key?: string): Promise<void>;
+    render(
+      disabled?: boolean,
+      key?: string,
+      additional?: boolean,
+    ): Promise<void>;
     armed(): string | null;
     disarmed: string[];
     armRequests: Array<{ token: string; kind?: AppShotShortcutKind }>;
@@ -71,9 +76,10 @@ async function fixture(
   });
   const attached: ZenXImageDraft[] = [];
   const abandoned: string[] = [];
+  const discarded: string[] = [];
   const disarmed: string[] = [];
   const armRequests: Array<{ token: string; kind?: AppShotShortcutKind }> = [];
-  let listener: (event: AppShotEvent) => void = () => {};
+  const listeners = new Set<(event: AppShotEvent) => void>();
   let armed: string | null = null;
   const api: AppShotApi = {
     list: async () => [{ id: "source", title: "Example" }],
@@ -81,7 +87,9 @@ async function fixture(
     read: async () => new Uint8Array([1, 2, 3, 4]),
     attach: async (id) =>
       id === "second" ? { ...shot, id: "second", name: "Second.png" } : shot,
-    discard: async () => {},
+    discard: async (id) => {
+      discarded.push(id);
+    },
     arm: async (token, _includeAccessibility, kind) => {
       armRequests.push({ token, kind });
       armed = token;
@@ -92,9 +100,9 @@ async function fixture(
       if (armed === token) armed = null;
     },
     onCapture: (callback) => {
-      listener = callback;
+      listeners.add(callback);
       return () => {
-        listener = () => {};
+        listeners.delete(callback);
       };
     },
   };
@@ -111,7 +119,7 @@ async function fixture(
     },
   });
   const root = createRoot(document.getElementById("root")!);
-  const render = async (disabled = false, key = "one") => {
+  const render = async (disabled = false, key = "one", additional = false) => {
     await act(async () =>
       root.render(
         React.createElement(
@@ -123,6 +131,14 @@ async function fixture(
             api,
             onAttach: (image) => attached.push(image),
           }),
+          additional
+            ? React.createElement(AppShotButton, {
+                key: "other-composer",
+                disabled: false,
+                api,
+                onAttach: (image) => attached.push(image),
+              })
+            : null,
         ),
       ),
     );
@@ -145,7 +161,10 @@ async function fixture(
       click,
       attached,
       abandoned,
-      emit: (event) => listener(event),
+      discarded,
+      emit: (event) => {
+        for (const listener of listeners) listener(event);
+      },
       render,
       armed: () => armed,
       disarmed,
@@ -491,4 +510,156 @@ test("a late explicit Attach retires its staging lease after cancel, disable or 
       assert.deepEqual(abandoned, [shot.id]);
     });
   }
+});
+
+test("Wayland consent denial is not armed; configure is explicit and reports the desktop chord", async () => {
+  await fixture(async ({ api, click, armed, emit, disarmed }) => {
+    let configurations = 0;
+    api.configuration = async () => ({
+      nativeForeground: false,
+      portalShortcut: true,
+    });
+    api.arm = async (token) => {
+      return { registered: false, canConfigure: true };
+    };
+    api.configureShortcut = async () => {
+      configurations++;
+      return {
+        registered: true,
+        shortcutDescription: "Super+F8",
+        canConfigure: true,
+      };
+    };
+    await click("App Shot");
+    await act(async () => shortcutCheckbox().click());
+    assert.equal(shortcutCheckbox().checked, false);
+    assert.match(document.body.textContent ?? "", /not armed/);
+    assert.equal(configurations, 0);
+    await click("Configure desktop shortcut");
+    assert.equal(configurations, 1);
+    assert.equal(shortcutCheckbox().checked, true);
+    assert.match(document.body.textContent ?? "", /Super\+F8/);
+    await act(async () => shortcutCheckbox().click());
+    assert.equal(shortcutCheckbox().checked, false);
+    assert.equal(disarmed.length, 1);
+  }, "linux");
+});
+
+test("unassigned Wayland setup can be stopped without granting or capturing", async () => {
+  await fixture(async ({ api, click, attached, disarmed }) => {
+    api.configuration = async () => ({
+      nativeForeground: false,
+      portalShortcut: true,
+    });
+    api.arm = async () => ({ registered: false, canConfigure: true });
+    await click("App Shot");
+    await act(async () => shortcutCheckbox().click());
+    await click("Stop shortcut setup");
+    assert.equal(disarmed.length, 1);
+    assert.deepEqual(attached, []);
+    assert.equal(
+      document.body.textContent?.includes("Configure desktop shortcut"),
+      false,
+    );
+  }, "linux");
+});
+
+test("queued Wayland status cannot revive a revoked or replaced registration", async () => {
+  await fixture(async ({ api, click, armed, emit }) => {
+    const originalArm = api.arm;
+    api.configuration = async () => ({
+      nativeForeground: true,
+      portalShortcut: true,
+    });
+    api.arm = async (...args) => {
+      await originalArm(...args);
+      return {
+        registered: true,
+        shortcutDescription: "Super+F8",
+        canConfigure: true,
+      };
+    };
+    await click("App Shot");
+    await act(async () => shortcutCheckbox().click());
+    const oldToken = armed()!;
+    await act(async () => shortcutCheckbox().click());
+    await act(async () =>
+      emit({
+        token: oldToken,
+        shortcutState: {
+          registered: true,
+          shortcutDescription: "STALE",
+          canConfigure: true,
+        },
+      }),
+    );
+    assert.equal(shortcutCheckbox().checked, false);
+    assert.equal(document.body.textContent?.includes("STALE"), false);
+    await act(async () => shortcutCheckbox().click());
+    assert.notEqual(armed(), oldToken);
+    await act(async () =>
+      emit({
+        token: oldToken,
+        shortcutState: {
+          registered: false,
+          shortcutDescription: "STALE",
+          canConfigure: true,
+        },
+      }),
+    );
+    assert.equal(shortcutCheckbox().checked, true);
+    assert.equal(document.body.textContent?.includes("STALE"), false);
+  }, "linux");
+});
+
+test("a portal-assigned different chord preserves the local Ctrl+Shift+2 picker", async () => {
+  await fixture(async ({ api, click }) => {
+    api.configuration = async () => ({
+      nativeForeground: true,
+      portalShortcut: true,
+    });
+    api.arm = async () => ({
+      registered: true,
+      shortcutDescription: "Super+F8",
+      canConfigure: true,
+    });
+    await click("App Shot");
+    await act(async () => shortcutCheckbox().click());
+    await click("Close App Shot");
+    document
+      .querySelector<HTMLButtonElement>('[aria-label="App Shot"]')!
+      .focus();
+    await act(async () =>
+      document.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          code: "Digit2",
+          key: "2",
+          ctrlKey: true,
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    assert.ok(document.querySelector('[role="dialog"]'));
+  }, "linux");
+});
+
+test("another mounted Composer cannot discard the active owner's captured image", async () => {
+  await fixture(async ({ render, click, armed, emit, discarded, attached }) => {
+    await render(false, "one", true);
+    await click("App Shot");
+    await act(async () => shortcutCheckbox().click());
+    const firstToken = armed()!;
+    await act(async () => emit({ token: firstToken, image: shot }));
+    assert.equal(discarded.length, 0);
+    await click("Attach to draft");
+    assert.deepEqual(attached, [shot]);
+    await click("App Shot");
+    await act(async () => shortcutCheckbox().click());
+    await act(async () =>
+      emit({ token: firstToken, image: { ...shot, id: "retired" } }),
+    );
+    assert.ok(discarded.includes("retired"));
+  });
 });

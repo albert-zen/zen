@@ -3,6 +3,12 @@ import { InMemoryAttachmentStore } from "../../../../src/attachment.js";
 import type { ZenXDraftAttachments } from "./draft-attachments.js";
 import type { ZenXImageDraft } from "./image-attachments.js";
 import type { AppShotCapture, AppShotService } from "./app-shot.js";
+import { isWaylandAppShotSession } from "./app-shot.js";
+import type {
+  PortalAppShotShortcutHandle,
+  PortalAppShotShortcutOptions,
+} from "./app-shot-portal-shortcut.js";
+import type { AppShotShortcutState } from "../app-shot.js";
 import { imageDraft } from "./image-attachments.js";
 import { isTrustedImZenXSetupSender } from "./imzenx-setup-ipc.js";
 import type {
@@ -20,6 +26,7 @@ import {
 
 const SHORTCUT = "CommandOrControl+Shift+2";
 const CHANNELS = {
+  configureShortcut: "zenx:app-shot:configure-shortcut",
   configuration: "zenx:app-shot:configuration",
   list: "zenx:app-shot:list",
   capture: "zenx:app-shot:capture",
@@ -41,6 +48,10 @@ export interface AppShotIpcDependencies<
   Frame extends object,
 > {
   platform: string;
+  portalSupport?(signal: AbortSignal): Promise<boolean>;
+  startPortalShortcut?(
+    options: PortalAppShotShortcutOptions,
+  ): Promise<PortalAppShotShortcutHandle>;
   niriBinding?: string;
   startNiriShortcut?(options: {
     signal: AbortSignal;
@@ -70,6 +81,7 @@ export interface AppShotIpcDependencies<
   }): Promise<{ stop(): Promise<void> }>;
   sendCaptured(renderer: Renderer, payload: AppShotEvent): void;
   focus(renderer: Renderer): void;
+  isFocused?(renderer: Renderer): boolean;
 }
 
 type Caller<R extends object, F extends object> = AppShotCaller<R, F>;
@@ -81,6 +93,7 @@ type Preview = {
   timer: ReturnType<typeof setTimeout>;
 };
 type Session<F extends object> = {
+  abort: AbortController;
   frame: F;
   service: AppShotService;
   previews: Map<string, Preview>;
@@ -93,6 +106,7 @@ type Owner<R extends object, F extends object> = {
   kind: AppShotShortcutKind;
   abort: AbortController;
   modifierPair?: Promise<{ stop(): Promise<void> }>;
+  portal?: PortalAppShotShortcutHandle;
   stopping?: Promise<void>;
   pending: boolean;
 };
@@ -120,6 +134,7 @@ export class AppShotIpcController<
     if (session?.frame !== caller.frame) {
       this.forget(caller.renderer);
       session = {
+        abort: new AbortController(),
         frame: caller.frame,
         service: this.#deps.createService(caller.renderer),
         previews: new Map(),
@@ -146,10 +161,20 @@ export class AppShotIpcController<
     }
   }
 
-  configuration(caller: Caller<Renderer, Frame>): AppShotConfiguration {
+  async configuration(
+    caller: Caller<Renderer, Frame>,
+  ): Promise<AppShotConfiguration> {
     const session = this.#require(caller);
+    const nativeForeground = this.#deps.portalSupport
+      ? await this.#deps.portalSupport(session.abort.signal)
+      : session.service.hasNativeActiveCapture === true;
+    if (!this.#still(caller, session))
+      throw new Error("App Shot renderer changed during capability check");
     return {
-      nativeForeground: session.service.hasNativeActiveCapture === true,
+      nativeForeground,
+      ...(this.#deps.startPortalShortcut
+        ? { portalShortcut: true as const }
+        : {}),
       ...(this.#deps.niriBinding
         ? { niriBinding: this.#deps.niriBinding }
         : {}),
@@ -305,7 +330,7 @@ export class AppShotIpcController<
     token: unknown,
     includeAccessibility: unknown,
     kind: unknown = "chord",
-  ): Promise<string> {
+  ): Promise<string | AppShotShortcutState> {
     const session = this.#require(caller);
     if (
       typeof token !== "string" ||
@@ -363,10 +388,7 @@ export class AppShotIpcController<
           await this.#stopModifierPair(owner);
           throw new Error("App Shot shortcut was cancelled");
         }
-      } else if (
-        this.#deps.platform === "linux" &&
-        session.service.hasNativeActiveCapture
-      ) {
+      } else if (this.#deps.platform === "linux" && this.#deps.niriBinding) {
         if (!this.#deps.startNiriShortcut)
           throw new Error("Niri App Shot shortcut is unavailable");
         owner.modifierPair = this.#deps
@@ -385,6 +407,37 @@ export class AppShotIpcController<
           await this.#stopModifierPair(owner);
           throw new Error("App Shot shortcut was cancelled");
         }
+      } else if (
+        this.#deps.platform === "linux" &&
+        this.#deps.startPortalShortcut
+      ) {
+        owner.modifierPair = this.#deps
+          .startPortalShortcut({
+            signal: owner.abort.signal,
+            isCurrentOwner: () =>
+              this.#owner === owner && this.#still(caller, session),
+            onCapture: () => {
+              if (this.#owner === owner) void this.onShortcut();
+            },
+            onFailure: (error) => this.#modifierFailed(owner, error),
+            onStateChanged: (shortcutState) => {
+              if (this.#owner === owner && this.#still(caller, session))
+                this.#deps.sendCaptured(caller.renderer, {
+                  token,
+                  shortcutState,
+                });
+            },
+          })
+          .then((handle) => {
+            owner.portal = handle;
+            return { stop: async () => handle.stop() };
+          });
+        await owner.modifierPair;
+        if (this.#owner !== owner || !this.#still(caller, session)) {
+          await this.#stopModifierPair(owner);
+          throw new Error("App Shot shortcut was cancelled");
+        }
+        return portalShortcutState(owner.portal!);
       } else {
         if (
           !this.#deps.registerShortcut(SHORTCUT, () => {
@@ -403,6 +456,25 @@ export class AppShotIpcController<
       if (this.#owner === owner) await this.#clearOwner();
       throw error;
     }
+  }
+
+  async configureShortcut(
+    caller: Caller<Renderer, Frame>,
+    token: unknown,
+  ): Promise<AppShotShortcutState> {
+    this.#require(caller);
+    const owner = this.#owner;
+    if (
+      !owner?.portal ||
+      owner.caller.renderer !== caller.renderer ||
+      owner.caller.frame !== caller.frame ||
+      owner.token !== token
+    )
+      throw new Error("No current App Shot shortcut session to configure");
+    await owner.portal.configure();
+    if (this.#owner !== owner || !this.#still(caller, owner.session))
+      throw new Error("App Shot shortcut was cancelled");
+    return portalShortcutState(owner.portal);
   }
 
   #modifierFailed(owner: Owner<Renderer, Frame>, error: unknown): void {
@@ -454,6 +526,7 @@ export class AppShotIpcController<
 
   forget(renderer: Renderer): void {
     const session = this.#sessions.get(renderer);
+    session?.abort.abort();
     if (session)
       for (const id of session.previews.keys())
         this.#removePreview(session, id);
@@ -470,16 +543,19 @@ export class AppShotIpcController<
 
   async onShortcut(): Promise<void> {
     const owner = this.#owner;
-    if (!owner || owner.pending) return;
+    if (!owner || owner.pending || (owner.portal && !owner.portal.registered))
+      return;
     if (!this.#still(owner.caller, owner.session)) {
       this.forget(owner.caller.renderer);
       return;
     }
     if (
-      this.#deps.platform === "linux" &&
-      !owner.session.service.hasNativeActiveCapture
+      (owner.portal && this.#deps.isFocused?.(owner.caller.renderer)) ||
+      (this.#deps.platform === "linux" &&
+        !owner.session.service.hasNativeActiveCapture)
     ) {
-      // Other Linux sessions still require an explicit chooser.
+      // A foreground ZenX portal trigger preserves the local picker shortcut.
+      // Never parse a localized trigger_description to guess key identity.
       this.#deps.sendCaptured(owner.caller.renderer, {
         token: owner.token,
         openPicker: true,
@@ -489,13 +565,23 @@ export class AppShotIpcController<
     }
     owner.pending = true;
     try {
-      // The target must be observed before ZenX is raised; never capture ZenX itself.
+      // Observe before raising ZenX. Identity-aware backends exclude owned windows;
+      // generic portal pixels contain no identity we can use for that exclusion.
       const capture = await owner.session.service.captureActive({
         includeAccessibility: owner.includeAccessibility,
         signal: owner.abort.signal,
       });
       if (this.#owner !== owner || !this.#still(owner.caller, owner.session))
         return;
+      if (!capture) {
+        // Only absent capability returns undefined. Denial/cancellation throws.
+        this.#deps.sendCaptured(owner.caller.renderer, {
+          token: owner.token,
+          openPicker: true,
+        });
+        this.#deps.focus(owner.caller.renderer);
+        return;
+      }
       const image = await this.#stage(
         owner.session,
         capture,
@@ -544,7 +630,35 @@ export async function installAppShotIpc(options: {
       destroyed: () => void;
     }
   >();
+  const portal =
+    process.platform === "linux" &&
+    isWaylandAppShotSession() &&
+    !niriSocketPath();
   const controller = new AppShotIpcController<Renderer, Frame>({
+    ...(portal
+      ? {
+          portalSupport: async (signal: AbortSignal) => {
+            const { getPortalAppShotSupport } =
+              await import("./app-shot-portal.js");
+            return getPortalAppShotSupport({
+              appId: app.isPackaged
+                ? "io.github.albert_zen.ZenX"
+                : "io.github.albert_zen.ZenX.Development",
+              signal,
+            });
+          },
+          startPortalShortcut: async (
+            shortcutOptions: PortalAppShotShortcutOptions,
+          ) => {
+            const { startPortalAppShotShortcut } =
+              await import("./app-shot-portal-shortcut.js");
+            return startPortalAppShotShortcut({
+              ...shortcutOptions,
+              development: !app.isPackaged,
+            });
+          },
+        }
+      : {}),
     platform: process.platform,
     niriBinding:
       process.platform === "linux" && niriSocketPath()
@@ -618,6 +732,9 @@ export async function installAppShotIpc(options: {
     sendCaptured(renderer, payload) {
       renderer.send(CHANNELS.captured, payload);
     },
+    isFocused(renderer) {
+      return BrowserWindow.fromWebContents(renderer)?.isFocused() === true;
+    },
     focus(renderer) {
       const window = BrowserWindow.fromWebContents(renderer);
       if (
@@ -653,6 +770,9 @@ export async function installAppShotIpc(options: {
   ipcMain.handle(CHANNELS.configuration, (event) =>
     controller.configuration(caller(event)),
   );
+  ipcMain.handle(CHANNELS.configureShortcut, (event, token: unknown) =>
+    controller.configureShortcut(caller(event), token),
+  );
   ipcMain.handle(CHANNELS.list, (event) => controller.list(caller(event)));
   ipcMain.handle(
     CHANNELS.capture,
@@ -679,6 +799,7 @@ export async function installAppShotIpc(options: {
   return () => {
     for (const channel of [
       CHANNELS.configuration,
+      CHANNELS.configureShortcut,
       CHANNELS.list,
       CHANNELS.capture,
       CHANNELS.read,
@@ -698,3 +819,13 @@ export async function installAppShotIpc(options: {
 }
 
 import { createElectronAppShotService } from "./app-shot.js";
+
+function portalShortcutState(
+  handle: PortalAppShotShortcutHandle,
+): AppShotShortcutState {
+  return {
+    registered: handle.registered,
+    shortcutDescription: handle.shortcutDescription,
+    canConfigure: handle.canConfigure,
+  };
+}

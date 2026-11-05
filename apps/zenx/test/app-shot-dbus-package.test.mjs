@@ -14,6 +14,17 @@ import {
   dbusBlobHash,
 } from "../scripts/patch-app-shot-dbus.mjs";
 
+test("npm ci runs the pinned D-Bus preparer after preceding lifecycle steps succeed", async () => {
+  const packageJson = JSON.parse(
+    await readFile(new URL("../package.json", import.meta.url), "utf8"),
+  );
+  assert.equal(packageJson.dependencies["dbus-next"], "0.10.2");
+  assert.match(
+    packageJson.scripts.postinstall,
+    /&&\s*node \.\/scripts\/prepare-app-shot-dbus\.mjs\s*(?=&&|$)/,
+  );
+});
+
 test("staged pure-JS D-Bus closure loads without connecting or optional usocket", async () => {
   const root = fileURLToPath(new URL("../../../", import.meta.url));
   const target = await mkdtemp(path.join(tmpdir(), "zenx-dbus-stage-"));
