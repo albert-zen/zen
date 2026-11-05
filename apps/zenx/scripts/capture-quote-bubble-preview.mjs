@@ -91,6 +91,11 @@ for (const scene of [
         ),
         false,
       );
+      // DOM presence precedes the popover's entrance animation. Capture its
+      // settled state rather than a translucent frame.
+      await evaluate(
+        "Promise.all(document.querySelector('.reference-details-popover').getAnimations({ subtree: true }).map(animation => animation.finished.catch(() => {}))).then(() => true)",
+      );
       await screenshot(`quote-hover-${scene.theme}-${scene.width}.png`);
       await send("Input.dispatchMouseEvent", {
         type: "mousePressed",
