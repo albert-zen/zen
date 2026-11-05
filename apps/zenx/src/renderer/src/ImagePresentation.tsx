@@ -1,3 +1,4 @@
+import { registerNativeViewOverlay } from "./native-view-overlays.js";
 import { localErrorDetail } from "../../local-error-detail.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
@@ -213,6 +214,9 @@ export function ImageUrlPreview({
   useEffect(() => {
     closeRef.current?.focus();
     const layer = layerRef.current;
+    const unregisterOverlay = layer
+      ? registerNativeViewOverlay(layer)
+      : undefined;
     const keydown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -239,6 +243,7 @@ export function ImageUrlPreview({
     };
     document.addEventListener("keydown", keydown);
     return () => {
+      unregisterOverlay?.();
       document.removeEventListener("keydown", keydown);
       const active = document.activeElement;
       if (active !== document.body && !layer?.contains(active)) return;

@@ -104,7 +104,12 @@ interface Tab {
 }
 interface Owner {
   window: BrowserWindow;
-  active?: { tab: Tab; lease: string; bounds: Electron.Rectangle };
+  active?: {
+    tab: Tab;
+    lease: string;
+    bounds: Electron.Rectangle;
+    occluded: boolean;
+  };
 }
 interface WorkspaceBrowserDependencies {
   createView(): WebContentsView;
@@ -667,10 +672,14 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       tabId?: unknown;
       lease?: unknown;
       appearance?: unknown;
+      occluded?: unknown;
       bounds?: { x: number; y: number; width: number; height: number };
     };
     if (typeof value.lease !== "string" || value.lease.length > 100)
       throw new Error("Invalid browser view lease");
+    if (value.occluded !== undefined && typeof value.occluded !== "boolean")
+      throw new Error("Invalid browser occlusion");
+    const occluded = value.occluded === true;
     const owner = this.#owner(sender);
     if (!value.bounds) {
       if (owner.active?.lease === value.lease) this.#hide(owner);
@@ -713,7 +722,15 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       previousBounds.y !== bounds.y ||
       previousBounds.width !== bounds.width ||
       previousBounds.height !== bounds.height;
-    if (!changedMount) return;
+    if (!changedMount) {
+      if (owner.active!.occluded !== occluded) {
+        // Restore any borrowed compositor surface before changing presentation.
+        this.#dependencies.releaseUnmountedView?.(tab.view);
+        owner.active!.occluded = occluded;
+        tab.view.setVisible(!occluded);
+      }
+      return;
+    }
     // Return the exact borrowed view before accepting newer UI ownership.
     this.#dependencies.releaseUnmountedView?.(tab.view);
     if (tab.owner !== undefined && tab.owner !== owner) this.#hide(tab.owner);
@@ -727,9 +744,9 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       tab.renderRevision += 1;
       tab.observation = undefined;
     }
-    owner.active = { tab, lease: value.lease, bounds };
+    owner.active = { tab, lease: value.lease, bounds, occluded };
     tab.view.setBounds(bounds);
-    tab.view.setVisible(true);
+    tab.view.setVisible(!occluded);
   }
 
   observeTab(

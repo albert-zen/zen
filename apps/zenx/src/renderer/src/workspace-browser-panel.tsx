@@ -1,3 +1,7 @@
+import {
+  nativeViewOverlapsOverlay,
+  subscribeNativeViewOverlays,
+} from "./native-view-overlays.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import { Icon } from "./icons.js";
@@ -78,6 +82,7 @@ function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
           threadId,
           tabId: active.id,
           lease,
+          occluded: !!rect && nativeViewOverlapsOverlay(rect),
           appearance:
             document.documentElement.dataset.appearance === "dark"
               ? "dark"
@@ -112,6 +117,7 @@ function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
           }
         });
     };
+    const unsubscribeOverlays = subscribeNativeViewOverlays(mount);
     const observer = new ResizeObserver(mount);
     observer.observe(area.current);
     // Keep the same mount lease when appearance changes: recoloring a blank
@@ -127,6 +133,7 @@ function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
     mount();
     return () => {
       stopped = true;
+      unsubscribeOverlays();
       observer.disconnect();
       themeObserver.disconnect();
       window.removeEventListener("resize", mount);

@@ -1653,12 +1653,14 @@ async function assertBlankThemePixels(port: number): Promise<void> {
       name: string,
       appearance: "light" | "dark",
       expected: number,
+      occluded = false,
     ) => {
       phase = name;
       const record: Record<string, unknown> = {
         name,
         appearance,
         expected,
+        occluded,
         nativeThemeSource: nativeTheme.themeSource,
         nativeShouldUseDarkColors: nativeTheme.shouldUseDarkColors,
         pagePrefersDark: await view!.webContents.executeJavaScript(
@@ -1675,8 +1677,10 @@ async function assertBlankThemePixels(port: number): Promise<void> {
         tabId: tab.tabId,
         lease,
         appearance,
+        occluded,
         bounds: { x: 0, y: 0, width: 600, height: 400 },
       });
+      assert.equal(view!.getVisible(), !occluded);
       assert.equal(view!.webContents.id, contentsId);
       assert.ok(owner.contentView.children.includes(view!));
       // Use the real product inspection path: it causally requests a fresh
@@ -1688,6 +1692,7 @@ async function assertBlankThemePixels(port: number): Promise<void> {
         tab.tabId,
       );
       assert.equal(inspection.tabId, tab.tabId);
+      assert.equal(view!.getVisible(), !occluded);
       assert.equal(view!.webContents.id, contentsId);
       assert.ok(owner.contentView.children.includes(view!));
       const png = readFileSync(inspection.screenshot.artifactPath);
@@ -1728,6 +1733,11 @@ async function assertBlankThemePixels(port: number): Promise<void> {
     );
     await sample("website-dark", "dark", 80);
     await sample("website-light", "light", 80);
+    // Real native hidden presentation still supports fresh Agent capture and
+    // restores the same hidden mount rather than leaking above a DOM overlay.
+    // These PNGs are page pixels, not a composed-window preview screenshot.
+    await sample("website-occluded", "light", 80, true);
+    await sample("website-restored", "light", 80);
     await browser.navigate("blank-theme-session", tab.tabId, "about:blank");
     await sample("blank-dark-return", "dark", 0);
     passed = true;
