@@ -74,3 +74,100 @@ export function quoteSourceTarget(
     disclosures,
   };
 }
+
+/** Exact rendered text within an already identity-verified source; never a global text search. */
+export function quoteExcerptRange(
+  source: HTMLElement,
+  excerpt: string,
+): Range | null {
+  if (!excerpt) return null;
+  const walker = source.ownerDocument.createTreeWalker(source, 4);
+  const nodes: Text[] = [];
+  let text = "";
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    if (
+      node.parentElement?.closest(
+        "button, [data-message-quote-ignore], [hidden], [aria-hidden='true']",
+      )
+    )
+      continue;
+    nodes.push(node as Text);
+    text += node.textContent ?? "";
+  }
+  let start = text.indexOf(excerpt);
+  let end = start + excerpt.length;
+  if (start < 0) {
+    // Browser selection inserts layout whitespace at block boundaries while text nodes do not.
+    // Reconcile only whitespace, inside this already identity-verified source.
+    const offsets: number[] = [];
+    let folded = "";
+    for (let index = 0; index < text.length; index++) {
+      if (/\s/u.test(text[index]!)) continue;
+      offsets.push(index);
+      folded += text[index];
+    }
+    const needle = excerpt.replace(/\s/gu, "");
+    const match = needle ? folded.indexOf(needle) : -1;
+    if (match < 0) return null;
+    start = offsets[match]!;
+    end = offsets[match + needle.length - 1]! + 1;
+  }
+  const range = source.ownerDocument.createRange();
+  let offset = 0;
+  let started = false;
+  for (const node of nodes) {
+    const next = offset + node.length;
+    if (!started && start < next) {
+      range.setStart(node, start - offset);
+      started = true;
+    }
+    if (started && end <= next) {
+      range.setEnd(node, end - offset);
+      return range;
+    }
+    offset = next;
+  }
+  return null;
+}
+const quoteHighlights = new WeakMap<Document, () => void>();
+
+/** A temporary paint-only highlight keeps React DOM, selection and canonical text unchanged. */
+export function focusMessageQuoteSource(
+  source: HTMLElement,
+  excerpt: string,
+  highlight = true,
+): void {
+  const range = quoteExcerptRange(source, excerpt);
+  source.scrollIntoView({ block: "center", behavior: "auto" });
+  const rect = range?.getBoundingClientRect?.();
+  const viewport = source.closest<HTMLElement>(".messages");
+  if (rect && rect.height > 0 && viewport) {
+    const bounds = viewport.getBoundingClientRect();
+    viewport.scrollTop +=
+      rect.top + rect.height / 2 - (bounds.top + viewport.clientHeight / 2);
+  }
+  source.focus({ preventScroll: true });
+  if (!highlight) return;
+  const document = source.ownerDocument;
+  quoteHighlights.get(document)?.();
+  const view = document.defaultView as (Window & typeof globalThis) | null;
+  const registry = view?.CSS?.highlights;
+  const HighlightConstructor = view?.Highlight;
+  if (range && registry && HighlightConstructor)
+    registry.set("zenx-quote-source", new HighlightConstructor(range));
+  else source.dataset.quoteHighlight = "true";
+  const clear = () => {
+    clearTimeout(timer);
+    registry?.delete("zenx-quote-source");
+    delete source.dataset.quoteHighlight;
+    document.removeEventListener("pointerdown", clear, true);
+    document.removeEventListener("keydown", clear, true);
+    if (quoteHighlights.get(document) === clear)
+      quoteHighlights.delete(document);
+  };
+  const timer = setTimeout(clear, 1600);
+  document.addEventListener("pointerdown", clear, true);
+  document.addEventListener("keydown", clear, true);
+  quoteHighlights.set(document, clear);
+}

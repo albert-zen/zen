@@ -238,7 +238,7 @@ for (const surface of [
     try {
       const result = after.inspect();
       assert.deepEqual(result, before.inspect(uncachedExpression()));
-      if (surface === "iframe" || surface === "file")
+      if (surface === "iframe")
         assert.equal(result.inputSnapshot.focusUnsupported, "native-surface");
       else if (surface === "closed-shadow")
         assert.equal(result.inputSnapshot.focusNeedsShadowEvidence, true);

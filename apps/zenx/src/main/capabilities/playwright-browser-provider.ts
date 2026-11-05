@@ -12,9 +12,6 @@ import {
   assertBrowserObservation,
   browserScrollScript,
   type BrowserScrollDirection,
-  assertBrowserTabCapacity,
-  MAX_BROWSER_TABS_GLOBAL,
-  MAX_BROWSER_TABS_PER_SESSION,
   redactBrowserUrl,
 } from "./browser-provider.js";
 import {
@@ -33,7 +30,6 @@ const PLAYWRIGHT_CLOSE_TIMEOUT_MS = 10_000;
 const MAX_PLAYWRIGHT_VISIBLE_TEXT = 8_000;
 const MAX_PLAYWRIGHT_TARGETS = 128;
 const MAX_PLAYWRIGHT_SCREENSHOT_OUTPUT_BYTES = 8 * 1024 * 1024;
-const MAX_PLAYWRIGHT_PAGES = MAX_BROWSER_TABS_GLOBAL;
 const MAX_PLAYWRIGHT_PAGE_KEY_LENGTH = 128;
 const MAX_PLAYWRIGHT_PAGE_URL_LENGTH = 8_192;
 const MAX_PLAYWRIGHT_PAGE_TITLE_LENGTH = 256;
@@ -123,7 +119,6 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
   readonly #processEnvironment?: NodeJS.ProcessEnv;
   readonly #sessions = new Map<string, PlaywrightSessionState>();
   readonly #artifacts: BrowserScreenshotArtifactStore;
-  #reservedOpenTabs = 0;
 
   constructor(options: {
     executable: string;
@@ -207,32 +202,23 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
         this.#assertSession(session, revision, signal);
         this.#reconcileTabs(session, existingPages);
       }
-      assertBrowserTabCapacity(
-        this.#tabCount() + this.#reservedOpenTabs + 1,
-        session.tabs.size + 1,
-      );
-      this.#reservedOpenTabs += 1;
-      try {
-        if (!session.opened) {
-          const response = await this.#run(session, ["open", url], signal);
-          requirePlaywrightOpenEnvelope(response, session.cliSessionName);
-          session.opened = true;
-        } else {
-          await this.#run(session, ["tab-new", url], signal);
-        }
-        const pages = await this.#pageStates(session, signal);
-        this.#assertSession(session, revision, signal);
-        this.#reconcileTabs(session, pages);
-        const current = pages.find((page) => page.current) ?? pages.at(-1);
-        if (current === undefined)
-          throw new Error("Playwright opened no browser tab");
-        const state = session.tabs.get(current.tabKey);
-        if (state === undefined)
-          throw new Error("Playwright tab mapping is missing");
-        return pageSummary(sessionId, state.tabId, current);
-      } finally {
-        this.#reservedOpenTabs -= 1;
+      if (!session.opened) {
+        const response = await this.#run(session, ["open", url], signal);
+        requirePlaywrightOpenEnvelope(response, session.cliSessionName);
+        session.opened = true;
+      } else {
+        await this.#run(session, ["tab-new", url], signal);
       }
+      const pages = await this.#pageStates(session, signal);
+      this.#assertSession(session, revision, signal);
+      this.#reconcileTabs(session, pages);
+      const current = pages.find((page) => page.current) ?? pages.at(-1);
+      if (current === undefined)
+        throw new Error("Playwright opened no browser tab");
+      const state = session.tabs.get(current.tabKey);
+      if (state === undefined)
+        throw new Error("Playwright tab mapping is missing");
+      return pageSummary(sessionId, state.tabId, current);
     });
   }
 
@@ -768,12 +754,7 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
         "Unsupported playwright-cli JSON schema: run-code result is not JSON",
       );
     }
-    if (
-      !Array.isArray(parsed) ||
-      parsed.length > MAX_PLAYWRIGHT_PAGES ||
-      parsed.length > MAX_BROWSER_TABS_PER_SESSION ||
-      !parsed.every(isPlaywrightPageState)
-    ) {
+    if (!Array.isArray(parsed) || !parsed.every(isPlaywrightPageState)) {
       throw new Error(
         "Unsupported playwright-cli JSON schema: invalid page state result",
       );
@@ -1083,12 +1064,6 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
     ) {
       throw new Error("Playwright browser session is closed or stale");
     }
-  }
-
-  #tabCount(): number {
-    let count = 0;
-    for (const session of this.#sessions.values()) count += session.tabs.size;
-    return count;
   }
 
   #invalidate(tab: PlaywrightTabState): void {
@@ -1505,7 +1480,6 @@ function isPlaywrightPageState(value: unknown): value is PlaywrightPageState {
   return (
     Number.isSafeInteger(page.index) &&
     (page.index as number) >= 0 &&
-    (page.index as number) < MAX_PLAYWRIGHT_PAGES &&
     typeof page.tabKey === "string" &&
     page.tabKey.length > 0 &&
     page.tabKey.length <= MAX_PLAYWRIGHT_PAGE_KEY_LENGTH &&

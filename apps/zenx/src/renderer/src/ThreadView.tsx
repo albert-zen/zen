@@ -1,3 +1,4 @@
+import { flushSync } from "react-dom";
 import { AnsweredQuestionBubble } from "./AnsweredQuestionBubble.js";
 import {
   indexAnsweredQuestions,
@@ -6,6 +7,7 @@ import {
 import { VirtualTranscriptFind } from "./VirtualTranscriptFind.js";
 import {
   findMessageQuoteSource,
+  focusMessageQuoteSource,
   quoteSourceTarget,
 } from "./quote-source-navigation.js";
 import { isNestedTranscriptScroll } from "./transcript-viewport-pins.js";
@@ -307,8 +309,7 @@ function goToMessageQuoteSource(
 ): boolean {
   const source = findMessageQuoteSource(viewport, quote);
   if (!source) return false;
-  source.scrollIntoView({ block: "center", behavior: "auto" });
-  source.focus({ preventScroll: true });
+  focusMessageQuoteSource(source, quote.excerpt);
   return true;
 }
 
@@ -1143,8 +1144,18 @@ function ThreadViewContent({
   const resolveQuoteSource = useCommittedCallback(
     (quote: SentMessageQuote): HTMLElement | null => {
       const mounted = findMessageQuoteSource(scrollRef.current, quote);
-      if (!virtualTranscript || !displayedThread || !virtualViewport.current)
-        return mounted;
+      // A queue dialog temporarily aria-hides the outer app; only transcript disclosures
+      // determine whether the source itself needs to be expanded before closing that dialog.
+      const visible = (element: HTMLElement | null): element is HTMLElement => {
+        const hidden = element?.closest(
+          "[hidden], [aria-hidden='true']:not([data-aria-hidden]), [inert]",
+        );
+        return (
+          element !== null && (!hidden || !scrollRef.current?.contains(hidden))
+        );
+      };
+      if (!displayedThread) return mounted;
+      if (!virtualTranscript && visible(mounted)) return mounted;
       const target = quoteSourceTarget(
         displayedThread.id,
         turns,
@@ -1152,6 +1163,18 @@ function ThreadViewContent({
         quote,
       );
       if (!target) return mounted;
+      if (!virtualTranscript || !virtualViewport.current) {
+        if (
+          target.disclosures.some(
+            (key) => readingState.snapshot().get(key) !== true,
+          )
+        )
+          flushSync(() =>
+            target.disclosures.forEach((key) => readingState.set(key, true)),
+          );
+        const source = findMessageQuoteSource(scrollRef.current, quote);
+        return visible(source) ? source : null;
+      }
       const owner = currentThreadRef.current;
       pauseFollowing();
       let source: HTMLElement | null = null;
@@ -1165,15 +1188,12 @@ function ThreadViewContent({
             (document.activeElement === source ||
               document.activeElement === document.body)
           )
-            source.scrollIntoView({ block: "center", behavior: "auto" });
+            focusMessageQuoteSource(source, quote.excerpt, false);
         },
       );
       if (!materialized) return null;
       source = findMessageQuoteSource(materialized.element, quote);
-      if (
-        !source ||
-        source.closest("[hidden], [aria-hidden='true'], [inert]")
-      ) {
+      if (!visible(source)) {
         materialized.cancel();
         return null;
       }
@@ -1190,8 +1210,7 @@ function ThreadViewContent({
       pauseFollowing();
       const source = resolveQuoteSource(quote);
       if (!source) return false;
-      source.scrollIntoView({ block: "center", behavior: "auto" });
-      source.focus({ preventScroll: true });
+      focusMessageQuoteSource(source, quote.excerpt);
       return true;
     },
   );
@@ -1208,6 +1227,7 @@ function ThreadViewContent({
     scrollRef,
     pauseFollowing,
     virtualTranscript ? materializeTargetTurn : undefined,
+    navigateQuoteSource,
   );
 
   // New transcript data may advance a live reader. Approvals, focus and Composer
@@ -1775,9 +1795,7 @@ function ThreadViewContent({
       ) : null}
       <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
         <ThreadImagesContext.Provider value={imageContext}>
-          <MessageQuoteSourceContext.Provider
-            value={virtualTranscript ? navigateQuoteSource : null}
-          >
+          <MessageQuoteSourceContext.Provider value={navigateQuoteSource}>
             <TranscriptViewport
               key={virtualTranscript ? (thread?.id ?? composerId) : undefined}
               experimental={virtualTranscript && transcriptRows.length > 0}

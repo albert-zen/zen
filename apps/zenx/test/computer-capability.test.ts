@@ -202,17 +202,26 @@ test("cancels foreground takeover before global input begins", async () => {
   assert.deepEqual(calls, []);
 });
 
-test("executes the explicitly labeled foreground baseline after its cancellation window", async () => {
+test("executes the explicitly labeled foreground baseline without an artificial delay", async () => {
   const calls: string[] = [];
   const capability = new ComputerZenXCapabilityPackage(
     computerBackend(calls),
     computerCapabilityManifest,
     true,
   );
-  const result = await capability.invoke(
+  const pending = capability.invoke(
     "computer_foreground_click",
     invocation({ x: 10, y: 20, button: "right" }),
   );
+  assert.equal(
+    await Promise.race([
+      pending.then(() => true),
+      new Promise<boolean>((resolve) => setImmediate(() => resolve(false))),
+    ]),
+    true,
+    "input must not wait for an arbitrary per-action timer",
+  );
+  const result = await pending;
   assert.deepEqual(result, {
     action: "click",
     x: 10,
@@ -238,17 +247,27 @@ test("direct Computer package construction fails closed for foreground tools", a
 
 test("revoking foreground consent fences a stale concurrent invocation before global input", async () => {
   const calls: string[] = [];
+  let painted!: () => void;
+  const painting = new Promise<void>((resolve) => {
+    painted = resolve;
+  });
   const capability = new ComputerZenXCapabilityPackage(
     computerBackend(calls),
     computerCapabilityManifest,
     true,
+    {
+      run: async (invocation, operation) => {
+        await painting;
+        return operation(invocation.signal);
+      },
+    },
   );
   const execution = capability.invoke(
     "computer_foreground_click",
     invocation({ x: 10, y: 20 }),
   );
-  await new Promise<void>((resolve) => setTimeout(resolve, 20));
   capability.setForegroundControlAllowed(false);
+  painted();
 
   await assert.rejects(execution, /foreground_required/u);
   assert.deepEqual(calls, []);

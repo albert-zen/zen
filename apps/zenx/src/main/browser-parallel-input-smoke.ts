@@ -31,7 +31,10 @@ import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import WebSocket from "ws";
 import { UserBrowserCdpDiagnosticObserver } from "./capabilities/user-browser-cdp-diagnostics.js";
-import { BrowserInputUnsupportedError } from "./capabilities/browser-targeted-input.js";
+import {
+  BrowserInputUnsupportedError,
+  BrowserInputOutcomeUnknownError,
+} from "./capabilities/browser-targeted-input.js";
 import type {
   BrowserInspection,
   ZenXBrowserBackend,
@@ -39,6 +42,7 @@ import type {
 import {
   connectUserBrowserCdp,
   UserBrowserDocumentChangedBeforeDispatchError,
+  UserBrowserMutationOutcomeUnknownError,
   windowsBrowserExecutableCandidates,
   type UserBrowserConnection,
 } from "./capabilities/user-browser-provider.js";
@@ -83,7 +87,18 @@ interface Target {
   type: string;
 }
 
+interface FixtureCdpEvent {
+  method?: string;
+  sessionId?: string;
+  params?: Record<string, unknown>;
+}
+
 class Rpc {
+  #listeners = new Set<(event: FixtureCdpEvent) => void>();
+  onEvent(listener: (event: FixtureCdpEvent) => void): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
   #id = 0;
   #pending = new Map<
     number,
@@ -98,8 +113,11 @@ class Rpc {
         id?: number;
         result?: Record<string, unknown>;
         error?: unknown;
-      };
-      if (message.id === undefined) return;
+      } & FixtureCdpEvent;
+      if (message.id === undefined) {
+        for (const listener of this.#listeners) listener(message);
+        return;
+      }
       const pending = this.#pending.get(message.id);
       if (!pending) return;
       this.#pending.delete(message.id);
@@ -127,6 +145,7 @@ class Rpc {
   async send(
     method: string,
     params: Record<string, unknown> = {},
+    sessionId?: string,
   ): Promise<Record<string, unknown>> {
     const id = ++this.#id;
     return await new Promise((resolve, reject) => {
@@ -145,7 +164,14 @@ class Rpc {
         },
       });
       try {
-        this.socket.send(JSON.stringify({ id, method, params }));
+        this.socket.send(
+          JSON.stringify({
+            id,
+            method,
+            params,
+            ...(sessionId ? { sessionId } : {}),
+          }),
+        );
       } catch (error) {
         clearTimeout(timer);
         this.#pending.delete(id);
@@ -300,9 +326,25 @@ async function settleMacFixtureInput(options: {
   }
 }
 
+import {
+  isRemoteFrameMode,
+  remoteFrameModes,
+  remoteFrameContractPage,
+  remoteFrameFixtureFromUrl,
+  type RemoteFrameMode,
+} from "./browser-remote-frame-smoke-fixture.js";
+export { remoteFrameContractPage } from "./browser-remote-frame-smoke-fixture.js";
+
 /** Served only by the disposable local smoke servers, before any tracker exists. */
 export function targetedInputContractPage(requestUrl: string): string {
   const mode = new URL(requestUrl, "http://127.0.0.1").searchParams.get("mode");
+  if (isRemoteFrameMode(mode))
+    return remoteFrameContractPage(
+      new URL(requestUrl, "http://127.0.0.1").pathname === "/remote-frame-child"
+        ? "child"
+        : "parent",
+      remoteFrameFixtureFromUrl(requestUrl),
+    );
   return `<!doctype html><meta charset="utf-8"><title>ZenX targeted input contract</title>
 <style>body{margin:0;font:16px system-ui}#contract-host{position:absolute;left:20px;top:20px;width:620px;height:480px}#status{position:absolute;top:530px}</style>
 <div id="contract-host"></div><p id="status">Disposable targeted input contract</p>
@@ -310,7 +352,25 @@ export function targetedInputContractPage(requestUrl: string): string {
 const mode=${JSON.stringify(mode)};
 const host=document.querySelector('#contract-host');
 let root=host;
-if(mode==='shadow'||mode==='closed-shadow')root=host.attachShadow({mode:mode==='shadow'?'open':'closed'});
+let contractFrame;
+let reflected=false;
+const cosine=0.9659258262890683,sine=0.25881904510252074;
+const applyAffine=()=>{contractFrame.style.transform='matrix('+[cosine,reflected?-sine:sine,reflected?sine:-sine,cosine,0,0].join(',')+')'};
+if(mode==='same-origin-frame'||mode==='same-origin-closed-shadow'||mode==='affine-frame'){
+  contractFrame=document.createElement('iframe');contractFrame.id='contract-frame';
+  contractFrame.style.cssText='width:620px;height:480px;border:5px solid #345;padding:11px 7px';
+  host.append(contractFrame);root=contractFrame.contentDocument.body;root.style.margin='0';
+  if(mode==='affine-frame'){host.style.left='100px';host.style.top='90px';contractFrame.style.display='block';contractFrame.style.transformOrigin='322px 256px';applyAffine()}
+  // Main-world poison is a witness that provider probes stay in isolated wrappers.
+  const child=contractFrame.contentWindow;child.mainWorldProbeCalls=0;
+  child.getComputedStyle=()=>{child.mainWorldProbeCalls++;throw Error('Main-world style probe used')};
+  contractFrame.contentDocument.elementFromPoint=()=>{child.mainWorldProbeCalls++;throw Error('Main-world hit probe used')};
+}
+if(mode==='shadow'||mode==='closed-shadow'||mode==='same-origin-closed-shadow'){
+  const shadowHost=contractFrame?contractFrame.contentDocument.createElement('div'):host;
+  if(contractFrame){shadowHost.style.cssText='position:absolute;left:0;top:0;width:620px;height:480px';root.append(shadowHost)}
+  root=shadowHost.attachShadow({mode:mode==='shadow'?'open':'closed'});
+}
 if(mode==='deep-shadow'){
   let container=host;
   for(let depth=0;depth<40;depth++){
@@ -334,15 +394,30 @@ const events=[];
 const eventTypes=['pointerdown','pointerup','keydown','keyup'];
 // Register the fixture witness before the consuming handler and before inspection.
 // The witness observes real trusted events; it never changes them or tracker state.
-for(const type of eventTypes)window.addEventListener(type,event=>events.push({type,trusted:event.isTrusted,target:event.composedPath()[0]?.id||''}),true);
+const witness=(mode==='closed-shadow'||mode==='same-origin-closed-shadow')?root:contractFrame?contractFrame.contentWindow:window;
+const witnessEvent=event=>events.push({type:event.type,trusted:event.isTrusted,target:event.composedPath().find(node=>node.id)?.id||''});
+for(const type of eventTypes)witness.addEventListener(type,witnessEvent,true);
 if(mode==='stop-propagation'||mode==='stop-immediate'){
   for(const type of eventTypes)window.addEventListener(type,event=>{
     if(mode==='stop-immediate')event.stopImmediatePropagation();else event.stopPropagation();
   },true);
 }
+// Suppress control defaults (including focus/activation) in this fixture only.
+// This proves trusted dispatch, not real picker operation or value changes. The
+// witness above still records both events, including open-shadow controls.
+for(const element of root.querySelectorAll('input:not([type]),input[type=file],input[type=color],input[type=date],select,label')){
+  if(!element.id.startsWith('native-')&&!element.id.startsWith('label-'))continue;
+  for(const type of ['pointerdown','mousedown','click','keydown','keyup'])element.addEventListener(type,event=>event.preventDefault());
+}
 window.contract={mode,events,clicks:0,widgets:{},
-  point(id){const element=node(id);if(!element)throw Error('Missing fixture node '+id);const hit=id.startsWith('label-')?element.querySelector('span'):element;const r=hit.getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}},
-  focus(id){const element=node(id);element.focus();if(element.isContentEditable){const range=document.createRange();range.selectNodeContents(element);range.collapse(false);const selection=getSelection();selection.removeAllRanges();selection.addRange(range)}return {outer:document.activeElement?.id,inner:element.getRootNode().activeElement?.id||document.activeElement?.id}},
+  reopenFrame(){if(!contractFrame)throw Error('Frame fixture required');const html=root.innerHTML;const doc=contractFrame.contentDocument;doc.open();doc.write('<!doctype html><body style="margin:0;min-height:900px">'+html+'</body>');doc.close();root=doc.body;for(const type of eventTypes)doc.defaultView.addEventListener(type,witnessEvent,true);node('text-a').focus()},
+  flipTransform(){if(mode!=='affine-frame')throw Error('Affine fixture required');const before=contractFrame.getBoundingClientRect().toJSON();reflected=!reflected;applyAffine();return {before,after:contractFrame.getBoundingClientRect().toJSON()}},
+  point(id){const element=node(id);if(!element)throw Error('Missing fixture node '+id);const hit=id.startsWith('label-')?element.querySelector('span'):element;const r=hit.getBoundingClientRect();
+    // Independent forward oracle: fixed fixture layout + authored CSS matrix,
+    // never provider inverse mapping, CDP quads or transformed bounding boxes.
+    if(mode==='affine-frame'){const x=r.left+r.width/2+12-322,y=r.top+r.height/2+16-256,angle=reflected?-sine:sine;return {x:100+322+cosine*x-angle*y,y:90+256+angle*x+cosine*y}}
+    const frame=contractFrame?.getBoundingClientRect();return {x:r.left+r.width/2+(frame?frame.left+contractFrame.clientLeft+7:0),y:r.top+r.height/2+(frame?frame.top+contractFrame.clientTop+11:0)}},
+  focus(id){const element=node(id);element.focus();if(element.isContentEditable){const range=element.ownerDocument.createRange();range.selectNodeContents(element);range.collapse(false);const selection=element.ownerDocument.defaultView.getSelection();selection.removeAllRanges();selection.addRange(range)}return {outer:document.activeElement?.id,inner:element.getRootNode().activeElement?.id||document.activeElement?.id}},
   state(){return {mode,events:[...events],clicks:this.clicks,widgets:{...this.widgets},values:{'text-a':node('text-a')?.value,'text-b':node('text-b')?.value,editor:node('editor')?.textContent.replaceAll(String.fromCharCode(160),' ')},a:node('text-a')?.value,b:node('text-b')?.value,visibility:document.visibilityState,outer:document.activeElement?.id}},
 };
 if(node('canvas'))node('canvas').onclick=event=>{if(!event.isTrusted)throw Error('Untrusted fixture click');contract.clicks++;event.currentTarget.focus()};
@@ -353,6 +428,22 @@ node(mode==='ordinary-dom'?'editor':'text-a').focus();
 
 interface ContractState {
   mode: string;
+  documentId?: string;
+  childVisibility?: string;
+  routeEvents?: {
+    type: string;
+    trusted: boolean;
+    target: string;
+    clientX?: number;
+    clientY?: number;
+  }[];
+  rootEvents?: {
+    type: string;
+    trusted: boolean;
+    target: string;
+    clientX?: number;
+    clientY?: number;
+  }[];
   widgets: Record<string, number>;
   values: Record<string, string | undefined>;
   events: { type: string; trusted: boolean; target: string }[];
@@ -362,10 +453,1197 @@ interface ContractState {
   visibility: string;
   outer: string;
 }
+interface RemoteFixturePoint {
+  outerAffine?: boolean;
+  reflected?: boolean;
+  x: number;
+  y: number;
+  documentId: string;
+  hitId: string;
+  localPoint: { x: number; y: number };
+  childViewport: {
+    width: number;
+    height: number;
+    scrollX: number;
+    scrollY: number;
+  };
+  owners: {
+    id: string;
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+    hitId: string;
+    scrollX: number;
+    scrollY: number;
+  }[];
+}
+
+/** The independent authored forward point must match every current DOM owner. */
+export function assertRemoteFixturePoint(
+  point: RemoteFixturePoint,
+  id: string,
+  depth: number,
+): void {
+  assert.ok(Number.isFinite(point.x) && Number.isFinite(point.y));
+  assert.equal(
+    point.hitId,
+    id,
+    "Independent child point must hit the requested element",
+  );
+  assert.equal(point.childViewport.width, depth === 1 ? 620 : 400);
+  assert.equal(point.childViewport.height, depth === 1 ? 480 : 300);
+  assert.equal(
+    point.childViewport.scrollX,
+    0,
+    "Fixture child must not scroll during setup",
+  );
+  assert.equal(
+    point.childViewport.scrollY,
+    0,
+    "Fixture child must not scroll during setup",
+  );
+  assert.ok(
+    Number.isFinite(point.localPoint.x) && Number.isFinite(point.localPoint.y),
+  );
+  assert.ok(
+    point.localPoint.x >= 0 && point.localPoint.x < point.childViewport.width,
+  );
+  assert.ok(
+    point.localPoint.y >= 0 && point.localPoint.y < point.childViewport.height,
+  );
+  assert.equal(point.owners.length, depth);
+  const nestedOffset = depth === 2 ? { x: 45, y: 55 } : { x: 0, y: 0 };
+  const cosine = Math.cos(Math.PI / 12);
+  const sine = Math.sin(Math.PI / 12);
+  const localX = point.localPoint.x + nestedOffset.x;
+  const localY = point.localPoint.y + nestedOffset.y;
+  const angle = point.reflected ? -sine : sine;
+  const expectedPoint = point.outerAffine
+    ? {
+        x: 422 + cosine * (localX + 12 - 322) - angle * (localY + 16 - 256),
+        y: 346 + angle * (localX + 12 - 322) + cosine * (localY + 16 - 256),
+      }
+    : { x: localX + 32, y: localY + 36 };
+  assert.ok(Math.abs(point.x - expectedPoint.x) < 0.01);
+  assert.ok(Math.abs(point.y - expectedPoint.y) < 0.01);
+  for (const [index, owner] of point.owners.entries()) {
+    const expected =
+      index === 0
+        ? point.outerAffine
+          ? {
+              id: "contract-frame",
+              left: 422 - cosine * 322 - sine * 256,
+              top: 346 - sine * 322 - cosine * 256,
+              width: cosine * 644 + sine * 512,
+              height: sine * 644 + cosine * 512,
+            }
+          : { id: "contract-frame", left: 20, top: 20, width: 644, height: 512 }
+        : {
+            id: "nested-contract-frame",
+            left: 40,
+            top: 50,
+            width: 410,
+            height: 310,
+          };
+    assert.equal(owner.id, expected.id);
+    assert.equal(
+      owner.hitId,
+      owner.id,
+      "Mapped point must hit the actual parent iframe",
+    );
+    assert.equal(owner.scrollX, 0);
+    assert.equal(owner.scrollY, 0);
+    for (const key of ["left", "top", "width", "height"] as const)
+      assert.ok(
+        Math.abs(owner[key] - expected[key]) < 0.01,
+        `Fixture owner ${owner.id} ${key} is ${owner[key]}, expected ${expected[key]}`,
+      );
+  }
+}
+
+/** CDP ACK is not child-consumption evidence. Only read the already-issued pair. */
+export async function settleRemoteFixturePair(
+  read: () => Promise<ContractState>,
+  before: ContractState,
+  kind: "click" | "key",
+  id: string,
+): Promise<{ state: ContractState; reads: number }> {
+  const expected = (
+    kind === "click" ? ["pointerdown", "pointerup"] : ["keydown", "keyup"]
+  ).map((type) => ({ type, trusted: true, target: id }));
+  let reads = 0;
+  const state = await poll(async () => {
+    const current = await read();
+    reads++;
+    assert.equal(
+      current.documentId,
+      before.documentId,
+      "Child document changed while consuming the issued pair",
+    );
+    assert.equal(current.visibility, "hidden");
+    assert.deepEqual(
+      current.events.slice(0, before.events.length),
+      before.events,
+      "Remote witness history must not change",
+    );
+    const events = current.events.slice(before.events.length);
+    assert.ok(
+      events.length <= expected.length,
+      "Unexpected additional remote input",
+    );
+    assert.deepEqual(
+      events,
+      expected.slice(0, events.length),
+      "Remote input must be the exact trusted target/type prefix",
+    );
+    const expectedClicks =
+      before.clicks + Number(kind === "click" && id === "canvas");
+    assert.ok(
+      current.clicks === before.clicks || current.clicks === expectedClicks,
+      "Unexpected remote click effect",
+    );
+    const expectedValue =
+      kind === "key" && id in before.values
+        ? before.values[id] + " "
+        : undefined;
+    if (expectedValue !== undefined)
+      assert.ok(
+        current.values[id] === before.values[id] ||
+          current.values[id] === expectedValue,
+        "Unexpected remote text effect",
+      );
+    return events.length === expected.length &&
+      current.clicks === expectedClicks &&
+      (expectedValue === undefined || current.values[id] === expectedValue)
+      ? current
+      : undefined;
+  }, "exact remote trusted pair and effect (read-only settlement)");
+  return { state, reads };
+}
+
 interface ContractInput {
   method: string;
   type: string;
   sessionId: string;
+  socketId?: number;
+  route?: {
+    targetId?: string;
+    parentSessionId?: string;
+    parentTargetId?: string;
+    grandparentSessionId?: string;
+    frameId?: string;
+    parentFrameId?: string;
+  };
+  x?: number;
+  y?: number;
+}
+
+interface FixtureExecutionContext {
+  id: number;
+  uniqueId: string;
+  auxData: { frameId: string; isDefault: boolean };
+}
+interface FramePlacementEvidence {
+  mode: RemoteFrameMode;
+  rootFrameId: string;
+  childFrameId: string;
+  rootContexts: FixtureExecutionContext[];
+  targets: { targetId: string; type: string; url: string }[];
+  childUrl: string;
+  childSessionId?: string;
+  childSessionTargetId?: string;
+  childSessionFrameId?: string;
+  childSessionParentFrameId?: string;
+  parentTreeChildFrames?: { id: string; url: string }[];
+  childContexts?: FixtureExecutionContext[];
+  childAttachedEvent?: {
+    sessionId: string;
+    targetInfo: { targetId: string; type: string; url: string };
+  };
+  ownerBackendNodeId: number;
+  descendant?: FramePlacementEvidence;
+}
+
+/** Process placement is observed, never inferred from cross-origin URLs. */
+export function assertRemoteFramePlacement(
+  evidence: FramePlacementEvidence,
+): void {
+  assert.notEqual(evidence.rootFrameId, evidence.childFrameId);
+  const root = evidence.rootContexts.filter(
+    (context) =>
+      context.auxData?.isDefault &&
+      context.auxData.frameId === evidence.rootFrameId &&
+      context.uniqueId,
+  );
+  const local = evidence.rootContexts.filter(
+    (context) =>
+      context.auxData?.isDefault &&
+      context.auxData.frameId === evidence.childFrameId &&
+      context.uniqueId,
+  );
+  const targets = evidence.targets.filter(
+    (target) => target.type === "iframe" && target.url === evidence.childUrl,
+  );
+  assert.equal(root.length, 1, "Need the exact live root default context");
+  assert.ok(
+    Number.isSafeInteger(evidence.ownerBackendNodeId) &&
+      evidence.ownerBackendNodeId > 0,
+    "Need the exact parent DOM frame owner",
+  );
+  if (evidence.mode === "cross-origin-same-process") {
+    assert.equal(
+      local.length,
+      1,
+      "Same-process fixture requires a real child default context in the root session",
+    );
+    assert.equal(
+      targets.length,
+      0,
+      "Same-process fixture must not actually be an OOPIF",
+    );
+  } else {
+    assert.equal(
+      local.length,
+      0,
+      "OOPIF default context must not be in the parent session",
+    );
+    assert.equal(
+      targets.length,
+      1,
+      "OOPIF fixture requires a real iframe target",
+    );
+    assert.equal(targets[0]!.url, evidence.childUrl);
+    assert.ok(
+      evidence.childSessionId,
+      "OOPIF fixture requires an attached child session",
+    );
+    assert.equal(evidence.childSessionTargetId, targets[0]!.targetId);
+    assert.equal(
+      evidence.childAttachedEvent?.sessionId,
+      evidence.childSessionId,
+    );
+    assert.equal(
+      evidence.childAttachedEvent?.targetInfo.targetId,
+      evidence.childSessionTargetId,
+    );
+    assert.equal(evidence.childAttachedEvent?.targetInfo.type, "iframe");
+    assert.equal(
+      evidence.childAttachedEvent?.targetInfo.url,
+      evidence.childUrl,
+    );
+    assert.equal(evidence.childSessionFrameId, evidence.childFrameId);
+    if (evidence.childSessionParentFrameId !== undefined)
+      assert.equal(evidence.childSessionParentFrameId, evidence.rootFrameId);
+    const child = evidence.childContexts?.filter(
+      (context) =>
+        context.auxData?.isDefault &&
+        context.auxData.frameId === evidence.childFrameId &&
+        context.uniqueId,
+    );
+    assert.equal(
+      child?.length,
+      1,
+      "OOPIF fixture requires its child-session default context",
+    );
+  }
+  if (
+    evidence.mode === "nested-oopif" ||
+    evidence.mode === "nested-same-process"
+  ) {
+    assert.ok(
+      evidence.descendant,
+      "Nested fixture requires independently observed descendant placement",
+    );
+    assert.equal(evidence.descendant.rootFrameId, evidence.childFrameId);
+    assert.equal(
+      evidence.descendant.mode,
+      evidence.mode === "nested-oopif"
+        ? "cross-origin-oopif"
+        : "cross-origin-same-process",
+    );
+    assertRemoteFramePlacement(evidence.descendant);
+  }
+}
+
+/** Passive native transport evidence, independent from the provider's route receipt. */
+export function assertRemoteProviderRoute(options: {
+  kind: "click" | "key";
+  inputs: ContractInput[];
+  root: { sessionId: string; socketId: number };
+  placement: FramePlacementEvidence;
+  point?: RemoteFixturePoint;
+}): void {
+  const { kind, inputs, root, placement, point } = options;
+  assert.equal(inputs.length, 2);
+  const remoteMouse =
+    kind === "click" && placement.mode !== "cross-origin-same-process";
+  const renderer =
+    placement.mode === "nested-oopif" ? placement.descendant! : placement;
+  for (const input of inputs) {
+    assert.equal(
+      input.socketId,
+      root.socketId,
+      "Pair must remain on the verified provider connection",
+    );
+    if (remoteMouse) {
+      assert.notEqual(input.sessionId, root.sessionId);
+      assert.equal(input.route?.targetId, renderer.childSessionTargetId);
+      assert.equal(input.route?.frameId, renderer.childFrameId);
+      assert.equal(input.route?.parentFrameId, renderer.rootFrameId);
+      assert.ok(input.route?.parentSessionId);
+      if (placement.mode === "nested-oopif") {
+        assert.equal(
+          input.route?.parentTargetId,
+          placement.childSessionTargetId,
+        );
+        assert.equal(
+          input.route?.grandparentSessionId,
+          root.sessionId,
+          "Nested renderer ancestry must return to the verified provider root",
+        );
+      } else assert.equal(input.route?.parentSessionId, root.sessionId);
+    } else {
+      assert.equal(
+        input.sessionId,
+        root.sessionId,
+        "Keys and same-process mouse remain root routed",
+      );
+    }
+    if (kind === "click") {
+      assert.ok(point);
+      const expected = !remoteMouse
+        ? point
+        : placement.mode === "nested-same-process"
+          ? { x: point.localPoint.x + 45, y: point.localPoint.y + 55 }
+          : point.localPoint;
+      assert.ok(
+        typeof input.x === "number" && Math.abs(input.x - expected.x) < 0.01,
+        "Mouse x must be in the selected renderer-root viewport, not leaf or top coordinates",
+      );
+      assert.ok(
+        typeof input.y === "number" && Math.abs(input.y - expected.y) < 0.01,
+        "Mouse y must be in the selected renderer-root viewport, not leaf or top coordinates",
+      );
+    }
+  }
+  assert.equal(inputs[0]!.sessionId, inputs[1]!.sessionId);
+}
+
+type FixtureCdpEndpoint = Pick<Rpc, "send" | "onEvent">;
+
+export async function observeRemoteFramePlacement(
+  rpc: FixtureCdpEndpoint,
+  browserRpc: FixtureCdpEndpoint,
+  mode: RemoteFrameMode,
+  rootUrl: string,
+  expectedChildRevision = 0,
+): Promise<FramePlacementEvidence> {
+  const rootContexts: FixtureExecutionContext[] = [];
+  const removeRoot = rpc.onEvent((event) => {
+    if (event.method === "Runtime.executionContextCreated")
+      rootContexts.push(event.params?.context as FixtureExecutionContext);
+  });
+  let childSessionId: string | undefined;
+  let removeChild: (() => void) | undefined;
+  const diagnostic: Record<string, unknown> = { mode, rootUrl };
+  try {
+    // Re-enabling this independent observer session enumerates its current
+    // contexts without consulting provider caches or changing page state.
+    await rpc.send("Runtime.disable");
+    await rpc.send("Runtime.enable");
+    const tree = (await rpc.send("Page.getFrameTree")).frameTree as {
+      frame: { id: string; url: string };
+      childFrames?: { frame: { id: string; url: string } }[];
+    };
+    diagnostic.rootTree = tree;
+    assert.equal(tree.frame.url, rootUrl);
+    // Native Chromium may omit remote children from a renderer's frame tree.
+    // Discover the exact authored owner and nonce-bound URL independently, then
+    // join the attached child's own frame identity through DOM.getFrameOwner.
+    const fixture = remoteFrameFixtureFromUrl(rootUrl);
+    const nestedOwner = new URL(rootUrl).pathname === "/remote-frame-child";
+    if (nestedOwner) assert.ok(fixture.leafOrigin);
+    const childUrl = new URL(
+      "/remote-frame-child",
+      nestedOwner ? fixture.leafOrigin! : fixture.childOrigin,
+    );
+    for (const [key, value] of Object.entries(
+      nestedOwner
+        ? {
+            ...fixture,
+            parentOrigin: fixture.childOrigin,
+            childOrigin: fixture.leafOrigin!,
+            leafOrigin: "",
+          }
+        : fixture,
+    ))
+      childUrl.searchParams.set(key, value);
+    assert.ok(
+      Number.isSafeInteger(expectedChildRevision) && expectedChildRevision >= 0,
+    );
+    if (expectedChildRevision > 0) {
+      assert.equal(
+        nestedOwner,
+        false,
+        "Only the top fixture reloads its direct child",
+      );
+      childUrl.searchParams.set("revision", String(expectedChildRevision));
+    }
+    const document = (await rpc.send("DOM.getDocument", { depth: 0 })).root as {
+      nodeId: number;
+    };
+    const owners = (
+      await rpc.send("DOM.querySelectorAll", {
+        nodeId: document.nodeId,
+        selector: "iframe",
+      })
+    ).nodeIds as number[];
+    assert.equal(
+      owners.length,
+      1,
+      "Need one actual iframe owner in this parent document",
+    );
+    const ownerNode = (
+      await rpc.send("DOM.describeNode", { nodeId: owners[0], depth: 0 })
+    ).node as {
+      localName: string;
+      backendNodeId: number;
+      frameId?: string;
+      attributes: string[];
+    };
+    diagnostic.ownerNode = ownerNode;
+    assert.equal(ownerNode.localName, "iframe");
+    const attributes = new Map<string, string>();
+    for (let index = 0; index < ownerNode.attributes.length; index += 2)
+      attributes.set(
+        ownerNode.attributes[index]!,
+        ownerNode.attributes[index + 1]!,
+      );
+    assert.equal(
+      attributes.get("id"),
+      nestedOwner ? "nested-contract-frame" : "contract-frame",
+    );
+    assert.equal(
+      attributes.get("src"),
+      childUrl.href,
+      "Owner must have the exact authored nonce-bound child URL",
+    );
+    assert.ok(
+      Number.isSafeInteger(ownerNode.backendNodeId) &&
+        ownerNode.backendNodeId > 0,
+    );
+    const targets = (await browserRpc.send("Target.getTargets"))
+      .targetInfos as FramePlacementEvidence["targets"];
+    diagnostic.targets = targets;
+    let child: { id: string; url: string; parentId?: string };
+    const childEvidence: Partial<FramePlacementEvidence> = {};
+    if (mode === "cross-origin-same-process") {
+      assert.equal(
+        tree.childFrames?.length,
+        1,
+        "Same-process child must appear in its parent's renderer tree",
+      );
+      child = tree.childFrames![0]!.frame;
+      assert.equal(child.url, childUrl.href);
+    } else {
+      const candidates = targets.filter(
+        (target) => target.type === "iframe" && target.url === childUrl.href,
+      );
+      assert.equal(
+        candidates.length,
+        1,
+        "Need one exact nonce-bound OOPIF target before attaching",
+      );
+      const childTargetId = candidates[0]!.targetId;
+      const childContexts: FixtureExecutionContext[] = [];
+      const childAttachedEvents: NonNullable<
+        FramePlacementEvidence["childAttachedEvent"]
+      >[] = [];
+      removeChild = browserRpc.onEvent((event) => {
+        if (event.method === "Target.attachedToTarget") {
+          const params = event.params as unknown as NonNullable<
+            FramePlacementEvidence["childAttachedEvent"]
+          >;
+          if (params.targetInfo.targetId === childTargetId)
+            childAttachedEvents.push(params);
+        }
+        if (
+          event.sessionId === childSessionId &&
+          event.method === "Runtime.executionContextCreated"
+        )
+          childContexts.push(event.params?.context as FixtureExecutionContext);
+      });
+      const attached = await browserRpc.send("Target.attachToTarget", {
+        targetId: childTargetId,
+        flatten: true,
+      });
+      assert.equal(typeof attached.sessionId, "string");
+      childSessionId = attached.sessionId as string;
+      await browserRpc.send("Runtime.enable", {}, childSessionId);
+      const childTree = (
+        await browserRpc.send("Page.getFrameTree", {}, childSessionId)
+      ).frameTree as { frame: { id: string; url: string; parentId?: string } };
+      diagnostic.childTree = childTree;
+      diagnostic.childAttachedEvents = childAttachedEvents;
+      assert.equal(
+        childAttachedEvents.length,
+        1,
+        "Need exactly one trusted attachment for the observed child target",
+      );
+      child = childTree.frame;
+      assert.equal(child.url, childUrl.href);
+      if (child.parentId !== undefined)
+        assert.equal(child.parentId, tree.frame.id);
+      const reportedChildren = tree.childFrames ?? [];
+      assert.ok(
+        reportedChildren.length <= 1,
+        "Parent tree must not contain additional children",
+      );
+      if (reportedChildren.length === 1)
+        assert.deepEqual(
+          {
+            id: reportedChildren[0]!.frame.id,
+            url: reportedChildren[0]!.frame.url,
+          },
+          { id: child.id, url: child.url },
+          "A supplied remote placeholder must match the child-session frame",
+        );
+      Object.assign(childEvidence, {
+        childSessionId,
+        childSessionTargetId: childTargetId,
+        childAttachedEvent: childAttachedEvents[0],
+        childSessionFrameId: child.id,
+        childSessionParentFrameId: child.parentId,
+        childContexts,
+      });
+    }
+    const owner = await rpc.send("DOM.getFrameOwner", { frameId: child.id });
+    assert.equal(
+      owner.backendNodeId,
+      ownerNode.backendNodeId,
+      "Child-session frame must belong to the exact authored parent owner",
+    );
+    if (ownerNode.frameId !== undefined)
+      assert.equal(ownerNode.frameId, child.id);
+    const evidence: FramePlacementEvidence = {
+      mode,
+      rootFrameId: tree.frame.id,
+      childFrameId: child.id,
+      rootContexts,
+      targets,
+      childUrl: child.url,
+      ownerBackendNodeId: ownerNode.backendNodeId,
+      parentTreeChildFrames: (tree.childFrames ?? []).map(({ frame }) => ({
+        id: frame.id,
+        url: frame.url,
+      })),
+      ...childEvidence,
+    };
+    if (mode === "nested-oopif" || mode === "nested-same-process") {
+      removeChild?.();
+      removeChild = undefined;
+      assert.ok(childSessionId);
+      const parentSessionId = childSessionId;
+      const childRpc: FixtureCdpEndpoint = {
+        send: async (method, params = {}) =>
+          await browserRpc.send(method, params, parentSessionId),
+        onEvent: (listener) =>
+          browserRpc.onEvent((event) => {
+            if (event.sessionId === parentSessionId) listener(event);
+          }),
+      };
+      evidence.descendant = await observeRemoteFramePlacement(
+        childRpc,
+        browserRpc,
+        mode === "nested-oopif"
+          ? "cross-origin-oopif"
+          : "cross-origin-same-process",
+        child.url,
+      );
+    }
+    assertRemoteFramePlacement(evidence);
+    return evidence;
+  } catch (error) {
+    console.error("Remote frame placement failure", JSON.stringify(diagnostic));
+    throw error;
+  } finally {
+    removeRoot();
+    removeChild?.();
+    if (childSessionId)
+      await browserRpc.send("Target.detachFromTarget", {
+        sessionId: childSessionId,
+      });
+  }
+}
+
+/** Independent protocol diagnostics, never retries or provider acceptance. */
+async function runRemoteFrameRouteDiagnostics(options: {
+  backend: ZenXBrowserBackend;
+  sessionId: string;
+  endpoint: string;
+  url: string;
+  browserRpc: FixtureCdpEndpoint;
+  guard(): Promise<void>;
+  report(receipt: Record<string, unknown>): void;
+}): Promise<void> {
+  const { backend, sessionId, browserRpc, guard } = options;
+  // Both sequences are planned before input. A failed case cannot select a
+  // fallback route on its target; each case physically retires its own tab.
+  for (const route of ["root-pair", "child-session-pair"] as const) {
+    const url = new URL(options.url);
+    url.searchParams.set("nonce", randomUUID());
+    assert.equal(url.searchParams.get("mode"), "cross-origin-oopif");
+    const owned = await backend.open(sessionId, url.href);
+    let rpc: Rpc | undefined;
+    let childSessionId: string | undefined;
+    let removeChild: (() => void) | undefined;
+    let fatalSafetyError: unknown;
+    let childLifecycleInvalidatedBy: string | undefined;
+    let admittedChildContext: FixtureExecutionContext | undefined;
+    const receipt: Record<string, unknown> = {
+      scenario: "independent-remote-protocol-route",
+      layer: "protocol-diagnostic-only",
+      providerAcceptance: "not-exercised",
+      nativeExtensionRouting: "not-exercised",
+      platform: process.platform,
+      route,
+      ownedTargetId: owned.tabId,
+      dispatchAttempts: 0,
+      acknowledgedDispatches: 0,
+      settlementReads: 0,
+      outcome: "inconclusive",
+    };
+    const checkForeground = async (stage: string) => {
+      receipt.stage = stage;
+      try {
+        await guard();
+      } catch (error) {
+        fatalSafetyError = error;
+        receipt.fatalSafetyFailure = true;
+        receipt.foregroundGuardError ??= String(error);
+        receipt.foregroundGuardErrorAt ??= stage;
+        throw error;
+      }
+    };
+    const checkHidden = (current: ContractState, stage: string) => {
+      try {
+        assert.equal(
+          current.visibility,
+          "hidden",
+          "Diagnostic target must stay hidden",
+        );
+        assert.equal(
+          current.childVisibility,
+          "hidden",
+          "Diagnostic child must stay hidden",
+        );
+      } catch (error) {
+        fatalSafetyError = error;
+        receipt.fatalSafetyFailure = true;
+        receipt.visibilityGuardError ??= String(error);
+        receipt.visibilityGuardErrorAt ??= stage;
+        throw error;
+      }
+    };
+    const checkChildLifecycle = () =>
+      assert.equal(
+        childLifecycleInvalidatedBy,
+        undefined,
+        "Diagnostic child context/session changed; never dispatch to a replacement",
+      );
+    try {
+      const target = await poll(async () => {
+        const targets = (await (
+          await fetch(`${options.endpoint}/json/list`, {
+            redirect: "error",
+            signal: AbortSignal.timeout(5_000),
+          })
+        ).json()) as Target[];
+        return targets.find((target) => target.id === owned.tabId);
+      }, "dedicated route-diagnostic target");
+      rpc = await Rpc.connect(target.webSocketDebuggerUrl);
+      const fixture = rpc;
+      await poll(
+        async () =>
+          (await fixture.evaluate<boolean>("window.contract?.ready === true"))
+            ? true
+            : undefined,
+        "route-diagnostic remote child",
+      );
+      const placement = await observeRemoteFramePlacement(
+        fixture,
+        browserRpc,
+        "cross-origin-oopif",
+        url.href,
+      );
+      receipt.placement = placement;
+      if (route === "child-session-pair") {
+        const childContexts: FixtureExecutionContext[] = [];
+        const attachedEvents: NonNullable<
+          FramePlacementEvidence["childAttachedEvent"]
+        >[] = [];
+        removeChild = browserRpc.onEvent((event) => {
+          if (event.method === "Target.attachedToTarget") {
+            const attached = event.params as unknown as NonNullable<
+              FramePlacementEvidence["childAttachedEvent"]
+            >;
+            if (attached.targetInfo.targetId === placement.childSessionTargetId)
+              attachedEvents.push(attached);
+          }
+          const invalidate = (reason: string) => {
+            childLifecycleInvalidatedBy ??= reason;
+            receipt.childLifecycleInvalidatedBy = childLifecycleInvalidatedBy;
+          };
+          if (
+            event.method === "Target.detachedFromTarget" &&
+            ((childSessionId && event.params?.sessionId === childSessionId) ||
+              event.params?.targetId === placement.childSessionTargetId)
+          )
+            invalidate(event.method);
+          if (event.sessionId !== childSessionId || !childSessionId) return;
+          if (
+            event.method === "Runtime.executionContextsCleared" ||
+            event.method === "Runtime.executionContextDestroyed"
+          )
+            invalidate(event.method);
+          if (event.method === "Runtime.executionContextCreated") {
+            const context = event.params?.context as FixtureExecutionContext;
+            childContexts.push(context);
+            if (
+              context.auxData?.isDefault &&
+              (admittedChildContext ||
+                context.uniqueId !==
+                  placement.childContexts!.find(
+                    (value) => value.auxData.isDefault,
+                  )?.uniqueId)
+            )
+              invalidate("default-context-replaced");
+          }
+        });
+        const attached = await browserRpc.send("Target.attachToTarget", {
+          targetId: placement.childSessionTargetId,
+          flatten: true,
+        });
+        assert.equal(typeof attached.sessionId, "string");
+        childSessionId = attached.sessionId as string;
+        await browserRpc.send("Runtime.enable", {}, childSessionId);
+        const tree = (
+          await browserRpc.send("Page.getFrameTree", {}, childSessionId)
+        ).frameTree as {
+          frame: { id: string; url: string; parentId?: string };
+        };
+        assert.equal(tree.frame.url, placement.childUrl);
+        assert.equal(attachedEvents.length, 1);
+        const current = {
+          ...placement,
+          childSessionId,
+          childAttachedEvent: attachedEvents[0],
+          childSessionFrameId: tree.frame.id,
+          childSessionParentFrameId: tree.frame.parentId,
+          childContexts,
+        };
+        assertRemoteFramePlacement(current);
+        assert.deepEqual(
+          childContexts
+            .filter((context) => context.auxData.isDefault)
+            .map((context) => context.uniqueId),
+          placement
+            .childContexts!.filter((context) => context.auxData.isDefault)
+            .map((context) => context.uniqueId),
+          "Diagnostic attachment must retain the exact child document context",
+        );
+        const owner = await fixture.send("DOM.getFrameOwner", {
+          frameId: tree.frame.id,
+        });
+        assert.equal(owner.backendNodeId, placement.ownerBackendNodeId);
+        admittedChildContext = childContexts.find(
+          (context) => context.auxData.isDefault,
+        );
+        assert.ok(admittedChildContext);
+        checkChildLifecycle();
+        receipt.dispatchSessionEvidence = current;
+      }
+      const capture = await fixture.send("Page.captureScreenshot", {
+        format: "png",
+        fromSurface: true,
+        captureBeyondViewport: false,
+      });
+      assert.ok(typeof capture.data === "string" && capture.data.length > 0);
+      const position = await fixture.evaluate<RemoteFixturePoint>(
+        "window.contract.point('canvas')",
+      );
+      receipt.position = position;
+      assertRemoteFixturePoint(position, "canvas", 1);
+      const before = await fixture.evaluate<ContractState>(
+        "window.contract.state()",
+      );
+      receipt.before = before;
+      checkHidden(before, "setup");
+      assert.equal(before.documentId, position.documentId);
+      assert.equal(before.events.length, 0);
+      assert.equal(before.routeEvents?.length, 0);
+      assert.equal(before.rootEvents?.length, 0);
+      assert.equal(before.clicks, 0);
+      await checkForeground("before-pair");
+      const point =
+        route === "root-pair"
+          ? { x: position.x, y: position.y }
+          : position.localPoint;
+      receipt.inputPoint = point;
+      receipt.setupVerified = true;
+      for (const type of ["mousePressed", "mouseReleased"]) {
+        if (route === "child-session-pair") {
+          checkChildLifecycle();
+          assert.ok(childSessionId && admittedChildContext);
+          const document = await browserRpc.send(
+            "Runtime.evaluate",
+            {
+              expression: "document.URL",
+              uniqueContextId: admittedChildContext.uniqueId,
+              returnByValue: true,
+              awaitPromise: false,
+            },
+            childSessionId,
+          );
+          assert.equal(
+            document.exceptionDetails,
+            undefined,
+            "Exact diagnostic child context must remain live",
+          );
+          assert.equal(
+            (document.result as { value: string }).value,
+            placement.childUrl,
+          );
+        }
+        const current = await fixture.evaluate<ContractState>(
+          "window.contract.state()",
+        );
+        checkHidden(current, `before-${type}`);
+        assert.equal(
+          current.documentId,
+          before.documentId,
+          "Diagnostic child document changed before dispatch",
+        );
+        await checkForeground(`before-${type}`);
+        checkChildLifecycle();
+        receipt.dispatchAttempts = Number(receipt.dispatchAttempts) + 1;
+        const params = {
+          type,
+          ...point,
+          button: "left",
+          buttons: type === "mousePressed" ? 1 : 0,
+          clickCount: 1,
+        };
+        if (route === "root-pair")
+          await fixture.send("Input.dispatchMouseEvent", params);
+        else {
+          assert.ok(childSessionId);
+          await browserRpc.send(
+            "Input.dispatchMouseEvent",
+            params,
+            childSessionId,
+          );
+        }
+        receipt.acknowledgedDispatches =
+          Number(receipt.acknowledgedDispatches) + 1;
+        await checkForeground(`after-${type}`);
+        const afterEvent = await fixture.evaluate<ContractState>(
+          "window.contract.state()",
+        );
+        receipt.after = afterEvent;
+        checkHidden(afterEvent, `after-${type}`);
+        checkChildLifecycle();
+      }
+      await settleRemoteFixturePair(
+        async () => {
+          await checkForeground("read-only-settlement");
+          const current = await fixture.evaluate<ContractState>(
+            "window.contract.state()",
+          );
+          receipt.after = current;
+          checkHidden(current, "read-only-settlement");
+          checkChildLifecycle();
+          receipt.settlementReads = Number(receipt.settlementReads) + 1;
+          return current;
+        },
+        before,
+        "click",
+        "canvas",
+      );
+      receipt.outcome = "observed-exact-leaf-pair-and-effect";
+    } catch (error) {
+      receipt.error = error instanceof Error ? error.message : String(error);
+    } finally {
+      // Even a failed/unknown press retires this exact owned target. Never
+      // release/retry on another session, and do not run another case if close fails.
+      removeChild?.();
+      if (childSessionId) {
+        try {
+          await browserRpc.send("Target.detachFromTarget", {
+            sessionId: childSessionId,
+          });
+        } catch (error) {
+          receipt.detachError = String(error);
+        }
+      }
+      rpc?.close();
+      try {
+        try {
+          await backend.closeTab(sessionId, owned.tabId);
+        } catch (error) {
+          receipt.providerDetachError = String(error);
+        }
+        const closed = await browserRpc.send("Target.closeTarget", {
+          targetId: owned.tabId,
+        });
+        assert.equal(
+          closed.success,
+          true,
+          "Exact diagnostic target must physically close",
+        );
+        await poll(async () => {
+          const targets = (await (
+            await fetch(`${options.endpoint}/json/list`, {
+              redirect: "error",
+              signal: AbortSignal.timeout(5_000),
+            })
+          ).json()) as Target[];
+          return targets.some((target) => target.id === owned.tabId)
+            ? undefined
+            : true;
+        }, "physical route-diagnostic target closure");
+        receipt.physicallyClosed = true;
+        await checkForeground("after-physical-close");
+      } catch (error) {
+        receipt.teardownError = String(error);
+        throw error;
+      } finally {
+        options.report(receipt);
+        console.log(
+          "Independent remote protocol route",
+          JSON.stringify(receipt),
+        );
+      }
+    }
+    if (receipt.fatalSafetyFailure) throw fatalSafetyError;
+  }
+}
+
+/** Intentional unknown outcome owns a separate tab and physically closes it. */
+async function runInterruptedRemoteFrameSmoke(options: {
+  backend: ZenXBrowserBackend;
+  sessionId: string;
+  endpoint: string;
+  url: string;
+  browserRpc: Pick<Rpc, "send">;
+  inputs: ContractInput[];
+  guard(): Promise<void>;
+  onFailure?(receipt: Record<string, unknown>): void;
+}): Promise<Record<string, unknown>> {
+  const { backend, sessionId, inputs, guard } = options;
+  const owned = await backend.open(sessionId, options.url);
+  let rpc: Rpc | undefined;
+  const inputStart = inputs.length;
+  const diagnostic: Record<string, unknown> = {
+    scenario: "remote-document-open-after-press",
+    ownedTargetId: owned.tabId,
+    setup: "not-ready",
+    pointerCalls: 0,
+  };
+  try {
+    const target = await poll(async () => {
+      const targets = (await (
+        await fetch(`${options.endpoint}/json/list`, {
+          redirect: "error",
+          signal: AbortSignal.timeout(5_000),
+        })
+      ).json()) as Target[];
+      return targets.find((target) => target.id === owned.tabId);
+    }, "dedicated interrupted-input target");
+    rpc = await Rpc.connect(target.webSocketDebuggerUrl);
+    const fixture = rpc;
+    await poll(
+      async () =>
+        (await fixture.evaluate<boolean>("window.contract?.ready === true"))
+          ? true
+          : undefined,
+      "dedicated remote child",
+    );
+    await guard();
+    assert.equal(await fixture.evaluate("document.visibilityState"), "hidden");
+    // Explicit read-only setup absorbs first observer/owner discovery before
+    // the final authorizing capture. Never repair geometry or replay an action.
+    const discovery = await backend.inspect(sessionId, owned.tabId);
+    assert.equal(discovery.screenshot.status, "captured");
+    assert.equal(inputs.length, inputStart);
+    diagnostic.discoveryInputAvailable = Boolean(discovery.inputViewport);
+    const screenshot = await fixture.send("Page.captureScreenshot", {
+      format: "png",
+      fromSurface: true,
+      captureBeyondViewport: false,
+    });
+    assert.ok(
+      typeof screenshot.data === "string" && screenshot.data.length > 0,
+    );
+    const before = await fixture.evaluate<
+      ContractState & { documentId: string }
+    >("window.contract.state()");
+    const position = await fixture.evaluate<RemoteFixturePoint>(
+      "window.contract.point('canvas')",
+    );
+    assertRemoteFixturePoint(
+      position,
+      "canvas",
+      before.mode.startsWith("nested-") ? 2 : 1,
+    );
+    assert.equal(position.documentId, before.documentId);
+    assert.equal(before.visibility, "hidden");
+    assert.equal(before.childVisibility, "hidden");
+    await guard();
+    diagnostic.before = before;
+    diagnostic.position = position;
+    diagnostic.setup = "read-only-discovery-compositor-and-geometry-verified";
+    assert.deepEqual(await fixture.evaluate("window.contract.armReplace()"), {
+      armed: true,
+    });
+    const capture = async () =>
+      await poll(async () => {
+        const count = inputs.length;
+        const observed = await backend.inspect(sessionId, owned.tabId);
+        assert.equal(observed.screenshot.status, "captured");
+        assert.equal(
+          inputs.length,
+          count,
+          "Interrupted-target inspection must never dispatch Input",
+        );
+        await guard();
+        return observed.inputViewport ? observed : undefined;
+      }, "interrupted-target coherent capture (read-only)");
+    const observed = await capture();
+    const start = inputs.length;
+    let reason = "";
+    await assert.rejects(
+      () => {
+        diagnostic.pointerCalls = Number(diagnostic.pointerCalls) + 1;
+        return backend.pointerClick!(
+          sessionId,
+          owned.tabId,
+          observed.observationId,
+          position.x,
+          position.y,
+        );
+      },
+      (error) => {
+        diagnostic.originalError =
+          error instanceof Error
+            ? {
+                name: error.name,
+                constructor: error.constructor.name,
+                message: error.message,
+                stack: error.stack,
+                cause: String(error.cause ?? ""),
+              }
+            : { message: String(error) };
+        diagnostic.inputAttempts = inputs.slice(inputStart);
+        const rawHeldUnknown =
+          error instanceof UserBrowserMutationOutcomeUnknownError &&
+          error.message.startsWith(
+            "Browser targeted input outcome is unknown (",
+          );
+        assert.ok(
+          error instanceof BrowserInputOutcomeUnknownError || rawHeldUnknown,
+          `Expected typed targeted-input unknown after the intended press; got ${error instanceof Error ? error.constructor.name + ": " + error.message : String(error)}; observed Input attempts=${inputs.length - inputStart}`,
+        );
+        if (error instanceof BrowserInputOutcomeUnknownError)
+          assert.equal(error.inputMayRemainPressed, true);
+        reason = error instanceof Error ? error.message : String(error);
+        return true;
+      },
+    );
+    assert.deepEqual(
+      inputs
+        .slice(start)
+        .map((event) => ({ method: event.method, type: event.type })),
+      [{ method: "Input.dispatchMouseEvent", type: "mousePressed" }],
+      "A changed child must never receive a successor release",
+    );
+    const after = await fixture.evaluate<
+      ContractState & { documentId: string }
+    >("window.contract.state()");
+    assert.notEqual(after.documentId, before.documentId);
+    assert.deepEqual(after.events.slice(before.events.length), [
+      { type: "pointerdown", trusted: true, target: "canvas" },
+    ]);
+    assert.equal(after.clicks, before.clicks);
+    assert.equal(after.visibility, "hidden");
+    // A fresh, deliberate different action confirms the held-input fence. It is
+    // not a retry or release of the unknown earlier click.
+    // Quarantine intentionally withholds authorizing input metadata. A single
+    // ordinary read remains available; never wait for an input-ready capture.
+    const fresh = await backend.inspect(sessionId, owned.tabId);
+    assert.equal(fresh.screenshot.status, "captured");
+    assert.equal(fresh.inputViewport, undefined);
+    await guard();
+    await assert.rejects(
+      () =>
+        backend.keyPress!(sessionId, owned.tabId, fresh.observationId, "Space"),
+      /blocked|held|pressed|close.*tab/iu,
+    );
+    assert.equal(inputs.length, start + 1);
+    assert.deepEqual(
+      (await fixture.evaluate<ContractState>("window.contract.state()")).events,
+      after.events,
+    );
+    await guard();
+    return {
+      scenario: "remote-document-open-after-press",
+      layer: "headed-provider-cdp-contract",
+      nativeExtensionRouting: "not-exercised",
+      status: "passed",
+      inputDispatches: 1,
+      successorReleaseDispatches: 0,
+      quarantined: true,
+      reason,
+    };
+  } catch (error) {
+    diagnostic.error = error instanceof Error ? error.message : String(error);
+    diagnostic.inputAttempts = inputs.slice(inputStart);
+    options.onFailure?.(diagnostic);
+    console.error(
+      "Interrupted remote fixture failure",
+      JSON.stringify(diagnostic),
+    );
+    throw error;
+  } finally {
+    rpc?.close();
+    // Provider closeTab settles only its logical attachment; it is not physical
+    // Chrome closure and cannot release the possibly held input by itself.
+    try {
+      await backend.closeTab(sessionId, owned.tabId);
+    } finally {
+      const closed = await options.browserRpc.send("Target.closeTarget", {
+        targetId: owned.tabId,
+      });
+      assert.equal(
+        closed.success,
+        true,
+        "The exact positively-created disposable target must physically close",
+      );
+    }
+    await poll(async () => {
+      const targets = (await (
+        await fetch(`${options.endpoint}/json/list`, {
+          redirect: "error",
+          signal: AbortSignal.timeout(5_000),
+        })
+      ).json()) as Target[];
+      return targets.some((target) => target.id === owned.tabId)
+        ? undefined
+        : true;
+    }, "physical interrupted-input target closure");
+    await guard();
+  }
 }
 
 /** Real protocol acceptance, shared by both headed smoke entry points. */
@@ -377,6 +1655,8 @@ export async function runTargetedInputContractSmoke(options: {
   origin: string;
   guard(): Promise<void>;
   onPhase?(phase: string): void;
+  onFailure?(diagnostic: Record<string, unknown>): void;
+  remoteFrameInput?: "supported" | "unsupported";
 }): Promise<Record<string, unknown>[]> {
   const { backend, sessionId, tabId, endpoint, origin, guard } = options;
   assert.ok(backend.pointerClick && backend.keyPress);
@@ -395,31 +1675,141 @@ export async function runTargetedInputContractSmoke(options: {
     })
   ).json()) as { webSocketDebuggerUrl: string };
   const rpc = await Rpc.connect(target.webSocketDebuggerUrl);
+  const placementRpc = await Rpc.connect(version.webSocketDebuggerUrl);
+  const remoteServer = createServer((request, response) => {
+    response.setHeader("content-type", "text/html; charset=utf-8");
+    response.setHeader("cache-control", "no-store");
+    response.setHeader("Origin-Agent-Cluster", "?0");
+    try {
+      assert.equal(
+        new URL(request.url ?? "", origin).pathname,
+        "/remote-frame-child",
+      );
+      response.end(
+        remoteFrameContractPage(
+          "child",
+          remoteFrameFixtureFromUrl(request.url!),
+        ),
+      );
+    } catch {
+      response.statusCode = 400;
+      response.end("Invalid disposable fixture request");
+    }
+  });
   const inputs: ContractInput[] = [];
   const reports: Record<string, unknown>[] = [];
+  let remoteWitness: Record<string, unknown> | undefined;
+  const protocolRouteDiagnostics: Record<string, unknown>[] = [];
+  const interruptedRouteFailures: Record<string, unknown>[] = [];
   // A passive, scoped tap on actual outgoing ws messages. No mock transport,
   // rewritten events, retries, tracker access or synthetic trusted-event shims.
-  // Only the provider's browser socket/session-scoped Input is counted.
+  // Only provider Input is counted. The independent placement/diagnostic
+  // socket is excluded even when its explicit child-session probe sends Input.
   const originalSend = WebSocket.prototype.send;
+  const providerSockets = new Map<
+    WebSocket,
+    {
+      id: number;
+      sessions: Map<string, NonNullable<ContractInput["route"]>>;
+      pendingTrees: Map<number, string>;
+      listener(raw: unknown): void;
+    }
+  >();
+  let providerRootSession: { sessionId: string; socketId: number } | undefined;
+  let providerPlacement: FramePlacementEvidence | undefined;
   WebSocket.prototype.send = function (this: WebSocket, ...args: unknown[]) {
     if (
       this.url === version.webSocketDebuggerUrl &&
+      this !== placementRpc.socket &&
       typeof args[0] === "string"
     ) {
+      let observed = providerSockets.get(this);
+      if (!observed) {
+        const sessions = new Map<string, NonNullable<ContractInput["route"]>>();
+        const pendingTrees = new Map<number, string>();
+        const listener = (raw: unknown) => {
+          const event = JSON.parse(String(raw)) as {
+            id?: number;
+            method?: string;
+            sessionId?: string;
+            params?: {
+              sessionId?: string;
+              targetInfo?: { targetId: string; type: string };
+            };
+            result?: {
+              frameTree?: { frame?: { id: string; parentId?: string } };
+            };
+          };
+          if (
+            event.method === "Target.attachedToTarget" &&
+            event.params?.sessionId &&
+            event.params.targetInfo?.type === "iframe"
+          ) {
+            sessions.set(event.params.sessionId, {
+              targetId: event.params.targetInfo.targetId,
+              parentSessionId: event.sessionId,
+            });
+          } else if (
+            event.method === "Target.detachedFromTarget" &&
+            event.params?.sessionId
+          ) {
+            sessions.delete(event.params.sessionId);
+          } else if (event.id !== undefined && pendingTrees.has(event.id)) {
+            const session = pendingTrees.get(event.id)!;
+            pendingTrees.delete(event.id);
+            const frame = event.result?.frameTree?.frame;
+            if (frame && event.sessionId === session)
+              sessions.set(session, {
+                ...sessions.get(session),
+                frameId: frame.id,
+                parentFrameId: frame.parentId,
+              });
+          }
+        };
+        observed = {
+          id: providerSockets.size + 1,
+          sessions,
+          pendingTrees,
+          listener,
+        };
+        providerSockets.set(this, observed);
+        this.on("message", listener);
+      }
       const message = JSON.parse(args[0]) as {
+        id?: number;
         method?: string;
         sessionId?: string;
-        params?: { type?: string };
+        params?: { type?: string; x?: number; y?: number };
       };
+      if (
+        message.method === "Page.getFrameTree" &&
+        message.id !== undefined &&
+        message.sessionId
+      )
+        observed.pendingTrees.set(message.id, message.sessionId);
       if (message.method?.startsWith("Input.")) {
         assert.ok(
           message.sessionId,
           "Provider Input must bind an exact CDP session",
         );
+        const route = observed.sessions.get(message.sessionId);
         inputs.push({
           method: message.method,
           type: message.params?.type ?? "",
           sessionId: message.sessionId,
+          socketId: observed.id,
+          route: {
+            ...route,
+            parentTargetId: route?.parentSessionId
+              ? observed.sessions.get(route.parentSessionId)?.targetId
+              : undefined,
+            grandparentSessionId: route?.parentSessionId
+              ? observed.sessions.get(route.parentSessionId)?.parentSessionId
+              : undefined,
+          },
+          ...(message.params?.x !== undefined
+            ? { x: message.params.x, y: message.params.y }
+            : {}),
         });
       }
     }
@@ -427,14 +1817,29 @@ export async function runTargetedInputContractSmoke(options: {
   };
   const state = async () =>
     await rpc.evaluate<ContractState>("window.contract.state()");
+  let withheldCaptures = 0;
   const inspect = async () => {
-    const observation = await backend.inspect(sessionId, tabId);
-    assert.equal(observation.screenshot.status, "captured");
-    assert.ok(
-      observation.inputViewport,
-      "Contract requires a real coherent screenshot",
-    );
-    return observation;
+    const inputIndex = inputs.length;
+    // A frame's first layout may invalidate a captured image. Wait only through
+    // fresh read-only inspections; never replay input or loosen provider fences.
+    return await poll(async () => {
+      const observation = await backend.inspect(sessionId, tabId);
+      assert.equal(observation.screenshot.status, "captured");
+      assert.equal(
+        inputs.length,
+        inputIndex,
+        "Inspection must not dispatch input",
+      );
+      await guard();
+      if (!observation.inputViewport) {
+        withheldCaptures++;
+        options.onPhase?.(
+          `input-contracts:withheld-capture:${withheldCaptures}`,
+        );
+        return undefined;
+      }
+      return observation;
+    }, "contract coherent screenshot (read-only capture settlement)");
   };
   const focus = async (id: string) =>
     await rpc.evaluate<{ outer: string; inner: string }>(
@@ -444,12 +1849,22 @@ export async function runTargetedInputContractSmoke(options: {
     await rpc.evaluate<{ x: number; y: number }>(
       `window.contract.point(${JSON.stringify(id)})`,
     );
-  const paired = async (kind: "click" | "key", id: string) => {
+  const paired = async (
+    kind: "click" | "key",
+    id: string,
+    key: "Space" | "Enter" = "Space",
+  ) => {
     if (kind === "key") assert.equal((await focus(id)).inner, id);
     const position = kind === "click" ? await point(id) : undefined;
     const observation = await inspect();
     if (kind === "key") assert.equal(observation.focusedInputAvailable, true);
     const before = await state();
+    if (position && isRemoteFrameMode(before.mode))
+      assertRemoteFixturePoint(
+        position as RemoteFixturePoint,
+        id,
+        before.mode.startsWith("nested-") ? 2 : 1,
+      );
     const inputIndex = inputs.length;
     if (position)
       await backend.pointerClick!(
@@ -460,12 +1875,7 @@ export async function runTargetedInputContractSmoke(options: {
         position.y,
       );
     else
-      await backend.keyPress!(
-        sessionId,
-        tabId,
-        observation.observationId,
-        "Space",
-      );
+      await backend.keyPress!(sessionId, tabId, observation.observationId, key);
     const dispatched = inputs.slice(inputIndex);
     assert.equal(
       dispatched.length,
@@ -491,7 +1901,38 @@ export async function runTargetedInputContractSmoke(options: {
         ? ["mousePressed", "mouseReleased"]
         : ["keyDown", "keyUp"],
     );
-    const after = await state();
+    if (isRemoteFrameMode(before.mode)) {
+      assert.ok(providerRootSession && providerPlacement);
+      assertRemoteProviderRoute({
+        kind,
+        inputs: dispatched,
+        root: providerRootSession,
+        placement: providerPlacement,
+        point: position as RemoteFixturePoint | undefined,
+      });
+    } else {
+      assert.ok(dispatched[0]!.socketId);
+      const currentRoot = {
+        sessionId: dispatched[0]!.sessionId,
+        socketId: dispatched[0]!.socketId!,
+      };
+      if (providerRootSession)
+        assert.deepEqual(currentRoot, providerRootSession);
+      else providerRootSession = currentRoot;
+    }
+    const after = isRemoteFrameMode(before.mode)
+      ? (
+          await settleRemoteFixturePair(
+            async () => {
+              await guard();
+              return await state();
+            },
+            before,
+            kind,
+            id,
+          )
+        ).state
+      : await state();
     const observedEvents = after.events.slice(before.events.length);
     assert.deepEqual(
       observedEvents.map((event) => event.type),
@@ -503,7 +1944,8 @@ export async function runTargetedInputContractSmoke(options: {
     );
     if (kind === "click")
       assert.equal(after.clicks, before.clicks + Number(id === "canvas"));
-    else assert.equal(after.values[id], before.values[id] + " ");
+    else if (key === "Space" && id in before.values)
+      assert.equal(after.values[id], before.values[id] + " ");
     if (kind === "click" && ["button-span", "widget"].includes(id))
       assert.equal(after.widgets[id], (before.widgets[id] ?? 0) + 1);
     await guard();
@@ -512,7 +1954,7 @@ export async function runTargetedInputContractSmoke(options: {
   const rejected = async (
     label: string,
     action: () => Promise<unknown>,
-    expected: RegExp | "native-surface" | "shadow-surface",
+    expected: RegExp | "shadow-surface",
   ) => {
     const inputIndex = inputs.length;
     const before = await state();
@@ -540,25 +1982,56 @@ export async function runTargetedInputContractSmoke(options: {
     return { case: label, inputDispatches: 0, reason };
   };
   try {
+    await new Promise<void>((resolve, reject) => {
+      remoteServer.once("error", reject);
+      remoteServer.listen(0, "127.0.0.1", resolve);
+    });
+    const remoteAddress = remoteServer.address();
+    assert.ok(remoteAddress && typeof remoteAddress !== "string");
     for (const mode of [
       "stop-propagation",
       "stop-immediate",
       "shadow",
       "light-native",
+      "same-origin-frame",
+      "affine-frame",
+      "same-origin-closed-shadow",
       "closed-shadow",
       "deep-shadow",
       "ordinary-dom",
+      ...remoteFrameModes,
     ]) {
+      remoteWitness = undefined;
+      const withheldBefore = withheldCaptures;
       options.onPhase?.(`input-contracts:${mode}:navigate`);
       await guard();
-      await backend.navigate(
-        sessionId,
-        tabId,
-        `${origin}/input-contract?mode=${mode}`,
-      );
+      const remoteMode = isRemoteFrameMode(mode);
+      const contractUrl = new URL("/input-contract", origin);
+      contractUrl.searchParams.set("mode", mode);
+      if (remoteMode) {
+        contractUrl.searchParams.set("parentOrigin", origin);
+        contractUrl.searchParams.set(
+          "childOrigin",
+          `http://${mode === "cross-origin-same-process" ? "127.0.0.1" : "localhost"}:${remoteAddress.port}`,
+        );
+        contractUrl.searchParams.set("nonce", randomUUID());
+        if (mode.startsWith("nested-"))
+          contractUrl.searchParams.set("outerAffine", "true");
+        if (mode === "nested-oopif")
+          contractUrl.searchParams.set(
+            "leafOrigin",
+            `http://nested.localhost:${remoteAddress.port}`,
+          );
+        if (mode === "nested-same-process")
+          contractUrl.searchParams.set(
+            "leafOrigin",
+            origin.replace("127.0.0.1", "localhost"),
+          );
+      }
+      await backend.navigate(sessionId, tabId, contractUrl.href);
       await poll(async () => {
         const ready = await rpc.evaluate<boolean>(
-          `window.contract?.mode === ${JSON.stringify(mode)}`,
+          `window.contract?.mode === ${JSON.stringify(mode)} && ${remoteMode ? "window.contract.ready === true" : "true"}`,
         );
         assert.equal(
           typeof ready,
@@ -574,7 +2047,343 @@ export async function runTargetedInputContractSmoke(options: {
         "Contract page must stay inactive",
       );
       const cases: Record<string, unknown>[] = [];
-      if (mode === "stop-propagation" || mode === "stop-immediate") {
+      if (mode === "closed-shadow" || mode === "same-origin-closed-shadow") {
+        // Establish trusted closed-root observation before an authorizing capture.
+        // This is an explicit read, never replay of a refused input operation.
+        const discovery = await backend.inspect(sessionId, tabId);
+        cases.push({
+          case: "closed-root-observer-discovery",
+          screenshot: discovery.screenshot.status,
+        });
+      }
+      if (remoteMode) {
+        if (mode === "cross-origin-oopif") {
+          options.onPhase?.(
+            "input-contracts:independent-remote-route-diagnostics",
+          );
+          await runRemoteFrameRouteDiagnostics({
+            backend,
+            sessionId,
+            endpoint,
+            url: contractUrl.href,
+            browserRpc: placementRpc,
+            guard,
+            report: (receipt) => protocolRouteDiagnostics.push(receipt),
+          });
+          options.onPhase?.(`input-contracts:${mode}:actions`);
+          cases.push({
+            case: "independent-protocol-route-diagnostics",
+            receipts: protocolRouteDiagnostics,
+          });
+        }
+        const placement = await observeRemoteFramePlacement(
+          rpc,
+          placementRpc,
+          mode,
+          contractUrl.href,
+        );
+        providerPlacement = placement;
+        cases.push({ case: "observed-frame-process-placement", ...placement });
+        // Root mouse delivery to OOPIFs is measured only on the independent
+        // disposable diagnostics. Its known platform limitation must not gate a
+        // separately preselected provider child route. Provider success below
+        // still requires the exact real trusted pair and effect in every mode.
+        const directKinds: ("click" | "key")[] =
+          mode === "cross-origin-same-process" ? ["click", "key"] : ["key"];
+        for (const kind of directKinds) {
+          const id = kind === "click" ? "canvas" : "text-a";
+          if (kind === "key") assert.equal((await focus(id)).inner, id);
+          const before = await state();
+          remoteWitness = {
+            mode,
+            layer: "direct-root-cdp-fixture-oracle",
+            kind,
+            id,
+            placement,
+            before,
+            dispatchAttempts: 0,
+            acknowledgedDispatches: 0,
+            settlementReads: 0,
+          };
+          const screenshot = await rpc.send("Page.captureScreenshot", {
+            format: "png",
+            fromSurface: true,
+            captureBeyondViewport: false,
+          });
+          assert.ok(
+            typeof screenshot.data === "string" && screenshot.data.length > 0,
+            "Direct fixture needs a real read-only compositor capture before input",
+          );
+          remoteWitness.compositorCaptured = true;
+          await guard();
+          if (kind === "click") {
+            const position = await rpc.evaluate<RemoteFixturePoint>(
+              `window.contract.point(${JSON.stringify(id)})`,
+            );
+            remoteWitness.position = position;
+            console.log(
+              "Remote frame fixture point",
+              JSON.stringify({ mode, position }),
+            );
+            assertRemoteFixturePoint(
+              position,
+              id,
+              mode.startsWith("nested-") ? 2 : 1,
+            );
+            assert.equal(position.documentId, before.documentId);
+            for (const type of ["mousePressed", "mouseReleased"]) {
+              remoteWitness.dispatchAttempts =
+                Number(remoteWitness.dispatchAttempts) + 1;
+              await rpc.send("Input.dispatchMouseEvent", {
+                type,
+                x: position.x,
+                y: position.y,
+                button: "left",
+                buttons: type === "mousePressed" ? 1 : 0,
+                clickCount: 1,
+              });
+              remoteWitness.acknowledgedDispatches =
+                Number(remoteWitness.acknowledgedDispatches) + 1;
+            }
+          } else {
+            for (const type of ["keyDown", "keyUp"]) {
+              remoteWitness.dispatchAttempts =
+                Number(remoteWitness.dispatchAttempts) + 1;
+              await rpc.send("Input.dispatchKeyEvent", {
+                type,
+                key: " ",
+                code: "Space",
+                windowsVirtualKeyCode: 32,
+                ...(type === "keyDown" ? { text: " " } : {}),
+              });
+              remoteWitness.acknowledgedDispatches =
+                Number(remoteWitness.acknowledgedDispatches) + 1;
+            }
+          }
+          const witness = remoteWitness;
+          const settled = await settleRemoteFixturePair(
+            async () => {
+              await guard();
+              const current = await state();
+              witness.after = current;
+              witness.settlementReads = Number(witness.settlementReads) + 1;
+              return current;
+            },
+            before,
+            kind,
+            id,
+          );
+          const after = settled.state;
+          assert.deepEqual(
+            after.events.slice(before.events.length).map((event) => ({
+              type: event.type,
+              trusted: event.trusted,
+              target: event.target,
+            })),
+            (kind === "click"
+              ? ["pointerdown", "pointerup"]
+              : ["keydown", "keyup"]
+            ).map((type) => ({ type, trusted: true, target: id })),
+          );
+          if (kind === "click") assert.equal(after.clicks, before.clicks + 1);
+          else assert.equal(after.values[id], before.values[id] + " ");
+          assert.equal(after.visibility, "hidden");
+          await guard();
+          remoteWitness.status = "passed";
+          cases.push({
+            case: `child-${kind}-witness`,
+            layer: "direct-root-cdp-fixture-oracle",
+            trustedPair: true,
+            effect: true,
+            settlementReads: settled.reads,
+          });
+        }
+        if (options.remoteFrameInput === "supported") {
+          cases.push({
+            case: "provider-remote-canvas",
+            pair: await paired("click", "canvas"),
+          });
+          cases.push({
+            case: "provider-remote-text",
+            pair: await paired("key", "text-a"),
+          });
+        } else {
+          const position = await point("canvas");
+          const observed = await inspect();
+          cases.push(
+            await rejected(
+              "provider-remote-pointer-not-yet-supported",
+              () =>
+                backend.pointerClick!(
+                  sessionId,
+                  tabId,
+                  observed.observationId,
+                  position.x,
+                  position.y,
+                ),
+              /surface|frame|embedded|unsupported/iu,
+            ),
+          );
+          cases.push(
+            await rejected(
+              "provider-remote-key-not-yet-supported",
+              () =>
+                backend.keyPress!(
+                  sessionId,
+                  tabId,
+                  observed.observationId,
+                  "Space",
+                ),
+              /surface|frame|embedded|unsupported|focused/iu,
+            ),
+          );
+        }
+        if (
+          options.remoteFrameInput === "supported" &&
+          mode.startsWith("nested-")
+        ) {
+          const oldGeometry = await inspect();
+          const geometry = await rpc.evaluate<{
+            before: { x: number; y: number; width: number; height: number };
+            after: { x: number; y: number; width: number; height: number };
+          }>("window.contract.flipTransform()");
+          for (const key of ["x", "y", "width", "height"] as const)
+            assert.ok(
+              Math.abs(geometry.before[key] - geometry.after[key]) < 0.01,
+              "Opposite fixture matrices retain the same AABB",
+            );
+          const nextPoint = await point("canvas");
+          cases.push(
+            await rejected(
+              "remote-affine-quad-changed-before-pointer",
+              () =>
+                backend.pointerClick!(
+                  sessionId,
+                  tabId,
+                  oldGeometry.observationId,
+                  nextPoint.x,
+                  nextPoint.y,
+                ),
+              /changed|stale|inspect again/iu,
+            ),
+          );
+          cases.push({
+            case: "fresh-remote-affine-quad-pointer",
+            pair: await paired("click", "canvas"),
+          });
+        }
+        const focusA = await focus("text-a");
+        const focused = await inspect();
+        const focusB = await focus("text-b");
+        assert.equal(focusA.outer, focusB.outer);
+        assert.equal(focusA.inner, "text-a");
+        assert.equal(focusB.inner, "text-b");
+        const staleReason =
+          options.remoteFrameInput === "supported"
+            ? /changed|stale|inspect again/iu
+            : /surface|frame|embedded|unsupported|focused|changed|stale|inspect again/iu;
+        cases.push(
+          await rejected(
+            "remote-inner-focus-replaced-before-key",
+            () =>
+              backend.keyPress!(
+                sessionId,
+                tabId,
+                focused.observationId,
+                "Space",
+              ),
+            staleReason,
+          ),
+        );
+        const mutated = await inspect();
+        await rpc.evaluate("window.contract.mutate()");
+        const position = await point("canvas");
+        cases.push(
+          await rejected(
+            "remote-document-mutation-before-pointer",
+            () =>
+              backend.pointerClick!(
+                sessionId,
+                tabId,
+                mutated.observationId,
+                position.x,
+                position.y,
+              ),
+            staleReason,
+          ),
+        );
+        const oldDocument = await rpc.evaluate<string>(
+          "window.contract.state().then(state => state.documentId)",
+        );
+        const captured = await inspect();
+        await rpc.evaluate("window.contract.reopenFrame()");
+        await poll(
+          async () =>
+            (await rpc.evaluate<boolean>("window.contract.ready"))
+              ? true
+              : undefined,
+          "replacement remote child document",
+        );
+        assert.notEqual(
+          await rpc.evaluate<string>(
+            "window.contract.state().then(state => state.documentId)",
+          ),
+          oldDocument,
+        );
+        cases.push(
+          await rejected(
+            "remote-child-navigation-before-pointer",
+            () =>
+              backend.pointerClick!(
+                sessionId,
+                tabId,
+                captured.observationId,
+                position.x,
+                position.y,
+              ),
+            staleReason,
+          ),
+        );
+        providerPlacement = await observeRemoteFramePlacement(
+          rpc,
+          placementRpc,
+          mode,
+          contractUrl.href,
+          1,
+        );
+        cases.push({
+          case: "replacement-child-placement",
+          ...providerPlacement,
+        });
+        if (options.remoteFrameInput === "supported")
+          cases.push({
+            case: "fresh-replacement-remote-text",
+            pair: await paired("key", "text-a"),
+          });
+        if (
+          options.remoteFrameInput === "supported" &&
+          mode === "nested-oopif"
+        ) {
+          // The shared target remains usable; held-input quarantine belongs only
+          // to the new physical tab and that exact tab is closed in finally.
+          cases.push(
+            await runInterruptedRemoteFrameSmoke({
+              backend,
+              sessionId,
+              endpoint,
+              url: contractUrl.href,
+              browserRpc: placementRpc,
+              inputs,
+              guard,
+              onFailure: (receipt) => interruptedRouteFailures.push(receipt),
+            }),
+          );
+          cases.push({
+            case: "shared-target-still-usable-after-isolated-quarantine",
+            pair: await paired("key", "text-a"),
+          });
+        }
+      } else if (mode === "stop-propagation" || mode === "stop-immediate") {
         // Repeat actions on the SAME attachment to prove no held-input quarantine.
         for (let iteration = 0; iteration < 2; iteration++) {
           cases.push({
@@ -586,7 +2395,14 @@ export async function runTargetedInputContractSmoke(options: {
             pair: await paired("key", "text-a"),
           });
         }
-      } else if (mode === "shadow" || mode === "light-native") {
+      } else if (
+        mode === "shadow" ||
+        mode === "light-native" ||
+        mode === "same-origin-frame" ||
+        mode === "affine-frame" ||
+        mode === "closed-shadow" ||
+        mode === "same-origin-closed-shadow"
+      ) {
         cases.push({
           case: "ordinary-canvas",
           pair: await paired("click", "canvas"),
@@ -599,78 +2415,51 @@ export async function runTargetedInputContractSmoke(options: {
           case: "ordinary-text",
           pair: await paired("key", "text-a"),
         });
-        if (mode === "shadow") {
+        if (
+          mode === "shadow" ||
+          mode === "same-origin-frame" ||
+          mode === "affine-frame" ||
+          mode === "closed-shadow" ||
+          mode === "same-origin-closed-shadow"
+        ) {
           const a = await focus("text-a");
           const old = await inspect();
           const b = await focus("text-b");
           assert.equal(
             a.outer,
             b.outer,
-            "Focus regression needs the SAME outer shadow host",
+            "Focus regression needs the SAME outer host",
           );
           assert.equal(a.inner, "text-a");
           assert.equal(b.inner, "text-b");
           cases.push(
             await rejected(
-              "shadow-focus-A-to-B-stale",
+              `${mode}-focus-A-to-B-stale`,
               () =>
                 backend.keyPress!(sessionId, tabId, old.observationId, "Space"),
               /changed|stale|inspect again/iu,
             ),
           );
           cases.push({
-            case: "fresh-shadow-focus-B",
+            case: `fresh-${mode}-focus-B`,
             pair: await paired("key", "text-b"),
           });
         }
         for (const type of ["file", "color", "date", "select"]) {
           for (const id of [`native-${type}`, `label-${type}`]) {
-            const position = await point(id);
-            let observation = await inspect();
-            cases.push(
-              await rejected(
-                `${id}-pointer`,
-                () =>
-                  backend.pointerClick!(
-                    sessionId,
-                    tabId,
-                    observation.observationId,
-                    position.x,
-                    position.y,
-                  ),
-                "native-surface",
-              ),
-            );
-            assert.equal(
-              (await focus(id)).inner,
-              id,
-              "Native/label key test must focus that exact fixture node",
-            );
-            for (const key of ["Enter", "Space"] as const) {
-              observation = await inspect();
-              assert.equal(
-                observation.focusedInputAvailable,
-                false,
-                "Native/label focus must not advertise keyboard support",
-              );
-              cases.push(
-                await rejected(
-                  `${id}-${key}`,
-                  () =>
-                    backend.keyPress!(
-                      sessionId,
-                      tabId,
-                      observation.observationId,
-                      key,
-                    ),
-                  "native-surface",
-                ),
-              );
-            }
+            cases.push({
+              case: `${id}-pointer`,
+              pair: await paired("click", id),
+            });
+            for (const key of ["Enter", "Space"] as const)
+              cases.push({
+                case: `${id}-${key}`,
+                pair: await paired("key", id, key),
+              });
           }
         }
         cases.push({
-          case: "ordinary-after-rejection",
+          case: "ordinary-after-native-controls",
           pair: await paired("key", "text-a"),
         });
       } else if (mode === "ordinary-dom") {
@@ -721,54 +2510,160 @@ export async function runTargetedInputContractSmoke(options: {
           ),
         );
       }
-      if (mode === "closed-shadow") {
-        for (const type of ["file", "color", "date", "select"]) {
-          const id = `native-${type}`;
-          const position = await point(id);
-          await focus(id);
-          const observed = await inspect();
-          assert.equal(observed.focusedInputAvailable, false);
-          cases.push(
-            await rejected(
-              `${id}-closed-pointer`,
-              () =>
-                backend.pointerClick!(
-                  sessionId,
-                  tabId,
-                  observed.observationId,
-                  position.x,
-                  position.y,
-                ),
-              "shadow-surface",
-            ),
+      if (mode === "affine-frame") {
+        const position = await point("canvas");
+        const captured = await inspect();
+        const changed = await rpc.evaluate<{
+          before: { x: number; y: number; width: number; height: number };
+          after: { x: number; y: number; width: number; height: number };
+        }>("window.contract.flipTransform()");
+        for (const key of ["x", "y", "width", "height"] as const)
+          assert.ok(
+            Math.abs(changed.before[key] - changed.after[key]) < 0.01,
+            "Opposite rotation must preserve the iframe bounding box",
           );
-          cases.push(
-            await rejected(
-              `${id}-closed-Space`,
-              () =>
-                backend.keyPress!(
-                  sessionId,
-                  tabId,
-                  observed.observationId,
-                  "Space",
-                ),
-              "shadow-surface",
-            ),
-          );
-        }
+        cases.push(
+          await rejected(
+            "same-bounds-changed-affine-quad-stales-capture",
+            () =>
+              backend.pointerClick!(
+                sessionId,
+                tabId,
+                captured.observationId,
+                position.x,
+                position.y,
+              ),
+            /changed|stale|inspect again/iu,
+          ),
+        );
+        cases.push({
+          case: "fresh-opposite-affine-quad",
+          pair: await paired("key", "text-a"),
+        });
+        cases.push({
+          case: "fresh-opposite-affine-canvas",
+          pair: await paired("click", "canvas"),
+        });
+      }
+      if (mode === "same-origin-frame" || mode === "affine-frame") {
+        assert.equal(
+          await rpc.evaluate(
+            "document.querySelector('#contract-frame').contentWindow.mainWorldProbeCalls",
+          ),
+          0,
+          "Input observation must not invoke poisoned child main-world APIs",
+        );
+        const position = await point("text-a");
+        const observed = await inspect();
+        await rpc.evaluate(
+          "document.querySelector('#contract-frame').contentDocument.querySelector('#text-a').style.marginLeft = '8px'",
+        );
+        cases.push(
+          await rejected(
+            "child-document-mutation-stales-capture",
+            () =>
+              backend.pointerClick!(
+                sessionId,
+                tabId,
+                observed.observationId,
+                position.x,
+                position.y,
+              ),
+            /changed|stale|inspect again/iu,
+          ),
+        );
+        cases.push({
+          case: "fresh-child-after-mutation",
+          pair: await paired("click", "canvas"),
+        });
+        await rpc.evaluate("window.contract.reopenFrame()");
+        cases.push({
+          case: "fresh-child-after-document-open",
+          pair: await paired("key", "text-a"),
+        });
+        const beforeScroll = await inspect();
+        options.onPhase?.("input-contracts:same-origin-frame:reopened-scroll");
+        // This page is deliberately hidden: animation frames may be suspended.
+        // Read actual scroll geometry synchronously; the provider's next probe
+        // must reject the old capture without a timer or synthetic event.
+        const reopenedScroll = await rpc.evaluate<number>(
+          "(() => { const child = document.querySelector('#contract-frame').contentWindow; child.scrollTo(0, 20); return child.scrollY; })()",
+        );
+        assert.equal(reopenedScroll, 20);
+        cases.push(
+          await rejected(
+            "reopened-child-scroll-stales-capture",
+            () =>
+              backend.keyPress!(
+                sessionId,
+                tabId,
+                beforeScroll.observationId,
+                "Space",
+              ),
+            /changed|stale|inspect again/iu,
+          ),
+        );
       }
       await guard();
       reports.push({
         scenario: mode,
+        withheldCaptures: withheldCaptures - withheldBefore,
         layer: "headed-real-cdp-contract",
+        nativeExtensionRouting: "not-exercised",
+        ...(remoteMode
+          ? {
+              frameDepth: mode.startsWith("nested-") ? 2 : 1,
+              ownerChain: "cdp-observed",
+              recursiveProviderInput:
+                mode.startsWith("nested-") &&
+                options.remoteFrameInput === "supported"
+                  ? "trusted-inner-effect"
+                  : "not-exercised",
+              providerInput:
+                options.remoteFrameInput === "supported"
+                  ? "supported"
+                  : "unsupported-zero-dispatch",
+            }
+          : {}),
         status: "passed",
         cases,
       });
     }
     return reports;
+  } catch (error) {
+    const diagnostic = {
+      scenario: "targeted-input-contracts",
+      completedReports: reports,
+      lastDirectRemoteWitness: remoteWitness,
+      protocolRouteDiagnostics,
+      interruptedRouteFailures,
+      error: error instanceof Error ? error.message : String(error),
+    };
+    // Preserve the current authored point, owner/inner hits and final read in
+    // both native entrypoint failure receipts, without replaying any action.
+    try {
+      options.onFailure?.(diagnostic);
+      console.error(
+        "Targeted input contract failure",
+        JSON.stringify(diagnostic),
+      );
+    } catch {
+      // Diagnostics never replace the original fixture assertion.
+    }
+    throw error;
   } finally {
     WebSocket.prototype.send = originalSend;
+    for (const [socket, observed] of providerSockets)
+      socket.off("message", observed.listener);
     rpc.close();
+    placementRpc.close();
+    if (remoteServer.listening) {
+      const closed = new Promise<void>((resolve) =>
+        remoteServer.close(() => resolve()),
+      );
+      remoteServer.closeAllConnections();
+      await closed;
+    }
   }
 }
 
@@ -791,10 +2686,12 @@ function traceOwnedCdpTransport(
     "Page.createIsolatedWorld",
     "Page.captureScreenshot",
     "Page.frameNavigated",
+    "Page.documentOpened",
     "Page.navigatedWithinDocument",
     "Page.frameStoppedLoading",
     "Runtime.enable",
     "Runtime.evaluate",
+    "Runtime.callFunctionOn",
     "Runtime.releaseObject",
     "Runtime.executionContextCreated",
     "Runtime.executionContextDestroyed",
@@ -934,6 +2831,7 @@ async function main(): Promise<void> {
   let browser: ChildProcess | undefined;
   let browserError = "";
   let phase = "startup";
+  let remoteFrameFailure: Record<string, unknown> | undefined;
   const transportDiagnostics: unknown[] = [];
   let transportDropped = 0;
   let stopTransport: (() => void) | undefined;
@@ -951,7 +2849,11 @@ async function main(): Promise<void> {
     }
     response.setHeader("content-type", "text/html; charset=utf-8");
     response.setHeader("cache-control", "no-store");
-    if (request.url?.startsWith("/input-contract")) {
+    response.setHeader("Origin-Agent-Cluster", "?0");
+    if (
+      request.url?.startsWith("/input-contract") ||
+      request.url?.startsWith("/remote-frame-child")
+    ) {
       response.end(targetedInputContractPage(request.url));
       return;
     }
@@ -979,6 +2881,8 @@ async function main(): Promise<void> {
       [
         `--user-data-dir=${profile}`,
         "--remote-debugging-port=0",
+        "--site-per-process",
+        "--host-resolver-rules=MAP localhost 127.0.0.1, MAP nested.localhost 127.0.0.1",
         // Renderer AX metadata is required by this owned Mac fixture's strict
         // native focused-element/value preflight. This grants no OS permission.
         ...(process.platform === "darwin"
@@ -1576,6 +3480,10 @@ async function main(): Promise<void> {
         tabId: opened.tabId,
         endpoint,
         origin,
+        remoteFrameInput: "supported",
+        onFailure: (diagnostic) => {
+          remoteFrameFailure = diagnostic;
+        },
         onPhase: (value) => {
           phase = value;
         },
@@ -1651,6 +3559,7 @@ async function main(): Promise<void> {
         phase,
         transportDiagnostics,
         transportDropped,
+        remoteFrameFailure,
         ownedBrowser: {
           pid: browser?.pid,
           exitCode: browser?.exitCode,

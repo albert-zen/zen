@@ -23,6 +23,12 @@ test("Computer object discovery describes exact references and explicit app-curr
     kind: "appCurrentFocus",
     argument: "binding",
   });
+  assert.deepEqual(descriptor("computer_background_shortcut"), {
+    kind: "computer",
+    provider,
+    path: ["shortcut"],
+    reference: { kind: "appCurrentFocus", argument: "binding" },
+  });
   assert.deepEqual(descriptor("computer_background_click")?.reference, {
     kind: "capture",
     argument: "capture",

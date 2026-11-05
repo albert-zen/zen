@@ -123,3 +123,43 @@ test("mounted source lookup keeps exact thread identity and accepts canonical mu
   );
   dom.window.close();
 });
+
+test("excerpt range spans formatting only within the exact source and never changes content", async () => {
+  const { quoteExcerptRange, focusMessageQuoteSource } =
+    await import("../src/renderer/src/quote-source-navigation.js");
+  const dom = new JSDOM(
+    '<div class="messages"><div data-quote-thread-id="other" data-quote-item-id="same">精确原句。</div><div tabindex="-1" data-quote-thread-id="right" data-quote-item-id="same">之前。<strong>精确</strong><em>原句。</em>之后。<button>不可匹配</button></div></div>',
+  );
+  const document = dom.window.document;
+  const source = findMessageQuoteSource(document.body, {
+    threadId: "right",
+    id: "same",
+  })!;
+  assert.ok(source);
+  assert.equal(
+    quoteExcerptRange(source, "精确原句。")?.toString(),
+    "精确原句。",
+  );
+  assert.equal(
+    quoteExcerptRange(source, "精确 \n原句。")?.toString(),
+    "精确原句。",
+  );
+  assert.equal(quoteExcerptRange(source, "不可匹配"), null);
+  assert.equal(quoteExcerptRange(source, "missing"), null);
+  const before = source.innerHTML;
+  let centers = 0;
+  source.scrollIntoView = () => {
+    centers++;
+  };
+  focusMessageQuoteSource(source, "精确原句。");
+  assert.equal(source.dataset.quoteHighlight, "true");
+  assert.equal(document.activeElement, source);
+  focusMessageQuoteSource(source, "精确原句。");
+  assert.equal(centers, 2);
+  assert.equal(source.innerHTML, before);
+  document.dispatchEvent(
+    new dom.window.KeyboardEvent("keydown", { key: "Escape" }),
+  );
+  assert.equal(source.dataset.quoteHighlight, undefined);
+  dom.window.close();
+});

@@ -612,7 +612,7 @@ During a live foreground Computer operation, the Host registers global Escape on
 
 The actual HTML renderer is also used by `test/fixtures/foreground-activity-visual.html`. Reduced motion removes animations; forced colors retain readable status and borders. Browser preview verifies presentation only. Native focus, physical pointer pass-through, fullscreen behavior and monitor changes need their own OS evidence. This slice covers explicit foreground tools, not every possible side effect of a provider currently declared background-safe; provider-specific activation must be fixed at its real admission/dispatch boundary, not hidden by a late glow.
 
-The Computer access review reads the Host's current desktop-session projection as active, locked, suspended or unknown. Missing or uncertain observation stays unknown, never active. On macOS, the native provider may inspect and use actual targeted AX controls while locked; app support varies and native failures remain failures. Session changes invalidate prior observations. On macOS 14+, a provider declaring native window input may also capture a freshly verified exact window and attempt a separately authorized background left click while locked, without desktop foreground or pointer takeover; application-internal focus may change. The explanation follows the selected provider's access list and never implies that an installed plugin granted OS or action permission. Generic desktop-preview readiness remains unknown while locked; a particular native window is verified per request, not by that preview check. Foreground control requires local unlock, and other providers retain their own admission. Session changes stop live previews and fence late frames; unlock alone cannot revive a prior preview. System sleep requires local resume. Display power is not observable from these session events: display off is neither proof of lock nor proof of sleep. The operation-scoped app-suspension blocker prevents idle system sleep only during admitted Computer work; it does not keep the display lit or override manual sleep. The review is read-only and refreshes through existing readiness reads; it does not unlock, wake, grant permission or start a Turn. Synthetic previews certify only rendered states; native focus, Stop, window geometry, input release and application effects require separate macOS evidence.
+The Computer access review reads the Host's current desktop-session projection as active, locked, suspended or unknown. Missing or uncertain observation stays unknown, never active. On macOS, the native provider may inspect and use actual targeted AX controls while locked; app support varies and native failures remain failures. Session changes invalidate prior observations. On macOS 14+, a provider declaring native window input may also capture a freshly verified exact window and attempt a separately authorized background left, right or middle click (subject to the selected native helper’s explicit button support) while locked, without desktop foreground or pointer takeover; application-internal focus may change. The explanation follows the selected provider's access list and never implies that an installed plugin granted OS or action permission. Generic desktop-preview readiness remains unknown while locked; a particular native window is verified per request, not by that preview check. Foreground control requires local unlock, and other providers retain their own admission. Session changes stop live previews and fence late frames; unlock alone cannot revive a prior preview. System sleep requires local resume. Display power is not observable from these session events: display off is neither proof of lock nor proof of sleep. The operation-scoped app-suspension blocker prevents idle system sleep only during admitted Computer work; it does not keep the display lit or override manual sleep. The review is read-only and refreshes through existing readiness reads; it does not unlock, wake, grant permission or start a Turn. Synthetic previews certify only rendered states; native focus, Stop, window geometry, input release and application effects require separate macOS evidence.
 
 Peekaboo targeted press/value changes are not certified focus-isolated and therefore use the same explicit foreground permission and indicator admission as other foreground actions. No automatic background-to-foreground fallback is permitted. Native AX retains its separate targeted semantic contract; application-created dialogs/focus changes are not a guarantee of isolation. A successful tool dispatch and its optional visual pointer do not establish application effect. External-provider cancellation/timeout/output overflow shows stopping until actual child/pipe close, including failed kill requests; never shorten that lifecycle to make the indicator disappear.
 
@@ -1143,6 +1143,24 @@ advance only after all destinations accept. Old recalled client identities are
 terminal; a later explicit new answer receives a fresh identity. Restoration
 never sends, navigates, steals focus, enables shared Host publication or promises
 cross-window automatic insertion.
+
+### Quote bubble source navigation (2026-11-05)
+
+Message and selected-text reference bubbles reveal their complete stored excerpt
+on hover or keyboard focus. Activating the bubble navigates directly to its exact
+source; the same compact card retains its title, Close and Open source action.
+Do not display the explanatory transport sentence, source UUIDs or workspace path
+in excerpt cards. Excerpt cards also omit legacy display names such as “名称 ZenX”;
+only the exact excerpt and navigation controls are shown. Identity remains in the structured reference, never inferred
+from visible text. File and Thread pointer cards keep their existing details.
+
+Source navigation materializes the canonical virtual row and required disclosures,
+centers the matching rendered excerpt when scroll boundaries permit, and paints a
+brief static highlight without editing message text or browser selection. Repeated
+activation restarts the highlight; subsequent interaction clears it. Missing
+sources keep the excerpt readable with an explicit unavailable status. Cross-source
+excerpts retain access to every source, while direct activation opens the first.
+Navigation, dismissal and newer reference identities invalidate stale async reads.
 
 ### Answered-question transcript bubbles
 

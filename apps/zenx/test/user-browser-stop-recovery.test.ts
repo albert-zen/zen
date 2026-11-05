@@ -68,27 +68,26 @@ test("confirmed release retires a failed public session without replaying its un
     controller.abort();
     await assert.rejects(action, /outcome is unknown/u);
     const closing = invoke("browser_close_session");
-    const receipt = assert.rejects(closing, (error: unknown) => {
-      assert.ok(error instanceof Error);
-      assert.equal(error.name, "BrowserSessionReleasedWithUnknownEffectsError");
-      assert.match(error.message, /session was released/u);
-      assert.match(error.message, /earlier.*outcome is unknown/u);
-      assert.match(error.message, /do not repeat/u);
-      assert.doesNotMatch(error.message, /session close outcome is unknown/u);
-      return true;
+    let closeSettled = false;
+    const receipt = closing.then((result) => {
+      closeSettled = true;
+      return result;
     });
     await nextTurn();
     assert.equal(cdp.count("Target.detachFromTarget"), 0);
+    assert.equal(
+      closeSettled,
+      false,
+      "cleanup waits for the original action settlement",
+    );
     cdp.releaseLateActionReply();
-    await receipt;
+    assert.deepEqual(await receipt, { closed: true, sessionId: "task" });
     assert.equal(cdp.count("Target.detachFromTarget"), 1);
     assert.deepEqual(cdp.detachedSessionIds(), [oldAttachment]);
     const ended = events.findLast((event) => event.type === "turn-ended");
     assert.equal(ended?.type, "turn-ended");
     if (ended?.type === "turn-ended") {
-      assert.equal(ended.failed, true);
-      assert.match(ended.message ?? "", /session was released/u);
-      assert.match(ended.message ?? "", /earlier.*outcome is unknown/u);
+      assert.equal(ended.failed, false);
     }
     const cleared = events.findLast((event) => event.type === "targets");
     assert.equal(cleared?.type, "targets");
@@ -124,7 +123,6 @@ test("confirmed release retires a failed public session without replaying its un
     );
   } finally {
     stopCatalog();
-    // The original unknown-effect receipt remains recorded even after a fresh session.
     await capability.close().catch(() => undefined);
     await cdp.close();
   }
@@ -197,7 +195,10 @@ test("closing a session stops live reads before its unsettled action can release
     controller.abort();
     await assert.rejects(action, /outcome is unknown/u);
     const closing = Promise.resolve(connection.backend.closeSession("work"));
-    const receipt = assert.rejects(closing, /outcome is unknown/u);
+    let closeSettled = false;
+    const receipt = closing.then(() => {
+      closeSettled = true;
+    });
     assert.deepEqual(events.at(-1), {
       type: "status",
       status: "unavailable",
@@ -218,6 +219,11 @@ test("closing a session stops live reads before its unsettled action can release
       events.length,
       count,
       "no metadata or frame from the retiring session reaches the observer",
+    );
+    assert.equal(
+      closeSettled,
+      false,
+      "cleanup waits for the original action settlement",
     );
     cdp.releaseLateActionReply();
     await receipt;
@@ -258,7 +264,10 @@ test("finishing a session with a temporary page stops live reads before queued c
     controller.abort();
     await assert.rejects(action, /outcome is unknown/u);
     const closing = Promise.resolve(connection.backend.finishSession!("work"));
-    const receipt = assert.rejects(closing, /earlier.*outcome is unknown/u);
+    let closeSettled = false;
+    const receipt = closing.then(() => {
+      closeSettled = true;
+    });
     assert.deepEqual(events.at(-1), {
       type: "status",
       status: "unavailable",
@@ -267,6 +276,11 @@ test("finishing a session with a temporary page stops live reads before queued c
     });
     await waitUntil(() => cdp.count("Page.stopScreencast") === 1);
     assert.equal(cdp.count("Target.closeTarget"), 0);
+    assert.equal(
+      closeSettled,
+      false,
+      "cleanup waits for the original action settlement",
+    );
     cdp.releaseLateActionReply();
     await receipt;
     assert.equal(

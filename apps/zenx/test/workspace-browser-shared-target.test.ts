@@ -44,6 +44,25 @@ test("closing an expired workspace tab is idempotent but cannot close another Th
   }
 });
 
+test("workspace tabs have no arbitrary cross-thread twenty-tab admission cap", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    f.browser.bindThreadSession("b", "thread-b");
+    for (let index = 0; index < 21; index += 1) {
+      await f.browser.open("a", `https://example.test/${index}`);
+    }
+    const other = await f.browser.open("b", "https://example.test/other");
+    assert.equal((await f.browser.listTabs("a")).length, 21);
+    assert.equal((await f.browser.listTabs("b")).length, 1);
+    await f.browser.closeTab("b", other.tabId);
+    assert.equal((await f.browser.listTabs("b")).length, 0);
+    assert.equal((await f.browser.listTabs("a")).length, 21);
+  } finally {
+    await f.close();
+  }
+});
+
 test("Workspace Browser human view and Agent backend operate the exact same target", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-shared-browser-"),
@@ -1456,21 +1475,29 @@ test("Workspace takeover between targeted press and release blocks old release a
     const fresh = await f.browser.inspect("a", tab.tabId);
     assert.equal(fresh.agentActionOutcomeUnknown, true);
     assert.equal(fresh.inputViewport, undefined);
+    await f.browser.navigate(
+      "a",
+      tab.tabId,
+      "https://example.test/recovered",
+      undefined,
+      fresh.observationId,
+    );
+    const afterNavigation = await f.browser.inspect("a", tab.tabId);
     await assert.rejects(
-      f.browser.navigate(
+      f.browser.keyPress(
         "a",
         tab.tabId,
-        "https://example.test/no",
-        undefined,
-        fresh.observationId,
+        afterNavigation.observationId,
+        "Enter",
       ),
       /input is blocked/,
     );
-    await assert.rejects(
-      f.browser.keyPress("a", tab.tabId, fresh.observationId, "Enter"),
-      /input is blocked/,
+    await f.browser.closeTab(
+      "a",
+      tab.tabId,
+      undefined,
+      afterNavigation.observationId,
     );
-    await f.browser.closeTab("a", tab.tabId, undefined, fresh.observationId);
     assert.equal((await f.browser.listTabs("a")).length, 0);
   } finally {
     await f.close();
@@ -1572,7 +1599,7 @@ test("Workspace native dialog blocks targeted input without accepting or activat
     debuggerApi.emit("message", {}, "Page.javascriptDialogOpening");
     await assert.rejects(
       f.browser.pointerClick("a", tab.tabId, observed.observationId, 20, 30),
-      /native dialog requires human control/,
+      /targeted input cannot operate this open native dialog/,
     );
     assert.equal(input.events.length, 0);
     debuggerApi.emit("message", {}, "Page.javascriptDialogClosed");

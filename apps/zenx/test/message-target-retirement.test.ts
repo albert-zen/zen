@@ -323,3 +323,74 @@ test("cancelled virtual targets retire locally across snapshots, but new IDs and
     dom.window.close();
   }
 });
+
+test("cross-thread excerpts reveal outside the layout commit, fence old owners and allow a repeated new request", async () => {
+  const dom = new JSDOM('<div id="root"></div>');
+  const previous = { window: globalThis.window, document: globalThis.document };
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    React,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const root = createRoot(document.getElementById("root")!);
+  const thread = runtimeThread(runtimeIntro, "completed");
+  const calls: unknown[] = [];
+  const done: number[] = [];
+  let layoutCommitted = false;
+  function View({ request }: { request: MessageTargetRequest }) {
+    const viewport = React.useRef<HTMLElement>(null);
+    useMessageTargetNavigation(
+      thread,
+      viewport,
+      () => {},
+      undefined,
+      (quote) => {
+        assert.equal(layoutCommitted, true);
+        calls.push(quote);
+        return true;
+      },
+    );
+    React.useLayoutEffect(() => {
+      layoutCommitted = true;
+    }, [request]);
+    return null;
+  }
+  const request = {
+    threadId: thread.id,
+    itemId: "exact-source",
+    requestId: 1,
+    excerpt: "完整原句。",
+  };
+  const render = async (next: MessageTargetRequest) => {
+    layoutCommitted = false;
+    // The hook's own microtask runs after the synchronous layout phase.
+    await act(async () =>
+      root.render(
+        React.createElement(MessageTargetNavigationContext.Provider, {
+          value: { request: next, consumed: (id) => done.push(id) },
+          children: React.createElement(View, { request: next }),
+        }),
+      ),
+    );
+  };
+  try {
+    await render({ ...request, threadId: "other-owner" });
+    assert.equal(calls.length, 0);
+    await render(request);
+    assert.deepEqual(calls, [
+      { threadId: thread.id, id: "exact-source", excerpt: "完整原句。" },
+    ]);
+    await render(request);
+    assert.equal(calls.length, 1);
+    await render({ ...request, requestId: 2 });
+    assert.equal(calls.length, 2);
+    assert.deepEqual(done, [1, 2]);
+  } finally {
+    await act(async () => root.unmount());
+    Object.assign(globalThis, previous, {
+      IS_REACT_ACT_ENVIRONMENT: undefined,
+    });
+    dom.window.close();
+  }
+});

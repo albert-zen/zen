@@ -19,6 +19,7 @@ const METHODS = new Set([
   "Page.createIsolatedWorld",
   "Runtime.enable",
   "Runtime.evaluate",
+  "Runtime.callFunctionOn",
   "Runtime.releaseObject",
   "Page.captureScreenshot",
   "DOM.describeNode",

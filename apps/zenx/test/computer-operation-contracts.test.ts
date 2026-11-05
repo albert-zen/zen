@@ -103,8 +103,7 @@ for (const name of ["computer_press", "computer_set_value"]) {
     assert.equal(calls, 0);
     assert.equal(owner.snapshot.activities.length, 1);
     resolvePaint();
-    // Existing production cancellation notice is intentionally exercised.
-    await new Promise((resolve) => setTimeout(resolve, 1100));
+    await tick();
     assert.equal(calls, 1);
     notifyStopping?.();
     assert.equal(owner.snapshot.activities[0]?.stopping, true);
@@ -120,7 +119,7 @@ for (const name of ["computer_press", "computer_set_value"]) {
     owner.close();
   });
 
-  test(`Peekaboo ${name} consent revoked during notice sends no input`, async () => {
+  test(`Peekaboo ${name} consent revoked during indicator painting sends no input`, async () => {
     let calls = 0;
     const backend = {
       press: async () => {
@@ -130,13 +129,24 @@ for (const name of ["computer_press", "computer_set_value"]) {
         calls++;
       },
     } as unknown as ZenXComputerBackend;
+    let resolvePaint!: () => void;
+    const painting = new Promise<void>((resolve) => {
+      resolvePaint = resolve;
+    });
     const service = new ComputerZenXCapabilityPackage(
       backend,
       peekabooComputerManifest(),
       true,
+      {
+        run: async (invocation, operation) => {
+          await painting;
+          return operation(invocation.signal);
+        },
+      },
     );
     const pending = service.invoke(name, invocation(name));
     service.setForegroundControlAllowed(false);
+    resolvePaint();
     await assert.rejects(pending, /revoked/);
     assert.equal(calls, 0);
   });

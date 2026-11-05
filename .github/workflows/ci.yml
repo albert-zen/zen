@@ -365,7 +365,7 @@ jobs:
       - name: Verify macOS input construction without desktop input
         env:
           ZENX_COMPUTER_CONSTRUCTION_EVIDENCE: ${{ runner.temp }}/computer-event-construction.json
-        run: node --import tsx --test apps/zenx/test/computer-native-dispatch.test.ts apps/zenx/test/computer-native-construction.test.ts apps/zenx/test/computer-bound-native.test.ts
+        run: node --import tsx --test apps/zenx/test/computer-native-dispatch.test.ts apps/zenx/test/computer-native-construction.test.ts apps/zenx/test/computer-bound-native.test.ts apps/zenx/test/computer-app-keyboard-native.test.ts apps/zenx/test/computer-background-pointer-native.test.ts
       - name: Retain construction-only CoreGraphics metadata
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
@@ -742,6 +742,11 @@ jobs:
           icacls $browserDirectory /grant '*S-1-15-2-1:(OI)(CI)(RX)' '*S-1-15-2-2:(OI)(CI)(RX)' /T /Q
           if ($LASTEXITCODE -ne 0) { throw "Could not grant Chromium sandbox read-execute access" }
           "ZENX_USER_BROWSER_EXECUTABLE=$browserExecutable" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Exercise real extension routing and provider input with a synthetic native port
+        timeout-minutes: 5
+        env:
+          ZENX_CHROME_DEBUGGER_ARTIFACT_DIR: ${{ runner.temp }}/zenx-parallel-input-evidence
+        run: node --import tsx apps/zenx/scripts/smoke-chrome-debugger-children.mjs
       - run: npm --workspace apps/zenx run smoke:windows-user-browser
       - name: Exercise parallel native user typing and inactive Agent tab input
         env:
@@ -815,6 +820,17 @@ jobs:
           name: macos-browser-blank-appearance
           path: ${{ runner.temp }}/zenx-browser-blank-evidence
           if-no-files-found: ignore
+      - name: Verify native Workspace and Electron remote-frame input
+        timeout-minutes: 4
+        run: node apps/zenx/scripts/smoke-electron-frame-providers.mjs "${{ runner.temp }}/zenx-electron-frame-providers"
+      - name: Retain native Electron provider frame evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-electron-provider-frames-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-electron-frame-providers
+          if-no-files-found: warn
+          retention-days: 14
       - name: Prepare a pinned headed Chromium for parallel input
         run: |
           fixture="$RUNNER_TEMP/zenx-browser-fixture"

@@ -30,6 +30,7 @@ test(
 import Darwin
 typealias UniChar = UInt16
 typealias CGKeyCode = UInt16
+typealias CGEventFlags = Set<String>
 enum SourceState { case privateState }
 final class CGEventSource { init?(stateID: SourceState) {} }
 final class CGEvent {
@@ -42,6 +43,11 @@ struct App { let processIdentifier: Int32 = 7 }
 struct Failure: Error {}
 func refuse(_ message: String) throws -> Never { throw Failure() }
 var cancelled = false, birth = true, downCount = 0, abortAt = 0, recycleAt = 0
+var layout = "original", changeLayout = false
+func resolveShortcut(_ key: String, _ modifiers: [String]) throws -> (CGKeyCode, CGEventFlags, String?) {
+ guard key == "a", modifiers == ["command"] else { throw Failure() }
+ return (0, Set(modifiers), layout)
+}
 var backgroundSettledForRequest = false
 var events: [CGEvent] = [], phases: [[String: Any]] = []
 final class Binding {
@@ -54,13 +60,14 @@ func emit(_ value: [String: Any]) { phases.append(value) }
 func appStateEvent(_ subtype: Int16) throws -> CGEvent { let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)!; event.preparation = true; return event }
 func postToTarget(_ event: CGEvent, _ pid: Int32) {
  precondition(pid == 7); events.append(event)
+ if event.preparation && changeLayout { layout = "changed" }
  if !event.preparation && event.down { downCount += 1; if downCount == abortAt { cancelled = true }; if downCount == recycleAt { birth = false } }
 }
 ` +
       MAC_BOUND_TARGET_SOURCE.slice(start, end) +
       MAC_BOUND_TARGET_SOURCE.slice(chunks, keys) +
       `
-func reset() { cancelled = false; birth = true; downCount = 0; abortAt = 0; recycleAt = 0; events = []; phases = []; backgroundSettledForRequest = false }
+func reset() { layout = "original"; changeLayout = false; cancelled = false; birth = true; downCount = 0; abortAt = 0; recycleAt = 0; events = []; phases = []; backgroundSettledForRequest = false }
 let binding = Binding()
 let text = String(repeating: "a", count: 15) + "🌙🦆中文" + String(repeating: "🦆", count: 10)
 var posted = 0
@@ -87,6 +94,22 @@ precondition(events.isEmpty)
 reset(); posted = 0
 do { _ = try backgroundAppKeyboard(binding, ["operation": "backgroundKeyPress", "key": "enter", "modifiers": ["command"]], &posted); fatalError("shortcut accepted") } catch {}
 precondition(events.isEmpty)
+reset(); posted = 0
+let shortcutReceipt = try backgroundAppKeyboard(binding, ["operation": "backgroundShortcut", "key": "a", "modifiers": ["command"]], &posted)
+let shortcutEvents = events.filter { !$0.preparation }
+precondition(shortcutEvents.count == 2 && shortcutEvents[0].down && !shortcutEvents[1].down)
+precondition(shortcutEvents.allSatisfy { $0.flags == Set(["command"]) })
+precondition(shortcutReceipt["applicationEffect"] as? String == "unverified")
+reset(); changeLayout = true; posted = 0
+do { _ = try backgroundAppKeyboard(binding, ["operation": "backgroundShortcut", "key": "a", "modifiers": ["command"]], &posted); fatalError("layout drift accepted") } catch {}
+precondition(events.filter { !$0.preparation }.isEmpty, "changed layout must not post shortcut")
+reset(); abortAt = 1; posted = 0
+do { _ = try backgroundAppKeyboard(binding, ["operation": "backgroundShortcut", "key": "a", "modifiers": ["command"]], &posted); fatalError("cancel accepted") } catch {}
+precondition(events.filter { !$0.preparation }.count == 2, "shortcut cancellation must pair release")
+reset(); recycleAt = 1; posted = 0
+do { _ = try backgroundAppKeyboard(binding, ["operation": "backgroundShortcut", "key": "a", "modifiers": ["command"]], &posted); fatalError("recycled shortcut accepted") } catch {}
+precondition(events.filter { !$0.preparation && !$0.down }.isEmpty)
+precondition(phases.last?["release"] as? String == "unknown")
 print("PASS Unicode exact chunks, no window verify, cancel-up, birth-loss unknown, zero-dispatch refusal")
 `;
     const file = path.join(directory, "fixture.swift"),
