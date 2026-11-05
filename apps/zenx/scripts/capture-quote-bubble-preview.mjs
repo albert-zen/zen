@@ -77,10 +77,7 @@ for (const scene of [
       );
       assert.equal(target.excerpt, excerpt);
       assert.equal(target.item, "synthetic-answer");
-      assert.ok(
-        target.centerDelta < 3 || target.atBoundary,
-        JSON.stringify(target),
-      );
+      assert.ok(target.centerDelta < 3, JSON.stringify(target));
       await screenshot(`quote-source-${scene.theme}-${scene.width}.png`);
       await delay(1700);
       assert.equal(
