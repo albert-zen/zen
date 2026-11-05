@@ -84,3 +84,37 @@ jobs:
           path: ${{ runner.temp }}/app-shot-jxa.json
           if-no-files-found: warn
           retention-days: 14
+
+  dependency-candidate:
+    name: Resolve pinned upstream App Shot dependency candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Resolve exact T3 native dependencies without executing package scripts
+        run: npm install --workspace @zen/zenx --save-exact ffi-rs@1.3.2 @crowecawcaw/xa11y@0.13.0 --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Report bounded public dependency diff for review, never push from CI
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { execFileSync } from "node:child_process";
+          const before = JSON.parse(execFileSync("git", ["show", "HEAD:package-lock.json"], {encoding:"utf8"}));
+          const after = JSON.parse(readFileSync("package-lock.json", "utf8"));
+          const changed = Object.fromEntries(Object.entries(after.packages).filter(([key,value]) => JSON.stringify(value) !== JSON.stringify(before.packages[key])));
+          const removed = Object.keys(before.packages).filter(key => !(key in after.packages));
+          const { packages, ...root } = after;
+          const report = JSON.stringify({root,order:Object.keys(packages),changed,removed,packageJson:readFileSync("apps/zenx/package.json","utf8"),lockSha:execFileSync("git",["hash-object","package-lock.json"],{encoding:"utf8"}).trim(),packageSha:execFileSync("git",["hash-object","apps/zenx/package.json"],{encoding:"utf8"}).trim()});
+          for(let i=0;i<report.length;i+=6000) console.log("APP_SHOT_DEPENDENCY_CHUNK:"+JSON.stringify({index:i/6000,data:report.slice(i,i+6000)}));
+          console.log("APP_SHOT_DEPENDENCY_END:"+Math.ceil(report.length/6000));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-shot-native-dependency-candidate-${{ github.sha }}
+          path: |
+            package-lock.json
+            apps/zenx/package.json
+          retention-days: 7
