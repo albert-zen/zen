@@ -21,6 +21,7 @@ on:
       - apps/zenx/test/board-empty-visibility-ui.test.ts
       - apps/zenx/test/user-question-cards-interaction.test.ts
       - apps/zenx/test/question-read-recovery.test.ts
+      - apps/zenx/test/app-project-picker-interaction.test.ts
   workflow_dispatch:
 permissions:
   contents: read
@@ -54,6 +55,11 @@ jobs:
           apps/zenx/test/user-question-cards-interaction.test.ts
           apps/zenx/test/question-read-recovery.test.ts
           apps/zenx/test/information-board-native-input.test.mjs
+      - name: Real Host questions survive hiding every managed information widget
+        run: >-
+          node --import tsx --test
+          --test-name-pattern='real Host questions render in full App information panel'
+          apps/zenx/test/app-project-picker-interaction.test.ts
       - name: Build actual information components with synthetic data
         run: node apps/zenx/scripts/build-information-layout-preview.mjs "${{ runner.temp }}/information-content"
       - name: Empty to populated cards, switch geometry and repeated hide/show/close
