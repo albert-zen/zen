@@ -1199,6 +1199,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
             throw new Error(
               "A real, coherent screenshot is required for browser targeted input; inspect again",
             );
+          const frameCapture = browserFrameCaptureFor(input.snapshot);
           const version = tab.documentVersion;
           const navigation = tab.navigationGeneration;
           const render = tab.renderRevision;
@@ -1245,16 +1246,30 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
                 assertCurrent: assertActionCurrent,
                 snapshot: async () =>
                   requireBrowserInputSnapshot(
-                    browserFrameCaptureFor(input.snapshot)
-                      ? await browserFrameCaptureFor(input.snapshot)!.probe(
-                          action,
-                          assertActionCurrent,
-                        )
+                    frameCapture
+                      ? await frameCapture!.probe(action, assertActionCurrent)
                       : await this.#evaluate(
                           tab,
                           browserInputProbeScript(action),
                         ),
                   ),
+                prepareMouse: frameCapture
+                  ? (snapshot) =>
+                      frameCapture!.prepareMouse(
+                        snapshot,
+                        async (selectedSessionId, params, onDispatched) => {
+                          assertActionCurrent();
+                          const pending =
+                            tab.view.webContents.debugger.sendCommand(
+                              "Input.dispatchMouseEvent",
+                              params,
+                              selectedSessionId || undefined,
+                            );
+                          onDispatched();
+                          return await pending;
+                        },
+                      )
+                  : undefined,
                 beforeDispatch: () => {
                   if (tab.observation !== observation)
                     throw new Error(

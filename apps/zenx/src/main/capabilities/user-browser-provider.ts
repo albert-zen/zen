@@ -3131,6 +3131,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       );
     };
     const probe = browserInputProbeScript(action);
+    const frameCapture = browserFrameCaptureFor(observed);
     try {
       await dispatchBrowserTargetedInput(
         {
@@ -3139,7 +3140,6 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
             assertFence();
             await this.#documentBarrier(fence, signal);
             assertFence();
-            const frameCapture = browserFrameCaptureFor(observed);
             if (frameCapture)
               return await frameCapture.probe(action, assertFence);
             const response = asRecord(
@@ -3187,6 +3187,25 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
               ),
             );
           },
+          prepareMouse: frameCapture
+            ? (snapshot) =>
+                frameCapture.prepareMouse(
+                  snapshot,
+                  async (sessionId, params, done) => {
+                    assertFence();
+                    return await this.#sendDocumentCommand(
+                      fence,
+                      "Input.dispatchMouseEvent",
+                      params,
+                      signal,
+                      done,
+                      assertFence,
+                      undefined,
+                      sessionId,
+                    );
+                  },
+                )
+            : undefined,
           beforeDispatch: () => onDispatched?.(),
           dispatch: async (method, params, onDispatched) => {
             assertFence();
@@ -3769,13 +3788,21 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     onDispatched?: () => void,
     assertCurrent?: () => void,
     inspectDeadline?: number,
+    mouseSessionId?: string,
   ): Promise<unknown> {
+    if (
+      mouseSessionId !== undefined &&
+      (method !== "Input.dispatchMouseEvent" ||
+        !fence.attachmentEpoch.frameEvidence?.hasSession(mouseSessionId) ||
+        (params.type !== "mousePressed" && params.type !== "mouseReleased"))
+    )
+      throw new Error("Browser preselected mouse route is unavailable");
     const settlement = promiseCapability<void>();
     try {
       const result = await this.#send(
         method,
         params,
-        fence.sessionId,
+        mouseSessionId ?? fence.sessionId,
         signal,
         USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS,
         async () => settlement.resolve(),
@@ -3783,6 +3810,11 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         () => {
           assertCurrent?.();
           this.#assertDocumentFence(fence, true);
+          if (
+            mouseSessionId !== undefined &&
+            !fence.attachmentEpoch.frameEvidence?.hasSession(mouseSessionId)
+          )
+            throw new Error("Browser preselected mouse route was retired");
         },
         () => {
           fence.attachmentEpoch.unsettledMutation ??= `${method} late settlement was not observed`;

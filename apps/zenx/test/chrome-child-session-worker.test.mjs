@@ -3,6 +3,14 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
 
+const mouse = (type = "mousePressed") => ({
+  type,
+  x: 12.75,
+  y: 3.5,
+  button: "left",
+  buttons: type === "mousePressed" ? 1 : 0,
+  clickCount: 1,
+});
 const autoAttach = (autoAttach = true) => ({
   autoAttach,
   flatten: true,
@@ -236,7 +244,7 @@ test("extension preserves DebuggerSession IDs only for trusted iframe descendant
   assert.match(
     (await f.result(f.send("Input.dispatchMouseEvent", {}, "child"))).error
       .message,
-    /root tab/,
+    /validated left-button/,
   );
   assert.equal(f.commands.length, count);
   f.emit("Target.detachedFromTarget", { sessionId: "child" });
@@ -512,4 +520,185 @@ test("extension rejects nonempty disable filters without weakening enable scope 
     (await f.result(f.send("Page.enable", {}, "child"))).result,
     {},
   );
+});
+
+test("extension dispatches validated left-click pairs only to exact owned iframe routes", async () => {
+  const f = await fixture();
+  await f.enable();
+  f.attach("child");
+  await f.enable("child");
+  f.attach("grandchild", "child");
+  for (const sessionId of ["child", "grandchild"]) {
+    for (const type of ["mousePressed", "mouseReleased"]) {
+      const params = mouse(type);
+      assert.deepEqual(
+        (await f.result(f.send("Input.dispatchMouseEvent", params, sessionId)))
+          .result,
+        {},
+      );
+      assert.deepEqual(f.commands.at(-1), {
+        target: { tabId: 7, sessionId },
+        method: "Input.dispatchMouseEvent",
+        params,
+      });
+    }
+  }
+});
+
+test("extension rejects malformed child mouse commands and unsupported Input before native send", async () => {
+  const f = await fixture();
+  await f.enable();
+  f.attach("child");
+  const count = f.commands.length;
+  const missing = Object.keys(mouse()).map((removed) =>
+    Object.fromEntries(
+      Object.entries(mouse()).filter(([key]) => key !== removed),
+    ),
+  );
+  for (const params of [
+    ...missing,
+    null,
+    [],
+    { ...mouse(), x: null },
+    { ...mouse(), x: "12" },
+    { ...mouse(), x: NaN },
+    { ...mouse(), y: Infinity },
+    { ...mouse(), y: -Infinity },
+    { ...mouse(), button: "right" },
+    { ...mouse(), buttons: 0 },
+    { ...mouse("mouseReleased"), buttons: 1 },
+    { ...mouse(), clickCount: 2 },
+    { ...mouse(), type: "mouseMoved" },
+    { ...mouse(), type: "mouseWheel", deltaY: 1 },
+    { ...mouse(), modifiers: 0 },
+    { ...mouse(), pointerType: "mouse" },
+    { ...mouse(), sessionId: "root-a" },
+    { ...mouse(), rootSessionId: "root-a" },
+    { ...mouse(), targetId: "chrome-tab-7" },
+  ]) {
+    assert.match(
+      (await f.result(f.send("Input.dispatchMouseEvent", params, "child")))
+        .error.message,
+      /validated left-button/,
+    );
+    assert.equal(f.commands.length, count);
+  }
+  for (const method of [
+    "Input.dispatchKeyEvent",
+    "Input.insertText",
+    "Input.dispatchTouchEvent",
+    "Input.dispatchDragEvent",
+    "Input.synthesizeScrollGesture",
+  ]) {
+    assert.match(
+      (await f.result(f.send(method, mouse(), "child"))).error.message,
+      /validated left-button/,
+    );
+    assert.equal(f.commands.length, count);
+  }
+  assert.deepEqual(
+    (
+      await f.result(
+        f.send("Input.dispatchKeyEvent", { type: "keyDown", key: "a" }),
+      )
+    ).result,
+    {},
+  );
+  assert.deepEqual(f.commands.at(-1).target, { tabId: 7 });
+});
+
+test("extension rejects forged owners and retired mouse routes without transferring the root", async () => {
+  const f = await fixture();
+  await f.enable();
+  f.attach("child");
+  f.attach("worker", undefined, "worker");
+  f.attach("unknown-parent", "unknown");
+  const count = f.commands.length;
+  for (const [sessionId, root] of [
+    ["child", "root-b"],
+    ["arbitrary-native", "root-a"],
+    ["worker", "root-a"],
+    ["unknown-parent", "root-a"],
+  ]) {
+    assert.match(
+      (
+        await f.result(
+          f.send("Input.dispatchMouseEvent", mouse(), sessionId, root),
+        )
+      ).error.message,
+      /Unknown or retired/,
+    );
+    assert.equal(f.commands.length, count);
+  }
+  assert.deepEqual(
+    (await f.result(f.send("Input.dispatchMouseEvent", mouse(), "child")))
+      .result,
+    {},
+  );
+  f.emit("Target.detachedFromTarget", { sessionId: "child" });
+  f.attach("child");
+  f.attach("replacement");
+  const retiredCount = f.commands.length;
+  assert.match(
+    (
+      await f.result(
+        f.send("Input.dispatchMouseEvent", mouse("mouseReleased"), "child"),
+      )
+    ).error.message,
+    /Unknown or retired/,
+  );
+  assert.equal(f.commands.length, retiredCount);
+  assert.deepEqual(
+    (await f.result(f.send("Target.setAutoAttach", autoAttach(false)))).result,
+    {},
+  );
+  const disabledCount = f.commands.length;
+  assert.match(
+    (await f.result(f.send("Input.dispatchMouseEvent", mouse(), "replacement")))
+      .error.message,
+    /Unknown or retired/,
+  );
+  assert.match(
+    (
+      await f.result(
+        f.send("Target.setAutoAttach", autoAttach(), undefined, "root-b"),
+      )
+    ).error.message,
+    /pinned.*reconnect/,
+  );
+  assert.equal(f.commands.length, disabledCount);
+});
+
+test("extension rechecks child retirement after awaited tab validation before mouse release", async () => {
+  const f = await fixture();
+  await f.enable();
+  f.attach("child");
+  assert.deepEqual(
+    (await f.result(f.send("Input.dispatchMouseEvent", mouse(), "child")))
+      .result,
+    {},
+  );
+  let entered = false;
+  let finish;
+  const gate = new Promise((resolve) => {
+    finish = resolve;
+  });
+  f.chrome.tabs.get = async () => {
+    entered = true;
+    await gate;
+    return { id: 7, title: "Root", url: "https://root.test/" };
+  };
+  const count = f.commands.length;
+  const release = f.send(
+    "Input.dispatchMouseEvent",
+    mouse("mouseReleased"),
+    "child",
+  );
+  await waitFor(() => entered);
+  f.emit("Target.detachedFromTarget", { sessionId: "child" });
+  f.attach("child");
+  f.attach("replacement");
+  finish();
+  assert.match((await f.result(release)).error.message, /Unknown or retired/);
+  assert.equal(f.commands.length, count);
 });

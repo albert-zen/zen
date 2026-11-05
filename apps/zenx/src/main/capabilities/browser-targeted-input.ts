@@ -1194,10 +1194,20 @@ export class BrowserInputOutcomeUnknownError extends Error {
   }
 }
 
+/** Host-private preselected mouse operation; never serialized into observations. */
+export interface BrowserTargetedMouseDispatch {
+  assertSnapshot(snapshot: BrowserInputSnapshot): void;
+  dispatch(
+    params: Record<string, unknown>,
+    onDispatched: () => void,
+  ): Promise<unknown>;
+}
+
 export interface BrowserTargetedInputPort {
   /** Synchronous session/control/document generation fence, before every send. */
   assertCurrent(): void;
   snapshot(): Promise<BrowserInputSnapshot>;
+  prepareMouse?(snapshot: BrowserInputSnapshot): BrowserTargetedMouseDispatch;
   dispatch(
     method: "Input.dispatchMouseEvent" | "Input.dispatchKeyEvent",
     params: Record<string, unknown>,
@@ -1260,6 +1270,15 @@ export async function dispatchBrowserTargetedInput(
         code: key,
         windowsVirtualKeyCode: virtualKeys[key!],
       };
+  // Route selection precedes the first mutation. A frame capture must supply a
+  // receipt; it cannot silently fall back to root when its evidence is absent.
+  const mouse = point ? port.prepareMouse?.(initial) : undefined;
+  if (point && port.prepareMouse && !mouse)
+    throw new Error(
+      "Browser preselected mouse receipt is unavailable; inspect again",
+    );
+  const dispatch = (params: Record<string, unknown>, done: () => void) =>
+    mouse ? mouse.dispatch(params, done) : port.dispatch(method, params, done);
   let dispatched = false;
   let released = false;
   try {
@@ -1271,8 +1290,7 @@ export async function dispatchBrowserTargetedInput(
         port.beforeDispatch();
       }
     };
-    await port.dispatch(
-      method,
+    await dispatch(
       {
         ...parameters,
         type: point
@@ -1321,10 +1339,10 @@ export async function dispatchBrowserTargetedInput(
       throw new Error(
         "Browser document or concurrent input changed after press",
       );
+    mouse?.assertSnapshot(pressed);
     signal?.throwIfAborted();
     port.assertCurrent();
-    await port.dispatch(
-      method,
+    await dispatch(
       {
         ...parameters,
         type: point ? "mouseReleased" : "keyUp",

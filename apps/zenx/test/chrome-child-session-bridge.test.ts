@@ -8,6 +8,14 @@ import vm from "node:vm";
 import ts from "typescript";
 
 type Message = Record<string, any>;
+const mouse = (type = "mousePressed") => ({
+  type,
+  x: 12.75,
+  y: 3.5,
+  button: "left",
+  buttons: type === "mousePressed" ? 1 : 0,
+  clickCount: 1,
+});
 const autoAttach = (enabled = true) => ({
   autoAttach: enabled,
   flatten: true,
@@ -484,7 +492,10 @@ test("frame attachment events remain scoped and subscription changes cannot over
     { type: "mousePressed" },
     child,
   );
-  assert.match(f.response(f.client, input)!.error.message, /root tab/);
+  assert.match(
+    f.response(f.client, input)!.error.message,
+    /validated left-button/,
+  );
   f.request(f.client, "Target.setAutoAttach", autoAttach(false), root);
   const disable = f.latestCommand();
   const overlap = f.request(
@@ -643,4 +654,226 @@ test("bridge rejects nonempty disable filters without weakening enable scope or 
   f.settle();
   assert.deepEqual(f.response(f.client, childRead)!.result, {});
   await f.bridge.close();
+});
+
+test("bridge routes only validated left-click pairs through exact owned iframe sessions", async () => {
+  const f = await fixture();
+  const root = f.attach();
+  f.enable(root);
+  f.attachEvent(root, "child");
+  const child = f.client.messages.at(-1)!.params.sessionId;
+  f.enable(root, child);
+  f.attachEvent(root, "grandchild", "child");
+  const grandchild = f.client.messages.at(-1)!.params.sessionId;
+  for (const [virtual, native] of [
+    [child, "child"],
+    [grandchild, "grandchild"],
+  ]) {
+    for (const type of ["mousePressed", "mouseReleased"]) {
+      const params = mouse(type);
+      const id = f.request(
+        f.client,
+        "Input.dispatchMouseEvent",
+        params,
+        virtual,
+      );
+      assert.deepEqual(f.latestCommand(), {
+        type: "cdp-command",
+        requestId: f.latestCommand().requestId,
+        tabId: 7,
+        sessionId: native,
+        rootSessionId: root,
+        method: "Input.dispatchMouseEvent",
+        params,
+      });
+      f.settle();
+      assert.deepEqual(f.response(f.client, id), {
+        id,
+        result: {},
+        sessionId: virtual,
+      });
+    }
+  }
+  await f.bridge.close();
+});
+
+test("bridge rejects malformed child mouse commands and other Input without dispatch", async () => {
+  const f = await fixture();
+  const root = f.attach();
+  f.enable(root);
+  f.attachEvent(root, "child");
+  const child = f.client.messages.at(-1)!.params.sessionId;
+  const count = f.native.messages.length;
+  const missing = Object.keys(mouse()).map((removed) =>
+    Object.fromEntries(
+      Object.entries(mouse()).filter(([key]) => key !== removed),
+    ),
+  );
+  for (const params of [
+    ...missing,
+    { ...mouse(), x: null },
+    { ...mouse(), x: "12" },
+    { ...mouse(), x: NaN },
+    { ...mouse(), y: Infinity },
+    { ...mouse(), y: -Infinity },
+    { ...mouse(), button: "right" },
+    { ...mouse(), buttons: 0 },
+    { ...mouse("mouseReleased"), buttons: 1 },
+    { ...mouse(), clickCount: 2 },
+    { ...mouse(), type: "mouseMoved" },
+    { ...mouse(), type: "mouseWheel", deltaY: 1 },
+    { ...mouse(), modifiers: 0 },
+    { ...mouse(), pointerType: "mouse" },
+    { ...mouse(), sessionId: root },
+    { ...mouse(), rootSessionId: root },
+    { ...mouse(), targetId: "chrome-tab-7" },
+  ]) {
+    const id = f.request(f.client, "Input.dispatchMouseEvent", params, child);
+    assert.match(
+      f.response(f.client, id)!.error.message,
+      /validated left-button/,
+    );
+    assert.equal(f.native.messages.length, count);
+  }
+  for (const method of [
+    "Input.dispatchKeyEvent",
+    "Input.insertText",
+    "Input.dispatchTouchEvent",
+    "Input.dispatchDragEvent",
+    "Input.synthesizeScrollGesture",
+  ]) {
+    const id = f.request(f.client, method, mouse(), child);
+    assert.match(
+      f.response(f.client, id)!.error.message,
+      /validated left-button/,
+    );
+    assert.equal(f.native.messages.length, count);
+  }
+  // Root input retains its existing behavior, including keyboard dispatch.
+  const key = f.request(
+    f.client,
+    "Input.dispatchKeyEvent",
+    { type: "keyDown", key: "a" },
+    root,
+  );
+  assert.equal(f.latestCommand().sessionId, undefined);
+  f.settle();
+  assert.deepEqual(f.response(f.client, key)!.result, {});
+  await f.bridge.close();
+});
+
+test("child mouse ownership rejects forged, detached and replaced routes without fallback", async () => {
+  const f = await fixture();
+  const root = f.attach();
+  const other = f.connect();
+  const otherRoot = f.attach(other);
+  f.enable(root);
+  const before = f.client.messages.length;
+  f.attachEvent(otherRoot, "forged-owner");
+  f.attachEvent(root, "worker", undefined, "worker");
+  assert.equal(f.client.messages.length, before);
+  f.attachEvent(root, "child");
+  const child = f.client.messages.at(-1)!.params.sessionId;
+  const count = f.native.messages.length;
+  for (const [socket, route] of [
+    [other, child],
+    [f.client, "child"],
+    [f.client, "forged-owner"],
+    [f.client, "worker"],
+  ] as const) {
+    const id = f.request(socket, "Input.dispatchMouseEvent", mouse(), route);
+    assert.ok(f.response(socket, id)!.error);
+    assert.equal(f.native.messages.length, count);
+  }
+  const pressed = f.request(
+    f.client,
+    "Input.dispatchMouseEvent",
+    mouse(),
+    child,
+  );
+  const pending = f.latestCommand();
+  f.event(root, "Target.detachedFromTarget", { sessionId: "child" });
+  assert.ok(f.response(f.client, pressed)!.error);
+  const retiredCount = f.native.messages.length;
+  f.attachEvent(root, "child"); // Native IDs are never reused in one attachment lifetime.
+  f.attachEvent(root, "replacement");
+  const replacement = f.client.messages.at(-1)!.params.sessionId;
+  assert.notEqual(replacement, child);
+  const released = f.request(
+    f.client,
+    "Input.dispatchMouseEvent",
+    mouse("mouseReleased"),
+    child,
+  );
+  assert.ok(f.response(f.client, released)!.error);
+  assert.equal(f.native.messages.length, retiredCount);
+  f.settle(pending); // A late success cannot resurrect the retired input receipt.
+  assert.equal(
+    f.client.messages.filter((message) => message.id === pressed).length,
+    1,
+  );
+  const denied = f.request(
+    other,
+    "Target.setAutoAttach",
+    autoAttach(),
+    otherRoot,
+  );
+  assert.match(f.response(other, denied)!.error.message, /pinned/);
+  const retiredRoot = f.request(f.client, "Target.detachFromTarget", {
+    sessionId: root,
+  });
+  f.settle();
+  assert.deepEqual(f.response(f.client, retiredRoot)!.result, {});
+  const afterRoot = f.native.messages.length;
+  const stale = f.request(
+    f.client,
+    "Input.dispatchMouseEvent",
+    mouse(),
+    replacement,
+  );
+  assert.ok(f.response(f.client, stale)!.error);
+  assert.equal(f.native.messages.length, afterRoot);
+  const successor = f.request(
+    other,
+    "Target.setAutoAttach",
+    autoAttach(),
+    otherRoot,
+  );
+  assert.match(
+    f.response(other, successor)!.error.message,
+    /pinned.*reconnect/,
+  );
+  await f.bridge.close();
+});
+
+test("child mouse routes expire with their owning socket and native connection", async () => {
+  for (const retire of ["socket", "native"]) {
+    const f = await fixture();
+    const root = f.attach();
+    f.enable(root);
+    f.attachEvent(root, "child");
+    const child = f.client.messages.at(-1)!.params.sessionId;
+    const id = f.request(f.client, "Input.dispatchMouseEvent", mouse(), child);
+    const pending = f.latestCommand();
+    if (retire === "socket") f.client.close();
+    else f.native.close();
+    const other = f.connect();
+    const count = f.native.messages.length;
+    const release = f.request(
+      other,
+      "Input.dispatchMouseEvent",
+      mouse("mouseReleased"),
+      child,
+    );
+    assert.ok(f.response(other, release)!.error);
+    assert.equal(f.native.messages.length, count);
+    f.settle(pending);
+    assert.equal(
+      f.client.messages.some(
+        (message) => message.id === id && message.result !== undefined,
+      ),
+      false,
+    );
+    await f.bridge.close();
+  }
 });

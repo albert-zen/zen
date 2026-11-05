@@ -939,3 +939,18 @@ test("Electron and Workspace evaluation preserves only known structured surface 
     assert.ok(!commands.some((method) => method.startsWith("Input.")));
   }
 });
+
+test("missing active mouse receipt cannot fall back to the legacy root path", async () => {
+  const f = fixture();
+  f.port.prepareMouse = () => undefined as never;
+  await assert.rejects(
+    dispatchBrowserTargetedInput(f.port, snapshot(), {
+      kind: "click",
+      x: 100,
+      y: 80,
+    }),
+    /receipt is unavailable/,
+  );
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.quarantined, false);
+});

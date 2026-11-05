@@ -42,6 +42,7 @@ import type {
 import {
   connectUserBrowserCdp,
   UserBrowserDocumentChangedBeforeDispatchError,
+  UserBrowserMutationOutcomeUnknownError,
   windowsBrowserExecutableCandidates,
   type UserBrowserConnection,
 } from "./capabilities/user-browser-provider.js";
@@ -341,6 +342,7 @@ interface RemoteFrameFixture {
   childOrigin: string;
   nonce: string;
   leafOrigin?: string;
+  outerAffine?: "true";
 }
 
 /** Fixed synthetic commands only; neither side accepts code from postMessage. */
@@ -450,7 +452,10 @@ parent.postMessage({kind:'ready',nonce:config.nonce,documentId},config.parentOri
 const config=${config},childUrl=${JSON.stringify(childUrl.href)},pending=new Map(),rootEvents=[];
 for(const type of ['pointermove','pointerdown','pointerup','mousemove','mousedown','mouseup','click','keydown','keyup'])window.addEventListener(type,event=>rootEvents.push({type:event.type,trusted:event.isTrusted,target:event.target.id||event.target.localName,clientX:event.clientX,clientY:event.clientY}),true);
 const frame=document.createElement('iframe');frame.id='contract-frame';
-let sequence=0,revision=0,ready=false;
+let sequence=0,revision=0,ready=false,reflected=false;
+const cosine=0.9659258262890683,sine=0.25881904510252074;
+const applyAffine=()=>{frame.style.transform='matrix('+[cosine,reflected?-sine:sine,reflected?sine:-sine,cosine,0,0].join(',')+')'};
+if(config.outerAffine){frame.style.left='100px';frame.style.top='90px';frame.style.transformOrigin='322px 256px';applyAffine()}
 window.addEventListener('message',event=>{
   const message=event.data;
   if(event.source!==frame.contentWindow||event.origin!==config.childOrigin||!message||message.nonce!==config.nonce)return;
@@ -466,7 +471,11 @@ const request=(method,argument)=>new Promise((resolve,reject)=>{
 window.contract={mode:config.mode,get ready(){return ready},
   async state(){const child=await request('state');return {...child,childVisibility:child.visibility,rootEvents:[...rootEvents],visibility:document.visibilityState,outer:document.activeElement?.id}},
   async focus(id){return {...await request('focus',id),outer:document.activeElement?.id}},
-  async point(id){const point=await request('point',id),x=point.x+20+5+7,y=point.y+20+5+11,r=frame.getBoundingClientRect();return {...point,x,y,owners:[{id:frame.id,left:r.left,top:r.top,width:r.width,height:r.height,hitId:document.elementFromPoint?.(x,y)?.id||'',scrollX,scrollY},...(point.owners||[])]}},
+  async point(id){const point=await request('point',id);let x=point.x+20+5+7,y=point.y+20+5+11;
+    // Authored forward matrix only: no provider inverse, native quad or AABB.
+    if(config.outerAffine){const localX=point.x+12-322,localY=point.y+16-256,angle=reflected?-sine:sine;x=100+322+cosine*localX-angle*localY;y=90+256+angle*localX+cosine*localY}
+    const r=frame.getBoundingClientRect();return {...point,x,y,...(config.outerAffine?{outerAffine:true,reflected}:{}),owners:[{id:frame.id,left:r.left,top:r.top,width:r.width,height:r.height,hitId:document.elementFromPoint?.(x,y)?.id||'',scrollX,scrollY},...(point.owners||[])]}},
+  flipTransform(){if(!config.outerAffine)throw Error('Affine remote fixture required');const before=frame.getBoundingClientRect().toJSON();reflected=!reflected;applyAffine();return {before,after:frame.getBoundingClientRect().toJSON()}},
   mutate(){return request('mutate')},
   armReplace(){return request('armReplace')},
   reopenFrame(){ready=false;frame.src=childUrl+'&revision='+(++revision)}
@@ -484,6 +493,9 @@ function remoteFrameFixtureFromUrl(requestUrl: string): RemoteFrameFixture {
     parentOrigin: query.get("parentOrigin") ?? "",
     childOrigin: query.get("childOrigin") ?? "",
     nonce: query.get("nonce") ?? "",
+    ...(query.get("outerAffine") === "true"
+      ? { outerAffine: "true" as const }
+      : {}),
     ...(query.get("leafOrigin")
       ? { leafOrigin: query.get("leafOrigin")! }
       : {}),
@@ -609,6 +621,8 @@ interface ContractState {
   outer: string;
 }
 interface RemoteFixturePoint {
+  outerAffine?: boolean;
+  reflected?: boolean;
   x: number;
   y: number;
   documentId: string;
@@ -666,10 +680,32 @@ export function assertRemoteFixturePoint(
     point.localPoint.y >= 0 && point.localPoint.y < point.childViewport.height,
   );
   assert.equal(point.owners.length, depth);
+  const nestedOffset = depth === 2 ? { x: 45, y: 55 } : { x: 0, y: 0 };
+  const cosine = Math.cos(Math.PI / 12);
+  const sine = Math.sin(Math.PI / 12);
+  const localX = point.localPoint.x + nestedOffset.x;
+  const localY = point.localPoint.y + nestedOffset.y;
+  const angle = point.reflected ? -sine : sine;
+  const expectedPoint = point.outerAffine
+    ? {
+        x: 422 + cosine * (localX + 12 - 322) - angle * (localY + 16 - 256),
+        y: 346 + angle * (localX + 12 - 322) + cosine * (localY + 16 - 256),
+      }
+    : { x: localX + 32, y: localY + 36 };
+  assert.ok(Math.abs(point.x - expectedPoint.x) < 0.01);
+  assert.ok(Math.abs(point.y - expectedPoint.y) < 0.01);
   for (const [index, owner] of point.owners.entries()) {
     const expected =
       index === 0
-        ? { id: "contract-frame", left: 20, top: 20, width: 644, height: 512 }
+        ? point.outerAffine
+          ? {
+              id: "contract-frame",
+              left: 422 - cosine * 322 - sine * 256,
+              top: 346 - sine * 322 - cosine * 256,
+              width: cosine * 644 + sine * 512,
+              height: sine * 644 + cosine * 512,
+            }
+          : { id: "contract-frame", left: 20, top: 20, width: 644, height: 512 }
         : {
             id: "nested-contract-frame",
             left: 40,
@@ -757,6 +793,17 @@ interface ContractInput {
   method: string;
   type: string;
   sessionId: string;
+  socketId?: number;
+  route?: {
+    targetId?: string;
+    parentSessionId?: string;
+    parentTargetId?: string;
+    grandparentSessionId?: string;
+    frameId?: string;
+    parentFrameId?: string;
+  };
+  x?: number;
+  y?: number;
 }
 
 interface FixtureExecutionContext {
@@ -884,6 +931,70 @@ export function assertRemoteFramePlacement(
     );
     assertRemoteFramePlacement(evidence.descendant);
   }
+}
+
+/** Passive native transport evidence, independent from the provider's route receipt. */
+export function assertRemoteProviderRoute(options: {
+  kind: "click" | "key";
+  inputs: ContractInput[];
+  root: { sessionId: string; socketId: number };
+  placement: FramePlacementEvidence;
+  point?: RemoteFixturePoint;
+}): void {
+  const { kind, inputs, root, placement, point } = options;
+  assert.equal(inputs.length, 2);
+  const remoteMouse =
+    kind === "click" && placement.mode !== "cross-origin-same-process";
+  const renderer =
+    placement.mode === "nested-oopif" ? placement.descendant! : placement;
+  for (const input of inputs) {
+    assert.equal(
+      input.socketId,
+      root.socketId,
+      "Pair must remain on the verified provider connection",
+    );
+    if (remoteMouse) {
+      assert.notEqual(input.sessionId, root.sessionId);
+      assert.equal(input.route?.targetId, renderer.childSessionTargetId);
+      assert.equal(input.route?.frameId, renderer.childFrameId);
+      assert.equal(input.route?.parentFrameId, renderer.rootFrameId);
+      assert.ok(input.route?.parentSessionId);
+      if (placement.mode === "nested-oopif") {
+        assert.equal(
+          input.route?.parentTargetId,
+          placement.childSessionTargetId,
+        );
+        assert.equal(
+          input.route?.grandparentSessionId,
+          root.sessionId,
+          "Nested renderer ancestry must return to the verified provider root",
+        );
+      } else assert.equal(input.route?.parentSessionId, root.sessionId);
+    } else {
+      assert.equal(
+        input.sessionId,
+        root.sessionId,
+        "Keys and same-process mouse remain root routed",
+      );
+    }
+    if (kind === "click") {
+      assert.ok(point);
+      const expected = !remoteMouse
+        ? point
+        : placement.mode === "nested-same-process"
+          ? { x: point.localPoint.x + 45, y: point.localPoint.y + 55 }
+          : point.localPoint;
+      assert.ok(
+        typeof input.x === "number" && Math.abs(input.x - expected.x) < 0.01,
+        "Mouse x must be in the selected renderer-root viewport, not leaf or top coordinates",
+      );
+      assert.ok(
+        typeof input.y === "number" && Math.abs(input.y - expected.y) < 0.01,
+        "Mouse y must be in the selected renderer-root viewport, not leaf or top coordinates",
+      );
+    }
+  }
+  assert.equal(inputs[0]!.sessionId, inputs[1]!.sessionId);
 }
 
 type FixtureCdpEndpoint = Pick<Rpc, "send" | "onEvent">;
@@ -1495,10 +1606,18 @@ async function runInterruptedRemoteFrameSmoke(options: {
   browserRpc: Pick<Rpc, "send">;
   inputs: ContractInput[];
   guard(): Promise<void>;
+  onFailure?(receipt: Record<string, unknown>): void;
 }): Promise<Record<string, unknown>> {
   const { backend, sessionId, inputs, guard } = options;
   const owned = await backend.open(sessionId, options.url);
   let rpc: Rpc | undefined;
+  const inputStart = inputs.length;
+  const diagnostic: Record<string, unknown> = {
+    scenario: "remote-document-open-after-press",
+    ownedTargetId: owned.tabId,
+    setup: "not-ready",
+    pointerCalls: 0,
+  };
   try {
     const target = await poll(async () => {
       const targets = (await (
@@ -1520,15 +1639,41 @@ async function runInterruptedRemoteFrameSmoke(options: {
     );
     await guard();
     assert.equal(await fixture.evaluate("document.visibilityState"), "hidden");
-    assert.deepEqual(await fixture.evaluate("window.contract.armReplace()"), {
-      armed: true,
+    // Explicit read-only setup absorbs first observer/owner discovery before
+    // the final authorizing capture. Never repair geometry or replay an action.
+    const discovery = await backend.inspect(sessionId, owned.tabId);
+    assert.equal(discovery.screenshot.status, "captured");
+    assert.equal(inputs.length, inputStart);
+    diagnostic.discoveryInputAvailable = Boolean(discovery.inputViewport);
+    const screenshot = await fixture.send("Page.captureScreenshot", {
+      format: "png",
+      fromSurface: true,
+      captureBeyondViewport: false,
     });
+    assert.ok(
+      typeof screenshot.data === "string" && screenshot.data.length > 0,
+    );
     const before = await fixture.evaluate<
       ContractState & { documentId: string }
     >("window.contract.state()");
-    const position = await fixture.evaluate<{ x: number; y: number }>(
+    const position = await fixture.evaluate<RemoteFixturePoint>(
       "window.contract.point('canvas')",
     );
+    assertRemoteFixturePoint(
+      position,
+      "canvas",
+      before.mode.startsWith("nested-") ? 2 : 1,
+    );
+    assert.equal(position.documentId, before.documentId);
+    assert.equal(before.visibility, "hidden");
+    assert.equal(before.childVisibility, "hidden");
+    await guard();
+    diagnostic.before = before;
+    diagnostic.position = position;
+    diagnostic.setup = "read-only-discovery-compositor-and-geometry-verified";
+    assert.deepEqual(await fixture.evaluate("window.contract.armReplace()"), {
+      armed: true,
+    });
     const capture = async () =>
       await poll(async () => {
         const count = inputs.length;
@@ -1546,18 +1691,40 @@ async function runInterruptedRemoteFrameSmoke(options: {
     const start = inputs.length;
     let reason = "";
     await assert.rejects(
-      () =>
-        backend.pointerClick!(
+      () => {
+        diagnostic.pointerCalls = Number(diagnostic.pointerCalls) + 1;
+        return backend.pointerClick!(
           sessionId,
           owned.tabId,
           observed.observationId,
           position.x,
           position.y,
-        ),
+        );
+      },
       (error) => {
-        assert.ok(error instanceof BrowserInputOutcomeUnknownError);
-        assert.equal(error.inputMayRemainPressed, true);
-        reason = error.message;
+        diagnostic.originalError =
+          error instanceof Error
+            ? {
+                name: error.name,
+                constructor: error.constructor.name,
+                message: error.message,
+                stack: error.stack,
+                cause: String(error.cause ?? ""),
+              }
+            : { message: String(error) };
+        diagnostic.inputAttempts = inputs.slice(inputStart);
+        const rawHeldUnknown =
+          error instanceof UserBrowserMutationOutcomeUnknownError &&
+          error.message.startsWith(
+            "Browser targeted input outcome is unknown (",
+          );
+        assert.ok(
+          error instanceof BrowserInputOutcomeUnknownError || rawHeldUnknown,
+          `Expected typed targeted-input unknown after the intended press; got ${error instanceof Error ? error.constructor.name + ": " + error.message : String(error)}; observed Input attempts=${inputs.length - inputStart}`,
+        );
+        if (error instanceof BrowserInputOutcomeUnknownError)
+          assert.equal(error.inputMayRemainPressed, true);
+        reason = error instanceof Error ? error.message : String(error);
         return true;
       },
     );
@@ -1606,6 +1773,15 @@ async function runInterruptedRemoteFrameSmoke(options: {
       quarantined: true,
       reason,
     };
+  } catch (error) {
+    diagnostic.error = error instanceof Error ? error.message : String(error);
+    diagnostic.inputAttempts = inputs.slice(inputStart);
+    options.onFailure?.(diagnostic);
+    console.error(
+      "Interrupted remote fixture failure",
+      JSON.stringify(diagnostic),
+    );
+    throw error;
   } finally {
     rpc?.close();
     // Provider closeTab settles only its logical attachment; it is not physical
@@ -1691,31 +1867,116 @@ export async function runTargetedInputContractSmoke(options: {
   const reports: Record<string, unknown>[] = [];
   let remoteWitness: Record<string, unknown> | undefined;
   const protocolRouteDiagnostics: Record<string, unknown>[] = [];
+  const interruptedRouteFailures: Record<string, unknown>[] = [];
   // A passive, scoped tap on actual outgoing ws messages. No mock transport,
   // rewritten events, retries, tracker access or synthetic trusted-event shims.
   // Only provider Input is counted. The independent placement/diagnostic
   // socket is excluded even when its explicit child-session probe sends Input.
   const originalSend = WebSocket.prototype.send;
+  const providerSockets = new Map<
+    WebSocket,
+    {
+      id: number;
+      sessions: Map<string, NonNullable<ContractInput["route"]>>;
+      pendingTrees: Map<number, string>;
+      listener(raw: unknown): void;
+    }
+  >();
+  let providerRootSession: { sessionId: string; socketId: number } | undefined;
+  let providerPlacement: FramePlacementEvidence | undefined;
   WebSocket.prototype.send = function (this: WebSocket, ...args: unknown[]) {
     if (
       this.url === version.webSocketDebuggerUrl &&
       this !== placementRpc.socket &&
       typeof args[0] === "string"
     ) {
+      let observed = providerSockets.get(this);
+      if (!observed) {
+        const sessions = new Map<string, NonNullable<ContractInput["route"]>>();
+        const pendingTrees = new Map<number, string>();
+        const listener = (raw: unknown) => {
+          const event = JSON.parse(String(raw)) as {
+            id?: number;
+            method?: string;
+            sessionId?: string;
+            params?: {
+              sessionId?: string;
+              targetInfo?: { targetId: string; type: string };
+            };
+            result?: {
+              frameTree?: { frame?: { id: string; parentId?: string } };
+            };
+          };
+          if (
+            event.method === "Target.attachedToTarget" &&
+            event.params?.sessionId &&
+            event.params.targetInfo?.type === "iframe"
+          ) {
+            sessions.set(event.params.sessionId, {
+              targetId: event.params.targetInfo.targetId,
+              parentSessionId: event.sessionId,
+            });
+          } else if (
+            event.method === "Target.detachedFromTarget" &&
+            event.params?.sessionId
+          ) {
+            sessions.delete(event.params.sessionId);
+          } else if (event.id !== undefined && pendingTrees.has(event.id)) {
+            const session = pendingTrees.get(event.id)!;
+            pendingTrees.delete(event.id);
+            const frame = event.result?.frameTree?.frame;
+            if (frame && event.sessionId === session)
+              sessions.set(session, {
+                ...sessions.get(session),
+                frameId: frame.id,
+                parentFrameId: frame.parentId,
+              });
+          }
+        };
+        observed = {
+          id: providerSockets.size + 1,
+          sessions,
+          pendingTrees,
+          listener,
+        };
+        providerSockets.set(this, observed);
+        this.on("message", listener);
+      }
       const message = JSON.parse(args[0]) as {
+        id?: number;
         method?: string;
         sessionId?: string;
-        params?: { type?: string };
+        params?: { type?: string; x?: number; y?: number };
       };
+      if (
+        message.method === "Page.getFrameTree" &&
+        message.id !== undefined &&
+        message.sessionId
+      )
+        observed.pendingTrees.set(message.id, message.sessionId);
       if (message.method?.startsWith("Input.")) {
         assert.ok(
           message.sessionId,
           "Provider Input must bind an exact CDP session",
         );
+        const route = observed.sessions.get(message.sessionId);
         inputs.push({
           method: message.method,
           type: message.params?.type ?? "",
           sessionId: message.sessionId,
+          socketId: observed.id,
+          route: {
+            ...route,
+            parentTargetId: route?.parentSessionId
+              ? observed.sessions.get(route.parentSessionId)?.targetId
+              : undefined,
+            grandparentSessionId: route?.parentSessionId
+              ? observed.sessions.get(route.parentSessionId)?.parentSessionId
+              : undefined,
+          },
+          ...(message.params?.x !== undefined
+            ? { x: message.params.x, y: message.params.y }
+            : {}),
         });
       }
     }
@@ -1765,6 +2026,12 @@ export async function runTargetedInputContractSmoke(options: {
     const observation = await inspect();
     if (kind === "key") assert.equal(observation.focusedInputAvailable, true);
     const before = await state();
+    if (position && isRemoteFrameMode(before.mode))
+      assertRemoteFixturePoint(
+        position as RemoteFixturePoint,
+        id,
+        before.mode.startsWith("nested-") ? 2 : 1,
+      );
     const inputIndex = inputs.length;
     if (position)
       await backend.pointerClick!(
@@ -1801,6 +2068,25 @@ export async function runTargetedInputContractSmoke(options: {
         ? ["mousePressed", "mouseReleased"]
         : ["keyDown", "keyUp"],
     );
+    if (isRemoteFrameMode(before.mode)) {
+      assert.ok(providerRootSession && providerPlacement);
+      assertRemoteProviderRoute({
+        kind,
+        inputs: dispatched,
+        root: providerRootSession,
+        placement: providerPlacement,
+        point: position as RemoteFixturePoint | undefined,
+      });
+    } else {
+      assert.ok(dispatched[0]!.socketId);
+      const currentRoot = {
+        sessionId: dispatched[0]!.sessionId,
+        socketId: dispatched[0]!.socketId!,
+      };
+      if (providerRootSession)
+        assert.deepEqual(currentRoot, providerRootSession);
+      else providerRootSession = currentRoot;
+    }
     const after = isRemoteFrameMode(before.mode)
       ? (
           await settleRemoteFixturePair(
@@ -1896,6 +2182,8 @@ export async function runTargetedInputContractSmoke(options: {
           `http://${mode === "cross-origin-same-process" ? "127.0.0.1" : "localhost"}:${remoteAddress.port}`,
         );
         contractUrl.searchParams.set("nonce", randomUUID());
+        if (mode.startsWith("nested-"))
+          contractUrl.searchParams.set("outerAffine", "true");
         if (mode === "nested-oopif")
           contractUrl.searchParams.set(
             "leafOrigin",
@@ -1961,10 +2249,15 @@ export async function runTargetedInputContractSmoke(options: {
           mode,
           contractUrl.href,
         );
+        providerPlacement = placement;
         cases.push({ case: "observed-frame-process-placement", ...placement });
-        // Validate the synthetic child witness independently of provider support.
-        // This is direct root CDP input, explicitly NOT extension/provider proof.
-        for (const kind of ["click", "key"] as const) {
+        // Root mouse delivery to OOPIFs is measured only on the independent
+        // disposable diagnostics. Its known platform limitation must not gate a
+        // separately preselected provider child route. Provider success below
+        // still requires the exact real trusted pair and effect in every mode.
+        const directKinds: ("click" | "key")[] =
+          mode === "cross-origin-same-process" ? ["click", "key"] : ["key"];
+        for (const kind of directKinds) {
           const id = kind === "click" ? "canvas" : "text-a";
           if (kind === "key") assert.equal((await focus(id)).inner, id);
           const before = await state();
@@ -2112,6 +2405,40 @@ export async function runTargetedInputContractSmoke(options: {
             ),
           );
         }
+        if (
+          options.remoteFrameInput === "supported" &&
+          mode.startsWith("nested-")
+        ) {
+          const oldGeometry = await inspect();
+          const geometry = await rpc.evaluate<{
+            before: { x: number; y: number; width: number; height: number };
+            after: { x: number; y: number; width: number; height: number };
+          }>("window.contract.flipTransform()");
+          for (const key of ["x", "y", "width", "height"] as const)
+            assert.ok(
+              Math.abs(geometry.before[key] - geometry.after[key]) < 0.01,
+              "Opposite fixture matrices retain the same AABB",
+            );
+          const nextPoint = await point("canvas");
+          cases.push(
+            await rejected(
+              "remote-affine-quad-changed-before-pointer",
+              () =>
+                backend.pointerClick!(
+                  sessionId,
+                  tabId,
+                  oldGeometry.observationId,
+                  nextPoint.x,
+                  nextPoint.y,
+                ),
+              /changed|stale|inspect again/iu,
+            ),
+          );
+          cases.push({
+            case: "fresh-remote-affine-quad-pointer",
+            pair: await paired("click", "canvas"),
+          });
+        }
         const focusA = await focus("text-a");
         const focused = await inspect();
         const focusB = await focus("text-b");
@@ -2184,15 +2511,16 @@ export async function runTargetedInputContractSmoke(options: {
             staleReason,
           ),
         );
+        providerPlacement = await observeRemoteFramePlacement(
+          rpc,
+          placementRpc,
+          mode,
+          contractUrl.href,
+          1,
+        );
         cases.push({
           case: "replacement-child-placement",
-          ...(await observeRemoteFramePlacement(
-            rpc,
-            placementRpc,
-            mode,
-            contractUrl.href,
-            1,
-          )),
+          ...providerPlacement,
         });
         if (options.remoteFrameInput === "supported")
           cases.push({
@@ -2214,6 +2542,7 @@ export async function runTargetedInputContractSmoke(options: {
               browserRpc: placementRpc,
               inputs,
               guard,
+              onFailure: (receipt) => interruptedRouteFailures.push(receipt),
             }),
           );
           cases.push({
@@ -2474,6 +2803,7 @@ export async function runTargetedInputContractSmoke(options: {
       completedReports: reports,
       lastDirectRemoteWitness: remoteWitness,
       protocolRouteDiagnostics,
+      interruptedRouteFailures,
       error: error instanceof Error ? error.message : String(error),
     };
     // Preserve the current authored point, owner/inner hits and final read in
@@ -2490,6 +2820,8 @@ export async function runTargetedInputContractSmoke(options: {
     throw error;
   } finally {
     WebSocket.prototype.send = originalSend;
+    for (const [socket, observed] of providerSockets)
+      socket.off("message", observed.listener);
     rpc.close();
     placementRpc.close();
     if (remoteServer.listening) {

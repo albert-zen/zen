@@ -13,6 +13,7 @@ import {
   type BrowserInputSnapshot,
   type BrowserInputKey,
   type BrowserInputFrameDocument,
+  type BrowserTargetedMouseDispatch,
 } from "./browser-targeted-input.js";
 import {
   browserFrameIdentityTransform,
@@ -75,11 +76,33 @@ interface Sample {
 export interface BrowserFrameInputCapture {
   readonly snapshot: BrowserInputSnapshot;
   assertCurrent(): void;
+  prepareMouse(
+    snapshot: BrowserInputSnapshot,
+    send: (
+      sessionId: string,
+      params: Record<string, unknown>,
+      onDispatched: () => void,
+    ) => Promise<unknown>,
+  ): BrowserTargetedMouseDispatch;
   probe(
     action?: BrowserFrameInputAction,
     callerGuard?: () => void,
   ): Promise<BrowserInputSnapshot>;
 }
+interface MouseOwner {
+  sampleSerial: number;
+}
+interface MouseSample {
+  readonly owner: MouseOwner;
+  readonly sampleSerial: number;
+  readonly rendererRoot: Frame;
+  readonly rootPoint: Readonly<{ x: number; y: number }>;
+  readonly point: Readonly<{ x: number; y: number }>;
+  readonly assertCurrent: () => void;
+}
+// Only completed Host probes enter this map. Copying a snapshot or supplying
+// page-returned route/context IDs can never acquire a dispatch receipt.
+const mouseSamples = new WeakMap<BrowserInputSnapshot, MouseSample>();
 const captures = new WeakMap<BrowserInputSnapshot, BrowserFrameInputCapture>();
 const enabledRoutes = new WeakMap<BrowserFrameEvidence, Set<string>>();
 const setupFailures = new WeakMap<BrowserFrameEvidence, Error>();
@@ -169,10 +192,77 @@ export class BrowserFrameInputObserver {
       this.evidence.assertCapture(fence);
       for (const frame of frames) this.evidence.assertContext(frame.context);
     };
-    const snapshot = await this.#sample(frames, fence, assertCurrent);
+    const mouseOwner: MouseOwner = { sampleSerial: 0 };
+    const snapshot = await this.#sample(
+      frames,
+      fence,
+      assertCurrent,
+      mouseOwner,
+    );
     const capture: BrowserFrameInputCapture = {
       snapshot,
       assertCurrent,
+      prepareMouse: (snapshot, send) => {
+        const selected = mouseSamples.get(snapshot);
+        if (!selected || selected.owner !== mouseOwner) fail();
+        selected!.assertCurrent();
+        mouseSamples.delete(snapshot);
+        let pressSerial = -1;
+        let phase: "ready" | "pressed" | "release-ready" | "spent" = "ready";
+        return Object.freeze({
+          assertSnapshot: (fresh: BrowserInputSnapshot) => {
+            selected!.assertCurrent();
+            const next = mouseSamples.get(fresh);
+            if (
+              phase !== "pressed" ||
+              !next ||
+              next.owner !== mouseOwner ||
+              next.sampleSerial <= pressSerial ||
+              next.rendererRoot !== selected!.rendererRoot ||
+              next.point.x !== selected!.point.x ||
+              next.point.y !== selected!.point.y ||
+              next.rootPoint.x !== selected!.rootPoint.x ||
+              next.rootPoint.y !== selected!.rootPoint.y
+            )
+              fail();
+            next!.assertCurrent();
+            mouseSamples.delete(fresh);
+            phase = "release-ready";
+          },
+          dispatch: async (
+            params: Record<string, unknown>,
+            onDispatched: () => void,
+          ) => {
+            selected!.assertCurrent();
+            const press = phase === "ready";
+            if (
+              (!press && phase !== "release-ready") ||
+              params.type !== (press ? "mousePressed" : "mouseReleased") ||
+              params.x !== selected!.rootPoint.x ||
+              params.y !== selected!.rootPoint.y ||
+              params.button !== "left" ||
+              params.buttons !== (press ? 1 : 0) ||
+              params.clickCount !== 1 ||
+              Object.keys(params).length !== 6
+            )
+              fail();
+            // Retire before enqueue, including synchronous/unknown failures. A
+            // failed send never permits retrying this receipt or another route.
+            phase = "spent";
+            const result = await send(
+              selected!.rendererRoot.document.sessionId,
+              { ...params, x: selected!.point.x, y: selected!.point.y },
+              onDispatched,
+            );
+            if (press) {
+              selected!.assertCurrent();
+              pressSerial = mouseOwner.sampleSerial;
+              phase = "pressed";
+            }
+            return result;
+          },
+        });
+      },
       probe: (action, callerGuard) =>
         this.#sample(
           frames,
@@ -181,6 +271,7 @@ export class BrowserFrameInputObserver {
             assertCurrent();
             callerGuard?.();
           },
+          mouseOwner,
           action,
         ),
     };
@@ -332,8 +423,10 @@ export class BrowserFrameInputObserver {
     frames: Frame[],
     fence: BrowserFrameCaptureFence,
     assertCurrent: () => void,
+    mouseOwner: MouseOwner,
     action?: BrowserFrameInputAction,
   ): Promise<BrowserInputSnapshot> {
+    const sampleSerial = ++mouseOwner.sampleSerial;
     assertCurrent();
     const currentFrames = await this.#frames();
     if (
@@ -454,6 +547,7 @@ export class BrowserFrameInputObserver {
       id: string | null;
       backendNodeId?: number;
       unsupported?: "native-surface" | "shadow-surface";
+      frameId?: string;
     }> => {
       let current = root;
       for (let depth = 0; depth < 32; depth++) {
@@ -499,6 +593,7 @@ export class BrowserFrameInputObserver {
           return {
             id: JSON.stringify([current.key, id]),
             backendNodeId: native,
+            frameId: current.frame.document.frameId,
           };
         const children = [...samples.values()].filter(
           (child) =>
@@ -582,7 +677,7 @@ export class BrowserFrameInputObserver {
     this.evidence.assertCapture(fence);
     assertCurrent();
     const values = [...samples.values()];
-    return requireBrowserInputSnapshot({
+    const aggregate = requireBrowserInputSnapshot({
       documentKey: root.key,
       viewport: root.snapshot.viewport,
       focusId: focus.id,
@@ -610,6 +705,33 @@ export class BrowserFrameInputObserver {
       ),
       frameDocuments: documents,
     });
+    if (action?.kind === "click" && pointer?.frameId) {
+      const leaf = samples.get(pointer.frameId)!;
+      const rendererRoot = samples.get(leaf.frame.rendererRootId)!;
+      const point = browserFrameMapPoint(
+        browserFrameInvert(rendererRoot.transform),
+        action,
+      );
+      if (
+        point.x < 0 ||
+        point.y < 0 ||
+        point.x >= rendererRoot.snapshot.viewport.width ||
+        point.y >= rendererRoot.snapshot.viewport.height
+      )
+        fail();
+      mouseSamples.set(
+        aggregate,
+        Object.freeze({
+          owner: mouseOwner,
+          sampleSerial,
+          rendererRoot: rendererRoot.frame,
+          rootPoint: Object.freeze({ x: action.x, y: action.y }),
+          point: Object.freeze(point),
+          assertCurrent,
+        }),
+      );
+    }
+    return aggregate;
   }
 
   async #ownerWitness(

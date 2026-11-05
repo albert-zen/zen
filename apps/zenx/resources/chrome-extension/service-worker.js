@@ -491,9 +491,13 @@ async function runCommandNow(session, message) {
         throw new Error("Unknown or retired Chrome child session");
       if (
         message.sessionId !== undefined &&
-        message.method.startsWith("Input.")
+        message.method.startsWith("Input.") &&
+        (message.method !== "Input.dispatchMouseEvent" ||
+          !iframeMouseParams(message.params))
       )
-        throw new Error("Browser input requires the root tab route");
+        throw new Error(
+          "Chrome child input only supports a validated left-button press or release",
+        );
       if (message.method === "Target.setAutoAttach") {
         result = await setIframeAutoAttach(session, message);
       } else if (message.method === "Target.detachFromTarget") {
@@ -740,6 +744,27 @@ async function browserIdentity() {
 
 function validRouteId(value) {
   return typeof value === "string" && value.length > 0 && value.length <= 512;
+}
+
+// Mirror the bridge's narrow left-click validation at the native send boundary.
+// The exact iframe route must already belong to this live root connection.
+function iframeMouseParams(params) {
+  return (
+    params !== null &&
+    typeof params === "object" &&
+    !Array.isArray(params) &&
+    (params.type === "mousePressed" || params.type === "mouseReleased") &&
+    typeof params.x === "number" &&
+    Number.isFinite(params.x) &&
+    typeof params.y === "number" &&
+    Number.isFinite(params.y) &&
+    params.button === "left" &&
+    params.buttons === (params.type === "mousePressed" ? 1 : 0) &&
+    params.clickCount === 1 &&
+    Object.keys(params).every((key) =>
+      ["type", "x", "y", "button", "buttons", "clickCount"].includes(key),
+    )
+  );
 }
 
 function debuggerRoute(message) {

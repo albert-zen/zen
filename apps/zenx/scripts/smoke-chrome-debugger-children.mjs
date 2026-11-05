@@ -635,9 +635,10 @@ export async function runChromeDebuggerSmoke() {
               child,
             )
           ).error.message,
-          /root tab/,
+          /validated left-button/,
         );
-        checks.unknownSessionRejected = checks.childInputRejected = true;
+        checks.unknownSessionRejected =
+          checks.unsupportedChildInputRejected = true;
         setPhase("child-retirement");
         await current.success(
           tabId,

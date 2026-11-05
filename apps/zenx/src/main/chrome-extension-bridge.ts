@@ -1128,12 +1128,20 @@ export class ChromeExtensionBridge {
       );
       return;
     }
-    if (session.nativeSessionId !== undefined && method.startsWith("Input.")) {
+    if (
+      session.nativeSessionId !== undefined &&
+      method.startsWith("Input.") &&
+      (method !== "Input.dispatchMouseEvent" || !iframeMouseParams(params))
+    ) {
       this.#reply(
         socket,
         id,
         undefined,
-        { code: -32000, message: "Browser input requires the root tab route" },
+        {
+          code: -32000,
+          message:
+            "Chrome child input only supports a validated left-button press or release",
+        },
         sessionId,
       );
       return;
@@ -1385,6 +1393,24 @@ export class ChromeExtensionBridge {
       });
     }
   }
+}
+
+// The Host chooses the existing exact renderer route; this transport only
+// admits the current left-click pair and never derives or widens that route.
+function iframeMouseParams(params: Record<string, unknown>): boolean {
+  return (
+    (params.type === "mousePressed" || params.type === "mouseReleased") &&
+    typeof params.x === "number" &&
+    Number.isFinite(params.x) &&
+    typeof params.y === "number" &&
+    Number.isFinite(params.y) &&
+    params.button === "left" &&
+    params.buttons === (params.type === "mousePressed" ? 1 : 0) &&
+    params.clickCount === 1 &&
+    Object.keys(params).every((key) =>
+      ["type", "x", "y", "button", "buttons", "clickCount"].includes(key),
+    )
+  );
 }
 
 function targetId(tab: ConnectedTab): string {
