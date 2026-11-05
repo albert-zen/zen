@@ -192,12 +192,12 @@
 }
 
 ::highlight(zenx-quote-source) {
-  background-color: var(--color-surface-active, #e4d6a0);
+  background-color: var(--color-surface-active);
   color: var(--color-text-primary);
   text-decoration: underline;
   text-decoration-color: var(--color-text-muted);
 }
 [data-quote-highlight="true"] {
-  background-color: var(--color-surface-active, #e4d6a0);
+  background-color: var(--color-surface-active);
   outline: 1px solid var(--color-border-subtle);
 }
