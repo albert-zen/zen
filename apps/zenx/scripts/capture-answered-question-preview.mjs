@@ -203,9 +203,7 @@ for (const scene of [
       });
       await waitFor("!!document.querySelector('.user-question-error')");
       await delay(4500);
-      await evaluate(
-        "document.querySelector('.user-question-error summary').click()",
-      );
+
       assert.equal(
         await evaluate(
           "document.querySelectorAll('.user-question-attention > header button').length",
@@ -214,9 +212,14 @@ for (const scene of [
       );
       assert.match(
         await evaluate(
-          "document.querySelector('.user-question-error button')?.textContent",
+          "document.querySelector('.user-question-read-error button')?.textContent",
         ),
         /重新加载问题|Try loading questions again/,
+      );
+      assert(
+        await evaluate(
+          "(() => {const b = document.querySelector('.user-question-read-error button'); const r = b.getBoundingClientRect(); return r.height > 0 && r.bottom <= innerHeight && getComputedStyle(b).visibility === 'visible';})()",
+        ),
       );
       await screenshot(
         `question-read-failure-${scene.theme}-${scene.width}.png`,

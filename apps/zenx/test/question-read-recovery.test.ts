@@ -220,7 +220,7 @@ for (const kind of ["native", "room"] as const) {
       assert.equal(reads, 1);
       assert.equal(document.querySelectorAll("header button").length, 0);
       assert.ok(
-        document.querySelector(".user-question-error button")?.textContent,
+        document.querySelector(".user-question-read-error button")?.textContent,
       );
       await act(async () => {
         t.mock.timers.tick(1000);

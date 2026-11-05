@@ -55,9 +55,11 @@ export const UserQuestionCards = memo(function UserQuestionCards({
         <p role="status">{t("boardLoading")}</p>
       ) : null}
       {state.error ? (
-        <details className="user-question-error">
-          <summary>{t("questionReadFailed")}</summary>
-          <pre>{state.error}</pre>
+        <div className="user-question-read-error" role="status">
+          <details className="user-question-error">
+            <summary>{t("questionReadFailed")}</summary>
+            <pre>{state.error}</pre>
+          </details>
           <button
             type="button"
             className="quiet-button"
@@ -66,7 +68,7 @@ export const UserQuestionCards = memo(function UserQuestionCards({
           >
             {t("questionRetryRead")}
           </button>
-        </details>
+        </div>
       ) : null}
       {state.ids.map((id) =>
         state.cards[id] ? (
