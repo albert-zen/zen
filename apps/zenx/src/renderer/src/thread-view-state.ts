@@ -43,7 +43,10 @@ function projectedQueue(
 export function projectNativeRecovery(
   recovery: NativeThreadRecoverySnapshot,
 ): Thread {
-  let thread = projectNativeThread(recovery.thread);
+  let thread: Thread = {
+    ...projectNativeThread(recovery.thread),
+    recoveryEpoch: recovery.processEpoch,
+  };
   const canonicalItemIds = new Set(
     recovery.thread.items.map((item) => item.id),
   );
@@ -110,6 +113,9 @@ export function applyNativeThreadEvent(
   if (event.type === "queue_failed" || event.type === "queue_admission_started")
     return thread;
   if (event.type === "context_item_completed") {
+    // Presentation windows intentionally do not claim a semantic ItemList.
+    // Debug/fork/audit readers use zen/thread/read or full native recovery.
+    if (thread.history !== undefined) return thread;
     if (
       event.threadId !== thread.id ||
       thread.itemList?.some((item) => item.id === event.item.id)
@@ -626,7 +632,9 @@ export function projectNativeThread(
     sessionId: snapshot.id,
     forkedFromId: fork?.sourceThreadId ?? null,
     parentThreadId: metadata.parentThreadId ?? null,
-    preview: firstInputMessagePreview(snapshot.items),
+    preview:
+      snapshot.history?.preview ?? firstInputMessagePreview(snapshot.items),
+    ...(snapshot.history === undefined ? {} : { history: snapshot.history }),
     ephemeral: false,
     isPinned: false,
     modelProvider: snapshot.providerProfileId,

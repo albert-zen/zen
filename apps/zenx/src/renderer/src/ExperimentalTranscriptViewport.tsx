@@ -30,7 +30,13 @@ export interface MaterializedTranscriptRow extends TranscriptRevealOwnership {
 }
 export interface VirtualTranscriptHandle {
   /** Materialize one canonical row, without mounting intervening history. */
-  reveal(key: string, onRevealed?: () => void): Promise<boolean>;
+  reveal(
+    key: string,
+    onRevealed?: () => void,
+    offset?: number,
+  ): Promise<boolean>;
+  /** Keep the current reading anchor when a historical page is prepended. */
+  preserveAnchor?(anchor: TranscriptAnchor): Promise<boolean>;
   /** Capture cancellation for this request only; stale cleanup cannot cancel a newer source. */
   captureReveal(): TranscriptRevealOwnership;
   /** A user source action needs its exact DOM target synchronously, not a Promise. */
@@ -79,6 +85,25 @@ export function ExperimentalTranscriptViewport({
   const [target, setTarget] = useState<string | null>(
     position.virtualAnchor?.key ?? null,
   );
+  const previousRows = useRef(rows);
+  const oldFirst = previousRows.current[0]?.key;
+  const prependAnchor =
+    oldFirst &&
+    rows.findIndex((row) => row.key === oldFirst) > 0 &&
+    position.scroll?.following === false
+      ? position.virtualAnchor
+      : null;
+  useLayoutEffect(() => {
+    previousRows.current = rows;
+    if (!prependAnchor) return;
+    let active = true;
+    queueMicrotask(() => {
+      if (active) void controller.current?.preserveAnchor?.(prependAnchor);
+    });
+    return () => {
+      active = false;
+    };
+  }, [rows, prependAnchor, controller]);
   const generation = useRef(0);
   const selecting = useRef(false);
   const saved = useRef(position.virtualAnchor);
@@ -267,10 +292,14 @@ export function ExperimentalTranscriptViewport({
     };
     controller.current = {
       captureReveal,
-      reveal: (key, onRevealed) => {
+      preserveAnchor: (anchor) =>
+        pending.size > 0
+          ? Promise.resolve(false)
+          : restore(anchor.key, anchor.offset, generation.current),
+      reveal: (key, onRevealed, offset = 0) => {
         protect(true);
         for (const cancel of pending) cancel();
-        return restore(key, 0, ++generation.current, onRevealed);
+        return restore(key, offset, ++generation.current, onRevealed);
       },
       materialize: (key, prepare, onRevealed) => {
         if (!latest.current.rows.some((row) => row.key === key)) return null;

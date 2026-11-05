@@ -279,7 +279,7 @@ export function ThreadConversationViewport({
       else apply(event);
     });
     void window.zenx.protocol
-      .request("zen/thread/resume", { threadId })
+      .request("zen/thread/resume-window", { threadId })
       .then((snapshot) => {
         if (!current()) return;
         callbacks.current.onRecovery?.(threadId, snapshot);

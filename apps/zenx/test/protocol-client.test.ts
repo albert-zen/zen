@@ -1146,3 +1146,95 @@ test("native recovery observers see the authoritative first input before overlap
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+test("window subscriptions reconnect with bounded recovery and full consumers are never downgraded", async () => {
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  let connected: WebSocket | undefined;
+  const methods: string[] = [];
+  let connections = 0;
+  server.on("connection", (socket) => {
+    connected = socket;
+    const epoch = `epoch-${++connections}`;
+    socket.on("message", (data) => {
+      const request = JSON.parse(data.toString()) as {
+        id?: number;
+        method: string;
+      };
+      if (request.id === undefined) return;
+      const isResume = request.method.startsWith("zen/thread/resume");
+      if (isResume) methods.push(request.method);
+      socket.send(
+        JSON.stringify({
+          id: request.id,
+          result: isResume
+            ? {
+                processEpoch: epoch,
+                threadId: "synthetic",
+                watermark: 0,
+                events: [],
+                thread: {
+                  id: "synthetic",
+                  items: [],
+                  turns: [],
+                  ...(request.method.endsWith("window")
+                    ? {
+                        history: {
+                          before: "stable-cursor",
+                          preview: "",
+                          itemPositions: {},
+                        },
+                      }
+                    : {}),
+                },
+              }
+            : request.method === "zen/initialize"
+              ? { processEpoch: epoch }
+              : {},
+        }),
+      );
+    });
+  });
+  const client = await ZenXProtocolClient.connect({
+    ...clientOptions(
+      `ws://127.0.0.1:${String(address.port)}`,
+      "window-reconnect",
+    ),
+    reconnect: { minDelayMs: 1, maxDelayMs: 5, maxAttempts: 3 },
+  });
+  const recovered: Array<ClientRequestResults["zen/thread/resume"]> = [];
+  client.onStatus((status) => {
+    if (status.type === "resubscribed") recovered.push(status.recovery);
+  });
+  const waitUntil = async (predicate: () => boolean) => {
+    const end = Date.now() + 3000;
+    while (!predicate()) {
+      if (Date.now() > end) throw new Error("Reconnect did not complete");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  };
+  try {
+    await Promise.all([
+      client.request("zen/thread/resume-window", { threadId: "synthetic" }),
+      client.request("zen/thread/resume-window", { threadId: "synthetic" }),
+    ]);
+    assert.deepEqual(methods, ["zen/thread/resume-window"]);
+    connected!.terminate();
+    await waitUntil(() => recovered.length === 1);
+    assert.equal(methods.at(-1), "zen/thread/resume-window");
+    assert.equal(recovered[0]!.processEpoch, "epoch-2");
+    assert(recovered[0]!.thread.history);
+    await client.request("zen/thread/resume", { threadId: "synthetic" });
+    await client.request("zen/thread/resume-window", { threadId: "synthetic" });
+    connected!.terminate();
+    await waitUntil(() => recovered.length === 2);
+    assert.equal(methods.at(-1), "zen/thread/resume");
+    assert.equal(recovered[1]!.thread.history, undefined);
+  } finally {
+    client.close();
+    for (const socket of server.clients) socket.terminate();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

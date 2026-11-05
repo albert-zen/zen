@@ -1,5 +1,7 @@
 # ARCHITECTURE
 
+- **Native transcript windows** — Explicit native presentation reads select bounded complete Turns from the canonical journal using Thread-scoped exclusive Turn cursors; window metadata and renderer backfill are disposable, live epoch/watermark recovery remains authoritative, and full audit reads plus CAS snapshots retain their existing semantics. Window views intentionally omit semantic ItemList context (including its live deltas), never interpret absence as empty context, and explicitly use full native read/resume before debug, fork, or audit operations.
+
 - **Browser per-document input probes** — Existing root attachments may assemble a bounded transient vector of disjoint isolated-world document snapshots, trusted context identities and exact native iframe-owner quads; renderer-root transforms are composed only at remote-frame boundaries, every ancestor focus/hit is verified, and the retained capture fence grants no independent input route or replay. Native dictionary insertion order is nonsemantic: comparisons validate exact field shapes and values while preserving ordered ancestry and geometry.
 
 - **Browser preselected mouse route** — A Host-private, single-use receipt binds a fully verified screenshot point to its exact renderer-root widget beneath the existing root lease; it freezes the native session, context epoch and renderer-root CSS point for one press/release pair, keeps keys on the root route, and quarantines the whole owned root after uncertain held input without fallback or replay.

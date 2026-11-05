@@ -1,5 +1,7 @@
+import { ThreadHistoryContext } from "./use-thread-history-pages.js";
 import {
   useEffect,
+  useContext,
   useId,
   useLayoutEffect,
   useMemo,
@@ -58,7 +60,14 @@ export function VirtualTranscriptFind({
   pauseFollowing,
 }: Props) {
   const { t } = useTranslation("shell");
+  const history = useContext(ThreadHistoryContext);
   const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const controller = new AbortController();
+    if (open && history?.hasMore)
+      void history.loadAll(controller.signal).catch(() => {});
+    return () => controller.abort();
+  }, [open, history?.loadAll]);
   const [query, setQuery] = useState("");
   const [selection, setSelection] = useState<{
     index: number;
@@ -402,15 +411,27 @@ export function VirtualTranscriptFind({
           }}
         />
         <span role="status" aria-live="polite" aria-atomic="true">
-          {query.trim()
-            ? matches.length
-              ? t("threadFindCount", {
-                  current: match ? activeIndex + 1 : 0,
-                  total: matches.length,
-                })
-              : t("threadFindNoMatches")
-            : ""}
+          {history?.error
+            ? history.error
+            : history?.hasMore
+              ? t("historySearching")
+              : query.trim()
+                ? matches.length
+                  ? t("threadFindCount", {
+                      current: match ? activeIndex + 1 : 0,
+                      total: matches.length,
+                    })
+                  : t("threadFindNoMatches")
+                : ""}
         </span>
+        {history?.error ? (
+          <button
+            type="button"
+            onClick={() => void history.loadAll().catch(() => {})}
+          >
+            {t("historyLoadEarlier")}
+          </button>
+        ) : null}
         <button
           type="button"
           className="icon-button"

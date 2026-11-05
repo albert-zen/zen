@@ -4730,6 +4730,9 @@ async function mountApp(
           : await options.getStatus(),
       getPendingApprovals: async () => [],
       request: async (method: string, params?: unknown) => {
+        // These interaction scenarios share complete recovery fixtures. Actual
+        // full/window wire routing is asserted in app-live-projection.test.ts.
+        if (method === "zen/thread/resume-window") method = "zen/thread/resume";
         if (method === "zen/initialize") return { processEpoch: "test-host" };
         // Passive evidence is not an input-admission call. Scenarios can fail or
         // hold its reply independently without changing the native send mock.

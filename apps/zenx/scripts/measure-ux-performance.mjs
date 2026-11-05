@@ -123,10 +123,20 @@ try {
         await measure("clear");
         await record(`transcript-${n}-first-mount`, "open", 1, n, "thread-a");
         assert.equal((await state()).turns, n);
+        const mountedTurns = await evaluate(
+          "document.querySelectorAll('.turn').length",
+        );
+        assert(
+          mountedTurns > 0 && mountedTurns < n,
+          "The default virtual transcript mounts only its visible window",
+        );
         assert.equal(
-          await evaluate("document.querySelectorAll('.turn').length"),
-          n,
-          "All synthetic turns must exist in DOM",
+          (await evaluate("window.__ux.transcript()")).lastText,
+          `Synthetic message ${n - 1}. **Bold text** and code.`,
+        );
+        assert(
+          mountedTurns <= 60,
+          "Mounted Turn count must remain bounded as history grows",
         );
         const beforeDeltas = await evaluate("window.__ux.transcript()");
         const deltas = await record(

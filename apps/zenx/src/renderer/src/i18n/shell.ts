@@ -1,4 +1,7 @@
 export const en = {
+  historyLoading: "Loading earlier messages…",
+  historyLoadEarlier: "Load earlier messages",
+  historySearching: "Searching earlier history…",
   answeredQuestion: "Original question",
   answeredQuestionSelected: "Selected",
   answeredQuestionNotSelected: "Not selected",
@@ -995,6 +998,9 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  historyLoading: "正在加载更早的消息…",
+  historyLoadEarlier: "加载更早的消息",
+  historySearching: "正在查找更早的历史…",
   answeredQuestion: "原问题",
   answeredQuestionSelected: "已选择",
   answeredQuestionNotSelected: "未选择",

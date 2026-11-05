@@ -105,6 +105,8 @@ export class ZenXProtocolClient {
     string,
     { epoch: string; watermark: number }
   >();
+  readonly #windowedThreads = new Set<string>();
+  readonly #fullRecoveryThreads = new Set<string>();
   readonly #resumes = new Map<
     string,
     Promise<ClientRequestResults["zen/thread/resume"]>
@@ -184,16 +186,39 @@ export class ZenXProtocolClient {
     if (!this.#ready) {
       throw new Error("App Server connection is not ready");
     }
-    if (method === "zen/thread/resume") {
+    if (
+      method === "zen/thread/resume" ||
+      method === "zen/thread/resume-window"
+    ) {
       const threadId = (params as ClientRequestParams["zen/thread/resume"])
         .threadId;
-      let resume = this.#resumes.get(threadId);
+      const key = JSON.stringify([method, threadId]);
+      const otherMethod =
+        method === "zen/thread/resume-window"
+          ? "zen/thread/resume"
+          : "zen/thread/resume-window";
+      const otherResume = this.#resumes.get(
+        JSON.stringify([otherMethod, threadId]),
+      );
+      if (otherResume !== undefined) {
+        await otherResume.catch(() => {});
+        return await this.request(method, params);
+      }
+      if (method === "zen/thread/resume") {
+        this.#fullRecoveryThreads.add(threadId);
+        this.#windowedThreads.delete(threadId);
+      } else if (!this.#fullRecoveryThreads.has(threadId))
+        this.#windowedThreads.add(threadId);
+      let resume = this.#resumes.get(key);
       if (resume === undefined) {
-        resume = this.#rawRequest("zen/thread/resume", { threadId });
-        this.#resumes.set(threadId, resume);
+        resume = this.#rawRequest(method, {
+          threadId,
+        } as ClientRequestParams[M]) as Promise<
+          ClientRequestResults["zen/thread/resume"]
+        >;
+        this.#resumes.set(key, resume);
         const clear = () => {
-          if (this.#resumes.get(threadId) === resume)
-            this.#resumes.delete(threadId);
+          if (this.#resumes.get(key) === resume) this.#resumes.delete(key);
         };
         void resume.then(clear, clear);
       }
@@ -334,7 +359,8 @@ export class ZenXProtocolClient {
     const response = new Promise<unknown>((resolve, reject) => {
       this.#pending.set(id, {
         method,
-        ...(method === "zen/thread/resume"
+        ...(method === "zen/thread/resume" ||
+        method === "zen/thread/resume-window"
           ? {
               resumeThreadId: (
                 params as ClientRequestParams["zen/thread/resume"]
@@ -648,9 +674,14 @@ export class ZenXProtocolClient {
     const recovered: NativeProjectedThreadEvent[] = [];
     for (const threadId of this.#subscribedThreads) {
       try {
-        const result = await this.#rawRequest("zen/thread/resume", {
-          threadId,
-        });
+        const result = await this.#rawRequest(
+          this.#windowedThreads.has(threadId)
+            ? "zen/thread/resume-window"
+            : "zen/thread/resume",
+          {
+            threadId,
+          },
+        );
         this.#nativeSubscriptions.add(threadId);
         this.#recordNativeWatermark(
           threadId,
@@ -702,7 +733,11 @@ export class ZenXProtocolClient {
       );
       return;
     }
-    if (method === "zen/thread/resume" || method === "zen/turn/wake") {
+    if (
+      method === "zen/thread/resume" ||
+      method === "zen/thread/resume-window" ||
+      method === "zen/turn/wake"
+    ) {
       const threadId = (params as ClientRequestParams["zen/thread/resume"])
         .threadId;
       this.#subscribedThreads.add(threadId);
@@ -715,6 +750,8 @@ export class ZenXProtocolClient {
       this.#subscribedThreads.delete(threadId);
       this.#nativeSubscriptions.delete(threadId);
       this.#nativeWatermarks.delete(threadId);
+      this.#windowedThreads.delete(threadId);
+      this.#fullRecoveryThreads.delete(threadId);
     }
   }
 
