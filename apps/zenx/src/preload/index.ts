@@ -1,4 +1,8 @@
-import type { AppShotApi, AppShotEvent } from "../app-shot.js";
+import type {
+  AppShotApi,
+  AppShotEvent,
+  AppShotShortcutKind,
+} from "../app-shot.js";
 import type {
   NativeInformationApi,
   NativeInformationUpdate,
@@ -359,11 +363,16 @@ contextBridge.exposeInMainWorld("zenx", {
         sourceId,
         includeAccessibility,
       ),
-    arm: async (token: string, includeAccessibility: boolean) =>
+    arm: async (
+      token: string,
+      includeAccessibility: boolean,
+      kind?: AppShotShortcutKind,
+    ) =>
       await ipcRenderer.invoke(
         ipcChannels.appShotArm,
         token,
         includeAccessibility,
+        kind,
       ),
     disarm: async (token: string) => {
       await ipcRenderer.invoke(ipcChannels.appShotDisarm, token);

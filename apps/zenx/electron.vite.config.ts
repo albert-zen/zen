@@ -113,7 +113,7 @@ export default defineConfig({
     build: {
       // Portable packaging stages only the native/runtime externals explicitly.
       externalizeDeps: {
-        include: ["sharp"],
+        include: ["sharp", "ffi-rs", "@crowecawcaw/xa11y"],
         exclude: ["@modelcontextprotocol/sdk"],
       },
       rollupOptions: {
@@ -123,6 +123,14 @@ export default defineConfig({
             "src/main/renderer-file-protocol.ts",
           ),
           index: resolve(__dirname, "src/main/index.ts"),
+          "app-shot-native-worker": resolve(
+            __dirname,
+            "src/main/app-shot-native-worker.ts",
+          ),
+          "app-shot-shortcut-worker": resolve(
+            __dirname,
+            "src/main/app-shot-shortcut-worker.ts",
+          ),
           "fleet-bridge": resolve(__dirname, "src/main/fleet-bridge.ts"),
           "fleet-relay-cli": resolve(__dirname, "src/main/fleet-relay-cli.ts"),
           "chrome-native-host-cli": resolve(

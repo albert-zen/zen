@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import {
   InMemoryAttachmentStore,
   type FileAttachmentStore,
@@ -6,6 +7,8 @@ import type { ZenXImageDraft } from "./image-attachments.js";
 import type { AppShotCapture, AppShotService } from "./app-shot.js";
 import { imageDraft } from "./image-attachments.js";
 import { isTrustedImZenXSetupSender } from "./imzenx-setup-ipc.js";
+import type { AppShotEvent, AppShotShortcutKind } from "../app-shot.js";
+import { startAppShotModifierPair } from "./app-shot-shortcut.js";
 
 const SHORTCUT = "CommandOrControl+Shift+2";
 const CHANNELS = {
@@ -40,15 +43,12 @@ export interface AppShotIpcDependencies<
   importCapture(capture: AppShotCapture): Promise<ZenXImageDraft>;
   registerShortcut(accelerator: string, callback: () => void): boolean;
   unregisterShortcut(accelerator: string): void;
-  sendCaptured(
-    renderer: Renderer,
-    payload: {
-      token: string;
-      image?: ZenXImageDraft;
-      error?: string;
-      disarmed?: true;
-    },
-  ): void;
+  startModifierPair?(options: {
+    onTrigger(): void;
+    onFailure(error: unknown): void;
+    signal: AbortSignal;
+  }): Promise<{ stop(): Promise<void> }>;
+  sendCaptured(renderer: Renderer, payload: AppShotEvent): void;
   focus(renderer: Renderer): void;
 }
 
@@ -70,6 +70,11 @@ type Owner<R extends object, F extends object> = {
   session: Session<F>;
   token: string;
   includeAccessibility: boolean;
+  kind: AppShotShortcutKind;
+  abort: AbortController;
+  modifierPair?: Promise<{ stop(): Promise<void> }>;
+  stopping?: Promise<void>;
+  pending: boolean;
 };
 
 /** Host-only, injected state machine. No global key hook exists until a trusted renderer opts in. */
@@ -81,7 +86,6 @@ export class AppShotIpcController<
   readonly #sessions = new Map<Renderer, Session<Frame>>();
   #owner?: Owner<Renderer, Frame>;
   #registered = false;
-  #pending = false;
   #stagedBytes = 0;
 
   constructor(deps: AppShotIpcDependencies<Renderer, Frame>) {
@@ -264,30 +268,39 @@ export class AppShotIpcController<
         if (preview.expiresAt <= now) this.#removePreview(session, id);
   }
 
-  arm(
+  async arm(
     caller: Caller<Renderer, Frame>,
     token: unknown,
     includeAccessibility: unknown,
-  ): string {
+    kind: unknown = "chord",
+  ): Promise<string> {
     const session = this.#require(caller);
-    if (this.#deps.platform !== "darwin")
-      throw new Error("App Shot shortcut is available only on macOS");
     if (
       typeof token !== "string" ||
       !/^[\x21-\x7e]{1,80}$/u.test(token) ||
-      typeof includeAccessibility !== "boolean"
+      typeof includeAccessibility !== "boolean" ||
+      (kind !== "both-shift" && kind !== "chord")
     )
       throw new Error("Invalid App Shot shortcut request");
-    if (!this.#registered) {
-      if (
-        !this.#deps.registerShortcut(SHORTCUT, () => {
-          void this.onShortcut();
-        })
-      )
-        throw new Error("App Shot shortcut is unavailable");
-      this.#registered = true;
-    }
+    if (
+      kind === "both-shift" &&
+      this.#deps.platform !== "darwin" &&
+      this.#deps.platform !== "win32"
+    )
+      throw new Error("Both Shift is available only on macOS and Windows");
     const previous = this.#owner;
+    const cleanup = this.#clearOwner();
+    const owner: Owner<Renderer, Frame> = {
+      caller,
+      session,
+      token,
+      includeAccessibility,
+      kind,
+      abort: new AbortController(),
+      pending: false,
+    };
+    // Establish ownership before awaiting startup: held modifiers may fire at once.
+    this.#owner = owner;
     if (
       previous &&
       (previous.caller.renderer !== caller.renderer ||
@@ -299,11 +312,61 @@ export class AppShotIpcController<
         token: previous.token,
         disarmed: true,
       });
-    this.#owner = { caller, session, token, includeAccessibility };
-    return "⌘⇧2";
+    try {
+      await cleanup;
+      if (this.#owner !== owner || !this.#still(caller, session))
+        throw new Error("App Shot shortcut was cancelled");
+      if (kind === "both-shift") {
+        if (!this.#deps.startModifierPair)
+          throw new Error("Both Shift is unavailable");
+        owner.modifierPair = this.#deps.startModifierPair({
+          signal: owner.abort.signal,
+          onTrigger: () => {
+            if (this.#owner === owner) void this.onShortcut();
+          },
+          onFailure: (error) => this.#modifierFailed(owner, error),
+        });
+        await owner.modifierPair;
+        if (this.#owner !== owner || !this.#still(caller, session)) {
+          await this.#stopModifierPair(owner);
+          throw new Error("App Shot shortcut was cancelled");
+        }
+      } else {
+        if (
+          !this.#deps.registerShortcut(SHORTCUT, () => {
+            if (this.#owner === owner) void this.onShortcut();
+          })
+        )
+          throw new Error("App Shot shortcut is unavailable");
+        this.#registered = true;
+      }
+      return kind === "both-shift"
+        ? "Left Shift + Right Shift"
+        : this.#deps.platform === "darwin"
+          ? "⌘⇧2"
+          : "Ctrl+Shift+2";
+    } catch (error) {
+      if (this.#owner === owner) await this.#clearOwner();
+      throw error;
+    }
   }
 
-  disarm(caller: Caller<Renderer, Frame>, token: unknown): void {
+  #modifierFailed(owner: Owner<Renderer, Frame>, error: unknown): void {
+    if (this.#owner !== owner) return;
+    const valid = this.#still(owner.caller, owner.session);
+    void this.#clearOwner().catch(() => {});
+    if (!valid) return;
+    const message =
+      error instanceof Error ? error.message : "Both Shift stopped";
+    this.#deps.sendCaptured(owner.caller.renderer, {
+      token: owner.token,
+      disarmed: true,
+      error: message.slice(0, 300),
+    });
+    this.#deps.focus(owner.caller.renderer);
+  }
+
+  async disarm(caller: Caller<Renderer, Frame>, token: unknown): Promise<void> {
     this.#require(caller);
     if (typeof token !== "string" || !/^[\x21-\x7e]{1,80}$/u.test(token))
       throw new Error("Invalid App Shot shortcut token");
@@ -312,15 +375,27 @@ export class AppShotIpcController<
       this.#owner.caller.frame === caller.frame &&
       this.#owner.token === token
     )
-      this.#clearOwner();
+      await this.#clearOwner();
   }
 
-  #clearOwner(): void {
+  async #clearOwner(): Promise<void> {
+    const owner = this.#owner;
     this.#owner = undefined;
+    owner?.abort.abort();
     if (this.#registered) {
       this.#deps.unregisterShortcut(SHORTCUT);
       this.#registered = false;
     }
+    if (owner) await this.#stopModifierPair(owner);
+  }
+
+  #stopModifierPair(owner: Owner<Renderer, Frame>): Promise<void> {
+    if (!owner.modifierPair) return Promise.resolve();
+    owner.stopping ??= owner.modifierPair.then(
+      (modifierPair) => modifierPair.stop(),
+      () => {},
+    );
+    return owner.stopping;
   }
 
   forget(renderer: Renderer): void {
@@ -329,27 +404,38 @@ export class AppShotIpcController<
       for (const id of session.previews.keys())
         this.#removePreview(session, id);
     this.#sessions.delete(renderer);
-    if (this.#owner?.caller.renderer === renderer) this.#clearOwner();
+    if (this.#owner?.caller.renderer === renderer)
+      void this.#clearOwner().catch(() => {});
   }
 
   dispose(): void {
-    this.#clearOwner();
+    void this.#clearOwner().catch(() => {});
     for (const renderer of this.#sessions.keys()) this.forget(renderer);
     this.#sessions.clear();
   }
 
   async onShortcut(): Promise<void> {
     const owner = this.#owner;
-    if (!owner || this.#pending) return;
+    if (!owner || owner.pending) return;
     if (!this.#still(owner.caller, owner.session)) {
       this.forget(owner.caller.renderer);
       return;
     }
-    this.#pending = true;
+    if (this.#deps.platform === "linux") {
+      // Linux has no verified foreground identity: request an explicit chooser.
+      this.#deps.sendCaptured(owner.caller.renderer, {
+        token: owner.token,
+        openPicker: true,
+      });
+      this.#deps.focus(owner.caller.renderer);
+      return;
+    }
+    owner.pending = true;
     try {
       // The target must be observed before ZenX is raised; never capture ZenX itself.
       const capture = await owner.session.service.captureActive({
         includeAccessibility: owner.includeAccessibility,
+        signal: owner.abort.signal,
       });
       if (this.#owner !== owner || !this.#still(owner.caller, owner.session))
         return;
@@ -358,8 +444,10 @@ export class AppShotIpcController<
         capture,
         () => this.#owner === owner && this.#still(owner.caller, owner.session),
       );
-      if (this.#owner !== owner || !this.#still(owner.caller, owner.session))
+      if (this.#owner !== owner || !this.#still(owner.caller, owner.session)) {
+        this.#removePreview(owner.session, image.id);
         return;
+      }
       this.#deps.sendCaptured(owner.caller.renderer, {
         token: owner.token,
         image,
@@ -376,7 +464,7 @@ export class AppShotIpcController<
         this.#deps.focus(owner.caller.renderer);
       }
     } finally {
-      this.#pending = false;
+      owner.pending = false;
     }
   }
 }
@@ -386,7 +474,8 @@ export async function installAppShotIpc(options: {
   ownedWindowIds: Set<number>;
   rendererUrl: string;
 }): Promise<() => void> {
-  const { BrowserWindow, globalShortcut, ipcMain } = await import("electron");
+  const { app, BrowserWindow, globalShortcut, ipcMain } =
+    await import("electron");
   type Renderer = Electron.WebContents;
   type Frame = Electron.WebFrameMain;
   const listeners = new Map<
@@ -440,6 +529,11 @@ export async function installAppShotIpc(options: {
         appShotContext: capture.context,
       };
     },
+    startModifierPair: (modifierOptions) =>
+      startAppShotModifierPair({
+        ...modifierOptions,
+        workerPath: join(app.getAppPath(), "out/main/app-shot-shortcut-worker.js"),
+      }),
     registerShortcut: (accelerator, callback) =>
       globalShortcut.register(accelerator, callback),
     unregisterShortcut: (accelerator) => globalShortcut.unregister(accelerator),
@@ -495,8 +589,12 @@ export async function installAppShotIpc(options: {
   );
   ipcMain.handle(
     CHANNELS.arm,
-    (event, token: unknown, includeAccessibility: unknown) =>
-      controller.arm(caller(event), token, includeAccessibility),
+    (
+      event,
+      token: unknown,
+      includeAccessibility: unknown,
+      kind: unknown,
+    ) => controller.arm(caller(event), token, includeAccessibility, kind),
   );
   ipcMain.handle(CHANNELS.disarm, (event, token: unknown) =>
     controller.disarm(caller(event), token),

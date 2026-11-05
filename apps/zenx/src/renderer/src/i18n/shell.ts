@@ -12,18 +12,26 @@ export const en = {
   appShotContext: "Captured context",
   appShotChooseAnother: "Choose another window",
   appShotAttach: "Attach to draft",
-  appShotIncludeText: "Include application text (macOS)",
+  appShotIncludeText: "Include application text (when available)",
   appShotTextHint:
-    "Optional accessibility text can include content outside the visible screenshot. macOS may require Accessibility permission. Unavailable text is reported explicitly.",
+    "Optional accessibility text can include content outside the visible screenshot. Availability depends on the platform, app and permissions. Unavailable text is reported explicitly.",
   appShotWindows: "Available application windows",
   appShotUntitled: "Untitled window",
   appShotNoWindows:
     "No windows available. Check Screen Recording permission and refresh.",
   appShotRefresh: "Refresh windows",
   appShotCancel: "Cancel",
-  appShotGlobalShortcut: "Capture the foreground app with ⌘⇧2",
+  appShotGlobalShortcut: "Enable global shortcut for this composer",
+  appShotShortcutPreference: "Shortcut preference",
+  appShotBothShift: "Both Shift keys",
+  appShotChord: "⌘/Ctrl+Shift+2",
+  appShotShortcutWorking: "Updating shortcut…",
+  appShotBothShiftHint:
+    "Hold left and right Shift together, not a double tap. Only modifier state is observed; the keys are not reserved and typing is not recorded. May capture immediately if both are already held. Disable to stop. Nothing is sent until you review, attach and send.",
   appShotGlobalHint:
-    "Enabled only for this composer while it remains open. Capture returns here for review. Disable to release the system shortcut; no keyboard monitoring is installed.",
+    "Captures the foreground app for review while this composer remains open. Disable to release the shortcut. This preference is not saved; attaching and sending are separate actions.",
+  appShotLinuxShortcutHint:
+    "Opens the window chooser; it does not capture the foreground app automatically on Linux. Disable to release the shortcut. Availability depends on the desktop. This preference is not saved.",
 
   answeredQuestion: "Original question",
   answeredQuestionSelected: "Selected",
@@ -1032,17 +1040,25 @@ export const zhCN = {
   appShotContext: "捕获的上下文",
   appShotChooseAnother: "选择其他窗口",
   appShotAttach: "添加到草稿",
-  appShotIncludeText: "包含应用文字（macOS）",
+  appShotIncludeText: "包含应用文字（可用时）",
   appShotTextHint:
-    "可选辅助功能文字可能包含截图可见区域以外的内容。macOS 可能需要辅助功能权限；无法读取时会明确说明。",
+    "可选辅助功能文字可能包含截图可见区域以外的内容。是否可用取决于平台、应用和权限；无法读取时会明确说明。",
   appShotWindows: "可用应用窗口",
   appShotUntitled: "无标题窗口",
   appShotNoWindows: "没有可用窗口。请检查屏幕录制权限后刷新。",
   appShotRefresh: "刷新窗口",
   appShotCancel: "取消",
-  appShotGlobalShortcut: "用 ⌘⇧2 捕获前台应用",
+  appShotGlobalShortcut: "为当前输入框启用全局快捷键",
+  appShotShortcutPreference: "快捷键偏好",
+  appShotBothShift: "左右 Shift 同时按住",
+  appShotChord: "⌘/Ctrl+Shift+2",
+  appShotShortcutWorking: "正在更新快捷键…",
+  appShotBothShiftHint:
+    "同时按住左右 Shift，不是双击。只观察修饰键状态，不独占按键，也不记录输入内容；启用时若已同时按住，可能立即捕获。取消勾选即可停止。检查、添加到草稿并发送前，不会传给模型。",
   appShotGlobalHint:
-    "仅在此输入框仍打开时启用，捕获后回到这里检查。关闭可释放系统快捷键；不会安装键盘监听程序。",
+    "仅在当前输入框仍打开时捕获前台应用并供检查。取消勾选可释放快捷键。偏好不会长期保存；添加到草稿与发送是分开的操作。",
+  appShotLinuxShortcutHint:
+    "打开窗口选择器，不会在 Linux 自动捕获前台应用。取消勾选可释放快捷键，是否可用取决于桌面环境。偏好不会长期保存。",
 
   answeredQuestion: "原问题",
   answeredQuestionSelected: "已选择",

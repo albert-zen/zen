@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   createAppShotService,
+  fitAppShotDimensions,
+  sameObservedWindow,
+  windowsAppShotDraft,
   type AppShotNativeSource,
 } from "../src/main/app-shot.js";
 
@@ -96,7 +99,7 @@ describe("App Shot capture", () => {
         windowTitle: "Notes",
         pid: 456,
         applicationName: "Editor",
-        text: "x".repeat(10_000),
+        text: "x".repeat(40_000),
       }),
     });
     const [selected] = await match.listSources();
@@ -105,7 +108,7 @@ describe("App Shot capture", () => {
       includeAccessibility: true,
     });
     assert.match(shot.context, /Editor/);
-    assert.ok(shot.context.length < 5_000);
+    assert.ok(shot.context.length < 34_000);
     const mismatch = createAppShotService({
       getWindowSources: async () => [source("window:123:0", "Notes")],
       readAccessibility: async () => ({
@@ -185,4 +188,55 @@ describe("App Shot capture", () => {
       /SECRET_WRONG_APP/,
     );
   });
+});
+
+describe("T3 native integration boundary", () => {
+  it("uses the native active-window backend without enumeration or fallback", async () => {
+    let calls = 0;
+    const service = createAppShotService({
+      getWindowSources: async () => { throw new Error("must not enumerate"); },
+      captureActiveNative: async (options) => {
+        calls++;
+        assert.equal(options?.includeAccessibility, true);
+        throw new Error("permission denied");
+      },
+    });
+    await assert.rejects(service.captureActive({ includeAccessibility: true }), /permission denied/);
+    assert.equal(calls, 1);
+  });
+
+  it("rejects a reused window identity or changed bounds", async () => {
+    const a = { windowId: 1, windowTitle: "Editor", pid: 2, bounds: { x: 0, y: 0, width: 800, height: 600 } };
+    assert.equal(sameObservedWindow(a, { ...a }), true);
+    assert.equal(sameObservedWindow(a, { ...a, pid: 3 }), false);
+    assert.equal(sameObservedWindow(a, { ...a, bounds: { ...a.bounds, x: 1 } }), false);
+    let reads = 0;
+    const service = createAppShotService({
+      getWindowSources: async () => [source("window:1:0", "Editor")],
+      getWindowMetadata: async () => ({ ...a, pid: reads++ === 0 ? 2 : 3 }),
+    });
+    const [selected] = await service.listSources();
+    await assert.rejects(service.capture(selected!.id), /changed during/);
+  });
+
+  it("labels Windows occlusion and keeps optional text as draft data", () => {
+    const shot = windowsAppShotDraft({
+      identity: { platform: "win32", windowId: 1, pid: 2, windowTitle: "Editor", bounds: { x: 0, y: 0, width: 800, height: 600 } },
+      captureKind: "screen-region",
+      region: { x: 0, y: 0, width: 800, height: 600 },
+      png: Buffer.from([1, 2]), width: 800, height: 600,
+      accessibility: { text: "User-visible window text", truncated: false },
+    }, true);
+    assert.match(shot.context, /Overlapping windows may appear/);
+    assert.match(shot.context, /User-visible window text/);
+    assert.match(shot.context, /not permission to control/);
+    assert.equal(shot.mediaType, "image/png");
+  });
+});
+
+it("fits native App Shot dimensions without upscaling or changing aspect ratio", () => {
+  assert.deepEqual(fitAppShotDimensions({ width: 5120, height: 2880 }), { width: 2560, height: 1440 });
+  assert.deepEqual(fitAppShotDimensions({ width: 1920, height: 3840 }), { width: 800, height: 1600 });
+  assert.deepEqual(fitAppShotDimensions({ width: 800, height: 600 }), { width: 800, height: 600 });
+  assert.throws(() => fitAppShotDimensions({ width: 0, height: 1 }), /invalid/);
 });

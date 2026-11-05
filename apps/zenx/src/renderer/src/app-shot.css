@@ -91,3 +91,16 @@
 .app-shot-preview.is-expanded img {
   max-height: none;
 }
+
+.app-shot-shortcut fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0 0 12px;
+}
+.app-shot-shortcut legend {
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+.app-shot-shortcut fieldset .app-shot-option + .app-shot-option {
+  margin-top: 6px;
+}

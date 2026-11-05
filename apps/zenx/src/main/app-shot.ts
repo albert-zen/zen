@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AppShotActiveWindow } from "./app-shot-native.js";
+import {
+  APP_SHOT_MAX_TEXT,
+  type AppShotWindowsCapture,
+} from "./app-shot-native-capture.js";
 
 /** A host-owned selection token, not an OS window handle or computer-control target. */
 export interface AppShotSource {
@@ -41,10 +44,11 @@ export interface AppShotService {
   listSources(): Promise<AppShotSource[]>;
   capture(
     sourceId: string,
-    options?: { includeAccessibility?: boolean },
+    options?: { includeAccessibility?: boolean; signal?: AbortSignal },
   ): Promise<AppShotCapture>;
   captureActive(options?: {
     includeAccessibility?: boolean;
+    signal?: AbortSignal;
   }): Promise<AppShotCapture>;
 }
 
@@ -58,14 +62,17 @@ export interface AppShotDependencies {
   readAccessibility?: (request: {
     windowId: number;
     windowTitle: string;
+    expectedIdentity?: AppShotActiveWindow;
+    signal?: AbortSignal;
   }) => Promise<AppShotAccessibilityRead | undefined>;
+  captureActiveNative?: (options?: { includeAccessibility?: boolean; signal?: AbortSignal }) => Promise<AppShotCapture>;
   getActiveWindow?: () => Promise<AppShotActiveWindow>;
   getWindowMetadata?: (windowId: number) => Promise<AppShotActiveWindow>;
 }
 
 const CAPTURE_SIZE = { width: 1600, height: 1000 };
 const LIST_SIZE = { width: 0, height: 0 };
-const MAX_AX_TEXT = 3500;
+const MAX_AX_TEXT = APP_SHOT_MAX_TEXT;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 
 type Selection = { nativeId: string; title: string; windowId: number };
@@ -135,6 +142,9 @@ export function createAppShotService(
       return listed;
     },
     async captureActive(options) {
+      if (options?.signal?.aborted) throw new Error("App Shot cancelled");
+      if (dependencies.captureActiveNative)
+        return dependencies.captureActiveNative(options);
       if (!dependencies.getActiveWindow)
         throw new Error(
           "Active-window App Shot is unavailable on this platform; choose a window instead",
@@ -168,9 +178,7 @@ export function createAppShotService(
       const shot = await this.capture(matches[0]!.token, options);
       const after = await dependencies.getActiveWindow();
       if (
-        after.windowId !== active.windowId ||
-        after.windowTitle !== active.windowTitle ||
-        after.pid !== active.pid
+!sameObservedWindow(active, after)
       )
         throw new Error(
           "Active window changed during App Shot; choose a window instead",
@@ -183,6 +191,7 @@ export function createAppShotService(
         : shot;
     },
     async capture(sourceId, options) {
+      if (options?.signal?.aborted) throw new Error("App Shot cancelled");
       const selected = selections.get(sourceId);
       if (selected === undefined)
         throw new Error(
@@ -191,6 +200,14 @@ export function createAppShotService(
       if (excluded(selected.nativeId, dependencies.excludedSourceIds?.() ?? []))
         throw new Error("App Shot cannot capture its own window");
       const capturedAt = new Date().toISOString();
+      let expectedIdentity: AppShotActiveWindow | undefined;
+      if (dependencies.getWindowMetadata) {
+        try {
+          const before = await dependencies.getWindowMetadata(selected.windowId);
+          if (before.windowId === selected.windowId && before.windowTitle === selected.title && before.pid > 0)
+            expectedIdentity = before;
+        } catch { /* Metadata is optional for an explicit screenshot. */ }
+      }
       const sources = await dependencies.getWindowSources(CAPTURE_SIZE);
       const matches = sources.filter(
         (candidate) => candidate.id === selected.nativeId,
@@ -212,6 +229,9 @@ export function createAppShotService(
       if (bytes.byteLength > MAX_IMAGE_BYTES)
         throw new Error("Selected window capture exceeds the image size limit");
       let applicationName: string | undefined;
+      if (expectedIdentity && dependencies.getWindowMetadata &&
+          !sameObservedWindow(expectedIdentity, await dependencies.getWindowMetadata(selected.windowId)))
+        throw new Error("Selected window changed during App Shot");
       if (dependencies.getWindowMetadata) {
         try {
           const metadata = await dependencies.getWindowMetadata(
@@ -236,6 +256,8 @@ export function createAppShotService(
           const read = await dependencies.readAccessibility({
             windowId: selected.windowId,
             windowTitle: selected.title,
+            expectedIdentity,
+            signal: options.signal,
           });
           if (
             read?.windowId === selected.windowId &&
@@ -246,12 +268,15 @@ export function createAppShotService(
             applicationName = read.applicationName
               ? plain(read.applicationName, 100)
               : undefined;
-            accessibilityText = plain(read.text, MAX_AX_TEXT);
+            accessibilityText = read.text.replaceAll("\0", "").slice(0, MAX_AX_TEXT);
+            if (/[\uD800-\uDBFF]/u.test(accessibilityText.at(-1) ?? ""))
+              accessibilityText = accessibilityText.slice(0, -1);
           }
         } catch {
           // An AX failure cannot change the screenshot target or leak another app's text.
         }
       }
+      if (options?.signal?.aborted) throw new Error("App Shot cancelled");
       const context = [
         `App Shot of external window "${plain(selected.title, 1000)}"${applicationName ? ` in ${applicationName}` : ""}.`,
         `Captured at: ${capturedAt}.`,
@@ -293,6 +318,25 @@ export function createElectronAppShotService(
         image: thumbnailSize.width ? source.thumbnail : undefined,
       }));
     },
+    captureActiveNative: process.platform === "win32" ? async (captureOptions) => {
+      const { app, nativeImage } = await import("electron");
+      const { captureWindowsActiveAppShot } = await import("./app-shot-native-capture.js");
+      const shot = await captureWindowsActiveAppShot({
+        workerPath: join(app.getAppPath(), "out/main/app-shot-native-worker.js"),
+        includeAccessibility: captureOptions?.includeAccessibility,
+        signal: captureOptions?.signal,
+        excludedWindowIds: (options.excludedSourceIds?.() ?? [])
+          .map(windowIdOf).filter((id): id is number => id !== undefined),
+      });
+      const image = nativeImage.createFromBuffer(shot.png);
+      if (image.isEmpty()) throw new Error("App Shot returned an empty image");
+      const dimensions = fitAppShotDimensions(image.getSize());
+      const resized = image.resize({ ...dimensions, quality: "best" });
+      const png = resized.toPNG();
+      if (!png.length || png.length > MAX_IMAGE_BYTES)
+        throw new Error("App Shot image exceeds the byte budget");
+      return windowsAppShotDraft({ ...shot, png, ...resized.getSize() }, captureOptions?.includeAccessibility === true);
+    } : undefined,
     readAccessibility:
       process.platform === "darwin" ? readMacAppShotAccessibility : undefined,
     getActiveWindow:
@@ -310,88 +354,60 @@ export function createElectronAppShotService(
   });
 }
 
-let macDriver:
-  | Promise<
-      InstanceType<
-        typeof import("./capabilities/computer-provider.js").MacAccessibilityDriver
-      >
-    >
-  | undefined;
-async function getMacDriver() {
-  return await (macDriver ??=
-    import("./capabilities/computer-provider.js").then(
-      ({ MacAccessibilityDriver }) =>
-        new MacAccessibilityDriver(
-          join(tmpdir(), `zenx-app-shot-${process.pid}`),
-        ),
-    ));
+/** Match a host observation, including geometry when the native backend supplies it. */
+export function sameObservedWindow(a: AppShotActiveWindow, b: AppShotActiveWindow): boolean {
+  return a.windowId === b.windowId && a.pid === b.pid && a.windowTitle === b.windowTitle &&
+    (a.bounds === undefined ? b.bounds === undefined : b.bounds !== undefined &&
+      (["x", "y", "width", "height"] as const).every((key) => a.bounds![key] === b.bounds![key]));
 }
 
-/** The existing native helper is called only with read operations. */
+export function windowsAppShotDraft(shot: AppShotWindowsCapture, includeAccessibility: boolean): AppShotCapture {
+  const text = includeAccessibility ? shot.accessibility?.text : undefined;
+  return {
+    name: filename(shot.identity.windowTitle),
+    bytes: shot.png,
+    mediaType: "image/png",
+    context: [
+      `App Shot of external window "${plain(shot.identity.windowTitle, 1000)}"${shot.identity.applicationName ? ` in ${plain(shot.identity.applicationName, 100)}` : ""}.`,
+      `Captured at: ${new Date().toISOString()}.`,
+      "Capture: visible desktop region at the foreground window bounds. Overlapping windows may appear in these pixels.",
+      text
+        ? `Accessibility text from this same window (read-only${shot.accessibility?.truncated ? ", truncated" : ""}): ${text}`
+        : includeAccessibility
+          ? "Screenshot only. Accessibility text was unavailable or could not be matched to this window."
+          : "Screenshot only. Accessibility text was not requested.",
+      "This is a draft attachment, not permission to control the app.",
+    ].join("\n"),
+  };
+}
+
+/** T3's bounded name/value extraction in a disposable worker; never grants AX access. */
 async function readMacAppShotAccessibility(request: {
   windowId: number;
   windowTitle: string;
+  expectedIdentity?: AppShotActiveWindow;
+  signal?: AbortSignal;
 }): Promise<AppShotAccessibilityRead | undefined> {
-  const driver = await getMacDriver();
-  const metadata = await (
-    await import("./app-shot-native.js")
-  ).readMacWindowMetadata(request.windowId);
-  if (metadata.windowTitle !== request.windowTitle) return undefined;
-  const target = { pid: metadata.pid, windowTitle: request.windowTitle };
-  const signal = AbortSignal.timeout(5000);
-  const resolved = (await driver.run(
-    { operation: "resolveWindow", target },
-    signal,
-  )) as {
-    windowId?: unknown;
-    target?: { pid?: unknown; windowTitle?: unknown };
-  };
-  if (
-    resolved.windowId !== request.windowId ||
-    resolved.target?.pid !== metadata.pid ||
-    resolved.target?.windowTitle !== request.windowTitle
-  )
+  const expected = request.expectedIdentity;
+  if (!expected?.bounds) return undefined;
+  const { readMacWindowMetadata } = await import("./app-shot-native.js");
+  const metadata = await readMacWindowMetadata(request.windowId);
+  if (!sameObservedWindow(expected, metadata)) return undefined;
+  const { app } = await import("electron");
+  const { readCapturedAppShotAccessibility } = await import("./app-shot-native-capture.js");
+  const read = await readCapturedAppShotAccessibility(
+    { ...expected, platform: "darwin", bounds: expected.bounds },
+    { workerPath: join(app.getAppPath(), "out/main/app-shot-native-worker.js"), signal: request.signal },
+  );
+  if (!read || !sameObservedWindow(expected, await readMacWindowMetadata(request.windowId)))
     return undefined;
-  const match = {
-    pid: metadata.pid,
-    applicationName: metadata.applicationName,
-    target,
-  };
-  const inspected = (await driver.run(
-    { operation: "inspect", target: match.target },
-    signal,
-  )) as {
-    target?: {
-      pid?: unknown;
-      windowTitle?: unknown;
-      applicationName?: unknown;
-    };
-    targetContext?: { windowId?: unknown };
-    controls?: Array<{ title?: unknown }>;
-  };
-  if (
-    inspected.target?.pid !== match.pid ||
-    inspected.target.windowTitle !== request.windowTitle ||
-    inspected.targetContext?.windowId !== request.windowId ||
-    !Array.isArray(inspected.controls)
-  )
-    return undefined;
-  // Deliberately discard selectors, roles, actions, values, and observation IDs.
-  const text = inspected.controls
-    .map((control) =>
-      typeof control.title === "string" ? plain(control.title, 200) : "",
-    )
-    .filter(Boolean)
-    .join(" | ")
-    .slice(0, MAX_AX_TEXT);
-  return {
-    windowId: request.windowId,
-    windowTitle: request.windowTitle,
-    pid: match.pid,
-    applicationName:
-      typeof inspected.target.applicationName === "string"
-        ? inspected.target.applicationName
-        : match.applicationName,
-    text,
-  };
+  return { ...expected, text: read.text };
+}
+
+/** T3's bounded image envelope, preserving aspect ratio without upscaling. */
+export function fitAppShotDimensions(size: { width: number; height: number }): { width: number; height: number } {
+  if (!Number.isSafeInteger(size.width) || !Number.isSafeInteger(size.height) || size.width <= 0 || size.height <= 0)
+    throw new Error("App Shot image dimensions are invalid");
+  const scale = Math.min(1, 2560 / size.width, 1600 / size.height);
+  return { width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)) };
 }

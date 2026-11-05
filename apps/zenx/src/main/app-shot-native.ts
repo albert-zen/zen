@@ -1,11 +1,13 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { isAppShotBounds, type AppShotBounds } from "./app-shot-native-contract.js";
 
 export interface AppShotActiveWindow {
   windowId: number;
   windowTitle: string;
   pid: number;
   applicationName?: string;
+  bounds?: AppShotBounds;
 }
 
 /** CoreGraphics window rows are front-to-back. This only reads metadata, never input. */
@@ -22,7 +24,8 @@ for (let i = 0; i < $.CFArrayGetCount(rows); i++) {
   if (Number(ObjC.unwrap(candidate.objectForKey('kCGWindowOwnerPID'))) === pid && Number(ObjC.unwrap(candidate.objectForKey('kCGWindowLayer'))) === 0) { row = candidate; break; }
 }
 if (!row) throw Error('No foreground window');
-JSON.stringify({windowId: Number(ObjC.unwrap(row.objectForKey('kCGWindowNumber'))), windowTitle: String(ObjC.unwrap(row.objectForKey('kCGWindowName')) || ''), pid: pid, applicationName: String(ObjC.unwrap(app.localizedName) || '')});`;
+const bounds = ObjC.deepUnwrap(row.objectForKey('kCGWindowBounds'));
+JSON.stringify({bounds: {x: Number(bounds.X), y: Number(bounds.Y), width: Number(bounds.Width), height: Number(bounds.Height)}, windowId: Number(ObjC.unwrap(row.objectForKey('kCGWindowNumber'))), windowTitle: String(ObjC.unwrap(row.objectForKey('kCGWindowName')) || ''), pid: pid, applicationName: String(ObjC.unwrap(app.localizedName) || '')});`;
 
 const execFileAsync = promisify(execFile);
 type Runner = (
@@ -75,6 +78,7 @@ export async function readMacActiveWindow(
     windowId: Number(row.windowId),
     windowTitle: row.windowTitle,
     pid: Number(row.pid),
+    ...(isAppShotBounds(row.bounds) ? { bounds: row.bounds } : {}),
     ...(typeof row.applicationName === "string"
       ? { applicationName: row.applicationName }
       : {}),
@@ -94,7 +98,8 @@ for (let i = 0; i < $.CFArrayGetCount(rows); i++) {
 if (!row) throw Error('Window not found');
 const pid = Number(ObjC.unwrap(row.objectForKey('kCGWindowOwnerPID')));
 const app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(pid);
-JSON.stringify({windowId: wanted, windowTitle: String(ObjC.unwrap(row.objectForKey('kCGWindowName')) || ''), pid: pid, applicationName: app ? String(ObjC.unwrap(app.localizedName) || '') : ''});`;
+const bounds = ObjC.deepUnwrap(row.objectForKey('kCGWindowBounds'));
+JSON.stringify({bounds: {x: Number(bounds.X), y: Number(bounds.Y), width: Number(bounds.Width), height: Number(bounds.Height)}, windowId: wanted, windowTitle: String(ObjC.unwrap(row.objectForKey('kCGWindowName')) || ''), pid: pid, applicationName: app ? String(ObjC.unwrap(app.localizedName) || '') : ''});`;
 
 /** Read app/window metadata for an explicit CG window ID; never infers a target. */
 export async function readMacWindowMetadata(
@@ -142,6 +147,7 @@ export async function readMacWindowMetadata(
     windowId,
     windowTitle: row.windowTitle,
     pid: Number(row.pid),
+    ...(isAppShotBounds(row.bounds) ? { bounds: row.bounds } : {}),
     ...(typeof row.applicationName === "string"
       ? { applicationName: row.applicationName }
       : {}),

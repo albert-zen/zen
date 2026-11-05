@@ -1,3 +1,7 @@
+import {
+  appShotRuntimeDependencies,
+  stageAppShotRuntime,
+} from "./stage-app-shot-runtime.mjs";
 import { stageStorageWriter } from "./stage-storage-writer.mjs";
 import { applyShellPtyPatch } from "./shell-pty-patch.mjs";
 import { prepareRtkResource } from "./prepare-rtk.mjs";
@@ -861,6 +865,7 @@ export async function stagePackage(options) {
       : path.join(options.appDirectory, "main");
   if (options.target === "app") {
     await stageShellPty(options.rootDirectory, options.appDirectory);
+    await stageAppShotRuntime(options.rootDirectory, options.appDirectory);
     const licenseDirectory = path.join(options.appDirectory, "licenses");
     await mkdir(licenseDirectory, { recursive: true });
     for (const name of ["xterm", "addon-fit"])
@@ -1228,7 +1233,7 @@ export async function copyMarketplaceCatalogResource(options) {
   return destination;
 }
 
-export function packageManifest(target, zenxPackage) {
+export function packageManifest(target, zenxPackage, platform = process.platform) {
   return target === "app"
     ? {
         name: "zenx",
@@ -1237,6 +1242,7 @@ export function packageManifest(target, zenxPackage) {
         type: "module",
         main: "out/main/index.js",
         dependencies: {
+          ...appShotRuntimeDependencies(platform),
           "@zenx/plugin-sdk": zenxPackage.dependencies["@zenx/plugin-sdk"],
           ws: zenxPackage.dependencies.ws,
           "node-pty": zenxPackage.dependencies["node-pty"],

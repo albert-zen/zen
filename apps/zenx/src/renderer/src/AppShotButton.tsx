@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
-import type { AppShotApi } from "../../app-shot.js";
+import type { AppShotApi, AppShotShortcutKind } from "../../app-shot.js";
 import type { AppShotSource } from "../../main/app-shot.js";
 import type { ZenXImageDraft } from "../../main/image-attachments.js";
 import { AttachmentImage } from "./ImagePresentation.js";
@@ -38,6 +38,14 @@ export function AppShotButton({
   const [error, setError] = useState<string | null>(null);
   const [includeAccessibility, setIncludeAccessibility] = useState(false);
   const [armed, setArmed] = useState(false);
+  const [shortcutBusy, setShortcutBusy] = useState(false);
+  const shortcutRequested = useRef(false);
+  const shortcutOperation = useRef(0);
+  const supportsBothShift =
+    window.zenx.platform === "darwin" || window.zenx.platform === "win32";
+  const [shortcutKind, setShortcutKind] = useState<AppShotShortcutKind>(
+    supportsBothShift ? "both-shift" : "chord",
+  );
   const pending = useRef(false);
 
   useEffect(() => {
@@ -45,11 +53,23 @@ export function AppShotButton({
     const dispose = api.onCapture((event) => {
       if (!live.current || event.token !== token) return;
       if (event.disarmed) {
+        shortcutOperation.current++;
+        shortcutRequested.current = false;
+        setShortcutBusy(false);
         setArmed(false);
+        if (event.error && !latest.current.disabled) {
+          setError(event.error);
+          setOpen(true);
+        }
         return;
       }
       if (latest.current.disabled) {
         if (event.image) void api.discard(event.image.id).catch(() => {});
+        return;
+      }
+      if (event.openPicker) {
+        if (currentImage.current) setOpen(true);
+        else void openLatest.current();
         return;
       }
       if (currentImage.current) {
@@ -78,6 +98,8 @@ export function AppShotButton({
     });
     return () => {
       live.current = false;
+      shortcutOperation.current++;
+      shortcutRequested.current = false;
       operation.current++;
       dispose();
       for (const image of [currentImage.current, ...waitingImages.current])
@@ -88,6 +110,9 @@ export function AppShotButton({
 
   useEffect(() => {
     if (!disabled) return;
+    shortcutOperation.current++;
+    shortcutRequested.current = false;
+    setShortcutBusy(false);
     operation.current++;
     pending.current = false;
     setExpanded(false);
@@ -140,7 +165,7 @@ export function AppShotButton({
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (
-        armed ||
+        (armed && shortcutKind === "chord") ||
         event.repeat ||
         !event.shiftKey ||
         (!event.ctrlKey && !event.metaKey) ||
@@ -155,7 +180,7 @@ export function AppShotButton({
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [armed]);
+  }, [armed, shortcutKind]);
 
   const close = () => {
     operation.current++;
@@ -229,24 +254,25 @@ export function AppShotButton({
     }
   };
   const toggleShortcut = async () => {
-    if (pending.current) return;
-    const next = !armed;
-    pending.current = true;
-    setBusy(true);
+    if (latest.current.disabled) return;
+    const generation = ++shortcutOperation.current;
+    const next = !shortcutRequested.current;
+    shortcutRequested.current = next;
+    setArmed(next);
+    setShortcutBusy(true);
     setError(null);
     try {
-      if (next) await api.arm(token, includeAccessibility);
-      else await api.disarm(token);
-      if (live.current && !latest.current.disabled) setArmed(next);
+      if (next) await api.arm(token, includeAccessibility, shortcutKind);
       else await api.disarm(token);
     } catch (cause) {
-      if (live.current)
+      if (live.current && shortcutOperation.current === generation) {
+        shortcutRequested.current = false;
+        setArmed(false);
         setError(String(cause instanceof Error ? cause.message : cause));
-    } finally {
-      if (live.current) {
-        pending.current = false;
-        setBusy(false);
       }
+    } finally {
+      if (live.current && shortcutOperation.current === generation)
+        setShortcutBusy(false);
     }
   };
   return (
@@ -289,6 +315,9 @@ export function AppShotButton({
             </p>
           )}
           {busy && <p role="status">{t("appShotWorking")}</p>}
+          {shortcutBusy && (
+            <p role="status">{t("appShotShortcutWorking")}</p>
+          )}
           {waitingCount > 0 && (
             <p role="status">{t("appShotWaiting", { count: waitingCount })}</p>
           )}
@@ -380,20 +409,51 @@ export function AppShotButton({
               </div>
             </>
           )}
-          {window.zenx.platform === "darwin" && (
-            <div className="app-shot-shortcut">
+          <div className="app-shot-shortcut">
+            <fieldset disabled={armed || shortcutBusy}>
+              <legend>{t("appShotShortcutPreference")}</legend>
+              {supportsBothShift && (
+                <label className="app-shot-option">
+                  <input
+                    type="radio"
+                    name={`app-shot-shortcut-${token}`}
+                    value="both-shift"
+                    checked={shortcutKind === "both-shift"}
+                    onChange={() => setShortcutKind("both-shift")}
+                  />
+                  {t("appShotBothShift")}
+                </label>
+              )}
               <label className="app-shot-option">
                 <input
-                  type="checkbox"
-                  checked={armed}
-                  disabled={busy}
-                  onChange={() => void toggleShortcut()}
+                  type="radio"
+                  name={`app-shot-shortcut-${token}`}
+                  value="chord"
+                  checked={shortcutKind === "chord"}
+                  onChange={() => setShortcutKind("chord")}
                 />
-                {t("appShotGlobalShortcut")}
+                {t("appShotChord")}
               </label>
-              <p className="app-shot-hint">{t("appShotGlobalHint")}</p>
-            </div>
-          )}
+            </fieldset>
+            <label className="app-shot-option">
+              <input
+                type="checkbox"
+                checked={armed}
+                disabled={disabled}
+                onChange={() => void toggleShortcut()}
+              />
+              {t("appShotGlobalShortcut")}
+            </label>
+            <p className="app-shot-hint">
+              {t(
+                window.zenx.platform === "linux"
+                  ? "appShotLinuxShortcutHint"
+                  : shortcutKind === "both-shift"
+                    ? "appShotBothShiftHint"
+                    : "appShotGlobalHint",
+              )}
+            </p>
+          </div>
         </div>
       </Dialog>
     </>

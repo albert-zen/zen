@@ -5,7 +5,11 @@ import { JSDOM } from "jsdom";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { AppShotButton } from "../src/renderer/src/AppShotButton.js";
-import type { AppShotApi, AppShotEvent } from "../src/app-shot.js";
+import type {
+  AppShotApi,
+  AppShotEvent,
+  AppShotShortcutKind,
+} from "../src/app-shot.js";
 import type { ZenXImageDraft } from "../src/main/image-attachments.js";
 import { i18n } from "../src/renderer/src/i18n.js";
 
@@ -39,7 +43,9 @@ async function fixture(
     render(disabled?: boolean, key?: string): Promise<void>;
     armed(): string | null;
     disarmed: string[];
+    armRequests: Array<{ token: string; kind?: AppShotShortcutKind }>;
   }) => Promise<void>,
+  platform = "darwin",
 ) {
   await i18n.changeLanguage("en");
   const dom = new JSDOM('<html><body><div id="root"></div></body></html>', {
@@ -64,6 +70,7 @@ async function fixture(
   });
   const attached: ZenXImageDraft[] = [];
   const disarmed: string[] = [];
+  const armRequests: Array<{ token: string; kind?: AppShotShortcutKind }> = [];
   let listener: (event: AppShotEvent) => void = () => {};
   let armed: string | null = null;
   const api: AppShotApi = {
@@ -73,7 +80,8 @@ async function fixture(
     attach: async (id) =>
       id === "second" ? { ...shot, id: "second", name: "Second.png" } : shot,
     discard: async () => {},
-    arm: async (token) => {
+    arm: async (token, _includeAccessibility, kind) => {
+      armRequests.push({ token, kind });
       armed = token;
       return "⌘⇧2";
     },
@@ -90,7 +98,7 @@ async function fixture(
   };
   Object.assign(dom.window, {
     zenx: {
-      platform: "darwin",
+      platform,
       appShot: api,
       imageAttachments: { read: async () => new Uint8Array([1, 2, 3, 4]) },
     },
@@ -133,6 +141,7 @@ async function fixture(
       render,
       armed: () => armed,
       disarmed,
+      armRequests,
     });
   } finally {
     await act(async () => root.unmount());
@@ -277,5 +286,159 @@ test("a repeated shortcut cannot supersede an explicit attach in flight", async 
     assert.deepEqual(attached, [shot]);
     assert.ok(document.querySelector('[role="dialog"]'));
     assert.ok(document.querySelector('[aria-label="Preview Second.png"]'));
+  });
+});
+
+function shortcutCheckbox(): HTMLInputElement {
+  const checkbox = [...document.querySelectorAll<HTMLInputElement>(
+    'input[type="checkbox"]',
+  )].at(-1);
+  assert.ok(checkbox);
+  return checkbox;
+}
+
+test("Windows defaults to both Shift but requires explicit enable", async () => {
+  await fixture(async ({ click, armed, armRequests }) => {
+    assert.equal(armed(), null);
+    assert.deepEqual(armRequests, []);
+    await click("App Shot");
+    const both = document.querySelector<HTMLInputElement>(
+      'input[type="radio"][value="both-shift"]',
+    )!;
+    assert.equal(both.checked, true);
+    assert.equal(shortcutCheckbox().checked, false);
+    await act(async () => shortcutCheckbox().click());
+    assert.equal(armRequests[0]?.kind, "both-shift");
+    assert.match(document.body.textContent!, /not a double tap/);
+    assert.match(document.body.textContent!, /not reserved/);
+    assert.match(document.body.textContent!, /already held/);
+    await act(async () => shortcutCheckbox().click());
+    assert.equal(armed(), null);
+    await act(async () =>
+      document.querySelector<HTMLInputElement>(
+        'input[type="radio"][value="chord"]',
+      )!.click(),
+    );
+    await act(async () => shortcutCheckbox().click());
+    assert.equal(armRequests[1]?.kind, "chord");
+  }, "win32");
+});
+
+test("Linux exposes only the chord and its event opens an explicit chooser", async () => {
+  await fixture(async ({ api, click, armed, emit, armRequests, attached }) => {
+    let lists = 0;
+    const list = api.list;
+    api.list = async () => {
+      lists++;
+      return list();
+    };
+    await click("App Shot");
+    assert.equal(
+      document.querySelector('input[type="radio"][value="both-shift"]'),
+      null,
+    );
+    assert.equal(
+      document.querySelector<HTMLInputElement>(
+        'input[type="radio"][value="chord"]',
+      )!.checked,
+      true,
+    );
+    assert.match(document.body.textContent!, /does not capture the foreground/);
+    await act(async () => shortcutCheckbox().click());
+    assert.equal(armRequests[0]?.kind, "chord");
+    const token = armed()!;
+    await click("Close App Shot");
+    await act(async () => emit({ token, openPicker: true }));
+    assert.equal(lists, 2);
+    assert.ok(document.querySelector('[role="dialog"]'));
+    assert.deepEqual(attached, []);
+    await click("Example");
+    await act(async () => emit({ token, openPicker: true }));
+    assert.equal(lists, 2);
+    assert.ok(document.querySelector('[aria-label="Preview Example.png"]'));
+    assert.deepEqual(attached, []);
+  }, "linux");
+});
+
+test("held-at-enable capture does not erase shortcut startup state or skip review", async () => {
+  await fixture(async ({ api, click, emit, attached }) => {
+    const arm = api.arm;
+    api.arm = async (token, includeAccessibility, kind) => {
+      const result = arm(token, includeAccessibility, kind);
+      emit({ token, image: shot });
+      return result;
+    };
+    await click("App Shot");
+    await act(async () => shortcutCheckbox().click());
+    assert.equal(shortcutCheckbox().checked, true);
+    assert.ok(document.querySelector('[aria-label="Preview Example.png"]'));
+    assert.deepEqual(attached, []);
+    await click("Attach to draft");
+    assert.deepEqual(attached, [shot]);
+  });
+});
+
+test("a pending shortcut can be disabled before startup completes", async () => {
+  await fixture(async ({ api, click, disarmed }) => {
+    const ready = deferred<string>();
+    api.arm = async () => ready.promise;
+    await click("App Shot");
+    await act(async () => shortcutCheckbox().click());
+    assert.equal(shortcutCheckbox().checked, true);
+    assert.equal(shortcutCheckbox().disabled, false);
+    await act(async () => shortcutCheckbox().click());
+    assert.equal(shortcutCheckbox().checked, false);
+    assert.equal(disarmed.length, 1);
+    await act(async () => ready.resolve("Left Shift + Right Shift"));
+    assert.equal(shortcutCheckbox().checked, false);
+  });
+});
+
+test("disabled composer fences a late shortcut startup result", async () => {
+  await fixture(async ({ api, click, render, disarmed }) => {
+    const ready = deferred<string>();
+    api.arm = async () => ready.promise;
+    await click("App Shot");
+    await act(async () => shortcutCheckbox().click());
+    await render(true);
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.equal(disarmed.length, 1);
+    await act(async () => ready.resolve("Left Shift + Right Shift"));
+    await render(false);
+    await click("App Shot");
+    assert.equal(shortcutCheckbox().checked, false);
+  });
+});
+
+test("native failure visibly disables the shortcut even when review was closed", async () => {
+  await fixture(async ({ click, armed, emit }) => {
+    await click("App Shot");
+    await act(async () => shortcutCheckbox().click());
+    const token = armed()!;
+    await click("Close App Shot");
+    await act(async () =>
+      emit({ token, disarmed: true, error: "Native helper stopped" }),
+    );
+    assert.ok(document.querySelector('[role="dialog"]'));
+    assert.equal(shortcutCheckbox().checked, false);
+    assert.match(
+      document.querySelector('[role="alert"]')!.textContent!,
+      /Native helper stopped/,
+    );
+  });
+});
+
+test("startup rejection leaves an unchecked preference and visible error", async () => {
+  await fixture(async ({ api, click }) => {
+    api.arm = async () => {
+      throw new Error("Shortcut unavailable");
+    };
+    await click("App Shot");
+    await act(async () => shortcutCheckbox().click());
+    assert.equal(shortcutCheckbox().checked, false);
+    assert.match(
+      document.querySelector('[role="alert"]')!.textContent!,
+      /Shortcut unavailable/,
+    );
   });
 });

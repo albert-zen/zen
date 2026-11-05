@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AppShotIpcController } from "../src/main/app-shot-ipc.js";
+import type { AppShotEvent } from "../src/app-shot.js";
 import type { AppShotCapture, AppShotService } from "../src/main/app-shot.js";
 import type { ZenXImageDraft } from "../src/main/image-attachments.js";
 
@@ -36,12 +37,23 @@ function fixture(platform = "darwin") {
   let imports = 0;
   let prepared = 0;
   let focusCount = 0;
-  const events: Array<{
-    token: string;
-    image?: ZenXImageDraft;
-    error?: string;
-    disarmed?: true;
-  }> = [];
+  const events: AppShotEvent[] = [];
+  type ModifierOptions = {
+    onTrigger(): void;
+    onFailure(error: unknown): void;
+    signal: AbortSignal;
+  };
+  const modifierStarts: ModifierOptions[] = [];
+  let modifierStops = 0;
+  let activeCaptures = 0;
+  let activeSignal: AbortSignal | undefined;
+  let startModifier: (
+    options: ModifierOptions,
+  ) => Promise<{ stop(): Promise<void> }> = async () => ({
+    async stop() {
+      modifierStops++;
+    },
+  });
   let activeCapture: () => Promise<typeof capture> = async () => capture;
   let manualCapture: () => Promise<AppShotCapture> = async () => capture;
   const controller = new AppShotIpcController<Renderer, object>({
@@ -63,7 +75,9 @@ function fixture(platform = "darwin") {
         async capture() {
           return manualCapture();
         },
-        async captureActive() {
+        async captureActive(options) {
+          activeSignal = options?.signal;
+          activeCaptures++;
           return activeCapture();
         },
       };
@@ -79,6 +93,10 @@ function fixture(platform = "darwin") {
     async importCapture(captured) {
       imports++;
       return { ...draft, appShotContext: captured.context };
+    },
+    startModifierPair(options) {
+      modifierStarts.push(options);
+      return startModifier(options);
     },
     registerShortcut(_key, callback) {
       shortcut = callback;
@@ -100,6 +118,19 @@ function fixture(platform = "darwin") {
     renderer,
     caller: () => ({ renderer, frame: renderer.frame }),
     events,
+    modifierStarts,
+    get modifierStops() {
+      return modifierStops;
+    },
+    get activeSignal() {
+      return activeSignal;
+    },
+    get activeCaptures() {
+      return activeCaptures;
+    },
+    setModifierStart(value: typeof startModifier) {
+      startModifier = value;
+    },
     get shortcut() {
       return shortcut;
     },
@@ -175,14 +206,14 @@ test("only owned exact main frames can stage; only Attach persists", async () =>
   assert.equal(f.imports, 1);
 });
 
-test("shortcut is opt-in, only macOS, and stale token cannot disarm replacement", async () => {
+test("portable chord is opt-in and stale token cannot disarm replacement", async () => {
   const f = fixture();
   assert.equal(f.shortcut, undefined);
-  assert.equal(f.controller.arm(f.caller(), "first", false), "⌘⇧2");
+  assert.equal(await f.controller.arm(f.caller(), "first", false), "⌘⇧2");
   assert.ok(f.shortcut);
-  f.controller.arm(f.caller(), "new", true);
+  await f.controller.arm(f.caller(), "new", true);
   assert.deepEqual(f.events, [{ token: "first", disarmed: true }]);
-  f.controller.disarm(f.caller(), "first");
+  await f.controller.disarm(f.caller(), "first");
   assert.ok(f.shortcut);
   await f.controller.onShortcut();
   assert.deepEqual(
@@ -191,24 +222,27 @@ test("shortcut is opt-in, only macOS, and stale token cannot disarm replacement"
   );
   assert.equal(f.focusCount, 1);
   assert.equal(f.imports, 0);
-  f.controller.disarm(f.caller(), "new");
+  await f.controller.disarm(f.caller(), "new");
   assert.equal(f.shortcut, undefined);
-  assert.equal(f.unregisters, 1);
-  assert.throws(
-    () => fixture("win32").controller.arm(f.caller(), "x", false),
-    /macOS/u,
+  assert.equal(f.unregisters, 2);
+  const windows = fixture("win32");
+  assert.equal(
+    await windows.controller.arm(windows.caller(), "x", false, "chord"),
+    "Ctrl+Shift+2",
   );
+  windows.controller.dispose();
 });
 
 test("pending captures are bounded and discarded after disarm or navigation", async () => {
   const f = fixture();
   const wait = deferred<typeof capture>();
   f.setActiveCapture(() => wait.promise);
-  f.controller.arm(f.caller(), "old", false);
+  await f.controller.arm(f.caller(), "old", false);
   const pending = f.controller.onShortcut();
   await f.controller.onShortcut();
-  f.controller.disarm(f.caller(), "old");
-  f.controller.arm(f.caller(), "new", false);
+  await f.controller.disarm(f.caller(), "old");
+  assert.equal(f.activeSignal?.aborted, true);
+  await f.controller.arm(f.caller(), "new", false);
   assert.deepEqual(f.events, []);
   wait.resolve(capture);
   await pending;
@@ -230,7 +264,7 @@ test("capture failures report to the current owner only", async () => {
   f.setActiveCapture(async () => {
     throw new Error("window unavailable");
   });
-  f.controller.arm(f.caller(), "owner", false);
+  await f.controller.arm(f.caller(), "owner", false);
   await f.controller.onShortcut();
   assert.deepEqual(f.events, [{ token: "owner", error: "window unavailable" }]);
   assert.equal(f.focusCount, 1);
@@ -288,4 +322,159 @@ test("staged bytes expire after five minutes without touching permanent storage"
     Date.now = original;
     f.controller.dispose();
   }
+});
+
+test("both Shift is opt-in on macOS and Windows and can trigger during startup", async () => {
+  for (const platform of ["darwin", "win32"]) {
+    const f = fixture(platform);
+    assert.equal(f.modifierStarts.length, 0);
+    let stops = 0;
+    f.setModifierStart(async (options) => {
+      options.onTrigger();
+      return {
+        async stop() {
+          stops++;
+        },
+      };
+    });
+    assert.equal(
+      await f.controller.arm(f.caller(), "pair", true, "both-shift"),
+      "Left Shift + Right Shift",
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(f.events.length, 1);
+    assert.equal(f.events[0]?.token, "pair");
+    assert.ok(f.events[0]?.image);
+    assert.equal(f.imports, 0);
+    assert.equal(f.shortcut, undefined);
+    await f.controller.disarm(f.caller(), "pair");
+    assert.equal(stops, 1);
+    assert.equal(f.modifierStarts[0]?.signal.aborted, true);
+    f.modifierStarts[0]!.onTrigger();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(f.activeCaptures, 1);
+    f.controller.dispose();
+  }
+});
+
+test("disarm waits for a late startup handle and its stop handshake", async () => {
+  const f = fixture();
+  const ready = deferred<{ stop(): Promise<void> }>();
+  const stopped = deferred<void>();
+  let stops = 0;
+  f.setModifierStart(() => ready.promise);
+  const arming = f.controller.arm(f.caller(), "pair", false, "both-shift");
+  const rejected = assert.rejects(arming, /cancelled/u);
+  await Promise.resolve();
+  let disarmed = false;
+  const disarming = f.controller.disarm(f.caller(), "pair").then(() => {
+    disarmed = true;
+  });
+  assert.equal(f.modifierStarts[0]?.signal.aborted, true);
+  ready.resolve({
+    async stop() {
+      stops++;
+      await stopped.promise;
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(stops, 1);
+  assert.equal(disarmed, false);
+  assert.deepEqual(f.events, []);
+  stopped.resolve();
+  await Promise.all([rejected, disarming]);
+  assert.equal(disarmed, true);
+});
+
+test("replacing a starting modifier owner stops it before enabling the chord", async () => {
+  const f = fixture();
+  const ready = deferred<{ stop(): Promise<void> }>();
+  let stops = 0;
+  f.setModifierStart(() => ready.promise);
+  const first = f.controller.arm(f.caller(), "old", false, "both-shift");
+  const rejected = assert.rejects(first, /cancelled/u);
+  await Promise.resolve();
+  const second = f.controller.arm(f.caller(), "new", false, "chord");
+  f.modifierStarts[0]!.onTrigger();
+  assert.equal(f.activeCaptures, 0);
+  assert.equal(f.shortcut, undefined);
+  ready.resolve({
+    async stop() {
+      stops++;
+    },
+  });
+  await Promise.all([rejected, second]);
+  assert.equal(stops, 1);
+  assert.ok(f.shortcut);
+  assert.deepEqual(f.events, [{ token: "old", disarmed: true }]);
+  await f.controller.disarm(f.caller(), "old");
+  assert.ok(f.shortcut);
+  f.controller.dispose();
+});
+
+test("modifier failure disarms visibly without a restart loop", async () => {
+  const f = fixture();
+  await f.controller.arm(f.caller(), "pair", false, "both-shift");
+  f.modifierStarts[0]!.onFailure(new Error("helper stopped"));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(f.events, [
+    { token: "pair", disarmed: true, error: "helper stopped" },
+  ]);
+  assert.equal(f.modifierStops, 1);
+  assert.equal(f.modifierStarts.length, 1);
+  f.modifierStarts[0]!.onTrigger();
+  assert.equal(f.activeCaptures, 0);
+  f.controller.dispose();
+});
+
+test("startup rejection and navigation leave no modifier ownership", async () => {
+  const failed = fixture();
+  failed.setModifierStart(async () => {
+    throw new Error("helper unavailable");
+  });
+  await assert.rejects(
+    failed.controller.arm(failed.caller(), "pair", false, "both-shift"),
+    /helper unavailable/u,
+  );
+  assert.equal(failed.modifierStarts[0]?.signal.aborted, true);
+  await failed.controller.onShortcut();
+  assert.equal(failed.activeCaptures, 0);
+  for (const destroy of [false, true]) {
+    const f = fixture();
+    await f.controller.arm(f.caller(), "pair", false, "both-shift");
+    if (destroy) f.controller.dispose();
+    else f.controller.forget(f.renderer);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(f.modifierStarts[0]?.signal.aborted, true);
+    assert.equal(f.modifierStops, 1);
+    f.modifierStarts[0]!.onTrigger();
+    assert.equal(f.activeCaptures, 0);
+  }
+});
+
+test("Linux chord opens the chooser without capturing or claiming a foreground window", async () => {
+  const f = fixture("linux");
+  await assert.rejects(
+    f.controller.arm(f.caller(), "pair", false, "both-shift"),
+    /macOS and Windows/u,
+  );
+  assert.equal(f.modifierStarts.length, 0);
+  await f.controller.arm(f.caller(), "chooser", true, "chord");
+  await f.controller.onShortcut();
+  assert.deepEqual(f.events, [{ token: "chooser", openPicker: true }]);
+  assert.equal(f.activeCaptures, 0);
+  assert.equal(f.prepared, 0);
+  assert.equal(f.imports, 0);
+  assert.equal(f.focusCount, 1);
+  f.controller.dispose();
+});
+
+test("invalid shortcut kinds cannot register a global listener", async () => {
+  const f = fixture();
+  await assert.rejects(
+    f.controller.arm(f.caller(), "owner", false, "double-tap"),
+    /Invalid/u,
+  );
+  assert.equal(f.shortcut, undefined);
+  assert.equal(f.modifierStarts.length, 0);
 });
