@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { delay, withPreviewBrowser } from "./preview-browser.mjs";
+import { settleAppShotPreview } from "./app-shot-preview-stability.mjs";
 
 assert.equal(process.env.GITHUB_ACTIONS, "true", "Capture is CI-only.");
 assert.equal(process.platform, "linux", "Capture targets Ubuntu CI.");
@@ -31,6 +32,7 @@ const measure = `(() => {
     context: document.querySelector('.app-shot-context')?.textContent,
     count: document.querySelector('main > p:last-child')?.textContent,
     overflow: document.documentElement.scrollWidth > innerWidth,
+    pendingFiniteAnimations: document.getAnimations().filter(a => Number.isFinite(a.effect?.getComputedTiming().endTime) && (a.pending || a.playState === 'running')).length,
     alert: document.querySelector('[role=alert]')?.textContent ?? null
   };
 })()`;
@@ -59,11 +61,7 @@ try {
         }
         throw new Error(`App Shot condition timed out: ${expression}`);
       };
-      const stable = async () => {
-        await evaluate(
-          "document.fonts.ready.then(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true)))))",
-        );
-      };
+      const stable = () => evaluate(`(${settleAppShotPreview.toString()})()`);
       const click = async (selector) => {
         const position = await evaluate(`(() => {
           const e=document.querySelector(${JSON.stringify(selector)});
@@ -81,9 +79,30 @@ try {
             clickCount: 1,
           });
       };
+      const reveal = async (selector) => {
+        await evaluate(
+          `document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'center'})`,
+        );
+        await stable();
+        assert.equal(
+          await evaluate(`(() => {
+          const element = document.querySelector(${JSON.stringify(selector)});
+          const r = element.getBoundingClientRect(), d = document.querySelector('.app-shot-dialog').getBoundingClientRect();
+          return r.height > 0 && r.top >= d.top && r.bottom <= d.bottom && r.left >= d.left && r.right <= d.right;
+        })()`),
+          true,
+          "Setup/revocation text must be reachable inside the dialog",
+        );
+      };
       const check = async (width, height) => {
+        await stable();
         const state = await evaluate(measure);
         assert.equal(state.overflow, false, "No horizontal page overflow.");
+        assert.equal(
+          state.pendingFiniteAnimations,
+          0,
+          "Capture only settled production motion.",
+        );
         assert.equal(state.alert, null, "No image or component error.");
         if (state.dialog) {
           assert.ok(
@@ -203,6 +222,13 @@ try {
             ...(await check(width, height)),
           });
           await screenshot(`${name}-manual-setup.png`);
+          await reveal(".app-shot-shortcut details > p:last-child");
+          receipt.states.push({
+            phase: "native-manual-revoke",
+            ...(await check(width, height)),
+            revokeVisible: true,
+          });
+          await screenshot(`${name}-manual-revoke.png`);
           await click(".app-shot-shortcut details summary");
           await stable();
         }
@@ -226,6 +252,13 @@ try {
             ...(await check(width, height)),
           });
           await screenshot(`${name}-manual-binding.png`);
+          await reveal(".app-shot-hyprland-binding pre:last-child");
+          receipt.states.push({
+            phase: "hyprland-lua-binding",
+            ...(await check(width, height)),
+            luaVisible: true,
+          });
+          await screenshot(`${name}-lua-binding.png`);
           await click(".app-shot-hyprland-binding summary");
           await click('.app-shot-shortcut input[type="checkbox"]');
           await wait(

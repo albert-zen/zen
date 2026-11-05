@@ -3,6 +3,7 @@ import {
   mkdir,
   mkdtemp,
   realpath,
+  readFile,
   rm,
   symlink,
   writeFile,
@@ -162,5 +163,32 @@ test("missing source input prevents the build callback from starting", async (t)
       assert.fail("must not build"),
     ),
     { code: "ENOENT" },
+  );
+});
+
+test("native workflow resolves runner.temp only in step environment scope", async () => {
+  const workflow = await readFile(
+    new URL(
+      "../../../.github/workflows/app-shot-linux-native.yml",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.doesNotMatch(workflow, /^ {6}CARGO_TARGET_DIR:/mu);
+  assert.equal(
+    [
+      ...workflow.matchAll(
+        /^ {10}CARGO_TARGET_DIR: \$\{\{ runner\.temp \}\}\/app-shot-linux-target$/gmu,
+      ),
+    ].length,
+    2,
+  );
+  assert.match(
+    workflow,
+    /Run both locked native suites[\s\S]*?        env:\n          CARGO_TARGET_DIR:/u,
+  );
+  assert.match(
+    workflow,
+    /Verify standalone Hyprland distribution[\s\S]*?        env:\n          CARGO_TARGET_DIR:/u,
   );
 });

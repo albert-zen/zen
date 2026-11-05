@@ -28,7 +28,6 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: stable
       RUSTUP_AUTO_INSTALL: "0"
-      CARGO_TARGET_DIR: ${{ runner.temp }}/app-shot-linux-target
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -51,6 +50,8 @@ jobs:
       - name: Test fixed-file staging, no-I/O skips and generated dependency notices
         run: node --test apps/zenx/test/stage-app-shot-linux.test.mjs apps/zenx/test/build-app-shot-linux.test.mjs apps/zenx/test/app-shot-hyprland-source.test.mjs
       - name: Run both locked native suites and release builds without a compositor
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/app-shot-linux-target
         shell: bash
         run: |
           set -o pipefail
@@ -74,6 +75,8 @@ jobs:
             done
           } > "${{ runner.temp }}/app-shot-linux-abi.txt"
       - name: Verify standalone Hyprland distribution also retains dependency notices
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/app-shot-linux-target
         run: |
           node apps/zenx/scripts/build-app-shot-hyprland.mjs --out "${{ runner.temp }}/app-shot-hyprland-standalone"
           test -s "${{ runner.temp }}/app-shot-hyprland-standalone/THIRD-PARTY-NOTICES.txt"
