@@ -1,4 +1,36 @@
 export const en = {
+  appShotNativeDataHome:
+    "Use the fixed user-owned paths below. $XDG_DATA_HOME defaults to ~/.local/share. Follow the README's ownership and permission checks; do not use symlinks.",
+  appShotKdeReady: "KDE native capture is available",
+  appShotKdeSetup: "KDE native capture needs manual setup",
+  appShotKdeUnavailable: "KDE native capture is unavailable in this session",
+  appShotKdeError: "KDE capture check failed",
+  appShotKdeSetupHint:
+    "For KDE Wayland, review resources/app-shot-linux/kde/README.md in the installation package. Manually install its helper and desktop authorization entry. ZenX does not install, update or authorize them. The desktop entry grants this helper screenshot access.",
+  appShotKdeRevokeHint:
+    "To revoke native capture access, remove the desktop authorization entry and helper. Disable this Composer's shortcut separately to close its session.",
+  appShotHyprlandReady: "Hyprland native capture is available",
+  appShotHyprlandSetup: "Hyprland native capture needs manual setup",
+  appShotHyprlandUpdate: "Hyprland helper needs a manual update or repair",
+  appShotHyprlandUnavailable:
+    "Hyprland native capture is unavailable in this session",
+  appShotHyprlandError: "Hyprland capture check failed",
+  appShotHyprlandSetupHint:
+    "Review resources/app-shot-linux/hyprland/README.md in the installation package. Manually install or replace the helper. ZenX does not install, update or grant permissions. Hyprland may request screen-sharing permission on explicit capture.",
+  appShotHyprlandRevokeHint:
+    "To revoke, disable the Composer action, remove the binding from your Hyprland configuration and remove the helper. Revoke any screen-sharing permission separately in Hyprland; disabling the action does not change compositor permissions.",
+  appShotHyprlandEnable: "Enable Hyprland capture action for this Composer",
+  appShotHyprlandHint:
+    "Registering the action does not confirm a physical shortcut. Bind it manually below. Disable closes this Composer's portal session, without editing your binding. Capture stays in review; Attach and Send remain separate.",
+  appShotHyprlandActionRegistered:
+    "Hyprland capture action is registered. Physical key binding is managed by your configuration.",
+  appShotHyprlandActionMissing:
+    "Hyprland capture action is not registered. App Shot is not armed.",
+  appShotHyprlandBinding: "Manual Hyprland shortcut setup",
+  appShotHyprlandManualSetup:
+    "Requires xdg-desktop-portal-hyprland. After checking conflicts, add one matching line to your own configuration and reload it. ZenX does not read or edit this file. To revoke the shortcut, remove the binding and disable the action here too.",
+  appShotHyprlandLegacy: "Legacy configuration",
+  appShotHyprlandLua: "Lua configuration",
   appShotGnomeReady: "GNOME capture extension is available",
   appShotGnomeSetup: "GNOME capture extension needs setup or an update",
   appShotGnomeSetupHint:
@@ -1053,6 +1085,36 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  appShotNativeDataHome:
+    "使用下方固定的用户自有路径。$XDG_DATA_HOME 默认为 ~/.local/share。请按 README 检查所有权和权限，不使用符号链接。",
+  appShotKdeReady: "KDE 原生捕获可用",
+  appShotKdeSetup: "KDE 原生捕获需要手动设置",
+  appShotKdeUnavailable: "当前会话不支持 KDE 原生捕获",
+  appShotKdeError: "KDE 捕获能力检查失败",
+  appShotKdeSetupHint:
+    "KDE Wayland 请查看安装包中的 resources/app-shot-linux/kde/README.md，手动安装辅助程序及桌面授权条目。ZenX 不会安装、更新或代为授权。该桌面条目会授予此辅助程序截图权限。",
+  appShotKdeRevokeHint:
+    "撤销原生捕获权限请移除桌面授权条目和辅助程序。输入框快捷键需单独取消启用，才能关闭该会话。",
+  appShotHyprlandReady: "Hyprland 原生捕获可用",
+  appShotHyprlandSetup: "Hyprland 原生捕获需要手动设置",
+  appShotHyprlandUpdate: "Hyprland 辅助程序需要手动更新或修复",
+  appShotHyprlandUnavailable: "当前会话不支持 Hyprland 原生捕获",
+  appShotHyprlandError: "Hyprland 捕获能力检查失败",
+  appShotHyprlandSetupHint:
+    "请查看安装包中的 resources/app-shot-linux/hyprland/README.md，手动安装或替换辅助程序。ZenX 不会安装、更新或代为授权。明确捕获时，Hyprland 可能请求屏幕共享权限。",
+  appShotHyprlandRevokeHint:
+    "撤销时请取消启用输入框动作，移除 Hyprland 配置中的绑定并删除辅助程序。已授予的屏幕共享权限需在 Hyprland 中单独撤销；停用动作不会改变 compositor 权限。",
+  appShotHyprlandEnable: "为当前输入框启用 Hyprland 捕获动作",
+  appShotHyprlandHint:
+    "注册动作不表示已绑定实体按键。请手动添加下方配置。取消启用会关闭当前输入框的 portal 会话，不会修改绑定。捕获仍需检查，添加与发送分开。",
+  appShotHyprlandActionRegistered:
+    "Hyprland 捕获动作已注册。实体按键绑定由你的配置管理。",
+  appShotHyprlandActionMissing: "Hyprland 捕获动作尚未注册，应用快照未启用。",
+  appShotHyprlandBinding: "手动设置 Hyprland 快捷键",
+  appShotHyprlandManualSetup:
+    "需要 xdg-desktop-portal-hyprland。检查冲突后，自行将一条对应格式的配置添加到文件并重新加载。ZenX 不读取或修改该文件。撤销快捷键请移除绑定，并在这里取消启用动作。",
+  appShotHyprlandLegacy: "传统配置",
+  appShotHyprlandLua: "Lua 配置",
   appShotGnomeReady: "GNOME 捕获扩展可用",
   appShotGnomeSetup: "GNOME 捕获扩展需要设置或更新",
   appShotGnomeSetupHint:

@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AppShotIpcController } from "../src/main/app-shot-ipc.js";
+import {
+  AppShotIpcController,
+  type AppShotIpcDependencies,
+} from "../src/main/app-shot-ipc.js";
 import type { PortalAppShotShortcutOptions } from "../src/main/app-shot-portal-shortcut.js";
 import type { AppShotEvent } from "../src/app-shot.js";
 import type { GnomeAppShotSupport } from "../src/main/app-shot-gnome.js";
@@ -31,6 +34,10 @@ function fixture(
   niri = false,
   portal = false,
   gnomeSupport?: (signal: AbortSignal) => Promise<GnomeAppShotSupport>,
+  native: Pick<
+    AppShotIpcDependencies<object, object>,
+    "kdeSupport" | "hyprlandSupport" | "portalSupport" | "hyprlandBinding"
+  > = {},
 ) {
   type Renderer = { owned: boolean; url: string; frame: object; calls: number };
   const renderer: Renderer = {
@@ -70,6 +77,7 @@ function fixture(
   let portalStops = 0;
   const portalHandle = {
     registered: false,
+    actionRegistered: undefined as boolean | undefined,
     shortcutDescription: undefined as string | undefined,
     canConfigure: true,
     stop() {
@@ -96,6 +104,7 @@ function fixture(
           },
         }
       : {}),
+    ...native,
     niriBinding: niri
       ? 'Ctrl+Shift+2 repeat=false { spawn "gdbus"; }'
       : undefined,
@@ -715,5 +724,133 @@ test("a portal shortcut in the focused ZenX Composer opens one chooser instead o
   await f.controller.onShortcut();
   assert.equal(f.activeCaptures, 0);
   assert.equal(f.events.at(-1)?.openPicker, true);
+  f.controller.dispose();
+});
+
+test("native Wayland readiness skips portal probes and reports setup or error without capture", async () => {
+  for (const backend of ["kde", "hyprland"] as const) {
+    const states =
+      backend === "kde"
+        ? (["ready", "manual-setup-required", "unavailable", "error"] as const)
+        : ([
+            "ready",
+            "not-installed",
+            "unsupported-session",
+            "update-required",
+            "error",
+          ] as const);
+    for (const status of states) {
+      let probes = 0;
+      const support = {
+        status,
+        message: "native diagnostic",
+        available: status === "ready",
+        protocolVersion: 1,
+        feedbackAvailable: false,
+      };
+      const native = {
+        [backend === "kde" ? "kdeSupport" : "hyprlandSupport"]: async () =>
+          support,
+        portalSupport: async () => {
+          probes++;
+          return true;
+        },
+      };
+      const f = fixture("linux", false, true, undefined, native);
+      const config = await f.controller.configuration(f.caller());
+      const blocked = status === "error" || status === "update-required";
+      assert.equal(config.nativeForeground, !blocked, `${backend}/${status}`);
+      assert.equal(
+        config[backend === "kde" ? "kdeSupport" : "hyprlandSupport"],
+        status,
+      );
+      assert.equal(probes, status === "ready" || blocked ? 0 : 1);
+      assert.equal(
+        config.nativeCaptureError,
+        blocked ? "native diagnostic" : undefined,
+      );
+      assert.equal(f.activeCaptures, 0);
+      assert.equal(f.portalStarts.length, 0);
+      f.controller.dispose();
+    }
+  }
+});
+
+test("native readiness rejects retired renderers before a fallback probe", async () => {
+  for (const backend of ["kdeSupport", "hyprlandSupport"] as const) {
+    const pending =
+      deferred<
+        Awaited<
+          ReturnType<
+            NonNullable<AppShotIpcDependencies<object, object>[typeof backend]>
+          >
+        >
+      >();
+    let signal: AbortSignal | undefined;
+    let fallbackProbes = 0;
+    const f = fixture("linux", false, true, undefined, {
+      [backend]: async (value: AbortSignal) => {
+        signal = value;
+        return pending.promise;
+      },
+      portalSupport: async () => {
+        fallbackProbes++;
+        return true;
+      },
+    });
+    const checking = f.controller.configuration(f.caller());
+    f.controller.forget(f.renderer);
+    assert.equal(signal?.aborted, true);
+    pending.resolve({
+      status:
+        backend === "kdeSupport" ? "manual-setup-required" : "not-installed",
+      message: "Manual setup required",
+      available: false,
+      protocolVersion: 1,
+      feedbackAvailable: false,
+    });
+    await assert.rejects(checking, /renderer changed/);
+    assert.equal(fallbackProbes, 0);
+    f.controller.dispose();
+  }
+});
+
+test("Hyprland managed action survives initial, live and configure state without claiming keys; revoke fences capture", async () => {
+  const f = fixture("linux", false, true);
+  f.portalHandle.actionRegistered = true;
+  f.portalHandle.canConfigure = false;
+  f.portalHandle.configure = async () => {};
+  const initial = await f.controller.arm(f.caller(), "hyprland", false);
+  assert.deepEqual(initial, {
+    registered: false,
+    actionRegistered: true,
+    shortcutDescription: undefined,
+    canConfigure: false,
+  });
+  await f.controller.onShortcut();
+  assert.equal(f.activeCaptures, 1);
+  assert.equal(f.imports, 0);
+  assert.ok(f.events.at(-1)?.image);
+  assert.equal(
+    (await f.controller.configureShortcut(f.caller(), "hyprland"))
+      .actionRegistered,
+    true,
+  );
+  f.portalHandle.actionRegistered = false;
+  f.portalStarts[0]!.onStateChanged?.(f.portalHandle);
+  assert.equal(f.events.at(-1)?.shortcutState?.actionRegistered, false);
+  await f.controller.onShortcut();
+  assert.equal(f.activeCaptures, 1);
+  f.portalHandle.actionRegistered = true;
+  f.portalStarts[0]!.onStateChanged?.(f.portalHandle);
+  assert.equal(f.events.at(-1)?.shortcutState?.actionRegistered, true);
+  await f.controller.disarm(f.caller(), "hyprland");
+  const events = f.events.length;
+  f.portalStarts[0]!.onCapture();
+  f.portalStarts[0]!.onStateChanged?.(f.portalHandle);
+  await f.controller.onShortcut();
+  assert.equal(f.events.length, events);
+  assert.equal(f.activeCaptures, 1);
+  assert.equal(f.portalStops, 1);
   f.controller.dispose();
 });

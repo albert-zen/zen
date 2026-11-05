@@ -5,6 +5,8 @@ export type AppShotShortcutKind = "both-shift" | "chord";
 
 export interface AppShotShortcutState {
   registered: boolean;
+  /** An available Hyprland action does not establish a physical key binding. */
+  actionRegistered?: boolean;
   shortcutDescription?: string;
   canConfigure: boolean;
 }
@@ -21,6 +23,15 @@ export interface AppShotEvent {
 export interface AppShotConfiguration {
   nativeForeground: boolean;
   niriBinding?: string;
+  hyprlandBinding?: { legacy: string; lua: string };
+  kdeSupport?: "ready" | "manual-setup-required" | "unavailable" | "error";
+  hyprlandSupport?:
+    | "ready"
+    | "unsupported-session"
+    | "not-installed"
+    | "update-required"
+    | "error";
+  nativeCaptureError?: string;
   portalShortcut?: true;
   gnomeSupport?:
     | "ready"

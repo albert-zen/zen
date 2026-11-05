@@ -36,12 +36,16 @@ type DbusModule = Pick<
 
 export interface PortalAppShotShortcutState {
   readonly registered: boolean;
+  /** Hyprland action registration does not establish that any keys are bound. */
+  readonly actionRegistered?: boolean;
   /** Only the desktop's actual trigger_description, never the requested chord. */
   readonly shortcutDescription?: string;
   readonly canConfigure: boolean;
 }
 export interface PortalAppShotShortcutOptions {
   development?: boolean;
+  /** Host-selected native Hyprland mode; never supplied by the renderer. */
+  managedByHyprland?: boolean;
   signal?: AbortSignal;
   isCurrentOwner(): boolean;
   onCapture(): void;
@@ -90,6 +94,7 @@ export async function startPortalAppShotShortcut(
   let closed = false;
   let ready = false;
   let registered = false;
+  let actionRegistered = false;
   let shortcutDescription: string | undefined;
   let bus: MessageBus | undefined;
   let dbus: DbusModule | undefined;
@@ -103,11 +108,14 @@ export async function startPortalAppShotShortcut(
   const appId = options.development
     ? "io.github.albert_zen.ZenX.Development"
     : "io.github.albert_zen.ZenX";
+  const managedByHyprland = options.managedByHyprland === true;
   const trigger = "CTRL+SHIFT+2";
-  const shortcutId = `zen-app-shot-${createHash("sha256")
-    .update(appId + ":" + trigger)
-    .digest("hex")
-    .slice(0, 16)}`;
+  const shortcutId = managedByHyprland
+    ? "capture-window"
+    : `zen-app-shot-${createHash("sha256")
+        .update(appId + ":" + trigger)
+        .digest("hex")
+        .slice(0, 16)}`;
   let rejectStopped!: (error: Error) => void;
   const stopped = new Promise<never>((_, reject) => {
     rejectStopped = reject;
@@ -147,6 +155,7 @@ export async function startPortalAppShotShortcut(
     if (closed) return;
     closed = true;
     registered = false;
+    actionRegistered = false;
     shortcutDescription = undefined;
     rejectStopped(cancelled());
     options.signal?.removeEventListener("abort", stop);
@@ -219,12 +228,15 @@ export async function startPortalAppShotShortcut(
   };
   const state = (): PortalAppShotShortcutState => ({
     registered,
+    ...(managedByHyprland ? { actionRegistered } : {}),
     shortcutDescription,
-    canConfigure: current() && Boolean(session) && version >= 2,
+    canConfigure:
+      !managedByHyprland && current() && Boolean(session) && version >= 2,
   });
   const bound = (shortcuts: unknown) => {
     if (!Array.isArray(shortcuts))
       throw new Error("Invalid shortcut portal bindings.");
+    let matching = false;
     let description: string | undefined;
     for (const entry of shortcuts) {
       if (
@@ -234,12 +246,18 @@ export async function startPortalAppShotShortcut(
         !record(entry[1])
       )
         throw new Error("Invalid shortcut portal binding.");
-      if (entry[0] === shortcutId && entry[1].trigger_description !== undefined)
-        description =
-          stringVariant(entry[1].trigger_description).trim() || undefined;
+      if (entry[0] === shortcutId) {
+        matching = true;
+        if (entry[1].trigger_description !== undefined)
+          description =
+            stringVariant(entry[1].trigger_description).trim() || undefined;
+      }
     }
-    shortcutDescription = description;
-    registered = Boolean(description);
+    // xdg-desktop-portal-hyprland registers an action, not a verified key chord.
+    // Users must add the matching global binding to their Hyprland config.
+    actionRegistered = managedByHyprland && matching;
+    shortcutDescription = managedByHyprland ? undefined : description;
+    registered = !managedByHyprland && Boolean(description);
     if (ready) options.onStateChanged?.(state());
   };
   function message(event: Message) {
@@ -298,7 +316,7 @@ export async function startPortalAppShotShortcut(
         event.signature === "osta{sv}" &&
         event.body[1] === shortcutId &&
         ready &&
-        registered
+        (registered || actionRegistered)
       )
         options.onCapture();
       if (
@@ -359,6 +377,7 @@ export async function startPortalAppShotShortcut(
       if (response[0] !== 0) {
         if (member === "BindShortcuts") {
           registered = false;
+          actionRegistered = false;
           shortcutDescription = undefined;
           return undefined;
         }
@@ -490,7 +509,9 @@ export async function startPortalAppShotShortcut(
           shortcutId,
           {
             description: new dbus.Variant("s", "Capture a window"),
-            preferred_trigger: new dbus.Variant("s", trigger),
+            ...(!managedByHyprland
+              ? { preferred_trigger: new dbus.Variant("s", trigger) }
+              : {}),
           },
         ],
       ],
@@ -509,6 +530,9 @@ export async function startPortalAppShotShortcut(
       get registered() {
         return current() && registered;
       },
+      get actionRegistered() {
+        return managedByHyprland ? current() && actionRegistered : undefined;
+      },
       get shortcutDescription() {
         return current() ? shortcutDescription : undefined;
       },
@@ -518,6 +542,10 @@ export async function startPortalAppShotShortcut(
       async configure() {
         try {
           assertCurrent();
+          if (managedByHyprland)
+            throw new Error(
+              "Change the App Shot binding in your Hyprland config, then save it.",
+            );
           if (version < 2)
             throw new Error(
               "Choose the App Shot shortcut in your desktop's shortcut settings.",
@@ -532,7 +560,7 @@ export async function startPortalAppShotShortcut(
           });
         } catch (error) {
           // Unsupported explicit settings is not a dead transport/session.
-          if (version >= 2 || !current()) fail(error);
+          if ((!managedByHyprland && version >= 2) || !current()) fail(error);
           throw error;
         }
       },

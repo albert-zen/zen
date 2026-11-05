@@ -10,8 +10,207 @@ import {
   gnomeAppShotDraft,
   gnomeAppShotIdentity,
   niriAppShotIdentity,
+  nativeWaylandAppShotIdentity,
+  nativeWaylandAppShotDraft,
   type AppShotNativeSource,
 } from "../src/main/app-shot.js";
+
+const nativeWaylandFixture = {
+  png: Buffer.from([1]),
+  width: 100,
+  height: 100,
+  window: {
+    id: "{kde-private-window-id}",
+    title: "Notes",
+    appName: "Editor",
+    appIdentifier: "test.editor",
+    processId: 10,
+    bounds: { x: 400, y: 100, width: 900, height: 600 },
+    clientBounds: { x: 405, y: 130, width: 890, height: 565 },
+  },
+};
+
+for (const backend of ["KDE", "Hyprland"] as const) {
+  it(`${backend} prefers ready native pixels, gates AX by trusted identity and never falls back after failure`, async () => {
+    let textReads = 0,
+      portalCalls = 0;
+    const dependencies = {
+      ...(backend === "KDE"
+        ? {
+            kdeSupport: async () => ({
+              status: "ready" as const,
+              available: true,
+              message: "",
+              protocolVersion: 1 as const,
+              feedbackAvailable: false as const,
+            }),
+            captureKde: async () => nativeWaylandFixture,
+          }
+        : {
+            hyprlandSupport: async () => ({
+              status: "ready" as const,
+              message: "",
+              feedbackAvailable: false as const,
+            }),
+            captureHyprland: async () => nativeWaylandFixture,
+          }),
+      captureGnome: async () => {
+        throw new Error("unexpected GNOME");
+      },
+      capturePortal: async () => {
+        portalCalls++;
+        return undefined;
+      },
+      readNativeAccessibility: async () => {
+        textReads++;
+        return { text: "Unique text", truncated: true };
+      },
+    };
+    assert.match(
+      (await captureWaylandAppShot(false, dependencies))!.context,
+      new RegExp(backend + " window"),
+    );
+    assert.equal(textReads, 0);
+    assert.match(
+      (await captureWaylandAppShot(true, dependencies))!.context,
+      /read-only, truncated.*Unique text/,
+    );
+    assert.equal(textReads, 1);
+    const captureKey = backend === "KDE" ? "captureKde" : "captureHyprland";
+    const pixels = { png: Buffer.from([1]), width: 100, height: 100 };
+    const screenshotOnly = await captureWaylandAppShot(true, {
+      ...dependencies,
+      [captureKey]: async () => pixels,
+    });
+    assert.match(screenshotOnly!.context, /metadata is omitted/);
+    assert.doesNotMatch(screenshotOnly!.context, /Unique text/);
+    assert.equal(textReads, 1);
+    await assert.rejects(
+      captureWaylandAppShot(false, {
+        ...dependencies,
+        [captureKey]: async () => {
+          throw new Error("denied or cancelled");
+        },
+      }),
+      /denied or cancelled/,
+    );
+    assert.equal(portalCalls, 0);
+  });
+}
+
+it("native Wayland readiness distinguishes absent setup from denial and unusable installed helpers", async () => {
+  let portalCalls = 0;
+  const dependencies = {
+    captureGnome: async () => {
+      throw new Error("unexpected GNOME");
+    },
+    capturePortal: async () => {
+      portalCalls++;
+      return undefined;
+    },
+  };
+  for (const status of ["manual-setup-required", "unavailable"] as const) {
+    await captureWaylandAppShot(false, {
+      ...dependencies,
+      kdeSupport: async () => ({
+        status,
+        available: false,
+        message: "missing",
+        protocolVersion: 1,
+        feedbackAvailable: false,
+      }),
+    });
+  }
+  for (const status of ["not-installed", "unsupported-session"] as const) {
+    await captureWaylandAppShot(false, {
+      ...dependencies,
+      hyprlandSupport: async () => ({
+        status,
+        message: "missing",
+        feedbackAvailable: false,
+      }),
+    });
+  }
+  assert.equal(portalCalls, 4);
+  await assert.rejects(
+    captureWaylandAppShot(false, {
+      ...dependencies,
+      kdeSupport: async () => ({
+        status: "error",
+        available: false,
+        message: "KDE denied",
+        protocolVersion: 1,
+        feedbackAvailable: false,
+      }),
+    }),
+    /KDE denied/,
+  );
+  for (const status of ["error", "update-required"] as const) {
+    await assert.rejects(
+      captureWaylandAppShot(false, {
+        ...dependencies,
+        hyprlandSupport: async () => ({
+          status,
+          message: "Hyprland unavailable installed helper",
+          feedbackAvailable: false,
+        }),
+      }),
+      /unavailable installed helper/,
+    );
+  }
+  await assert.rejects(
+    captureWaylandAppShot(false, {
+      ...dependencies,
+      kdeSupport: async () => {
+        throw new Error("transport failure");
+      },
+    }),
+    /transport failure/,
+  );
+  assert.equal(portalCalls, 4);
+});
+
+it("KDE/Hyprland AX identities preserve frame/client size but neither origins nor incompatible window IDs", () => {
+  assert.deepEqual(nativeWaylandAppShotIdentity(nativeWaylandFixture), {
+    platform: "linux",
+    matchMode: "wayland",
+    pid: 10,
+    windowTitle: "Notes",
+    bounds: { width: 900, height: 600 },
+    clientBounds: { width: 890, height: 565 },
+  });
+  for (const processId of [0, -1, 1.5, NaN])
+    assert.equal(
+      nativeWaylandAppShotIdentity({
+        ...nativeWaylandFixture,
+        window: { ...nativeWaylandFixture.window, processId },
+      }),
+      undefined,
+    );
+  assert.equal(
+    nativeWaylandAppShotIdentity({
+      ...nativeWaylandFixture,
+      window: { ...nativeWaylandFixture.window, title: "  " },
+    }),
+    undefined,
+  );
+  assert.equal(
+    nativeWaylandAppShotIdentity({
+      ...nativeWaylandFixture,
+      window: undefined,
+    }),
+    undefined,
+  );
+  assert.doesNotMatch(
+    nativeWaylandAppShotDraft(
+      "KDE",
+      { ...nativeWaylandFixture, window: undefined },
+      true,
+      { text: "Unmatched secret", truncated: false },
+    ).context,
+    /Unmatched secret/,
+  );
+});
 
 it("uses ready GNOME capture without a portal fallback, even on capture denial", async () => {
   let portalCalls = 0;

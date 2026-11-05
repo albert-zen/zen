@@ -696,3 +696,205 @@ test("another mounted Composer cannot discard the active owner's captured image"
     assert.ok(discarded.includes("retired"));
   });
 });
+
+test("KDE and Hyprland setup is collapsed, manual and distinct from capability errors", async () => {
+  for (const backend of ["kde", "hyprland"] as const) {
+    await fixture(async ({ api, click, armRequests }) => {
+      let state = "setup";
+      api.configuration = async () => ({
+        nativeForeground: state === "ready",
+        portalShortcut: true,
+        ...(backend === "kde"
+          ? {
+              kdeSupport:
+                state === "ready"
+                  ? ("ready" as const)
+                  : state === "error"
+                    ? ("error" as const)
+                    : ("manual-setup-required" as const),
+            }
+          : {
+              hyprlandSupport:
+                state === "ready"
+                  ? ("ready" as const)
+                  : state === "error"
+                    ? ("error" as const)
+                    : ("not-installed" as const),
+            }),
+        ...(state === "error"
+          ? { nativeCaptureError: "Permission probe failed" }
+          : {}),
+      });
+      await click("App Shot");
+      const disclosure = document.querySelector<HTMLDetailsElement>(
+        ".app-shot-shortcut details",
+      )!;
+      assert.equal(disclosure.open, false);
+      assert.match(disclosure.textContent!, /manual setup/);
+      assert.match(disclosure.textContent!, /resources\/app-shot-linux\//);
+      assert.match(disclosure.textContent!, /user-owned/);
+      assert.match(disclosure.textContent!, /does not install/);
+      assert.match(disclosure.textContent!, /To revoke/);
+      assert.equal(armRequests.length, 0);
+      state = "error";
+      await click("Refresh windows");
+      assert.match(
+        document.querySelector(".app-shot-shortcut summary")!.textContent!,
+        /check failed/,
+      );
+      assert.match(
+        document.querySelector('[role="alert"]')!.textContent!,
+        /Permission probe failed/,
+      );
+      state = "ready";
+      await click("Refresh windows");
+      assert.match(
+        document.querySelector(".app-shot-shortcut summary")!.textContent!,
+        /is available/,
+      );
+      assert.equal(document.querySelector('[role="alert"]'), null);
+      assert.equal(armRequests.length, 0);
+    }, "linux");
+  }
+});
+
+test("a stale native readiness probe cannot overwrite a refreshed or reopened picker", async () => {
+  await fixture(async ({ api, click }) => {
+    const pending =
+      deferred<Awaited<ReturnType<NonNullable<AppShotApi["configuration"]>>>>();
+    api.configuration = async () => pending.promise;
+    await click("App Shot");
+    await click("Close App Shot");
+    api.configuration = async () => ({
+      nativeForeground: true,
+      kdeSupport: "ready",
+    });
+    await click("App Shot");
+    await act(async () =>
+      pending.resolve({
+        nativeForeground: false,
+        kdeSupport: "error",
+        nativeCaptureError: "STALE",
+      }),
+    );
+    assert.match(
+      document.querySelector(".app-shot-shortcut summary")!.textContent!,
+      /is available/,
+    );
+    assert.equal(document.body.textContent!.includes("STALE"), false);
+  }, "linux");
+});
+
+test("Hyprland action-only state enables capture review without claiming keys or configuring the desktop", async () => {
+  await fixture(async ({ api, click, armed, emit, attached, disarmed }) => {
+    const originalArm = api.arm;
+    api.configuration = async () => ({
+      nativeForeground: true,
+      portalShortcut: true,
+      hyprlandSupport: "ready",
+      hyprlandBinding: {
+        legacy:
+          "bind = CTRL SHIFT, 2, global, io.github.albert_zen.ZenX.Development:capture-window",
+        lua: 'hl.bind("CTRL + SHIFT + 2", hl.dsp.global("io.github.albert_zen.ZenX.Development:capture-window"))',
+      },
+    });
+    api.arm = async (...args) => {
+      await originalArm(...args);
+      return { registered: false, actionRegistered: true, canConfigure: false };
+    };
+    await click("App Shot");
+    assert.match(document.body.textContent!, /xdg-desktop-portal-hyprland/);
+    assert.match(document.body.textContent!, /bind = CTRL SHIFT, 2, global/);
+    assert.match(document.body.textContent!, /hl\.bind/);
+    assert.match(document.body.textContent!, /remove the binding/);
+    await act(async () => shortcutCheckbox().click());
+    const oldToken = armed()!;
+    assert.equal(shortcutCheckbox().checked, true);
+    assert.match(document.body.textContent!, /action is registered/);
+    assert.match(
+      document.body.textContent!,
+      /does not confirm a physical shortcut/,
+    );
+    assert.equal(
+      document.body.textContent!.includes("Desktop shortcut:"),
+      false,
+    );
+    assert.equal(
+      document.body.textContent!.includes("Configure desktop shortcut"),
+      false,
+    );
+    await act(async () =>
+      emit({
+        token: oldToken,
+        shortcutState: {
+          registered: false,
+          actionRegistered: false,
+          canConfigure: false,
+        },
+      }),
+    );
+    assert.equal(shortcutCheckbox().checked, false);
+    assert.match(document.body.textContent!, /action is not registered/);
+    await act(async () =>
+      emit({
+        token: oldToken,
+        shortcutState: {
+          registered: false,
+          actionRegistered: true,
+          canConfigure: false,
+        },
+      }),
+    );
+    assert.equal(shortcutCheckbox().checked, true);
+    const pendingConfiguration =
+      deferred<Awaited<ReturnType<NonNullable<AppShotApi["configuration"]>>>>();
+    api.configuration = async () => pendingConfiguration.promise;
+    await click("Close App Shot");
+    await act(async () => emit({ token: oldToken, image: shot }));
+    assert.match(document.body.textContent!, /action is registered/);
+    assert.equal(document.body.textContent!.includes("not armed"), false);
+    assert.equal(
+      document.body.textContent!.includes("Configure desktop shortcut"),
+      false,
+    );
+    assert.deepEqual(attached, []);
+    await click("Attach to draft");
+    assert.deepEqual(attached, [shot]);
+    document
+      .querySelector<HTMLButtonElement>('[aria-label="App Shot"]')!
+      .focus();
+    await act(async () =>
+      document.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          code: "Digit2",
+          key: "2",
+          ctrlKey: true,
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    assert.ok(
+      document.querySelector('[role="dialog"]'),
+      "The local picker shortcut works while native readiness is still pending",
+    );
+    await act(async () => shortcutCheckbox().click());
+    assert.equal(disarmed.length, 1);
+    await act(async () =>
+      emit({
+        token: oldToken,
+        shortcutState: {
+          registered: false,
+          actionRegistered: true,
+          canConfigure: false,
+        },
+      }),
+    );
+    assert.equal(shortcutCheckbox().checked, false);
+    assert.equal(
+      document.body.textContent!.includes("action is registered"),
+      false,
+    );
+  }, "linux");
+});

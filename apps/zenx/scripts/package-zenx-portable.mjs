@@ -1,6 +1,10 @@
 import { stageAppShotDbus } from "./stage-app-shot-dbus.mjs";
 import { copyGnomeAppShotResource } from "./stage-app-shot-gnome.mjs";
 import {
+  prepareLinuxAppShotResources,
+  copyLinuxAppShotResources,
+} from "./stage-app-shot-linux.mjs";
+import {
   appShotRuntimeDependencies,
   stageAppShotRuntime,
 } from "./stage-app-shot-runtime.mjs";
@@ -112,6 +116,10 @@ export async function packageZenX(arguments_, options = {}) {
         appDirectory: appDir,
         manifestSha256: assembly.manifestSha256,
       });
+      const linuxAppShotResources = await prepareLinuxAppShotResources({
+        target,
+        stagingDirectory: staging,
+      });
       const windowsSmokeGuard = await prepareWindowsSmokeGuard({
         target,
         mainDirectory: path.join(appDir, "main"),
@@ -183,6 +191,11 @@ export async function packageZenX(arguments_, options = {}) {
               target,
               platform: process.platform,
             });
+            await copyLinuxAppShotResources({
+              buildPath,
+              sourceDirectory: linuxAppShotResources,
+              target,
+            });
             await copyChromeNativeHostResource({
               buildPath,
               sourceDirectory: path.join(
@@ -248,6 +261,16 @@ export async function packageZenX(arguments_, options = {}) {
         version: zenxPackage.version,
         manifestDigest: assembly.manifestSha256,
         releaseSizeBytes: assembly.releaseSizeBytes,
+        ...(target === "app" && process.platform === "linux"
+          ? {
+              appShotNativeHelpers: {
+                status: linuxAppShotResources
+                  ? "packaged"
+                  : "unsupported-architecture",
+                architecture: process.arch,
+              },
+            }
+          : {}),
       };
       console.log(JSON.stringify(result, null, 2));
       return result;

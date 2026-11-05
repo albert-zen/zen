@@ -33,6 +33,7 @@ import type { Message, MessageBus } from "dbus-next";
 import type {
   PortalAppShotShortcutDependencies,
   PortalAppShotShortcutOptions,
+  PortalAppShotShortcutState,
 } from "../src/main/app-shot-portal-shortcut.js";
 const PATH = "/org/freedesktop/portal/desktop";
 const NS = PATH + "/request/1_7/";
@@ -165,15 +166,16 @@ class FakeBus extends EventEmitter {
     this.disconnected++;
   }
 }
-function fixture() {
+function fixture(managedByHyprland = false) {
   const bus = new FakeBus();
   const abort = new AbortController();
   let current = true;
   let captures = 0;
   const failures: Error[] = [];
-  const states: unknown[] = [];
+  const states: PortalAppShotShortcutState[] = [];
   const timers = new Set<{ callback: () => void; milliseconds: number }>();
   const options: PortalAppShotShortcutOptions = {
+    managedByHyprland,
     signal: abort.signal,
     isCurrentOwner: () => current,
     onCapture: () => {
@@ -219,6 +221,7 @@ it("binds once, reports the actual desktop chord, and closes its session idempot
   const f = fixture();
   const handle = await f.start();
   assert.equal(handle.registered, true);
+  assert.equal(handle.actionRegistered, undefined);
   assert.equal(handle.shortcutDescription, "Super+Print");
   assert.equal(handle.canConfigure, true);
   assert.equal(f.bus.calls[0]?.body[0], "io.github.albert_zen.ZenX");
@@ -511,3 +514,230 @@ it("bounds module loading and cancels without ever creating a bus", async () => 
   });
   await Promise.resolve();
 });
+
+it("registers the fixed Hyprland action without requesting or claiming a key binding", async () => {
+  for (const label of [undefined, "   ", "Super+Print"]) {
+    const f = fixture(true);
+    f.bus.label = label;
+    const handle = await f.start();
+    assert.equal(f.bus.shortcutId, "capture-window");
+    assert.equal(handle.registered, false);
+    assert.equal(handle.actionRegistered, true);
+    assert.equal(handle.shortcutDescription, undefined);
+    assert.equal(handle.canConfigure, false);
+    assert.equal(
+      f.bus.calls.filter((call) => call.member === "CreateSession").length,
+      1,
+    );
+    const binds = f.bus.calls.filter((call) => call.member === "BindShortcuts");
+    assert.equal(binds.length, 1);
+    assert.equal(binds[0]!.body[0], f.bus.session);
+    assert.deepEqual(Object.keys(binds[0]!.body[1][0][1]), ["description"]);
+    assert.equal(binds[0]!.body[1][0][1].description.value, "Capture a window");
+    f.bus.activate();
+    assert.equal(f.captures, 1);
+    handle.stop();
+    assert.equal(handle.actionRegistered, false);
+    assert.equal(handle.registered, false);
+    assert.equal(f.bus.disconnected, 1);
+    assert.equal(
+      f.bus.sent.filter((call) => call.interface === SESSION).length,
+      1,
+    );
+    f.bus.activate();
+    assert.equal(f.captures, 1);
+  }
+});
+it("keeps the Hyprland action ID fixed for development while isolating app identity", async () => {
+  const f = fixture(true);
+  f.options.development = true;
+  const handle = await f.start();
+  assert.equal(
+    f.bus.calls[0]?.body[0],
+    "io.github.albert_zen.ZenX.Development",
+  );
+  assert.equal(f.bus.shortcutId, "capture-window");
+  handle.stop();
+});
+it("requires a matching Hyprland action and reports changes without ever claiming keys", async () => {
+  const f = fixture(true);
+  f.bus.responseHook = (request, path, body) => {
+    if (request.member === "BindShortcuts")
+      body = [
+        0,
+        {
+          shortcuts: new dbus.Variant("a(sa{sv})", [["unrelated-action", {}]]),
+        },
+      ];
+    f.bus.signal(REQUEST, "Response", "ua{sv}", body, path);
+  };
+  const handle = await f.start();
+  assert.equal(handle.actionRegistered, false);
+  assert.equal(handle.registered, false);
+  f.bus.activate();
+  assert.equal(f.captures, 0);
+  f.bus.signal(SHORTCUTS, "ShortcutsChanged", "oa(sa{sv})", [
+    f.bus.session,
+    f.bus.bindings(),
+  ]);
+  assert.equal(handle.actionRegistered, true);
+  assert.equal(handle.registered, false);
+  assert.equal(handle.shortcutDescription, undefined);
+  assert.deepEqual(f.states.at(-1), {
+    registered: false,
+    actionRegistered: true,
+    shortcutDescription: undefined,
+    canConfigure: false,
+  });
+  f.bus.activate();
+  assert.equal(f.captures, 1);
+  f.bus.signal(SHORTCUTS, "ShortcutsChanged", "oa(sa{sv})", [
+    f.bus.session,
+    [],
+  ]);
+  assert.equal(handle.actionRegistered, false);
+  assert.equal(f.states.at(-1)?.actionRegistered, false);
+  f.bus.activate();
+  assert.equal(f.captures, 1);
+  handle.stop();
+});
+it("refuses Hyprland configuration without calling the portal or destroying its action", async () => {
+  for (const version of [1, 2]) {
+    const f = fixture(true);
+    f.bus.version = version;
+    const handle = await f.start();
+    const calls = f.bus.calls.length;
+    await assert.rejects(handle.configure(), /Hyprland config/);
+    assert.equal(handle.canConfigure, false);
+    assert.equal(handle.actionRegistered, true);
+    assert.equal(f.bus.calls.length, calls);
+    assert.equal(f.bus.disconnected, 0);
+    assert.equal(f.failures.length, 0);
+    f.bus.activate();
+    assert.equal(f.captures, 1);
+    handle.stop();
+  }
+});
+it("pins Hyprland activation and binding changes to sender, path, interface, session, ID and signature", async () => {
+  const f = fixture(true);
+  const handle = await f.start();
+  f.bus.activate(":1.99");
+  f.bus.activate(OWNER, "wrong");
+  f.bus.activate(OWNER, f.bus.session, "wrong");
+  f.bus.activate(OWNER, f.bus.session, f.bus.shortcutId, "s");
+  f.bus.signal(
+    SHORTCUTS,
+    "Activated",
+    "osta{sv}",
+    [f.bus.session, f.bus.shortcutId, 1, {}],
+    PATH + "/wrong",
+  );
+  f.bus.signal("wrong.interface", "Activated", "osta{sv}", [
+    f.bus.session,
+    f.bus.shortcutId,
+    1,
+    {},
+  ]);
+  assert.equal(f.captures, 0);
+  f.bus.signal(
+    SHORTCUTS,
+    "ShortcutsChanged",
+    "oa(sa{sv})",
+    [f.bus.session, []],
+    PATH,
+    ":1.99",
+  );
+  f.bus.signal(SHORTCUTS, "ShortcutsChanged", "oa(sa{sv})", ["wrong", []]);
+  f.bus.signal(SHORTCUTS, "ShortcutsChanged", "s", [f.bus.session, []]);
+  f.bus.signal(
+    SHORTCUTS,
+    "ShortcutsChanged",
+    "oa(sa{sv})",
+    [f.bus.session, []],
+    PATH + "/wrong",
+  );
+  assert.equal(handle.actionRegistered, true);
+  assert.equal(f.states.length, 0);
+  f.bus.activate();
+  assert.equal(f.captures, 1);
+  f.stale();
+  assert.equal(handle.actionRegistered, false);
+  f.bus.activate();
+  assert.equal(f.captures, 1);
+  assert.equal(f.bus.disconnected, 1);
+  await assert.rejects(handle.configure(), /owner is no longer current/);
+});
+it("does not register a Hyprland action from denied or spoofed consent", async () => {
+  const f = fixture(true);
+  f.bus.responseHook = (request, path, body) => {
+    f.bus.signal(REQUEST, "Response", "ua{sv}", body, path, ":1.99");
+    f.bus.signal(
+      REQUEST,
+      "Response",
+      "ua{sv}",
+      request.member === "BindShortcuts" ? [1, {}] : body,
+      path,
+    );
+  };
+  const handle = await f.start();
+  assert.equal(handle.actionRegistered, false);
+  assert.equal(handle.registered, false);
+  assert.equal(handle.canConfigure, false);
+  f.bus.activate();
+  assert.equal(f.captures, 0);
+  handle.stop();
+});
+it("keeps Hyprland action activation disabled until setup completes and honors cancellation", async () => {
+  const f = fixture(true);
+  f.bus.hold = "BindShortcuts";
+  const pending = f.start();
+  await f.bus.held.promise;
+  f.bus.activate();
+  assert.equal(f.captures, 0);
+  f.abort.abort();
+  await assert.rejects(pending, { name: "AbortError" });
+  assert.deepEqual(
+    f.bus.sent.map((call) => call.interface),
+    [REQUEST, SESSION],
+  );
+  f.bus.release.resolve(
+    new dbus.Message({
+      type: dbus.MessageType.METHOD_RETURN,
+      replySerial: "1",
+      body: [NS + "late"],
+    }),
+  );
+  f.bus.activate();
+  assert.equal(f.captures, 0);
+  assert.equal(f.bus.disconnected, 1);
+  assert.equal(f.failures.length, 0);
+});
+for (const failure of ["error", "end", "close", "owner", "session"] as const) {
+  it(`clears the Hyprland action on ${failure} without retrying`, async () => {
+    const f = fixture(true);
+    const handle = await f.start();
+    const calls = f.bus.calls.length;
+    if (failure === "error") f.bus.emit("error", new Error("lost"));
+    if (failure === "end") f.bus._connection.emit("end");
+    if (failure === "close") f.bus._connection.stream.emit("close");
+    if (failure === "owner")
+      f.bus.signal(
+        "org.freedesktop.DBus",
+        "NameOwnerChanged",
+        "sss",
+        ["org.freedesktop.portal.Desktop", OWNER, ":1.66"],
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+      );
+    if (failure === "session")
+      f.bus.signal(SESSION, "Closed", "", [], f.bus.session);
+    f.bus.activate();
+    f.bus.emit("error", new Error("late"));
+    assert.equal(f.failures.length, 1);
+    assert.equal(f.bus.disconnected, 1);
+    assert.equal(handle.actionRegistered, false);
+    assert.equal(handle.registered, false);
+    assert.equal(f.captures, 0);
+    assert.equal(f.bus.calls.length, calls);
+  });
+}

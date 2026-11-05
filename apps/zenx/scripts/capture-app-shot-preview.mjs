@@ -106,11 +106,23 @@ try {
         { theme: "light", width: 1280, platform: "portal" },
         { theme: "light", width: 390, platform: "gnome" },
         { theme: "dark", width: 1280, platform: "gnome" },
+        { theme: "light", width: 390, platform: "kde" },
+        { theme: "dark", width: 1280, platform: "kde", helper: "ready" },
+        { theme: "light", width: 390, platform: "hyprland" },
+        { theme: "dark", width: 1280, platform: "hyprland", helper: "ready" },
       ];
-      for (const { theme, width, platform } of cases) {
+      for (const { theme, width, platform, helper = "setup" } of cases) {
         const height = 900;
         const name = `${platform}-${theme}-${width}`;
-        const receipt = { name, theme, width, height, platform, states: [] };
+        const receipt = {
+          name,
+          theme,
+          width,
+          height,
+          platform,
+          helper,
+          states: [],
+        };
         evidence.cases.push(receipt);
         await send("Emulation.setDeviceMetricsOverride", {
           width,
@@ -118,7 +130,7 @@ try {
           deviceScaleFactor: 1,
           mobile: false,
         });
-        const destination = `${url}/app-shot.html?theme=${theme}&platform=${platform}`;
+        const destination = `${url}/app-shot.html?theme=${theme}&platform=${platform}&helper=${helper}`;
         await send("Page.navigate", { url: destination });
         await wait(
           `location.href===${JSON.stringify(destination)} && document.querySelectorAll('.app-shot-sources button').length===2`,
@@ -168,7 +180,78 @@ try {
           await click(".app-shot-shortcut details summary");
           await stable();
         }
-        if (platform === "portal" || platform === "gnome") {
+        if (platform === "kde" || platform === "hyprland") {
+          assert.equal(
+            await evaluate(
+              "document.querySelector('.app-shot-shortcut details').open",
+            ),
+            false,
+          );
+          await click(".app-shot-shortcut details summary");
+          await wait(
+            "document.querySelector('.app-shot-shortcut details')?.open",
+          );
+          await stable();
+          const setup = await evaluate(
+            "document.querySelector('.app-shot-shortcut details').textContent",
+          );
+          assert.match(setup, /resources\/app-shot-linux\//);
+          assert.match(setup, /用户自有路径/);
+          assert.match(setup, /撤销/);
+          receipt.states.push({
+            phase: "native-manual-setup",
+            ...(await check(width, height)),
+          });
+          await screenshot(`${name}-manual-setup.png`);
+          await click(".app-shot-shortcut details summary");
+          await stable();
+        }
+        if (platform === "hyprland") {
+          await click(".app-shot-hyprland-binding summary");
+          await wait(
+            "document.querySelector('.app-shot-hyprland-binding')?.open",
+          );
+          await stable();
+          const binding = await evaluate(
+            "document.querySelector('.app-shot-hyprland-binding').textContent",
+          );
+          assert.match(binding, /xdg-desktop-portal-hyprland/);
+          assert.match(
+            binding,
+            /bind = CTRL SHIFT, 2, global, io\.github\.albert_zen\.ZenX:capture-window/,
+          );
+          assert.match(binding, /hl\.bind/);
+          receipt.states.push({
+            phase: "hyprland-manual-binding",
+            ...(await check(width, height)),
+          });
+          await screenshot(`${name}-manual-binding.png`);
+          await click(".app-shot-hyprland-binding summary");
+          await click('.app-shot-shortcut input[type="checkbox"]');
+          await wait(
+            "document.querySelector('.app-shot-shortcut input[type=checkbox]').checked",
+          );
+          const state = await evaluate(
+            "document.querySelector('.app-shot-shortcut').textContent",
+          );
+          assert.match(state, /捕获动作已注册/);
+          assert.equal(state.includes("桌面快捷键："), false);
+          assert.equal(state.includes("配置桌面快捷键"), false);
+          receipt.states.push({
+            phase: "hyprland-action-only",
+            ...(await check(width, height)),
+          });
+          await screenshot(`${name}-action-only.png`);
+          await click('.app-shot-shortcut input[type="checkbox"]');
+          await wait(
+            "!document.querySelector('.app-shot-shortcut input[type=checkbox]').checked",
+          );
+        }
+        if (
+          platform === "portal" ||
+          platform === "gnome" ||
+          platform === "kde"
+        ) {
           await click('.app-shot-shortcut input[type="checkbox"]');
           await wait(
             "document.querySelector('.app-shot-shortcut').textContent.includes('应用快照未启用')",

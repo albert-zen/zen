@@ -1,0 +1,97 @@
+name: App Shot Linux native distribution
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/app-shot-linux-native.yml
+      - apps/zenx/native/**
+      - apps/zenx/scripts/build-app-shot-*.mjs
+      - apps/zenx/scripts/stage-app-shot-linux.mjs
+      - apps/zenx/scripts/package-zenx-portable.mjs
+      - apps/zenx/test/app-shot-hyprland-source.test.mjs
+      - apps/zenx/test/build-app-shot-linux.test.mjs
+      - apps/zenx/test/stage-app-shot-linux.test.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-shot-linux-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-x64:
+    name: Linux x64 Ubuntu 22.04 native build and mock transports
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    env:
+      RUSTUP_TOOLCHAIN: stable
+      RUSTUP_AUTO_INSTALL: "0"
+      CARGO_TARGET_DIR: ${{ runner.temp }}/app-shot-linux-target
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check existing official toolchain and private-bus prerequisites
+        run: |
+          rustup toolchain list | grep -E '^stable-x86_64-unknown-linux-gnu( |$)'
+          rustc --version
+          cargo --version
+          command -v cc
+          command -v dbus-daemon
+          command -v mktemp
+          test "$(uname -m)" = x86_64
+          test -f "$(rustc --print sysroot)/share/doc/rust/COPYRIGHT-library.html"
+      - name: Check Rust source and transport-test formatting
+        run: |
+          cargo fmt --manifest-path apps/zenx/native/kde-snap-shot/Cargo.toml --all -- --check
+          cargo fmt --manifest-path apps/zenx/native/hyprland-app-shot/Cargo.toml --all -- --check
+      - name: Test fixed-file staging, no-I/O skips and generated dependency notices
+        run: node --test apps/zenx/test/stage-app-shot-linux.test.mjs apps/zenx/test/build-app-shot-linux.test.mjs apps/zenx/test/app-shot-hyprland-source.test.mjs
+      - name: Run both locked native suites and release builds without a compositor
+        shell: bash
+        run: |
+          set -o pipefail
+          node apps/zenx/scripts/build-app-shot-linux.mjs --out "${{ runner.temp }}/app-shot-linux" 2>&1 | tee "${{ runner.temp }}/app-shot-linux-build.log"
+      - name: Verify real artifact staging and record ELF dependencies without executing helpers
+        env:
+          APP_SHOT_DIST: ${{ runner.temp }}/app-shot-linux
+          APP_SHOT_STAGE: ${{ runner.temp }}/app-shot-stage/resources/app
+        run: |
+          node --input-type=module <<'NODE'
+          import { copyLinuxAppShotResources } from './apps/zenx/scripts/stage-app-shot-linux.mjs';
+          const destination = await copyLinuxAppShotResources({ target: 'app', platform: 'linux', arch: 'x64', sourceDirectory: process.env.APP_SHOT_DIST, buildPath: process.env.APP_SHOT_STAGE });
+          console.log(`Verified inert distribution at ${destination}`);
+          NODE
+          {
+            ldd --version | head -n 1
+            for binary in "$APP_SHOT_DIST/kde/zenx-kde-snap-shot" "$APP_SHOT_DIST/hyprland/zenx-hyprland-snap-shot"; do
+              file "$binary"
+              readelf --dynamic "$binary"
+              readelf --version-info "$binary"
+            done
+          } > "${{ runner.temp }}/app-shot-linux-abi.txt"
+      - name: Verify standalone Hyprland distribution also retains dependency notices
+        run: |
+          node apps/zenx/scripts/build-app-shot-hyprland.mjs --out "${{ runner.temp }}/app-shot-hyprland-standalone"
+          test -s "${{ runner.temp }}/app-shot-hyprland-standalone/THIRD-PARTY-NOTICES.txt"
+          test -s "${{ runner.temp }}/app-shot-hyprland-standalone/RUST-COPYRIGHT-library.html"
+      - name: Retain verified x64 distribution for explicit manual setup or full-app packaging
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-shot-linux-x64-ubuntu22.04-${{ github.sha }}
+          path: ${{ runner.temp }}/app-shot-linux
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain native test log and ABI evidence, not desktop acceptance
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-shot-linux-native-evidence-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/app-shot-linux-build.log
+            ${{ runner.temp }}/app-shot-linux-abi.txt
+          if-no-files-found: warn
+          retention-days: 14

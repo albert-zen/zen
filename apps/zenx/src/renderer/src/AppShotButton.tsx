@@ -60,6 +60,11 @@ export function AppShotButton({
   const [configuration, setConfiguration] =
     useState<AppShotConfiguration | null>(null);
   const [configurationRevision, setConfigurationRevision] = useState(0);
+  // Keep the action/key distinction while a newly opened picker probes capture
+  // readiness. An active portal session already identifies its managed mode.
+  const managedByHyprland =
+    Boolean(configuration?.hyprlandBinding) ||
+    portalState?.actionRegistered !== undefined;
 
   useEffect(() => {
     let current = true;
@@ -112,7 +117,10 @@ export function AppShotButton({
       }
       if (event.shortcutState) {
         setPortalState(event.shortcutState);
-        setArmed(event.shortcutState.registered);
+        setArmed(
+          event.shortcutState.registered ||
+            event.shortcutState.actionRegistered === true,
+        );
         return;
       }
       if (event.openPicker) {
@@ -215,7 +223,10 @@ export function AppShotButton({
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (
-        (armed && shortcutKind === "chord" && !configuration?.portalShortcut) ||
+        (armed &&
+          shortcutKind === "chord" &&
+          !configuration?.portalShortcut &&
+          !portalState) ||
         event.repeat ||
         !event.shiftKey ||
         (!event.ctrlKey && !event.metaKey) ||
@@ -230,7 +241,7 @@ export function AppShotButton({
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [armed, shortcutKind, configuration?.portalShortcut]);
+  }, [armed, shortcutKind, configuration?.portalShortcut, portalState]);
 
   const close = () => {
     operation.current++;
@@ -332,7 +343,7 @@ export function AppShotButton({
           return;
         if (typeof result !== "string") {
           setPortalState(result);
-          setArmed(result.registered);
+          setArmed(result.registered || result.actionRegistered === true);
         }
       } else {
         setPortalState(null);
@@ -364,7 +375,7 @@ export function AppShotButton({
         !latest.current.disabled
       ) {
         setPortalState(result);
-        setArmed(result.registered);
+        setArmed(result.registered || result.actionRegistered === true);
       }
     } catch (cause) {
       if (live.current && shortcutOperation.current === generation)
@@ -409,9 +420,9 @@ export function AppShotButton({
             </button>
           </header>
           <p>{t("appShotPrivacy")}</p>
-          {error && (
+          {(error || configuration?.nativeCaptureError) && (
             <p role="alert" className="settings-error">
-              {error}
+              {error || configuration?.nativeCaptureError}
             </p>
           )}
           {busy && <p role="status">{t("appShotWorking")}</p>}
@@ -521,31 +532,82 @@ export function AppShotButton({
                 <p>{t("appShotGnomeRevokeHint")}</p>
               </details>
             )}
-            <fieldset disabled={armed || shortcutBusy}>
-              <legend>{t("appShotShortcutPreference")}</legend>
-              {supportsBothShift && (
+            {configuration?.kdeSupport && (
+              <details className="app-shot-hint">
+                <summary>
+                  {t(
+                    configuration.kdeSupport === "ready"
+                      ? "appShotKdeReady"
+                      : configuration.kdeSupport === "error"
+                        ? "appShotKdeError"
+                        : configuration.kdeSupport === "unavailable"
+                          ? "appShotKdeUnavailable"
+                          : "appShotKdeSetup",
+                  )}
+                </summary>
+                <p>{t("appShotKdeSetupHint")}</p>
+                <p>{t("appShotNativeDataHome")}</p>
+                <pre className="app-shot-context">
+                  {
+                    "$XDG_DATA_HOME/zenx/kde-capture/zenx-kde-snap-shot\n$XDG_DATA_HOME/applications/io.github.albert_zen.ZenX.KdeCapture.desktop"
+                  }
+                </pre>
+                <p>{t("appShotKdeRevokeHint")}</p>
+              </details>
+            )}
+            {configuration?.hyprlandSupport && (
+              <details className="app-shot-hint">
+                <summary>
+                  {t(
+                    configuration.hyprlandSupport === "ready"
+                      ? "appShotHyprlandReady"
+                      : configuration.hyprlandSupport === "error"
+                        ? "appShotHyprlandError"
+                        : configuration.hyprlandSupport === "update-required"
+                          ? "appShotHyprlandUpdate"
+                          : configuration.hyprlandSupport ===
+                              "unsupported-session"
+                            ? "appShotHyprlandUnavailable"
+                            : "appShotHyprlandSetup",
+                  )}
+                </summary>
+                <p>{t("appShotHyprlandSetupHint")}</p>
+                <p>{t("appShotNativeDataHome")}</p>
+                <pre className="app-shot-context">
+                  {
+                    "$XDG_DATA_HOME/zenx/hyprland-capture/zenx-hyprland-snap-shot"
+                  }
+                </pre>
+                <p>{t("appShotHyprlandRevokeHint")}</p>
+              </details>
+            )}
+            {!managedByHyprland && (
+              <fieldset disabled={armed || shortcutBusy}>
+                <legend>{t("appShotShortcutPreference")}</legend>
+                {supportsBothShift && (
+                  <label className="app-shot-option">
+                    <input
+                      type="radio"
+                      name={`app-shot-shortcut-${token}`}
+                      value="both-shift"
+                      checked={shortcutKind === "both-shift"}
+                      onChange={() => setShortcutKind("both-shift")}
+                    />
+                    {t("appShotBothShift")}
+                  </label>
+                )}
                 <label className="app-shot-option">
                   <input
                     type="radio"
                     name={`app-shot-shortcut-${token}`}
-                    value="both-shift"
-                    checked={shortcutKind === "both-shift"}
-                    onChange={() => setShortcutKind("both-shift")}
+                    value="chord"
+                    checked={shortcutKind === "chord"}
+                    onChange={() => setShortcutKind("chord")}
                   />
-                  {t("appShotBothShift")}
+                  {t("appShotChord")}
                 </label>
-              )}
-              <label className="app-shot-option">
-                <input
-                  type="radio"
-                  name={`app-shot-shortcut-${token}`}
-                  value="chord"
-                  checked={shortcutKind === "chord"}
-                  onChange={() => setShortcutKind("chord")}
-                />
-                {t("appShotChord")}
-              </label>
-            </fieldset>
+              </fieldset>
+            )}
             <label className="app-shot-option">
               <input
                 type="checkbox"
@@ -556,47 +618,59 @@ export function AppShotButton({
               {t(
                 configuration?.niriBinding
                   ? "appShotNiriEnable"
-                  : configuration?.portalShortcut
-                    ? "appShotPortalEnable"
-                    : "appShotGlobalShortcut",
+                  : managedByHyprland
+                    ? "appShotHyprlandEnable"
+                    : configuration?.portalShortcut
+                      ? "appShotPortalEnable"
+                      : "appShotGlobalShortcut",
               )}
             </label>
             <p className="app-shot-hint">
               {t(
                 configuration?.niriBinding
                   ? "appShotNiriHint"
-                  : configuration?.portalShortcut
-                    ? "appShotPortalHint"
-                    : window.zenx.platform === "linux"
-                      ? "appShotLinuxShortcutHint"
-                      : shortcutKind === "both-shift"
-                        ? "appShotBothShiftHint"
-                        : "appShotGlobalHint",
+                  : managedByHyprland
+                    ? "appShotHyprlandHint"
+                    : configuration?.portalShortcut
+                      ? "appShotPortalHint"
+                      : window.zenx.platform === "linux"
+                        ? "appShotLinuxShortcutHint"
+                        : shortcutKind === "both-shift"
+                          ? "appShotBothShiftHint"
+                          : "appShotGlobalHint",
               )}
             </p>
             {portalState && (
               <>
                 <p role="status" className="app-shot-hint">
-                  {portalState.registered
-                    ? t("appShotPortalAssigned", {
-                        shortcut:
-                          portalState.shortcutDescription ??
-                          t("appShotPortalAssignedUnknown"),
-                      })
-                    : t("appShotPortalNotAssigned")}
+                  {managedByHyprland
+                    ? t(
+                        portalState.actionRegistered
+                          ? "appShotHyprlandActionRegistered"
+                          : "appShotHyprlandActionMissing",
+                      )
+                    : portalState.registered
+                      ? t("appShotPortalAssigned", {
+                          shortcut:
+                            portalState.shortcutDescription ??
+                            t("appShotPortalAssignedUnknown"),
+                        })
+                      : t("appShotPortalNotAssigned")}
                 </p>
                 <div className="app-shot-actions">
-                  {portalState.canConfigure && api.configureShortcut && (
-                    <button
-                      type="button"
-                      className="quiet-button"
-                      disabled={disabled || shortcutBusy}
-                      onClick={() => void configureShortcut()}
-                    >
-                      {t("appShotPortalConfigure")}
-                    </button>
-                  )}
-                  {!portalState.registered && (
+                  {!managedByHyprland &&
+                    portalState.canConfigure &&
+                    api.configureShortcut && (
+                      <button
+                        type="button"
+                        className="quiet-button"
+                        disabled={disabled || shortcutBusy}
+                        onClick={() => void configureShortcut()}
+                      >
+                        {t("appShotPortalConfigure")}
+                      </button>
+                    )}
+                  {!portalState.registered && !portalState.actionRegistered && (
                     <button
                       type="button"
                       className="quiet-button"
@@ -608,6 +682,22 @@ export function AppShotButton({
                   )}
                 </div>
               </>
+            )}
+            {configuration?.hyprlandBinding && (
+              <details className="app-shot-hyprland-binding">
+                <summary>{t("appShotHyprlandBinding")}</summary>
+                <p className="app-shot-hint">
+                  {t("appShotHyprlandManualSetup")}
+                </p>
+                <p className="app-shot-hint">{t("appShotHyprlandLegacy")}</p>
+                <pre className="app-shot-context">
+                  {configuration.hyprlandBinding.legacy}
+                </pre>
+                <p className="app-shot-hint">{t("appShotHyprlandLua")}</p>
+                <pre className="app-shot-context">
+                  {configuration.hyprlandBinding.lua}
+                </pre>
+              </details>
             )}
             {configuration?.niriBinding && (
               <details>

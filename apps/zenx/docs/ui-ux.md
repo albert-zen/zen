@@ -14,9 +14,13 @@ Composer 的应用快照入口先列出窗口，再捕获用户明确选择的�
 
 GNOME 45–51 Wayland 可使用随完整 Linux 安装包分发的 T3 扩展：界面只读检查版本并以折叠说明展示手动安装、退出/重新登录、明确启用与撤销步骤，不自动安装、更新或启用扩展，不打开全局用户扩展开关。已就绪时优先同次返回窗口身份与像素的 GNOME backend，扩展缺失/不兼容可尝试受支持 portal，但拒绝、取消或捕获失败绝不切换目标。授权边界明确说明同会话总线名称并非可执行程序认证；撤销快捷键不等于撤销扩展权限。未知 PID 不推断自身窗口排除或辅助文字目标。
 
-GNOME/Niri 在捕获身份包含有效 PID、标题和尺寸且用户勾选文字时，可通过既有隔离 worker 读取同窗 AT-SPI name/value 文字。Wayland 一律用逻辑尺寸匹配，不制造屏幕坐标；GNOME 不制造窗口 ID。只有 PID 缺失/成功空列表才允许有界的 Flatpak 代理元数据查找，权限/传输失败不扩大查找；只读取唯一匹配窗口的树。匿名 GTK4 回退只允许在已知 PID 内，重复匹配拒绝。读取失败、超时或身份不足明确为 screenshot-only；不启用系统辅助功能设置，不把 fresh AX 验证声称为像素和文字的原子快照。
+KDE/Hyprland Wayland 可使用随完整 Linux 安装包分发的独立原生 helper；X11 不启用这些原生捕获路径。界面只读显示已就绪、未安装、需更新或错误，并折叠展示手动安装/授权与撤销说明。KDE 使用独立 desktop entry 对 ScreenShot2 授权；Hyprland 使用精确窗口映射和 export 协议。已就绪 backend 优先，捕获拒绝或失败不切换目标；Hyprland 已安装但版本探测失败/需更新也不伪装为缺失而退回 portal。未知/漂移身份只保留像素，不读取其他窗口文字或宣称能排除 ZenX。
 
-当前与 T3 Snap Shot 的剩余差距：KDE/Hyprland 原生 backend、自动化但需明确同意的 GNOME setup、Niri 配置提案/保存、持久快捷键配置、AX 结构树、反馈动画和有可靠身份的 ZenX 自身窗口捕获尚未完成。Windows 明确窗口列表仍为 screenshot-only，辅助文字限前台捕获。没有自动退回全屏或另一个目标。系统授权/原生捕获需在对应平台单独验收；合成 UI 和主进程测试不能替代。
+Hyprland 明确启用后只注册固定 capture-window portal 动作，不提交 preferred_trigger，不声称物理按键已绑定，也不显示 Configure 按钮。界面展示固定 Ctrl+Shift+2 的传统配置/Lua 形式供用户自行加入配置；动作已注册可接收 compositor 事件，但不是系统已分配快捷键的证明。取消启用关闭本次 session，移除手动绑定和 helper/desktop 授权仍由用户执行。
+
+GNOME/Niri/KDE/Hyprland 在捕获身份包含有效 PID、标题和尺寸且用户勾选文字时，可通过既有隔离 worker 读取同窗 AT-SPI name/value 文字。Wayland 一律用逻辑尺寸匹配，不制造屏幕坐标；GNOME 不制造窗口 ID。只有 PID 缺失/成功空列表才允许有界的 Flatpak 代理元数据查找，权限/传输失败不扩大查找；只读取唯一匹配窗口的树。匿名 GTK4 回退只允许在已知 PID 内，重复匹配拒绝。读取失败、超时或身份不足明确为 screenshot-only；不启用系统辅助功能设置，不把 fresh AX 验证声称为像素和文字的原子快照。
+
+当前与 T3 Snap Shot 的剩余差距：自动化但需明确同意的 Linux helper/GNOME setup、Niri 配置提案/保存、持久快捷键配置、AX 结构树、反馈动画和有可靠身份的 ZenX 自身窗口捕获尚未完成。Windows 明确窗口列表仍为 screenshot-only，辅助文字限前台捕获。没有自动退回全屏或另一个目标。系统授权/原生捕获需在对应平台单独验收；合成 UI 和主进程测试不能替代。
 
 New thread 打开临时本地编辑页；选择或添加 Project 不创建 Thread，第一条有效 Send 才配置所选 Project 或分配无项目目录、创建真实 Thread，并在 Sidebar、usage 等辅助元数据独立刷新时立即启动 Turn。全局入口使用最近 Project，Project 内入口使用该精确 Project；失败以明确、可恢复且不遮盖会话的通知呈现。
 

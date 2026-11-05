@@ -8,6 +8,11 @@ import {
   isGnomeAppShotSession,
   type GnomeAppShotSupport,
 } from "./app-shot-gnome.js";
+import { isKdeSession, type KdeAppShotSupport } from "./app-shot-kde.js";
+import {
+  isHyprlandSession,
+  type HyprlandAppShotState,
+} from "./app-shot-hyprland.js";
 import type {
   PortalAppShotShortcutHandle,
   PortalAppShotShortcutOptions,
@@ -54,6 +59,9 @@ export interface AppShotIpcDependencies<
   platform: string;
   portalSupport?(signal: AbortSignal): Promise<boolean>;
   gnomeSupport?(signal: AbortSignal): Promise<GnomeAppShotSupport>;
+  kdeSupport?(signal: AbortSignal): Promise<KdeAppShotSupport>;
+  hyprlandSupport?(signal: AbortSignal): Promise<HyprlandAppShotState>;
+  hyprlandBinding?: AppShotConfiguration["hyprlandBinding"];
   startPortalShortcut?(
     options: PortalAppShotShortcutOptions,
   ): Promise<PortalAppShotShortcutHandle>;
@@ -170,17 +178,51 @@ export class AppShotIpcController<
     caller: Caller<Renderer, Frame>,
   ): Promise<AppShotConfiguration> {
     const session = this.#require(caller);
-    const gnomeSupport = await this.#deps.gnomeSupport?.(session.abort.signal);
+    // The host injects only the applicable Wayland backend. These probes never
+    // install a helper, request a screenshot, or register a shortcut.
+    const kdeSupport = this.#deps.kdeSupport
+      ? await this.#deps.kdeSupport(session.abort.signal)
+      : undefined;
+    const hyprlandSupport = this.#deps.hyprlandSupport
+      ? await this.#deps.hyprlandSupport(session.abort.signal)
+      : undefined;
+    const gnomeSupport = this.#deps.gnomeSupport
+      ? await this.#deps.gnomeSupport(session.abort.signal)
+      : undefined;
+    if (!this.#still(caller, session))
+      throw new Error("App Shot renderer changed during capability check");
+    // Match capture routing: native failure is not absence. Hyprland version
+    // probe failures are update-required, and may be denial/transport errors.
+    const nativeCaptureError =
+      kdeSupport?.status === "error"
+        ? kdeSupport.message
+        : hyprlandSupport?.status === "error" ||
+            hyprlandSupport?.status === "update-required"
+          ? hyprlandSupport.message
+          : undefined;
+    const nativeBlocked =
+      kdeSupport?.status === "error" ||
+      hyprlandSupport?.status === "error" ||
+      hyprlandSupport?.status === "update-required";
     const nativeForeground =
-      gnomeSupport?.status === "ready" ||
-      (this.#deps.portalSupport
-        ? await this.#deps.portalSupport(session.abort.signal)
-        : session.service.hasNativeActiveCapture === true);
+      !nativeBlocked &&
+      (kdeSupport?.status === "ready" ||
+        hyprlandSupport?.status === "ready" ||
+        gnomeSupport?.status === "ready" ||
+        (this.#deps.portalSupport
+          ? await this.#deps.portalSupport(session.abort.signal)
+          : session.service.hasNativeActiveCapture === true));
     if (!this.#still(caller, session))
       throw new Error("App Shot renderer changed during capability check");
     return {
       nativeForeground,
       ...(gnomeSupport ? { gnomeSupport: gnomeSupport.status } : {}),
+      ...(kdeSupport ? { kdeSupport: kdeSupport.status } : {}),
+      ...(hyprlandSupport ? { hyprlandSupport: hyprlandSupport.status } : {}),
+      ...(nativeCaptureError ? { nativeCaptureError } : {}),
+      ...(this.#deps.hyprlandBinding
+        ? { hyprlandBinding: this.#deps.hyprlandBinding }
+        : {}),
       ...(this.#deps.startPortalShortcut
         ? { portalShortcut: true as const }
         : {}),
@@ -552,7 +594,13 @@ export class AppShotIpcController<
 
   async onShortcut(): Promise<void> {
     const owner = this.#owner;
-    if (!owner || owner.pending || (owner.portal && !owner.portal.registered))
+    if (
+      !owner ||
+      owner.pending ||
+      (owner.portal &&
+        !owner.portal.registered &&
+        !owner.portal.actionRegistered)
+    )
       return;
     if (!this.#still(owner.caller, owner.session)) {
       this.forget(owner.caller.renderer);
@@ -643,8 +691,34 @@ export async function installAppShotIpc(options: {
     process.platform === "linux" &&
     isWaylandAppShotSession() &&
     !niriSocketPath();
+  const kde = portal && isKdeSession();
+  const hyprland = portal && !kde && isHyprlandSession();
+  const appId = app.isPackaged
+    ? "io.github.albert_zen.ZenX"
+    : "io.github.albert_zen.ZenX.Development";
   const controller = new AppShotIpcController<Renderer, Frame>({
-    ...(portal && isGnomeAppShotSession()
+    ...(kde
+      ? {
+          kdeSupport: async (signal: AbortSignal) => {
+            const { getKdeAppShotSupport } = await import("./app-shot-kde.js");
+            return getKdeAppShotSupport({ signal });
+          },
+        }
+      : {}),
+    ...(hyprland
+      ? {
+          hyprlandSupport: async (signal: AbortSignal) => {
+            const { getHyprlandAppShotState } =
+              await import("./app-shot-hyprland.js");
+            return getHyprlandAppShotState({ signal });
+          },
+          hyprlandBinding: {
+            legacy: `bind = CTRL SHIFT, 2, global, ${appId}:capture-window`,
+            lua: `hl.bind("CTRL + SHIFT + 2", hl.dsp.global("${appId}:capture-window"))`,
+          },
+        }
+      : {}),
+    ...(portal && !kde && !hyprland && isGnomeAppShotSession()
       ? {
           gnomeSupport: async (signal: AbortSignal) => {
             const { checkGnomeAppShotSupport } =
@@ -659,9 +733,7 @@ export async function installAppShotIpc(options: {
             const { getPortalAppShotSupport } =
               await import("./app-shot-portal.js");
             return getPortalAppShotSupport({
-              appId: app.isPackaged
-                ? "io.github.albert_zen.ZenX"
-                : "io.github.albert_zen.ZenX.Development",
+              appId,
               signal,
             });
           },
@@ -673,6 +745,7 @@ export async function installAppShotIpc(options: {
             return startPortalAppShotShortcut({
               ...shortcutOptions,
               development: !app.isPackaged,
+              managedByHyprland: hyprland,
             });
           },
         }
@@ -843,6 +916,9 @@ function portalShortcutState(
 ): AppShotShortcutState {
   return {
     registered: handle.registered,
+    ...(handle.actionRegistered !== undefined
+      ? { actionRegistered: handle.actionRegistered }
+      : {}),
     shortcutDescription: handle.shortcutDescription,
     canConfigure: handle.canConfigure,
   };

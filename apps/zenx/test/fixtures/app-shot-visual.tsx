@@ -48,7 +48,10 @@ const shot: ZenXImageDraft = {
 };
 const niri = params.get("platform") === "niri";
 const gnome = params.get("platform") === "gnome";
-const portal = params.get("platform") === "portal" || gnome;
+const kde = params.get("platform") === "kde";
+const hyprland = params.get("platform") === "hyprland";
+const nativeReady = params.get("helper") === "ready";
+const portal = params.get("platform") === "portal" || gnome || kde || hyprland;
 const api: AppShotApi = {
   configuration: async () =>
     niri
@@ -59,8 +62,27 @@ const api: AppShotApi = {
         }
       : portal
         ? {
-            nativeForeground: false,
+            nativeForeground: nativeReady,
             portalShortcut: true,
+            ...(kde
+              ? {
+                  kdeSupport: nativeReady
+                    ? ("ready" as const)
+                    : ("manual-setup-required" as const),
+                }
+              : {}),
+            ...(hyprland
+              ? {
+                  hyprlandSupport: nativeReady
+                    ? ("ready" as const)
+                    : ("not-installed" as const),
+                  hyprlandBinding: {
+                    legacy:
+                      "bind = CTRL SHIFT, 2, global, io.github.albert_zen.ZenX:capture-window",
+                    lua: 'hl.bind("CTRL + SHIFT + 2", hl.dsp.global("io.github.albert_zen.ZenX:capture-window"))',
+                  },
+                }
+              : {}),
             ...(gnome
               ? { gnomeSupport: "extension-unavailable" as const }
               : {}),
@@ -78,7 +100,12 @@ const api: AppShotApi = {
   read: async () => png,
   attach: async () => shot,
   discard: async () => {},
-  arm: async () => (portal ? { registered: false, canConfigure: true } : "⌘⇧2"),
+  arm: async () =>
+    hyprland
+      ? { registered: false, actionRegistered: true, canConfigure: false }
+      : portal
+        ? { registered: false, canConfigure: true }
+        : "⌘⇧2",
   configureShortcut: async () => ({
     registered: true,
     shortcutDescription: "Super+F8",

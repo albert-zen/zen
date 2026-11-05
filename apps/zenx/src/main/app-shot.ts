@@ -7,6 +7,11 @@ import type {
   GnomeAppShotCapture,
   GnomeAppShotSupport,
 } from "./app-shot-gnome.js";
+import type { KdeAppShotCapture, KdeAppShotSupport } from "./app-shot-kde.js";
+import type {
+  HyprlandAppShotCapture,
+  HyprlandAppShotState,
+} from "./app-shot-hyprland.js";
 import type { PortalAppShotCapture } from "./app-shot-portal.js";
 import type {
   AppShotLinuxCaptureIdentity,
@@ -409,10 +414,52 @@ export function createElectronAppShotService(
                   checkGnomeAppShotSupport,
                   captureGnomeActiveAppShot,
                 } = await import("./app-shot-gnome.js");
+                const {
+                  isKdeSession,
+                  getKdeAppShotSupport,
+                  captureKdeActiveAppShot,
+                } = await import("./app-shot-kde.js");
+                const {
+                  isHyprlandSession,
+                  getHyprlandAppShotState,
+                  captureHyprlandActiveAppShot,
+                } = await import("./app-shot-hyprland.js");
+                // Match the capability/shortcut adapter's single desktop selection.
+                const kde = isKdeSession();
+                const hyprland = !kde && isHyprlandSession();
                 return captureWaylandAppShot(
                   captureOptions?.includeAccessibility === true,
                   {
-                    ...(isGnomeAppShotSession()
+                    ...(kde
+                      ? {
+                          kdeSupport: () =>
+                            getKdeAppShotSupport({
+                              signal: captureOptions?.signal,
+                            }),
+                        }
+                      : {}),
+                    ...(hyprland
+                      ? {
+                          hyprlandSupport: () =>
+                            getHyprlandAppShotState({
+                              signal: captureOptions?.signal,
+                            }),
+                        }
+                      : {}),
+                    captureKde: () =>
+                      captureKdeActiveAppShot({
+                        signal: captureOptions?.signal,
+                      }),
+                    captureHyprland: () =>
+                      captureHyprlandActiveAppShot({
+                        signal: captureOptions?.signal,
+                      }),
+                    readNativeAccessibility: (shot) =>
+                      readLinuxAppShotAccessibility(
+                        nativeWaylandAppShotIdentity(shot),
+                        captureOptions?.signal,
+                      ),
+                    ...(!kde && !hyprland && isGnomeAppShotSession()
                       ? {
                           gnomeSupport: () =>
                             checkGnomeAppShotSupport({
@@ -564,6 +611,60 @@ export function gnomeAppShotIdentity(
   };
 }
 
+/** KDE/Hyprland identities retain logical frame and client sizes, never global origins. */
+export function nativeWaylandAppShotIdentity(
+  shot: KdeAppShotCapture | HyprlandAppShotCapture,
+): AppShotLinuxCaptureIdentity | undefined {
+  const window = shot.window;
+  if (
+    !window ||
+    !Number.isSafeInteger(window.processId) ||
+    window.processId <= 0 ||
+    !window.title.trim()
+  )
+    return undefined;
+  return {
+    platform: "linux",
+    matchMode: "wayland",
+    pid: window.processId,
+    windowTitle: window.title,
+    bounds: { width: window.bounds.width, height: window.bounds.height },
+    clientBounds: {
+      width: window.clientBounds.width,
+      height: window.clientBounds.height,
+    },
+  };
+}
+
+export function nativeWaylandAppShotDraft(
+  backend: "KDE" | "Hyprland",
+  shot: KdeAppShotCapture | HyprlandAppShotCapture,
+  includeAccessibility: boolean,
+  accessibility?: AppShotText,
+): AppShotCapture {
+  const title =
+    shot.window?.title || shot.window?.appName || `${backend} window`;
+  return {
+    name: filename(title),
+    bytes: shot.png,
+    mediaType: "image/png",
+    context: [
+      shot.window
+        ? `App Shot of ${backend} window "${plain(title, 1000)}"${shot.window.appName ? ` in ${plain(shot.window.appName, 100)}` : ""}.`
+        : `App Shot of the ${backend} window selected at capture start. Window identity changed or was unavailable afterward; metadata is omitted.`,
+      `Captured at: ${new Date().toISOString()}.`,
+      includeAccessibility &&
+      nativeWaylandAppShotIdentity(shot) &&
+      accessibility?.text
+        ? `Accessibility text from this same window (read-only${accessibility.truncated ? ", truncated" : ""}): ${accessibility.text}`
+        : includeAccessibility
+          ? "Screenshot only. Accessibility text was unavailable or could not be matched to this window."
+          : "Screenshot only. Accessibility text was not requested.",
+      "This is a draft attachment, not permission to control the app.",
+    ].join("\n"),
+  };
+}
+
 export function niriAppShotIdentity(
   shot: NiriAppShotCapture,
 ): AppShotLinuxCaptureIdentity | undefined {
@@ -598,6 +699,13 @@ async function readLinuxAppShotAccessibility(
 export async function captureWaylandAppShot(
   includeAccessibility: boolean,
   dependencies: {
+    kdeSupport?(): Promise<KdeAppShotSupport>;
+    captureKde?(): Promise<KdeAppShotCapture>;
+    hyprlandSupport?(): Promise<HyprlandAppShotState>;
+    captureHyprland?(): Promise<HyprlandAppShotCapture>;
+    readNativeAccessibility?(
+      shot: KdeAppShotCapture | HyprlandAppShotCapture,
+    ): Promise<AppShotText | undefined>;
     gnomeSupport?(): Promise<GnomeAppShotSupport>;
     captureGnome(): Promise<GnomeAppShotCapture>;
     readGnomeAccessibility?(
@@ -606,6 +714,38 @@ export async function captureWaylandAppShot(
     capturePortal(): Promise<PortalAppShotCapture | undefined>;
   },
 ): Promise<AppShotCapture | undefined> {
+  const kde = await dependencies.kdeSupport?.();
+  if (kde?.status === "error") throw new Error(kde.message);
+  if (kde?.status === "ready") {
+    if (!dependencies.captureKde)
+      throw new Error("KDE App Shot capture is unavailable");
+    const shot = await dependencies.captureKde();
+    const text =
+      includeAccessibility && nativeWaylandAppShotIdentity(shot)
+        ? await dependencies.readNativeAccessibility?.(shot)
+        : undefined;
+    return nativeWaylandAppShotDraft("KDE", shot, includeAccessibility, text);
+  }
+  const hyprland = await dependencies.hyprlandSupport?.();
+  // Version probing can fail through denial or transport errors, not just absence.
+  // Do not turn an installed but unusable helper into another capture target.
+  if (hyprland?.status === "error" || hyprland?.status === "update-required")
+    throw new Error(hyprland.message);
+  if (hyprland?.status === "ready") {
+    if (!dependencies.captureHyprland)
+      throw new Error("Hyprland App Shot capture is unavailable");
+    const shot = await dependencies.captureHyprland();
+    const text =
+      includeAccessibility && nativeWaylandAppShotIdentity(shot)
+        ? await dependencies.readNativeAccessibility?.(shot)
+        : undefined;
+    return nativeWaylandAppShotDraft(
+      "Hyprland",
+      shot,
+      includeAccessibility,
+      text,
+    );
+  }
   if ((await dependencies.gnomeSupport?.())?.status === "ready") {
     const shot = await dependencies.captureGnome();
     const text =
