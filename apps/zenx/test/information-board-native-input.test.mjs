@@ -273,6 +273,16 @@ test("removal after preparation keeps unacknowledged input unknown without repla
   await assert.rejects(f.click("button"), /trusted Chromium click delivered/);
   assert.deepEqual(f.events, ["mouseDown", "mouseUp", "DOM click delivered"]);
   assert.deepEqual(f.result.steps, []);
+  assert.equal(f.result.unacknowledgedClick.expectedAcknowledgement, 1);
+  assert.equal(
+    f.result.unacknowledgedClick.renderer.observedAcknowledgement,
+    null,
+  );
+  assert.equal(f.result.unacknowledgedClick.renderer.sameTarget, true);
+  assert.equal(
+    f.result.unacknowledgedClick.renderer.originalPointHitsArmed,
+    true,
+  );
 });
 
 test("an obscured control still refuses native input without forced dispatch", async () => {

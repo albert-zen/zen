@@ -71,7 +71,7 @@ async function click(selector, label = selector, systemPointer = false) {
   // missing pre-dispatch targets may wait; unknown dispatched input never retries.
   await until(async () => {
     point = await evaluate(
-      `(()=>{const e=${query(selector)};if(!e)return null;e.scrollIntoView({block:'center',inline:'nearest'});const r=e.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;if(e.disabled||!r.width||!r.height||!e.contains(document.elementFromPoint(x,y)))throw Error('Obscured/disabled native target: '+${JSON.stringify(label)}+' '+JSON.stringify({r:{x:r.x,y:r.y,width:r.width,height:r.height},hits:document.elementsFromPoint(x,y).map(n=>n.className).slice(0,5)}));e.addEventListener('click',event=>{if(event.isTrusted)window.__informationNativeClick=${acknowledgedClick}},{capture:true,once:true});return {x:Math.round(x),y:Math.round(y)}})()`,
+      `(()=>{const e=${query(selector)};if(!e)return null;e.scrollIntoView({block:'center',inline:'nearest'});const r=e.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;if(e.disabled||!r.width||!r.height||!e.contains(document.elementFromPoint(x,y)))throw Error('Obscured/disabled native target: '+${JSON.stringify(label)}+' '+JSON.stringify({r:{x:r.x,y:r.y,width:r.width,height:r.height},hits:document.elementsFromPoint(x,y).map(n=>n.className).slice(0,5)}));window.__informationPreparedTarget=e;e.addEventListener('click',event=>{if(event.isTrusted)window.__informationNativeClick=${acknowledgedClick}},{capture:true,once:true});return {x:Math.round(x),y:Math.round(y)}})()`,
     );
     return point !== null;
   }, label + " target prepared before input");
@@ -98,13 +98,54 @@ async function click(selector, label = selector, systemPointer = false) {
   }
   // Posting native input is not an acknowledgement: a following IPC read can
   // otherwise observe pre-click idle before React starts the layout write.
-  await until(
-    () => evaluate(`window.__informationNativeClick===${acknowledgedClick}`),
-    label +
-      (systemPointer
-        ? " trusted OS click delivered"
-        : " trusted Chromium click delivered"),
-  );
+  try {
+    await until(
+      () => evaluate(`window.__informationNativeClick===${acknowledgedClick}`),
+      label +
+        (systemPointer
+          ? " trusted OS click delivered"
+          : " trusted Chromium click delivered"),
+    );
+  } catch (error) {
+    // Read-only evidence after unknown delivery. Never re-dispatch, replace the
+    // acknowledgement, or turn a matching final UI state into proof of delivery.
+    result.unacknowledgedClick = {
+      label,
+      selector,
+      point,
+      expectedAcknowledgement: acknowledgedClick,
+      input: systemPointer ? "OS" : "Chromium",
+    };
+    try {
+      result.unacknowledgedClick.renderer = await evaluate(
+        `(() => {
+          const armed = window.__informationPreparedTarget;
+          const current = ${query(selector)};
+          const rect = (element) => {
+            if (!element) return null;
+            const r = element.getBoundingClientRect();
+            return { x: r.left, y: r.top, width: r.width, height: r.height };
+          };
+          const hit = document.elementFromPoint(${point.x}, ${point.y});
+          return {
+            observedAcknowledgement: window.__informationNativeClick ?? null,
+            armedConnected: armed?.isConnected ?? null,
+            sameTarget: armed === current,
+            armedRect: rect(armed),
+            currentRect: rect(current),
+            originalPointHitsArmed: Boolean(armed?.contains(hit)),
+            originalPointHitsCurrent: Boolean(current?.contains(hit)),
+            viewport: { width: window.innerWidth, height: window.innerHeight },
+            hitTag: hit?.tagName ?? null,
+            hitClass: typeof hit?.className === "string" ? hit.className : null,
+          };
+        })()`,
+      );
+    } catch (diagnosticError) {
+      result.unacknowledgedClick.diagnosticError = String(diagnosticError);
+    }
+    throw error;
+  }
   result.steps.push(label);
 }
 async function pressKey(keyCode, label) {

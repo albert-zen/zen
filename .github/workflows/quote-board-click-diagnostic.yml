@@ -1,0 +1,47 @@
+name: Quote Board click diagnostic
+on:
+  push:
+    branches:
+      - diagnostic/quote-board-click-20261105
+permissions:
+  contents: read
+concurrency:
+  group: quote-board-click-diagnostic-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native-information:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node --test apps/zenx/test/information-board-native-input.test.mjs
+      - run: npm run build
+      - run: npm run build --workspace @zen/zenx
+      - name: Select installed SDK for the unchanged production native helper
+        if: runner.os == 'macOS'
+        # Xcode 15's SDK cannot compile the guarded macOS 15 capture property.
+        # Keep the macOS 14 runtime; select only this job's installed SDK.
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+        run: |
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+          xcrun --sdk macosx --show-sdk-version
+      - name: Native information board flow in disposable full production App
+        timeout-minutes: 6
+        run: node apps/zenx/scripts/launch-information-board-acceptance.mjs "${{ runner.temp }}/information-board"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: information-board-${{ matrix.os }}-${{ github.sha }}
+          path: ${{ runner.temp }}/information-board
+          if-no-files-found: error
+          retention-days: 14
