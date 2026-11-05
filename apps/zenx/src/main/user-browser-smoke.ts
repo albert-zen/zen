@@ -184,10 +184,8 @@ try {
   });
   const account = tabs.find((tab) => tab.url.includes("/account"));
   assert.ok(account, "Expected the already-running authenticated account tab");
-  const stopLive = backend.observeTab!(
-    "windows-smoke",
-    account.tabId,
-    (event) => liveEvents.push(event),
+  let stopLive = backend.observeTab!("windows-smoke", account.tabId, (event) =>
+    liveEvents.push(event),
   );
   const inspection = await retryDocumentInspection(() =>
     backend.inspect("windows-smoke", account.tabId),
@@ -439,6 +437,11 @@ try {
     opened.tabId,
     `http://127.0.0.1:${port}`,
   );
+  // Diagnostic control only: this does not validate concurrent live observation.
+  stopLive();
+  console.log(
+    "Compositor control: foreground live observation paused before contracts",
+  );
   const targetedInputContracts = await runTargetedInputContractSmoke({
     backend,
     sessionId: "windows-smoke",
@@ -462,6 +465,21 @@ try {
       assert.equal(snapshot.visibilityByTarget.get(opened.tabId), "hidden");
     },
   });
+  const framesBeforeResume = liveEvents.filter(
+    (event) => event.type === "frame",
+  ).length;
+  stopLive = backend.observeTab!("windows-smoke", account.tabId, (event) =>
+    liveEvents.push(event),
+  );
+  await retry(async () =>
+    liveEvents.filter((event) => event.type === "frame").length >
+    framesBeforeResume
+      ? true
+      : undefined,
+  );
+  console.log(
+    "Compositor control: foreground live observation resumed after contracts",
+  );
   await smokeConnectedActivity(
     backend,
     `http://127.0.0.1:${String(port)}/opened`,
