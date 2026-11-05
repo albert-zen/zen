@@ -1,4 +1,9 @@
 export const en = {
+  answeredQuestion: "Original question",
+  showAnsweredQuestion: "Show original question and choices",
+  closeAnsweredQuestion: "Close original question",
+  answeredQuestionUnavailable:
+    "The original question and choices are unavailable. The recorded answer is shown unchanged.",
   findInThread: "Find in thread",
   threadFindCount: "{{current}} of {{total}}",
   threadFindNoMatches: "No matches",
@@ -988,6 +993,10 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  answeredQuestion: "原问题",
+  showAnsweredQuestion: "查看原问题和选项",
+  closeAnsweredQuestion: "关闭原问题",
+  answeredQuestionUnavailable: "原问题和选项不可用，下方保留已记录的回答。",
   findInThread: "在会话中查找",
   threadFindCount: "{{current}} / {{total}}",
   threadFindNoMatches: "没有匹配项",

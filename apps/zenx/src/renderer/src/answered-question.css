@@ -1,0 +1,79 @@
+.answered-question {
+  min-width: 0;
+}
+.answered-question-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 6px 10px;
+  margin-bottom: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.answered-question-trigger svg {
+  flex: none;
+}
+.answered-question-trigger span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.answered-question-trigger:focus-visible {
+  outline: 2px solid var(--color-text-primary);
+  outline-offset: 2px;
+}
+.answered-question-answer {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.answered-question-answer-part + .answered-question-answer-part {
+  margin-top: 10px;
+}
+.answered-question-popover {
+  width: min(420px, calc(100vw - 24px));
+  max-height: min(420px, var(--radix-popover-content-available-height));
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+.answered-question-popover header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.answered-question-popover header button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.answered-question-popover p,
+.answered-question-popover li {
+  white-space: pre-wrap;
+}
+.answered-question-popover ul {
+  padding-left: 22px;
+}
+.answered-question-popover li + li {
+  margin-top: 8px;
+}
+.answered-question-popover small {
+  display: block;
+  color: var(--color-text-secondary);
+}
+
+.answered-question-answer-part > p {
+  margin: 0;
+}

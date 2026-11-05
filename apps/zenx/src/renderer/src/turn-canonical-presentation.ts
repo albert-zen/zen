@@ -1,3 +1,9 @@
+import type { AnsweredQuestionPresentation } from "./answered-question-presentation.js";
+
+export const EMPTY_ANSWERED_QUESTIONS: ReadonlyMap<
+  string,
+  AnsweredQuestionPresentation
+> = new Map();
 import type { CanonicalItem } from "../../../../../src/item.js";
 import type { Turn } from "../../protocol-client/index.js";
 import type { ZenXThreadAttachmentProjection } from "../../thread-attachment-projection.js";
@@ -5,6 +11,7 @@ import type { ToolActionTarget } from "./tool-action-targets.js";
 
 type UserMessage = Extract<CanonicalItem, { type: "user_message" }>;
 export interface TurnCanonicalPresentation {
+  answeredQuestions?: ReadonlyMap<string, AnsweredQuestionPresentation>;
   inputs: ReadonlyMap<string, UserMessage>;
   quoteItems: ReadonlyMap<string, readonly CanonicalItem[]>;
   forkItems: ReadonlyMap<string, string | undefined>;
@@ -17,6 +24,7 @@ export interface TurnCanonicalPresentationIndex {
   // Immutable inputs of this disposable projection, not a second authority.
   source: {
     turns: readonly Turn[];
+    answeredQuestions: ReadonlyMap<string, AnsweredQuestionPresentation>;
     inputs: ReadonlyMap<string, UserMessage>;
     forkItems: ReadonlyMap<string, string | undefined>;
     attachments: ZenXThreadAttachmentProjection;
@@ -73,6 +81,10 @@ export function indexTurnCanonicalPresentation(
   toolTargets: ReadonlyMap<string, ToolActionTarget>,
   previous?: TurnCanonicalPresentationIndex,
   quoteItems: ReadonlyMap<string, readonly CanonicalItem[]> = new Map(),
+  answeredQuestions: ReadonlyMap<
+    string,
+    AnsweredQuestionPresentation
+  > = EMPTY_ANSWERED_QUESTIONS,
 ): TurnCanonicalPresentationIndex {
   const before = previous?.scope === scope ? previous.turns : undefined;
   const source = previous?.scope === scope ? previous.source : undefined;
@@ -82,7 +94,8 @@ export function indexTurnCanonicalPresentation(
     source.forkItems === forkItems &&
     source.attachments === attachments &&
     source.toolTargets === toolTargets &&
-    source.quoteItems === quoteItems;
+    source.quoteItems === quoteItems &&
+    source.answeredQuestions === answeredQuestions;
   const next = new Map<string, TurnCanonicalPresentation>();
   for (const [index, turn] of turns.entries()) {
     const old = before?.get(turn.id);
@@ -93,6 +106,7 @@ export function indexTurnCanonicalPresentation(
       continue;
     }
     const inputEntries: [string, UserMessage][] = [];
+    const answerEntries: [string, AnsweredQuestionPresentation][] = [];
     const quoteEntries: [string, readonly CanonicalItem[]][] = [];
     const forkEntries: [string, string | undefined][] = [];
     const attachmentEntries: [
@@ -103,6 +117,8 @@ export function indexTurnCanonicalPresentation(
     // Item IDs, not text or current turn status, select canonical metadata.
     // This preserves imported history and late canonical backfills.
     for (const item of turn.items) {
+      const answer = answeredQuestions.get(item.id);
+      if (answer !== undefined) answerEntries.push([item.id, answer]);
       const quotes = quoteItems.get(item.id);
       if (quotes !== undefined) quoteEntries.push([item.id, quotes]);
       const input = inputs.get(item.id);
@@ -118,6 +134,11 @@ export function indexTurnCanonicalPresentation(
       old !== undefined &&
       sameEntries(old.inputs, inputEntries) &&
       sameEntries(
+        old.answeredQuestions ?? EMPTY_ANSWERED_QUESTIONS,
+        answerEntries,
+        (a, b) => JSON.stringify(a) === JSON.stringify(b),
+      ) &&
+      sameEntries(
         old.quoteItems,
         quoteEntries,
         (a, b) =>
@@ -131,6 +152,7 @@ export function indexTurnCanonicalPresentation(
     } else {
       next.set(turn.id, {
         inputs: new Map(inputEntries),
+        answeredQuestions: new Map(answerEntries),
         quoteItems: new Map(quoteEntries),
         forkItems: new Map(forkEntries),
         attachments: Object.fromEntries(attachmentEntries),
@@ -141,7 +163,15 @@ export function indexTurnCanonicalPresentation(
   return {
     scope,
     turns: next,
-    source: { turns, inputs, forkItems, attachments, toolTargets, quoteItems },
+    source: {
+      turns,
+      inputs,
+      forkItems,
+      attachments,
+      toolTargets,
+      quoteItems,
+      answeredQuestions,
+    },
   };
 }
 

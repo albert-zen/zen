@@ -1,3 +1,8 @@
+import { AnsweredQuestionBubble } from "./AnsweredQuestionBubble.js";
+import {
+  indexAnsweredQuestions,
+  type AnsweredQuestionPresentation,
+} from "./answered-question-presentation.js";
 import { VirtualTranscriptFind } from "./VirtualTranscriptFind.js";
 import {
   findMessageQuoteSource,
@@ -429,6 +434,10 @@ export function ThreadView(props: ThreadViewProps) {
       items === undefined ? undefined : projectThreadAttachmentItems(items),
     [items],
   );
+  const answeredQuestions = useMemo(
+    () => indexAnsweredQuestions(items ?? []),
+    [items],
+  );
   const canonicalInputs = useMemo(
     () =>
       new Map(
@@ -509,6 +518,7 @@ export function ThreadView(props: ThreadViewProps) {
         toolTargets,
         committedPresentation.current,
         quoteItems,
+        answeredQuestions,
       ),
     [
       sourceThreadId,
@@ -520,6 +530,7 @@ export function ThreadView(props: ThreadViewProps) {
       attachments,
       toolTargets,
       quoteItems,
+      answeredQuestions,
     ],
   );
   useLayoutEffect(() => {
@@ -3023,6 +3034,7 @@ const TurnBlock = memo(function TurnBlock({
         onOpenImage={onOpenImage}
         onReadAttachment={onReadAttachment}
         turn={turn}
+        answeredQuestion={canonicalPresentation.answeredQuestions?.get(item.id)}
       />
     ) : (
       <TriggerMessageBubble
@@ -4184,12 +4196,14 @@ function reasoningContentText(
 }
 
 function InputMessage({
+  answeredQuestion,
   item,
   attachments,
   turn,
   onOpenImage,
   onReadAttachment,
 }: {
+  answeredQuestion?: AnsweredQuestionPresentation;
   item: Extract<ThreadItem, { type: "userMessage" | "threadMessage" }>;
   attachments: readonly AttachmentRef[];
   turn: Turn;
@@ -4275,7 +4289,9 @@ function InputMessage({
       )}
       {(presented.text.length > 0 || presented.references.length > 0) && (
         <div className="user-bubble" data-thread-find-item-id={item.id}>
-          {presented.references.length > 0 ? (
+          {answeredQuestion ? (
+            <AnsweredQuestionBubble key={item.id} answer={answeredQuestion} />
+          ) : presented.references.length > 0 ? (
             presentation.map((part, index) => (
               <InlineReferenceContent
                 key={index}

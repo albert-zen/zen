@@ -1143,3 +1143,7 @@ advance only after all destinations accept. Old recalled client identities are
 terminal; a later explicit new answer receives a fresh identity. Restoration
 never sends, navigates, steals focus, enables shared Host publication or promises
 cross-window automatic insertion.
+
+### Answered-question transcript bubbles
+
+A native answered-question message shows a compact original-question bubble before the answer. Hover previews the complete authored questions and choices; click or keyboard activation keeps the same disclosure open, with Escape, close and outside dismissal. Selected options display their authored labels in authored order, with independently entered free text preserved verbatim. Multiple questions and selections remain visible. Missing or ambiguous original content is explicitly unavailable and preserves the recorded answer; plain historical prose is never guessed into a structured question. This is display-only and does not alter stored inputs, model context, copying, routing, or answer admission.
