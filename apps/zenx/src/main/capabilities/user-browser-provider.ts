@@ -4,6 +4,12 @@ import {
   type BrowserExtensionOperation,
 } from "./browser-extensions.js";
 import { localErrorDetail } from "../../local-error-detail.js";
+import { BrowserFrameEvidence } from "./browser-frame-evidence.js";
+import {
+  BrowserFrameInputObserver,
+  browserFrameCaptureFor,
+  browserFrameInputNeedsObserver,
+} from "./browser-frame-input.js";
 import {
   type CdpDiagnosticConnection,
   type UserBrowserCdpDiagnosticObserver,
@@ -127,6 +133,7 @@ interface UserBrowserAttachmentEpoch extends UserBrowserAttachmentOwner {
   nativeDialogOpen?: boolean;
   /** Input-only child lifecycle evidence, independent of document/ownership fences. */
   inputLifecycleRevision: number;
+  frameEvidence?: BrowserFrameEvidence;
   /** Closing this exact route stops disposable observation traffic before detach. */
   observationClosing?: boolean;
 }
@@ -141,6 +148,7 @@ interface ZenXUserBrowserDocumentExecutionFence extends UserBrowserAttachmentOwn
   loaderId: string;
   url: string;
   executionContextId?: number;
+  frameTree?: unknown;
 }
 
 interface UserBrowserScreencastState {
@@ -220,7 +228,11 @@ export interface UserBrowserCdpClient {
     signal?: AbortSignal,
     onDispatched?: () => void,
     programmable?: "isolated" | "main",
-  ): Promise<{ value: unknown; documentIdentity: string }>;
+  ): Promise<{
+    value: unknown;
+    documentIdentity: string;
+    assertInputCapture?: () => void;
+  }>;
   targetedInputQuarantine?(targetId: string): string | undefined;
   targetedInput?(
     targetId: string,
@@ -897,7 +909,11 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     const { session, tab } = this.#sessionTab(sessionId, tabId);
     tab.observation = undefined;
     const operation = this.#observe(session, tab, async () => {
-      let evaluation: { value: unknown; documentIdentity: string };
+      let evaluation: {
+        value: unknown;
+        documentIdentity: string;
+        assertInputCapture?: () => void;
+      };
       try {
         evaluation = await this.#client.evaluateDocument(
           tabId,
@@ -1027,6 +1043,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
           try {
             inputIssue = "after-snapshot-invalid";
             const afterSnapshot = requireBrowserInputSnapshot(after.value);
+            evaluation.assertInputCapture?.();
             inputIssue = "snapshot-changed";
             assertBrowserInputSnapshot(snapshot, afterSnapshot);
             input = { snapshot, screenshotId: observationId };
@@ -1126,13 +1143,22 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
           "User browser document changed before inspection publication",
         );
       }
+      if (input !== undefined) {
+        try {
+          evaluation.assertInputCapture?.();
+        } catch {
+          input = undefined;
+        }
+      }
       tab.outcomeUnknown = undefined;
       tab.documentIdentity = evaluation.documentIdentity;
       tab.observation = {
         id: observationId,
         documentVersion: tab.documentVersion,
         targets,
-        ...(input === undefined ? {} : { input }),
+        ...(input === undefined
+          ? {}
+          : { input, assertInputCapture: evaluation.assertInputCapture }),
       };
       return {
         ...summary,
@@ -1412,6 +1438,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       observationId,
     );
     const observation = tab.observation;
+    observation.assertInputCapture?.();
     const input = observation.input;
     const expectedDocumentIdentity = tab.documentIdentity;
     const targetedInput = this.#client.targetedInput;
@@ -1444,6 +1471,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
           signal,
           () => {
             throwIfAborted(signal);
+            observation.assertInputCapture?.();
             this.#assertTabCurrent(session, tabId, tab);
             if (
               tab.documentVersion !== version ||
@@ -2554,7 +2582,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       loaderId: string;
       url: string;
       alive: boolean;
-      pendingFrameInvalidations: Set<string>;
+      pendingFrameInvalidations: Map<string, string | undefined>;
       invalidExecutionContextIds: Set<number>;
       pendingIsolatedContexts: Map<number, string>;
       isolatedExecutionContextId?: number;
@@ -2832,7 +2860,11 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     signal?: AbortSignal,
     onDispatched?: () => void,
     programmable?: "isolated" | "main",
-  ): Promise<{ value: unknown; documentIdentity: string }> {
+  ): Promise<{
+    value: unknown;
+    documentIdentity: string;
+    assertInputCapture?: () => void;
+  }> {
     throwIfAborted(signal);
     const before = await this.#executionDocument(
       targetId,
@@ -2840,6 +2872,8 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       signal,
       expression === browserInspectScript,
     );
+    let inputLifecycleRevision = before.attachmentEpoch.inputLifecycleRevision;
+    let frameCapture: ReturnType<typeof browserFrameCaptureFor>;
     const inspectDeadline = before.inspectDeadline;
     if (
       expectedDocumentIdentity !== undefined &&
@@ -2926,7 +2960,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       // the nested snapshot in DOM inspection. Only this exact trusted read gets
       // the same downgrade; its normal document/publication fences still run.
       const optionalInputOnly = expression === browserInputSnapshotScript;
-      const resolved = includesBrowserInputSnapshot(expression)
+      let resolved = includesBrowserInputSnapshot(expression)
         ? await resolveBrowserInputEvidence(
             optionalInputOnly ? { inputSnapshot: rawValue } : rawValue,
             async (method, params) => {
@@ -2948,6 +2982,47 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
             (objectId) => this.#releaseInputObject(before, objectId),
           )
         : rawValue;
+      if (expression === browserInspectScript || optionalInputOnly) {
+        const legacy = asRecord(resolved)?.inputSnapshot;
+        if (
+          browserFrameInputNeedsObserver(
+            before.frameTree,
+            legacy ??
+              (optionalInputOnly
+                ? rawValue
+                : asRecord(rawValue)?.inputSnapshot),
+          )
+        ) {
+          try {
+            const evidence = before.attachmentEpoch.frameEvidence;
+            if (!evidence)
+              throw new Error("Browser child frame evidence is unavailable");
+            const observer = new BrowserFrameInputObserver(evidence, {
+              assertCurrent: () => this.#assertDocumentFence(before, true),
+              send: async (sessionId, method, params) =>
+                await this.#send(
+                  method,
+                  params,
+                  sessionId,
+                  undefined,
+                  undefined,
+                  undefined,
+                  undefined,
+                  () => this.#assertDocumentFence(before, true),
+                ),
+            });
+            frameCapture = await observer.prepare(before.frameTree);
+            resolved = {
+              ...asRecord(resolved),
+              inputSnapshot: frameCapture?.snapshot,
+            };
+            inputLifecycleRevision =
+              before.attachmentEpoch.inputLifecycleRevision;
+          } catch {
+            resolved = { ...asRecord(resolved), inputSnapshot: undefined };
+          }
+        }
+      }
       const value = optionalInputOnly
         ? asRecord(resolved)?.inputSnapshot
         : resolved;
@@ -2980,6 +3055,22 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       return {
         value,
         documentIdentity: after.identity,
+        ...(includesBrowserInputSnapshot(expression)
+          ? {
+              assertInputCapture: () => {
+                frameCapture?.assertCurrent();
+                this.#assertDocumentFence(before, true);
+                if (
+                  before.attachmentEpoch.inputLifecycleRevision !==
+                    inputLifecycleRevision ||
+                  before.attachmentEpoch.frameEvidence?.failure !== undefined
+                )
+                  throw new Error(
+                    "Browser child lifecycle changed during screenshot capture",
+                  );
+              },
+            }
+          : {}),
       };
     } catch (error) {
       if (error instanceof UserBrowserDocumentChangedAfterDispatchError)
@@ -3040,6 +3131,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       );
     };
     const probe = browserInputProbeScript(action);
+    const frameCapture = browserFrameCaptureFor(observed);
     try {
       await dispatchBrowserTargetedInput(
         {
@@ -3048,6 +3140,8 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
             assertFence();
             await this.#documentBarrier(fence, signal);
             assertFence();
+            if (frameCapture)
+              return await frameCapture.probe(action, assertFence);
             const response = asRecord(
               await this.#sendDocumentCommand(
                 fence,
@@ -3093,6 +3187,25 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
               ),
             );
           },
+          prepareMouse: frameCapture
+            ? (snapshot) =>
+                frameCapture.prepareMouse(
+                  snapshot,
+                  async (sessionId, params, done) => {
+                    assertFence();
+                    return await this.#sendDocumentCommand(
+                      fence,
+                      "Input.dispatchMouseEvent",
+                      params,
+                      signal,
+                      done,
+                      assertFence,
+                      undefined,
+                      sessionId,
+                    );
+                  },
+                )
+            : undefined,
           beforeDispatch: () => onDispatched?.(),
           dispatch: async (method, params, onDispatched) => {
             assertFence();
@@ -3664,6 +3777,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     method:
       | "Runtime.evaluate"
       | "DOM.describeNode"
+      | "DOM.getBoxModel"
       | "DOM.resolveNode"
       | "Runtime.callFunctionOn"
       | "Runtime.releaseObject"
@@ -3674,13 +3788,21 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     onDispatched?: () => void,
     assertCurrent?: () => void,
     inspectDeadline?: number,
+    mouseSessionId?: string,
   ): Promise<unknown> {
+    if (
+      mouseSessionId !== undefined &&
+      (method !== "Input.dispatchMouseEvent" ||
+        !fence.attachmentEpoch.frameEvidence?.hasSession(mouseSessionId) ||
+        (params.type !== "mousePressed" && params.type !== "mouseReleased"))
+    )
+      throw new Error("Browser preselected mouse route is unavailable");
     const settlement = promiseCapability<void>();
     try {
       const result = await this.#send(
         method,
         params,
-        fence.sessionId,
+        mouseSessionId ?? fence.sessionId,
         signal,
         USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS,
         async () => settlement.resolve(),
@@ -3688,6 +3810,11 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         () => {
           assertCurrent?.();
           this.#assertDocumentFence(fence, true);
+          if (
+            mouseSessionId !== undefined &&
+            !fence.attachmentEpoch.frameEvidence?.hasSession(mouseSessionId)
+          )
+            throw new Error("Browser preselected mouse route was retired");
         },
         () => {
           fence.attachmentEpoch.unsettledMutation ??= `${method} late settlement was not observed`;
@@ -3794,6 +3921,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       ) {
         throw new Error("User browser CDP document identity is invalid");
       }
+      fence.frameTree = response;
       fence.frameId = frame.id;
       fence.loaderId = frame.loaderId;
       fence.url = frame.url;
@@ -3801,7 +3929,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       if (state === undefined || state.alive === false)
         throw new UserBrowserDocumentChangedBeforeDispatchError();
       const pendingMainFrameInvalidations = [
-        ...state.pendingFrameInvalidations,
+        ...state.pendingFrameInvalidations.keys(),
       ].filter((event) => event.endsWith(`\u0000${frame.id}`));
       if (pendingMainFrameInvalidations.length > 0) {
         state.pendingFrameInvalidations.clear();
@@ -4250,13 +4378,16 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       this.#targetSessions.set(targetId, response.sessionId);
       this.#sessionTargets.set(response.sessionId, targetId);
       this.#sessionEpochs.set(response.sessionId, attachmentClosure);
+      attachmentClosure.frameEvidence = new BrowserFrameEvidence(
+        response.sessionId,
+      );
       this.#targetDocuments.set(targetId, {
         revision: 0,
         frameId: "",
         loaderId: "",
         url: "",
         alive: true,
-        pendingFrameInvalidations: new Set(),
+        pendingFrameInvalidations: new Map(),
         invalidExecutionContextIds: new Set(),
         pendingIsolatedContexts: new Map(),
       });
@@ -4821,6 +4952,37 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     const method = message.method;
     const params = asRecord(message.params);
     if (typeof method !== "string" || params === undefined) return;
+    // Child routes are evidence of this existing root attachment, never tabs or
+    // independent owners. In particular, child detach must not retire the root.
+    if (typeof message.sessionId === "string") {
+      const sourceSessionId = message.sessionId;
+      const epoch =
+        this.#sessionEpochs.get(sourceSessionId) ??
+        [...this.#sessionEpochs.values()].find((candidate) =>
+          candidate.frameEvidence?.ownsSession(sourceSessionId),
+        );
+      const evidence = epoch?.frameEvidence;
+      if (epoch && evidence) {
+        const previous = evidence.revision;
+        const childDetach =
+          method === "Target.detachedFromTarget" &&
+          typeof params.sessionId === "string" &&
+          evidence.parentSession(params.sessionId) === sourceSessionId;
+        const handled = evidence.acceptEvent(sourceSessionId, method, params);
+        if (
+          method === "Page.javascriptDialogOpening" ||
+          method === "Page.javascriptDialogClosed"
+        )
+          epoch.nativeDialogOpen = evidence.hasOpenDialog;
+        const child = sourceSessionId !== epoch.cdpSessionId;
+        if (
+          (child || method.startsWith("Target.")) &&
+          evidence.revision !== previous
+        )
+          epoch.inputLifecycleRevision++;
+        if (child || (handled && childDetach)) return;
+      }
+    }
     if (
       typeof message.sessionId === "string" &&
       browserInputLifecycleEventInvalidates(method, params)
@@ -5020,7 +5182,9 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         this.#attachmentClosures.get(targetId) === epoch &&
         epoch.cdpSessionId === message.sessionId
       )
-        epoch.nativeDialogOpen = method === "Page.javascriptDialogOpening";
+        epoch.nativeDialogOpen =
+          epoch.frameEvidence?.hasOpenDialog ??
+          method === "Page.javascriptDialogOpening";
       return;
     }
     const document = this.#targetDocuments.get(targetId);
@@ -5084,6 +5248,48 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     }
     if (
       document !== undefined &&
+      document.alive &&
+      document.frameId.length === 0 &&
+      method === "Page.frameNavigated"
+    ) {
+      const frame = asRecord(params.frame);
+      const epoch = this.#sessionEpochs.get(message.sessionId);
+      if (
+        epoch !== undefined &&
+        this.#attachmentClosures.get(targetId) === epoch &&
+        epoch.cdpSessionId === message.sessionId &&
+        frame?.parentId === undefined &&
+        typeof frame?.id === "string" &&
+        frame.id.length > 0 &&
+        typeof frame.loaderId === "string" &&
+        frame.loaderId.length > 0 &&
+        typeof frame.url === "string"
+      ) {
+        // The native commit binds this initially unknown root. Only starts
+        // associated with its exact loader are historical; a newer or missing
+        // loader remains uncertain and must reject preflight, not be retried.
+        const navigating = `Page.frameStartedNavigating\u0000${frame.id}`;
+        const loading = `Page.frameStartedLoading\u0000${frame.id}`;
+        if (
+          document.pendingFrameInvalidations.get(navigating) === frame.loaderId
+        ) {
+          document.pendingFrameInvalidations.delete(navigating);
+          if (
+            document.pendingFrameInvalidations.get(loading) === frame.loaderId
+          )
+            document.pendingFrameInvalidations.delete(loading);
+        }
+        document.frameId = frame.id;
+        document.loaderId = frame.loaderId;
+        document.url = frame.url;
+        // Reconciliation never repairs an in-flight fence or retains a world
+        // from the old document. A fresh operation still reads native identity.
+        this.#invalidateTarget(targetId, false);
+        return;
+      }
+    }
+    if (
+      document !== undefined &&
       document.frameId.length === 0 &&
       typeof params.frameId === "string" &&
       (method === "Page.navigatedWithinDocument" ||
@@ -5094,12 +5300,21 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       if (
         document.pendingFrameInvalidations.size <
           USER_BROWSER_MAX_OPERATION_EVIDENCE ||
-        [...document.pendingFrameInvalidations].some((event) =>
+        [...document.pendingFrameInvalidations.keys()].some((event) =>
           event.endsWith(`\u0000${params.frameId}`),
         )
       ) {
-        document.pendingFrameInvalidations.add(
+        document.pendingFrameInvalidations.set(
           `${method}\u0000${params.frameId}`,
+          method === "Page.frameStartedNavigating" &&
+            typeof params.loaderId === "string" &&
+            params.loaderId.length > 0
+            ? params.loaderId
+            : method === "Page.frameStartedLoading"
+              ? document.pendingFrameInvalidations.get(
+                  `Page.frameStartedNavigating\u0000${params.frameId}`,
+                )
+              : undefined,
         );
       } else {
         document.revision += 1;
@@ -5126,7 +5341,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       loaderId: "",
       url: "",
       alive: true,
-      pendingFrameInvalidations: new Set<string>(),
+      pendingFrameInvalidations: new Map<string, string | undefined>(),
       invalidExecutionContextIds: new Set<number>(),
       pendingIsolatedContexts: new Map<number, string>(),
     };
@@ -5161,6 +5376,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     ownershipClosed: boolean,
   ): void {
     if (epoch === undefined) return;
+    epoch.frameEvidence?.close();
     const sessionId = epoch.cdpSessionId;
     if (sessionId) {
       const buffers = this.#eventBuffers.get(sessionId);
@@ -5217,6 +5433,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
   }
 
   #retireEpoch(epoch: UserBrowserAttachmentEpoch): void {
+    epoch.frameEvidence?.close();
     if (epoch.cdpSessionId !== undefined) {
       this.#rememberRetiredSession(epoch.cdpSessionId);
       this.#sessionEpochs.delete(epoch.cdpSessionId);

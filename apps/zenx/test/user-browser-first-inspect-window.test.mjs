@@ -4,12 +4,22 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
+import { BrowserFrameEvidence } from "../src/main/capabilities/browser-frame-evidence.ts";
+import {
+  BrowserFrameInputObserver,
+  browserFrameCaptureFor,
+  browserFrameInputNeedsObserver,
+} from "../src/main/capabilities/browser-frame-input.ts";
 import {
   browserInputLifecycleEventInvalidates,
   browserInspectScript,
 } from "../src/main/capabilities/browser-provider.ts";
 import {
   browserInputSnapshotScript,
+  browserInputProbeScript,
+  dispatchBrowserTargetedInput,
+  requireBrowserInputSnapshot,
+  BrowserInputOutcomeUnknownError,
   includesBrowserInputSnapshot,
   resolveBrowserInputEvidence,
 } from "../src/main/capabilities/browser-targeted-input.ts";
@@ -102,8 +112,16 @@ function fixture(options = {}) {
     WebSocket: { OPEN: 1 },
     performance: { now: () => now },
     browserInputLifecycleEventInvalidates,
+    BrowserFrameEvidence,
+    BrowserFrameInputObserver,
+    browserFrameCaptureFor: options.frameCaptureFor ?? browserFrameCaptureFor,
+    browserFrameInputNeedsObserver,
     browserInspectScript,
     browserInputSnapshotScript,
+    browserInputProbeScript,
+    dispatchBrowserTargetedInput,
+    requireBrowserInputSnapshot,
+    BrowserInputOutcomeUnknownError,
     includesBrowserInputSnapshot,
     resolveBrowserInputEvidence,
     UserBrowserCdpOutcomeUnknownError,
@@ -136,6 +154,7 @@ function fixture(options = {}) {
     const request = JSON.parse(raw);
     request.timer = timerHistory.at(-1);
     sends.push(request);
+    options.afterSend?.(request);
     queueMicrotask(() => {
       if (
         options.hold?.(request) ||
@@ -211,14 +230,18 @@ function fixture(options = {}) {
         signal,
       ),
     complete: (request) => reply(request, { result: { value } }),
-    event: (method, params = {}) =>
+    event: (
+      method,
+      params = {},
+      sourceSessionId = client.testEpoch()?.cdpSessionId,
+    ) =>
       socket.emit(
         "message",
         Buffer.from(
           JSON.stringify({
             method,
             params,
-            sessionId: client.testEpoch()?.cdpSessionId,
+            sessionId: sourceSessionId,
           }),
         ),
       ),
@@ -1466,4 +1489,405 @@ test("joint setup readiness crossing its deadline cannot grant a fresh inspectio
   assert.equal(epoch.runtimeEnable, "known-success");
   assert.equal(f.client.closureProblem(["target-1"], owner), undefined);
   assertSingleSetup(f);
+});
+
+test("child route lifecycle keeps root ownership but invalidates the original input capture", async () => {
+  const f = fixture();
+  const started = await start(f);
+  f.complete(started.request);
+  const result = await started.result;
+  assert.equal(typeof result.assertInputCapture, "function");
+  result.assertInputCapture();
+  const epoch = f.client.testEpoch();
+  f.event("Target.attachedToTarget", {
+    sessionId: "child-route",
+    targetInfo: { targetId: "child-target", type: "iframe" },
+    waitingForDebugger: false,
+  });
+  assert.throws(() => result.assertInputCapture(), /child lifecycle/);
+  assert.ok(f.client.testEpoch() === epoch);
+  const revision = epoch.inputLifecycleRevision;
+  f.event(
+    "Page.frameStartedNavigating",
+    { frameId: "child-frame" },
+    "child-route",
+  );
+  assert.equal(epoch.inputLifecycleRevision, revision + 1);
+  f.event("Target.detachedFromTarget", { sessionId: "child-route" });
+  assert.ok(f.client.testEpoch() === epoch);
+  assert.equal(epoch.detach, "known-failure");
+  assert.equal(epoch.frameEvidence.hasSession("child-route"), false);
+  assert.equal(f.client.closureProblem(["target-1"], owner), undefined);
+});
+
+test("child insertion after evaluation cannot authorize the retained screenshot", async () => {
+  const f = fixture();
+  const started = await start(f);
+  f.complete(started.request);
+  const result = await started.result;
+  result.assertInputCapture();
+  f.event("Page.frameAttached", {
+    frameId: "new-frame",
+    parentFrameId: "frame-1",
+  });
+  assert.throws(() => result.assertInputCapture(), /child lifecycle/);
+  assert.equal(
+    f.sends.filter((request) => request.method.startsWith("Input.")).length,
+    0,
+  );
+});
+
+test("admitted child dialog prevents root input without poisoning root ownership", async () => {
+  const f = fixture();
+  await f.client.testFence();
+  const epoch = f.client.testEpoch();
+  f.event("Target.attachedToTarget", {
+    sessionId: "child-dialog",
+    targetInfo: { type: "iframe", targetId: "child-target" },
+    waitingForDebugger: false,
+  });
+  f.event("Page.javascriptDialogOpening", {}, "child-dialog");
+  assert.equal(epoch.nativeDialogOpen, true);
+  f.event("Page.javascriptDialogClosed", {});
+  assert.equal(epoch.nativeDialogOpen, true);
+  f.event("Page.javascriptDialogClosed", {}, "child-dialog");
+  assert.equal(epoch.nativeDialogOpen, false);
+  assert.ok(f.client.testEpoch() === epoch);
+});
+
+const initialRootCommit = {
+  frame: {
+    id: "frame-1",
+    loaderId: "loader-1",
+    url: "https://owned.test/fixture",
+  },
+};
+const initialRootStart = {
+  frameId: "frame-1",
+  loaderId: "loader-1",
+  url: "https://owned.test/fixture",
+  navigationType: "differentDocument",
+};
+async function initiallyNavigatedFixture() {
+  const f = fixture();
+  await f.client.navigate("target-1", initialRootStart.url, owner);
+  return f;
+}
+function initialNavigationEvents(f, loaderId = "loader-1") {
+  f.event("Page.frameStartedNavigating", { ...initialRootStart, loaderId });
+  f.event("Page.frameStartedLoading", { frameId: "frame-1" });
+}
+
+test("matching native root commit retires historical initial navigation before fresh inspection", async () => {
+  const f = await initiallyNavigatedFixture();
+  initialNavigationEvents(f);
+  const revision = f.client.testEpoch().inputLifecycleRevision;
+  f.event("Page.frameNavigated", initialRootCommit);
+  assert.ok(f.client.testEpoch().inputLifecycleRevision > revision);
+  const fresh = await start(f);
+  f.complete(fresh.request);
+  await fresh.result;
+  assert.equal(f.sends.filter((r) => r.method === "Page.navigate").length, 1);
+  assert.equal(f.sends.filter((r) => r.method.startsWith("Input.")).length, 0);
+  assert.equal(f.observer.counters.observerErrors, 0);
+});
+
+test("initial root commit during preflight rejects that fence and allows a fresh inspection", async () => {
+  const f = await initiallyNavigatedFixture();
+  initialNavigationEvents(f);
+  f.hook((event) => {
+    if (event.kind !== "timer-armed" || event.method !== "Page.getFrameTree")
+      return;
+    f.hook(undefined);
+    f.event("Page.frameNavigated", initialRootCommit);
+  });
+  await assert.rejects(
+    f.inspect(),
+    UserBrowserDocumentChangedBeforeDispatchError,
+  );
+  assert.equal(f.main().length, 0);
+  assert.equal(
+    f.sends.filter((r) => r.method === "Page.createIsolatedWorld").length,
+    0,
+  );
+  const fresh = await start(f);
+  f.complete(fresh.request);
+  await fresh.result;
+});
+
+test("new navigation after initial commit still invalidates an in-flight inspection", async () => {
+  const f = await initiallyNavigatedFixture();
+  initialNavigationEvents(f);
+  f.event("Page.frameNavigated", initialRootCommit);
+  f.hook((event) => {
+    if (event.kind !== "timer-armed" || event.method !== "Page.getFrameTree")
+      return;
+    f.hook(undefined);
+    initialNavigationEvents(f, "loader-newer");
+  });
+  await assert.rejects(
+    f.inspect(),
+    UserBrowserDocumentChangedBeforeDispatchError,
+  );
+  assert.equal(f.main().length, 0);
+  assert.equal(
+    f.sends.filter((r) => r.method === "Page.createIsolatedWorld").length,
+    0,
+  );
+});
+
+for (const pending of [
+  "newer-loader",
+  "missing-loader",
+  "loading-without-start",
+  "unassociated-loading",
+]) {
+  test(`initial root commit preserves ${pending} uncertainty`, async () => {
+    const f = await initiallyNavigatedFixture();
+    if (pending === "newer-loader") {
+      initialNavigationEvents(f);
+      initialNavigationEvents(f, "loader-newer");
+    } else if (pending === "missing-loader") {
+      initialNavigationEvents(f, undefined);
+      // Explicitly malformed native data cannot borrow the earlier loader.
+      f.event("Page.frameStartedNavigating", {
+        ...initialRootStart,
+        loaderId: undefined,
+      });
+      f.event("Page.frameStartedLoading", { frameId: "frame-1" });
+    } else {
+      f.event("Page.frameStartedLoading", { frameId: "frame-1" });
+      if (pending === "unassociated-loading")
+        f.event("Page.frameStartedNavigating", initialRootStart);
+    }
+    f.event("Page.frameNavigated", initialRootCommit);
+    await assert.rejects(
+      f.inspect(),
+      (error) =>
+        error instanceof UserBrowserDocumentChangedBeforeDispatchError &&
+        /pending lifecycle/.test(error.message),
+    );
+    assert.equal(f.main().length, 0);
+    assert.equal(
+      f.sends.filter((r) => r.method === "Page.createIsolatedWorld").length,
+      0,
+    );
+  });
+}
+
+for (const invalid of [
+  "parented",
+  "missing-loader",
+  "empty-frame",
+  "child-session",
+]) {
+  test(`${invalid} commit cannot retire initial root navigation`, async () => {
+    const f = await initiallyNavigatedFixture();
+    initialNavigationEvents(f);
+    if (invalid === "child-session") {
+      f.event("Target.attachedToTarget", {
+        sessionId: "child-route",
+        targetInfo: { targetId: "child-target", type: "iframe" },
+        waitingForDebugger: false,
+      });
+      f.event("Page.frameNavigated", initialRootCommit, "child-route");
+    } else {
+      f.event("Page.frameNavigated", {
+        frame: {
+          ...initialRootCommit.frame,
+          ...(invalid === "parented" ? { parentId: "other-frame" } : {}),
+          ...(invalid === "missing-loader" ? { loaderId: undefined } : {}),
+          ...(invalid === "empty-frame" ? { id: "" } : {}),
+        },
+      });
+    }
+    await assert.rejects(
+      f.inspect(),
+      UserBrowserDocumentChangedBeforeDispatchError,
+    );
+    assert.equal(f.main().length, 0);
+    assert.equal(
+      f.sends.filter((r) => r.method === "Page.createIsolatedWorld").length,
+      0,
+    );
+  });
+}
+
+test("retired root-session commit cannot reconcile a successor attachment", async () => {
+  const f = await initiallyNavigatedFixture();
+  const retired = f.client.testEpoch().cdpSessionId;
+  await f.client.detachTarget("target-1", owner);
+  await f.client.navigate("target-1", initialRootStart.url, owner);
+  assert.notEqual(f.client.testEpoch().cdpSessionId, retired);
+  initialNavigationEvents(f);
+  f.event("Page.frameNavigated", initialRootCommit, retired);
+  await assert.rejects(
+    f.inspect(),
+    UserBrowserDocumentChangedBeforeDispatchError,
+  );
+  assert.equal(f.main().length, 0);
+  assert.equal(
+    f.sends.filter((r) => r.method === "Page.createIsolatedWorld").length,
+    0,
+  );
+});
+
+function mouseAdapterSnapshot() {
+  return {
+    documentKey: "0123456789abcdef0123456789abcdef|https://owned.test/fixture",
+    viewport: {
+      width: 640,
+      height: 480,
+      deviceScaleFactor: 1,
+      scrollX: 0,
+      scrollY: 0,
+      visualScale: 1,
+      visualOffsetX: 0,
+      visualOffsetY: 0,
+    },
+    focusId: "leaf",
+    pointerHitId: "leaf",
+    pointerBackendNodeId: 101,
+    pointerPoint: { x: 55, y: 75 },
+    inputRevision: 0,
+    layoutRevision: 0,
+  };
+}
+
+// The real observer/receipt is covered by browser-frame-input.test.ts. This
+// synthetic trusted capture isolates actual client transport and root ownership.
+for (const fault of [
+  undefined,
+  "child-detach",
+  "root-control",
+  "unknown-press",
+])
+  test(`selected child mouse keeps real client root fence and settlement (${fault ?? "success"})`, async () => {
+    const observed = mouseAdapterSnapshot();
+    let ownerCurrent = true,
+      f;
+    const capture = {
+      probe: async () => structuredClone(observed),
+      prepareMouse: (_snapshot, send) => ({
+        assertSnapshot() {},
+        dispatch: (params, done) =>
+          send("mouse-child", { ...params, x: 15, y: 15 }, done),
+      }),
+    };
+    f = fixture({
+      frameCaptureFor: (snapshot) =>
+        snapshot === observed ? capture : undefined,
+      hold: (request) =>
+        fault === "unknown-press" &&
+        request.method === "Input.dispatchMouseEvent",
+      afterSend: (request) => {
+        if (request.method !== "Input.dispatchMouseEvent") return;
+        if (fault === "child-detach")
+          f.event("Target.detachedFromTarget", { sessionId: "mouse-child" });
+        if (fault === "root-control") ownerCurrent = false;
+      },
+    });
+    await f.client.testFence();
+    f.event("Target.attachedToTarget", {
+      sessionId: "mouse-child",
+      targetInfo: { type: "iframe", targetId: "child-native-target" },
+      waitingForDebugger: false,
+    });
+    const fence = await f.client.testFence();
+    let firstDispatch = 0;
+    const action = f.client.targetedInput(
+      "target-1",
+      owner,
+      fence.identity,
+      observed,
+      { kind: "click", x: 55, y: 75 },
+      undefined,
+      () => {
+        if (!ownerCurrent) throw Error("root control changed");
+      },
+      () => {
+        firstDispatch++;
+      },
+    );
+    void action.catch(() => undefined);
+    if (fault === "unknown-press") {
+      await until(() =>
+        f.sends.some(
+          (request) => request.method === "Input.dispatchMouseEvent",
+        ),
+      );
+      f.fire(
+        f.sends.find((request) => request.method === "Input.dispatchMouseEvent")
+          .timer,
+      );
+    }
+    if (fault) {
+      await assert.rejects(action, UserBrowserMutationOutcomeUnknownError);
+      assert.match(
+        f.client.targetedInputQuarantine("target-1"),
+        /tab's input is blocked/,
+      );
+      assert.equal(f.client.targetedInputQuarantine("mouse-child"), undefined);
+    } else {
+      await action;
+      assert.equal(f.client.targetedInputQuarantine("target-1"), undefined);
+    }
+    const mouse = f.sends.filter(
+      (request) => request.method === "Input.dispatchMouseEvent",
+    );
+    assert.deepEqual(
+      mouse.map((request) => [
+        request.sessionId,
+        request.params.type,
+        request.params.x,
+        request.params.y,
+      ]),
+      fault
+        ? [["mouse-child", "mousePressed", 15, 15]]
+        : [
+            ["mouse-child", "mousePressed", 15, 15],
+            ["mouse-child", "mouseReleased", 15, 15],
+          ],
+    );
+    assert.equal(firstDispatch, 1);
+    assert.equal(
+      f.sends.some((request) => request.method === "Target.activateTarget"),
+      false,
+    );
+  });
+
+test("selected child route absent from exact root fails before the actual send callback", async () => {
+  const observed = mouseAdapterSnapshot();
+  const f = fixture({
+    frameCaptureFor: () => ({
+      probe: async () => structuredClone(observed),
+      prepareMouse: (_snapshot, send) => ({
+        assertSnapshot() {},
+        dispatch: (params, done) => send("foreign-route", params, done),
+      }),
+    }),
+  });
+  const fence = await f.client.testFence();
+  let callbacks = 0;
+  await assert.rejects(
+    f.client.targetedInput(
+      "target-1",
+      owner,
+      fence.identity,
+      observed,
+      { kind: "click", x: 55, y: 75 },
+      undefined,
+      undefined,
+      () => {
+        callbacks++;
+      },
+    ),
+    /route is unavailable/,
+  );
+  assert.equal(callbacks, 0);
+  assert.equal(
+    f.sends.filter((request) => request.method.startsWith("Input.")).length,
+    0,
+  );
+  assert.equal(f.client.targetedInputQuarantine("target-1"), undefined);
 });

@@ -1,3 +1,8 @@
+import {
+  resolveBrowserFrameAncestorEvidence,
+  type BrowserFrameAncestorEvidence,
+} from "./browser-frame-geometry.js";
+
 /** Target-page input only. Does not request tab/window activation or send OS input. */
 export const browserInputKeys = [
   "Enter",
@@ -38,10 +43,35 @@ export interface BrowserInputFrameDocument {
   parentDocumentKey: string;
   documentKey: string;
   viewport: BrowserInputViewport;
-  geometry: { x: number; y: number; width: number; height: number };
+  geometry: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    contentQuad?: number[];
+  };
+}
+interface BrowserInputFrameAncestorCandidate {
+  ownerId: string;
+  parentDocumentKey: string;
+  documentKey: string;
+}
+interface BrowserInputNativeFrameCandidate extends BrowserInputFrameAncestorCandidate {
+  viewport: BrowserInputViewport;
+  width: number;
+  height: number;
+  witness: string;
+  contentQuad?: number[];
 }
 export interface BrowserInputSnapshot {
   documentKey: string;
+  /** Internal local-document probe; iframe owners are resolved by the Host. */
+  localFrame?: boolean;
+  /** Isolated-DOM candidates only; native owner/session proof is still required. */
+  frameOwnerIds?: string[];
+  frameOwnerScanComplete?: boolean;
+  focusFrameOwner?: boolean;
+  pointerFrameOwner?: boolean;
   viewport: BrowserInputViewport;
   focusId: string | null;
   pointerHitId?: string;
@@ -54,6 +84,8 @@ export interface BrowserInputSnapshot {
   inputRevision: number;
   layoutRevision: number;
   frameDocuments?: BrowserInputFrameDocument[];
+  nativeFrameCandidates?: BrowserInputNativeFrameCandidate[];
+  frameAncestorCandidates?: BrowserInputFrameAncestorCandidate[];
 }
 export interface BrowserInputObservation {
   snapshot: BrowserInputSnapshot;
@@ -80,6 +112,7 @@ const browserInputElementResolutionScript = `
     for (let depth = 0; element && depth < 32; depth++) {
       if (nativeSurface(element)) return { unsupported: 'native-surface' };
       if (element.localName === 'iframe') {
+        if (state.localFrame) return { element };
         const frame = state.activeFrames.get(element);
         if (!frame || element.contentDocument !== frame.document) return { unsupported: 'native-surface' };
         const next = frame.document.activeElement;
@@ -97,14 +130,27 @@ const browserInputElementResolutionScript = `
     return element ? { unsupported: 'shadow-surface' } : {};
   };
   const resolveHit = (x, y) => {
+    const rootX = x, rootY = y;
     let element = document.elementFromPoint(x, y);
     for (let depth = 0; element && depth < 32; depth++) {
       if (nativeSurface(element)) return { unsupported: 'native-surface' };
       if (element.localName === 'iframe') {
+        if (state.localFrame) return { element };
         const frame = state.activeFrames.get(element);
         if (!frame || element.contentDocument !== frame.document) return { unsupported: 'native-surface' };
-        x -= frame.geometry.x;
-        y -= frame.geometry.y;
+        if (frame.geometry.contentQuad) {
+          const q = frame.geometry.contentQuad;
+          const ax = q[2] - q[0], ay = q[3] - q[1];
+          const bx = q[6] - q[0], by = q[7] - q[1];
+          const determinant = ax * by - ay * bx;
+          const dx = rootX - q[0], dy = rootY - q[1];
+          x = (dx * by - dy * bx) / determinant * frame.geometry.width;
+          y = (ax * dy - ay * dx) / determinant * frame.geometry.height;
+          if (!Number.isFinite(x) || !Number.isFinite(y)) return { unsupported: 'native-surface' };
+        } else {
+          x -= frame.geometry.x;
+          y -= frame.geometry.y;
+        }
         if (x < 0 || y < 0 || x >= frame.geometry.width || y >= frame.geometry.height) return { unsupported: 'native-surface' };
         element = frame.document.elementFromPoint(x, y);
         if (!element || element.ownerDocument !== frame.document) return { unsupported: 'native-surface' };
@@ -123,18 +169,24 @@ const browserInputElementResolutionScript = `
 
 /** Runs in the provider's isolated world; the page cannot forge the registry.
  * Child documents share this registry, never their main-world globals. */
-export const browserInputSnapshotScript = `(() => {
+function browserInputSnapshotSource(localFrame = false): string {
+  return `(() => {
+  const localFrame = ${JSON.stringify(localFrame)};
   const key = Symbol.for("zenx-browser-targeted-input-v2");
   const randomId = () => [...crypto.getRandomValues(new Uint32Array(4))].map(n => n.toString(16).padStart(8, "0")).join("");
   let state = globalThis[key];
-  if (!state || state.document !== document || !(state.documents instanceof Map)) {
+  if (!state || state.document !== document || !(state.documents instanceof Map) || Boolean(state.localFrame) !== localFrame) {
     // Older isolated registries may survive an attachment replacement. Retire
     // their observer and mint new IDs; their old listener counters are never read.
     state?.observer?.disconnect();
-    state = { document, id: randomId(), nodes: new WeakMap(), next: 1, inputRevision: 0, layoutRevision: 0, shadowRoots: new WeakSet(), shadowRootCount: 0, documents: new Map() };
+    for (const entry of state?.documents?.values?.() ?? []) { entry.observer?.disconnect(); for (const { target, type, listener } of entry.listeners ?? []) target.removeEventListener(type, listener, true); }
+    state = { document, localFrame, id: randomId(), nodes: new WeakMap(), next: 1, inputRevision: 0, layoutRevision: 0, shadowRoots: new WeakSet(), shadowRootCount: 0, documents: new Map() };
     globalThis[key] = state;
   }
   state.closedRoots ??= new WeakMap();
+  state.nativeFrames ??= new WeakMap();
+  state.nativeFrameCandidates = new Map();
+  state.frameAncestorCandidates = new Map();
   const nodeId = node => {
     let id = state.nodes.get(node);
     if (!id) { id = state.id + ":" + state.next++; state.nodes.set(node, id); }
@@ -179,17 +231,28 @@ export const browserInputSnapshotScript = `(() => {
     }
     return true;
   };
-  // Mapping is intentionally limited to ordinary untransformed CSS boxes. An
-  // axis-aligned bounding rect alone cannot identify rotated/scaled content.
+  // Only static 2D transform matrices use native geometry. Layout origins,
+  // ancestor transforms and scroll are never reconstructed from CSS matrices.
   const frameGeometry = (element, childViewport) => {
     const view = element.ownerDocument.defaultView;
-    let ancestor = element;
+    let ancestor = element, transformed = false, animated = false;
+    const styles = [];
     for (let depth = 0; ancestor; depth++) {
       if (depth >= 128) return;
       const style = view.getComputedStyle(ancestor);
-      if (['transform', 'translate', 'rotate', 'scale', 'perspective', 'offsetPath'].some(property => style[property] && style[property] !== 'none') || (style.zoom && style.zoom !== '1' && style.zoom !== 'normal')) return;
-      ancestor = ancestor.parentElement ?? ancestor.getRootNode()?.host;
+      if (['translate', 'rotate', 'scale', 'perspective', 'offsetPath'].some(property => style[property] && style[property] !== 'none') || (style.zoom && style.zoom !== '1' && style.zoom !== 'normal') || (style.transformStyle && style.transformStyle !== 'flat')) return;
+      const transform = style.transform || 'none';
+      if (transform !== 'none') {
+        if (!transform.startsWith('matrix(') || !transform.endsWith(')')) return;
+        const matrix = transform.slice(7, -1).split(',').map(Number);
+        if (matrix.length !== 6 || !matrix.every(Number.isFinite) || matrix[0] * matrix[3] - matrix[1] * matrix[2] === 0) return;
+        transformed = true;
+      }
+      if (typeof ancestor.getAnimations === 'function' && ancestor.getAnimations().some(animation => animation.playState === 'running' || animation.pending)) animated = true;
+      styles.push([transform, style.transformOrigin || '']);
+      ancestor = ancestor.assignedSlot ?? ancestor.parentElement ?? ancestor.getRootNode()?.host;
     }
+    if (transformed && animated) return;
     const style = view.getComputedStyle(element);
     const pixel = property => { const value = Number.parseFloat(style[property] || '0'); return Number.isFinite(value) && value >= 0 ? value : NaN; };
     const left = pixel('borderLeftWidth') + pixel('paddingLeft');
@@ -197,13 +260,24 @@ export const browserInputSnapshotScript = `(() => {
     const right = pixel('borderRightWidth') + pixel('paddingRight');
     const bottom = pixel('borderBottomWidth') + pixel('paddingBottom');
     const rect = element.getBoundingClientRect();
+    if (![rect.left, rect.top, rect.width, rect.height, left, top, right, bottom].every(Number.isFinite)) return;
+    if (transformed) {
+      const width = pixel('width') - (style.boxSizing === 'border-box' ? left + right : 0);
+      const height = pixel('height') - (style.boxSizing === 'border-box' ? top + bottom : 0);
+      if (width <= 0 || height <= 0 || !Number.isFinite(width) || !Number.isFinite(height) || Math.abs(width - childViewport.width) > 0.01 || Math.abs(height - childViewport.height) > 0.01) return;
+      return { native: true, width, height, witness: JSON.stringify([styles, rect.left, rect.top, rect.width, rect.height, left, top, right, bottom, width, height]) };
+    }
     const geometry = { x: rect.left + left, y: rect.top + top, width: rect.width - left - right, height: rect.height - top - bottom };
     if (!Object.values(geometry).every(Number.isFinite) || geometry.width <= 0 || geometry.height <= 0 || Math.abs(geometry.width - childViewport.width) > 0.01 || Math.abs(geometry.height - childViewport.height) > 0.01) return;
-    return geometry;
+    return { geometry };
   };
   const roots = [{ root: document, doc: document, depth: 0 }];
   const activeDocuments = new Set([document]);
   const frameDocuments = [];
+  const frameOwnerIds = [];
+  let frameOwnerScanComplete = true;
+  const nativeFrameCandidates = [];
+  const frameAncestorCandidates = [];
   state.activeFrames = new WeakMap();
   state.shadowRoots = new WeakSet();
   observeDocument(document);
@@ -219,9 +293,10 @@ export const browserInputSnapshotScript = `(() => {
         if (state.observeShadowRoot(shadow)) {
           state.shadowRoots.add(shadow);
           roots.push({ root: shadow, doc, depth });
-        }
+        } else frameOwnerScanComplete = false;
       }
-      if (element.localName !== 'iframe' || depth >= 8 || activeDocuments.size >= 32) continue;
+      if (element.localName === 'iframe') frameOwnerIds.push(nodeId(element));
+      if (localFrame || element.localName !== 'iframe' || depth >= 8 || activeDocuments.size >= 32) continue;
       try {
         const child = element.contentDocument;
         const view = child?.defaultView;
@@ -230,18 +305,33 @@ export const browserInputSnapshotScript = `(() => {
         const url = view.location.href;
         const childViewport = viewport(view);
         if (!unzoomed(childViewport)) continue;
-        const geometry = frameGeometry(element, childViewport);
-        if (!geometry) continue;
+        const mapping = frameGeometry(element, childViewport);
+        if (!mapping) continue;
         const childEntry = observeDocument(child);
         activeDocuments.add(child);
+        const identity = { ownerId: nodeId(element), parentDocumentKey: entry.id + "|" + doc.defaultView.location.href, documentKey: childEntry.id + "|" + url, viewport: childViewport };
+        const ancestry = { ownerId: identity.ownerId, parentDocumentKey: identity.parentDocumentKey, documentKey: identity.documentKey };
+        frameAncestorCandidates.push(ancestry);
+        state.frameAncestorCandidates.set(identity.ownerId, { element, document: child, candidate: ancestry });
+        let geometry = mapping.geometry;
+        if (mapping.native) {
+          const pinned = state.nativeFrames.get(element);
+          const contentQuad = pinned?.document === child && pinned.witness === mapping.witness ? pinned.contentQuad : undefined;
+          const candidate = { ...identity, width: mapping.width, height: mapping.height, witness: mapping.witness, ...(contentQuad ? { contentQuad } : {}) };
+          nativeFrameCandidates.push(candidate);
+          state.nativeFrameCandidates.set(identity.ownerId, { element, document: child, candidate });
+          if (!contentQuad) continue;
+          geometry = { x: contentQuad[0], y: contentQuad[1], width: mapping.width, height: mapping.height, contentQuad };
+        }
         state.activeFrames.set(element, { document: child, geometry });
-        frameDocuments.push({ ownerId: nodeId(element), parentDocumentKey: entry.id + "|" + doc.defaultView.location.href, documentKey: childEntry.id + "|" + url, viewport: childViewport, geometry });
+        frameDocuments.push({ ...identity, geometry });
         roots.push({ root: child, doc: child, depth: depth + 1 });
       } catch {
         // Cross-origin/OOPIF and inaccessible frames stay explicitly unsupported.
       }
     }
   }
+  if (budget <= 0) frameOwnerScanComplete = false;
   for (const [doc, entry] of state.documents) {
     entry.recordMutations(entry.observer.takeRecords());
     if (activeDocuments.has(doc)) continue;
@@ -258,22 +348,31 @@ export const browserInputSnapshotScript = `(() => {
   if (focused && focused !== focused.ownerDocument.body && focused !== focused.ownerDocument.documentElement) focusId = nodeId(focused);
   return {
     documentKey: state.id + "|" + location.href,
+    ...(localFrame ? { localFrame: true, ...(focused?.localName === 'iframe' ? { focusFrameOwner: true } : {}) } : {}),
     viewport: viewport(globalThis),
     focusId, ...(focusId && canHostShadow(focused) ? { focusNeedsShadowEvidence: true } : {}), ...(focus.unsupported ? { focusUnsupported: focus.unsupported } : {}), inputRevision: state.inputRevision, layoutRevision: state.layoutRevision,
-    frameDocuments,
+    frameDocuments, frameOwnerIds, frameOwnerScanComplete, ...(nativeFrameCandidates.length ? { nativeFrameCandidates } : {}), ...(frameAncestorCandidates.length ? { frameAncestorCandidates } : {}),
   };
 })()`;
+}
+
+export const browserInputSnapshotScript = browserInputSnapshotSource();
+export const browserFrameInputSnapshotScript = browserInputSnapshotSource(true);
 
 export function browserInputProbeScript(
   action:
     | { kind: "click"; x: number; y: number }
     | { kind: "key"; key: BrowserInputKey },
+  localFrame = false,
 ): string {
-  if (action.kind !== "click") return browserInputSnapshotScript;
+  const snapshotScript = localFrame
+    ? browserFrameInputSnapshotScript
+    : browserInputSnapshotScript;
+  if (action.kind !== "click") return snapshotScript;
   if (![action.x, action.y].every(Number.isFinite))
     throw new Error("Browser pointer coordinates must be finite numbers");
   return `(() => {
-    const snapshot = ${browserInputSnapshotScript};
+    const snapshot = ${snapshotScript};
     const state = globalThis[Symbol.for("zenx-browser-targeted-input-v2")];
     ${browserInputElementResolutionScript}
     const hit = resolveHit(${JSON.stringify(action.x)}, ${JSON.stringify(action.y)});
@@ -282,7 +381,7 @@ export function browserInputProbeScript(
     state.hitNode = element;
     let pointerHitId = state.nodes.get(element);
     if (!pointerHitId) { pointerHitId = state.id + ":" + state.next++; state.nodes.set(element, pointerHitId); }
-    return { ...snapshot, pointerHitId, ...(canHostShadow(element) ? { pointerNeedsShadowEvidence: true } : {}), pointerPoint: { x: ${JSON.stringify(action.x)}, y: ${JSON.stringify(action.y)} } };
+    return { ...snapshot, pointerHitId, ...(state.localFrame && element.localName === 'iframe' ? { pointerFrameOwner: true } : {}), ...(canHostShadow(element) ? { pointerNeedsShadowEvidence: true } : {}), pointerPoint: { x: ${JSON.stringify(action.x)}, y: ${JSON.stringify(action.y)} } };
   })()`;
 }
 
@@ -294,6 +393,7 @@ type BrowserInputCommand = (
   method:
     | "Runtime.evaluate"
     | "DOM.describeNode"
+    | "DOM.getBoxModel"
     | "DOM.resolveNode"
     | "Runtime.callFunctionOn"
     | "Runtime.releaseObject",
@@ -303,6 +403,220 @@ const record = (value: unknown): Record<string, unknown> | undefined =>
   value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
+
+/** Native quad corners retain their layout order, including reflected transforms. */
+export function requireBrowserInputContentQuad(value: unknown): number[] {
+  if (
+    !Array.isArray(value) ||
+    value.length !== 8 ||
+    value.some(
+      (coordinate) =>
+        typeof coordinate !== "number" || !Number.isFinite(coordinate),
+    )
+  )
+    throw new Error("Browser iframe content quad is unavailable or malformed");
+  const q = value as number[];
+  const ax = q[2]! - q[0]!,
+    ay = q[3]! - q[1]!;
+  const bx = q[6]! - q[0]!,
+    by = q[7]! - q[1]!;
+  const determinant = ax * by - ay * bx;
+  const magnitude = Math.max(Math.hypot(ax, ay), Math.hypot(bx, by));
+  // Native floats may round individual corners. A projective shape is never
+  // approximated: CSS ancestry must independently prove a 2D-only transform.
+  if (
+    !Number.isFinite(determinant) ||
+    !Number.isFinite(magnitude) ||
+    magnitude <= 0 ||
+    Math.abs(determinant) <= 1e-8 ||
+    (magnitude * magnitude) / Math.abs(determinant) > 1e6 ||
+    Math.abs(q[4]! - q[2]! - q[6]! + q[0]!) > 0.01 ||
+    Math.abs(q[5]! - q[3]! - q[7]! + q[1]!) > 0.01
+  )
+    throw new Error(
+      "Browser iframe content quad is not a usable affine mapping",
+    );
+  return [...q];
+}
+
+/** Exact native geometry is re-read for every probe, never trusted as a cache. */
+async function resolveBrowserInputFrameEvidence(
+  snapshot: BrowserInputSnapshot,
+  send: BrowserInputCommand,
+  releaseOwnedObject: (objectId: string) => Promise<unknown>,
+): Promise<void> {
+  const candidates = snapshot.frameAncestorCandidates;
+  if (!candidates?.length) return;
+  const probe = snapshot.pointerPoint
+    ? browserInputProbeScript({ kind: "click", ...snapshot.pointerPoint })
+    : browserInputSnapshotScript;
+  const expected = JSON.stringify(snapshot);
+  const owned = new Set<string>();
+  const evidence: {
+    candidate: BrowserInputFrameAncestorCandidate;
+    native?: BrowserInputNativeFrameCandidate;
+    backendNodeId: number;
+    contentQuad?: number[];
+    ancestry: BrowserFrameAncestorEvidence;
+  }[] = [];
+  const resultValue = (response: unknown) => {
+    const result = record(response);
+    if (!result || result.exceptionDetails !== undefined)
+      throw new Error("Browser iframe geometry evaluation failed");
+    return record(result.result);
+  };
+  const release = async () => {
+    const objectIds = [...owned];
+    owned.clear();
+    await Promise.all(
+      objectIds.map(async (objectId) => {
+        try {
+          await releaseOwnedObject(objectId);
+        } catch {
+          /* Exact-session cleanup is never retried after an unknown result. */
+        }
+      }),
+    );
+  };
+  const describe = async (
+    params: Record<string, unknown>,
+    expectedId?: number,
+  ) => {
+    const node = record(
+      record(
+        await send("DOM.describeNode", { ...params, depth: 0, pierce: false }),
+      )?.node,
+    );
+    if (
+      !node ||
+      node.nodeType !== 1 ||
+      node.localName !== "iframe" ||
+      !Number.isSafeInteger(node.backendNodeId) ||
+      (node.backendNodeId as number) <= 0 ||
+      (expectedId !== undefined && node.backendNodeId !== expectedId)
+    )
+      throw new Error(
+        "Browser iframe native identity changed or is unavailable",
+      );
+    return node.backendNodeId as number;
+  };
+  const quad = async (params: Record<string, unknown>) =>
+    requireBrowserInputContentQuad(
+      record(record(await send("DOM.getBoxModel", params))?.model)?.content,
+    );
+  const confirm = async () => {
+    const current = resultValue(
+      await send("Runtime.evaluate", {
+        expression: probe,
+        returnByValue: true,
+        awaitPromise: false,
+      }),
+    )?.value;
+    if (JSON.stringify(current) !== expected)
+      throw new Error(
+        "Browser iframe observation changed during geometry verification; inspect again",
+      );
+  };
+  try {
+    for (const candidate of candidates) {
+      const expression = `(() => {
+        const state = globalThis[Symbol.for("zenx-browser-targeted-input-v2")];
+        const entry = state?.frameAncestorCandidates?.get(${JSON.stringify(candidate.ownerId)});
+        return state?.document === document && state.id + "|" + location.href === ${JSON.stringify(snapshot.documentKey)} && entry?.element?.isConnected && entry.element.contentDocument === entry.document && JSON.stringify(entry.candidate) === ${JSON.stringify(JSON.stringify(candidate))} ? entry.element : null;
+      })()`;
+      const object = resultValue(
+        await send("Runtime.evaluate", {
+          expression,
+          returnByValue: false,
+          awaitPromise: false,
+        }),
+      );
+      if (typeof object?.objectId === "string" && object.objectId)
+        owned.add(object.objectId);
+      if (
+        object?.subtype !== "node" ||
+        typeof object.objectId !== "string" ||
+        !object.objectId
+      )
+        throw new Error(
+          "Browser iframe candidate changed before native geometry verification",
+        );
+      const params = { objectId: object.objectId };
+      const backendNodeId = await describe(params);
+      const ancestry = await resolveBrowserFrameAncestorEvidence(
+        object.objectId,
+        send,
+        releaseOwnedObject,
+      );
+      const native = snapshot.nativeFrameCandidates?.find(
+        (frame) => frame.ownerId === candidate.ownerId,
+      );
+      evidence.push({
+        candidate,
+        native,
+        backendNodeId,
+        ancestry,
+        ...(native ? { contentQuad: await quad(params) } : {}),
+      });
+    }
+    await release();
+    await confirm();
+    for (const entry of evidence) {
+      const params = { backendNodeId: entry.backendNodeId };
+      await entry.ancestry.recheckNative();
+      await describe(params, entry.backendNodeId);
+      if (
+        entry.native &&
+        JSON.stringify(await quad(params)) !== JSON.stringify(entry.contentQuad)
+      )
+        throw new Error(
+          "Browser iframe geometry changed during native verification; inspect again",
+        );
+    }
+    await confirm();
+    const updates = evidence.filter(
+      (entry) =>
+        entry.native &&
+        JSON.stringify(entry.native.contentQuad) !==
+          JSON.stringify(entry.contentQuad),
+    );
+    if (updates.length) {
+      const expression = `(() => {
+        const current = ${probe};
+        if (JSON.stringify(current) !== ${JSON.stringify(expected)}) throw new Error('Browser iframe changed before geometry registration');
+        const state = globalThis[Symbol.for("zenx-browser-targeted-input-v2")];
+        const updates = ${JSON.stringify(updates.map((entry) => ({ ownerId: entry.candidate.ownerId, contentQuad: entry.contentQuad })))};
+        for (const update of updates) {
+          const entry = state.nativeFrameCandidates.get(update.ownerId);
+          if (!entry?.element?.isConnected || entry.element.contentDocument !== entry.document) throw new Error('Browser iframe changed before geometry registration');
+        }
+        for (const update of updates) {
+          const entry = state.nativeFrameCandidates.get(update.ownerId);
+          state.nativeFrames.set(entry.element, { document: entry.document, witness: entry.candidate.witness, contentQuad: update.contentQuad });
+        }
+        state.layoutRevision++;
+        return true;
+      })()`;
+      if (
+        resultValue(
+          await send("Runtime.evaluate", {
+            expression,
+            returnByValue: true,
+            awaitPromise: false,
+          }),
+        )?.value !== true
+      )
+        throw new Error(
+          "Browser iframe geometry registration was not confirmed",
+        );
+      throw new Error(
+        "Browser iframe geometry observation initialized or changed; inspect again before targeted input",
+      );
+    }
+  } finally {
+    await release();
+  }
+}
 
 /** Only known JSON probe denials get a public classification. Runtime exceptions
  * and incomplete CDP metadata remain failures, never a successful native refusal. */
@@ -330,6 +644,12 @@ export async function resolveBrowserInputEvidence(
     if (nested) return value;
     throw error;
   }
+  try {
+    await resolveBrowserInputFrameEvidence(snapshot, send, releaseOwnedObject);
+  } catch (error) {
+    if (nested) return { ...outer, inputSnapshot: undefined };
+    throw error;
+  }
   if (
     !snapshot.focusNeedsShadowEvidence &&
     !snapshot.pointerNeedsShadowEvidence
@@ -337,8 +657,13 @@ export async function resolveBrowserInputEvidence(
     return value;
   const point = snapshot.pointerPoint;
   const probe = point
-    ? browserInputProbeScript({ kind: "click", ...point })
-    : browserInputSnapshotScript;
+    ? browserInputProbeScript(
+        { kind: "click", ...point },
+        snapshot.localFrame === true,
+      )
+    : snapshot.localFrame
+      ? browserFrameInputSnapshotScript
+      : browserInputSnapshotScript;
   const owned: {
     objectId: string;
     role: "focus" | "pointer";
@@ -632,6 +957,23 @@ export function requireBrowserInputSnapshot(
     throw new Error(
       "Browser targeted input requires a valid, unzoomed CSS viewport; inspect again",
     );
+  if (
+    snapshot.frameOwnerScanComplete !== undefined &&
+    typeof snapshot.frameOwnerScanComplete !== "boolean"
+  )
+    throw new Error("Browser iframe owner scan metadata is invalid");
+  if (
+    snapshot.frameOwnerIds !== undefined &&
+    (!Array.isArray(snapshot.frameOwnerIds) ||
+      snapshot.frameOwnerIds.length > 31 ||
+      new Set(snapshot.frameOwnerIds).size !== snapshot.frameOwnerIds.length ||
+      snapshot.frameOwnerIds.some(
+        (id) => typeof id !== "string" || id.length === 0 || id.length > 128,
+      ))
+  )
+    throw new Error(
+      "Browser iframe owner candidates are unavailable or exceed their bound",
+    );
   if (snapshot.frameDocuments !== undefined) {
     const frames = snapshot.frameDocuments;
     if (!Array.isArray(frames) || frames.length > 31)
@@ -654,7 +996,9 @@ export function requireBrowserInputSnapshot(
         !documents.has(frame.parentDocumentKey) ||
         !frame.geometry ||
         !["x", "y", "width", "height"].every((key) =>
-          Number.isFinite((frame.geometry as Record<string, number>)[key]),
+          Number.isFinite(
+            frame.geometry[key as "x" | "y" | "width" | "height"],
+          ),
         ) ||
         frame.geometry.width <= 0 ||
         frame.geometry.height <= 0
@@ -676,8 +1020,82 @@ export function requireBrowserInputSnapshot(
         throw new Error(
           "Browser input frame geometry is unavailable or malformed",
         );
+      if (frame.geometry.contentQuad !== undefined)
+        requireBrowserInputContentQuad(frame.geometry.contentQuad);
       documents.add(frame.documentKey);
       owners.add(frame.ownerId);
+    }
+  }
+  if (snapshot.nativeFrameCandidates !== undefined) {
+    const candidates = snapshot.nativeFrameCandidates;
+    if (!Array.isArray(candidates) || candidates.length > 31)
+      throw new Error("Browser native iframe evidence is malformed");
+    const owners = new Set<string>();
+    const documents = new Set([
+      snapshot.documentKey,
+      ...(snapshot.frameDocuments ?? []).map((frame) => frame.documentKey),
+    ]);
+    for (const candidate of candidates) {
+      if (
+        !candidate ||
+        typeof candidate.ownerId !== "string" ||
+        !candidate.ownerId ||
+        candidate.ownerId.length > 128 ||
+        owners.has(candidate.ownerId) ||
+        !documents.has(candidate.parentDocumentKey) ||
+        typeof candidate.documentKey !== "string" ||
+        candidate.documentKey.length < 32 ||
+        candidate.documentKey.length > 16_384 ||
+        typeof candidate.witness !== "string" ||
+        candidate.witness.length > 131_072 ||
+        !Number.isFinite(candidate.width) ||
+        !Number.isFinite(candidate.height) ||
+        candidate.width <= 0 ||
+        candidate.height <= 0
+      )
+        throw new Error("Browser native iframe evidence is malformed");
+      requireBrowserInputSnapshot({
+        documentKey: candidate.documentKey,
+        viewport: candidate.viewport,
+        focusId: null,
+        inputRevision: 0,
+        layoutRevision: 0,
+      });
+      if (
+        Math.abs(candidate.width - candidate.viewport.width) > 0.01 ||
+        Math.abs(candidate.height - candidate.viewport.height) > 0.01
+      )
+        throw new Error("Browser native iframe content size is ambiguous");
+      if (candidate.contentQuad !== undefined)
+        requireBrowserInputContentQuad(candidate.contentQuad);
+      owners.add(candidate.ownerId);
+    }
+  }
+  if (snapshot.frameAncestorCandidates !== undefined) {
+    const candidates = snapshot.frameAncestorCandidates;
+    const documents = new Set([
+      snapshot.documentKey,
+      ...(snapshot.frameDocuments ?? []).map((frame) => frame.documentKey),
+    ]);
+    const owners = new Set<string>();
+    if (!Array.isArray(candidates) || candidates.length > 31)
+      throw new Error("Browser iframe ancestor candidates are malformed");
+    for (const candidate of candidates) {
+      if (
+        !candidate ||
+        typeof candidate.ownerId !== "string" ||
+        !candidate.ownerId ||
+        candidate.ownerId.length > 128 ||
+        owners.has(candidate.ownerId) ||
+        !documents.has(candidate.parentDocumentKey) ||
+        typeof candidate.documentKey !== "string" ||
+        candidate.documentKey.length < 32 ||
+        candidate.documentKey.length > 16384
+      )
+        throw new Error(
+          "Browser iframe ancestor candidate identity is malformed",
+        );
+      owners.add(candidate.ownerId);
     }
   }
   return snapshot;
@@ -690,6 +1108,9 @@ export function assertBrowserInputSnapshot(
 ): void {
   if (
     actual.documentKey !== expected.documentKey ||
+    actual.frameOwnerScanComplete !== expected.frameOwnerScanComplete ||
+    JSON.stringify(actual.frameOwnerIds ?? []) !==
+      JSON.stringify(expected.frameOwnerIds ?? []) ||
     JSON.stringify(actual.viewport) !== JSON.stringify(expected.viewport) ||
     JSON.stringify(actual.frameDocuments ?? []) !==
       JSON.stringify(expected.frameDocuments ?? []) ||
@@ -773,10 +1194,20 @@ export class BrowserInputOutcomeUnknownError extends Error {
   }
 }
 
+/** Host-private preselected mouse operation; never serialized into observations. */
+export interface BrowserTargetedMouseDispatch {
+  assertSnapshot(snapshot: BrowserInputSnapshot): void;
+  dispatch(
+    params: Record<string, unknown>,
+    onDispatched: () => void,
+  ): Promise<unknown>;
+}
+
 export interface BrowserTargetedInputPort {
   /** Synchronous session/control/document generation fence, before every send. */
   assertCurrent(): void;
   snapshot(): Promise<BrowserInputSnapshot>;
+  prepareMouse?(snapshot: BrowserInputSnapshot): BrowserTargetedMouseDispatch;
   dispatch(
     method: "Input.dispatchMouseEvent" | "Input.dispatchKeyEvent",
     params: Record<string, unknown>,
@@ -839,6 +1270,15 @@ export async function dispatchBrowserTargetedInput(
         code: key,
         windowsVirtualKeyCode: virtualKeys[key!],
       };
+  // Route selection precedes the first mutation. A frame capture must supply a
+  // receipt; it cannot silently fall back to root when its evidence is absent.
+  const mouse = point ? port.prepareMouse?.(initial) : undefined;
+  if (point && port.prepareMouse && !mouse)
+    throw new Error(
+      "Browser preselected mouse receipt is unavailable; inspect again",
+    );
+  const dispatch = (params: Record<string, unknown>, done: () => void) =>
+    mouse ? mouse.dispatch(params, done) : port.dispatch(method, params, done);
   let dispatched = false;
   let released = false;
   try {
@@ -850,8 +1290,7 @@ export async function dispatchBrowserTargetedInput(
         port.beforeDispatch();
       }
     };
-    await port.dispatch(
-      method,
+    await dispatch(
       {
         ...parameters,
         type: point
@@ -900,10 +1339,10 @@ export async function dispatchBrowserTargetedInput(
       throw new Error(
         "Browser document or concurrent input changed after press",
       );
+    mouse?.assertSnapshot(pressed);
     signal?.throwIfAborted();
     port.assertCurrent();
-    await port.dispatch(
-      method,
+    await dispatch(
       {
         ...parameters,
         type: point ? "mouseReleased" : "keyUp",

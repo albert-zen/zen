@@ -62,7 +62,21 @@ const paths = [
     name: "contract",
     label: "`contract ${mode} document`",
     rpc: "rpc",
+    mode: "ordinary-dom",
+    remoteMode: false,
   },
+  ...[
+    "cross-origin-same-process",
+    "cross-origin-oopif",
+    "nested-oopif",
+    "nested-same-process",
+  ].map((mode) => ({
+    name: mode,
+    label: "`contract ${mode} document`",
+    rpc: "rpc",
+    mode,
+    remoteMode: true,
+  })),
 ].map((entry) => ({ ...entry, code: actualPoll(entry.label) }));
 const inspection = actualPoll('"initial Agent document lifecycle"');
 
@@ -108,7 +122,8 @@ function fixture(
       // The remainder is the actual surrounding source, including later focus,
       // inspect and input calls, rather than a test-created continuation.
       phase: "readiness",
-      mode: "ordinary-dom",
+      mode: entry.mode ?? "ordinary-dom",
+      remoteMode: entry.remoteMode ?? false,
       sessionId: "owned-session",
       opened: { tabId: "owned-agent" },
       connection: { backend },
@@ -164,12 +179,27 @@ for (const entry of paths) {
 
   for (const value of [undefined, null, 0, "", "true", 1]) {
     test(`${entry.name} document rejects non-boolean ${JSON.stringify(value)} without polling`, async () => {
-      const f = fixture(entry, { values: [value, true] });
+      const f = fixture(entry, { values: [value, true], remaining: true });
       await assert.rejects(f.run(), /readiness must be boolean/);
       assert.equal(f.reads.length, 1);
       assert.equal(f.elapsed(), 0);
+      assert.deepEqual(f.later, []);
     });
   }
+}
+
+for (const entry of paths.filter((path) => path.rpc === "rpc")) {
+  test(`${entry.name} readiness expression requires its exact mode${entry.remoteMode ? " and child readiness" : ""}`, async () => {
+    const f = fixture(entry, { values: [true] });
+    assert.equal(await f.run(), "ready");
+    const read = (contract) =>
+      runInNewContext(f.reads[0], { window: { contract } });
+    assert.equal(read(undefined), false);
+    assert.equal(read({ mode: "unrelated-mode", ready: true }), false);
+    assert.equal(read({ mode: entry.mode, ready: true }), true);
+    for (const ready of [undefined, false, null, "true", 1])
+      assert.equal(read({ mode: entry.mode, ready }), !entry.remoteMode);
+  });
 }
 
 function inspectFixture(values) {

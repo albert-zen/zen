@@ -18,6 +18,9 @@ const ALLOWED_TAB_COMMANDS = new Set([
   "Network.enable",
   "Network.getResponseBody",
   "DOM.describeNode",
+  "DOM.getBoxModel",
+  "DOM.getFrameOwner",
+  "DOM.getNodeForLocation",
   "DOM.resolveNode",
   "Runtime.callFunctionOn",
   "Runtime.releaseObject",
@@ -45,6 +48,7 @@ const ALLOWED_TAB_EVENTS = new Set([
   "Inspector.detached",
   "Page.backForwardCacheNotUsed",
   "Page.frameNavigated",
+  "Page.frameAttached",
   "Page.documentOpened",
   "Page.frameDetached",
   "Page.frameStartedLoading",
@@ -98,7 +102,19 @@ interface ConnectedTab {
 interface CdpSession {
   socket: WebSocket;
   targetId: string;
+  tabId: number;
+  rootSessionId: string;
+  parentSessionId?: string;
+  nativeSessionId?: string;
+  autoAttach: boolean;
+  depth: number;
 }
+
+const MAX_CHILD_SESSIONS = 64;
+const MAX_CHILD_SESSION_HISTORY = 256;
+const MAX_CHILD_DEPTH = 8;
+const IFRAME_SESSION_LIMITATION =
+  "Chrome 125 or newer and a current ZenX extension are required for child iframe sessions";
 
 interface PendingCommand {
   socket: WebSocket;
@@ -106,6 +122,8 @@ interface PendingCommand {
   sessionId?: string;
   tabId?: number;
   navigatedUrl?: string;
+  settled?: (failed: boolean) => void;
+  silent?: boolean;
 }
 
 interface BridgeConnection {
@@ -115,6 +133,10 @@ interface BridgeConnection {
   native?: WebSocket;
   nativeReady: boolean;
   browserConnected: boolean;
+  iframeSessions: boolean;
+  childOwners: Map<number, string>;
+  childUnavailable: Set<number>;
+  childSessionsSeen: Map<number, Set<string>>;
   cdpSockets: Set<WebSocket>;
   sessions: Map<string, CdpSession>;
   pending: Map<string, PendingCommand>;
@@ -131,6 +153,10 @@ function createBridgeConnection(
     generation: randomUUID(),
     nativeReady: false,
     browserConnected: false,
+    iframeSessions: false,
+    childOwners: new Map(),
+    childUnavailable: new Set(),
+    childSessionsSeen: new Map(),
     cdpSockets: new Set(),
     sessions: new Map(),
     pending: new Map(),
@@ -504,6 +530,8 @@ export class ChromeExtensionBridge {
         connection.browser = message.browser as "chrome" | "edge";
         this.#connections.set(id, connection);
       }
+      connection.iframeSessions =
+        asRecord(message.capabilities)?.iframeSessions === true;
       connection.nativeReady = true;
       socket.send(
         JSON.stringify({
@@ -548,6 +576,8 @@ export class ChromeExtensionBridge {
       const pending = connection.pending.get(requestId);
       if (pending === undefined) return;
       connection.pending.delete(requestId);
+      pending.settled?.(message.error !== undefined);
+      if (pending.silent) return;
       if (message.error !== undefined) {
         const error = asRecord(message.error);
         this.#reply(
@@ -591,14 +621,125 @@ export class ChromeExtensionBridge {
         currentTab === undefined ||
         tabId !== currentTab.id ||
         method === undefined ||
-        !ALLOWED_TAB_EVENTS.has(method)
+        (!ALLOWED_TAB_EVENTS.has(method) &&
+          method !== "Target.attachedToTarget" &&
+          method !== "Target.detachedFromTarget")
       )
         return;
+      const nativeSessionId = stringValue(message.sessionId);
+      if (message.sessionId !== undefined && nativeSessionId === undefined)
+        return;
+      const rootSessionId = connection.childOwners.get(tabId);
+      const parent =
+        nativeSessionId === undefined
+          ? rootSessionId === undefined
+            ? undefined
+            : connection.sessions.get(rootSessionId)
+          : [...connection.sessions.values()].find(
+              (route) =>
+                route.tabId === tabId &&
+                route.nativeSessionId === nativeSessionId &&
+                route.rootSessionId === rootSessionId,
+            );
+      if (
+        method === "Target.attachedToTarget" ||
+        method === "Target.detachedFromTarget"
+      ) {
+        if (parent === undefined || message.rootSessionId !== rootSessionId)
+          return;
+        const parentId =
+          nativeSessionId === undefined
+            ? rootSessionId!
+            : [...connection.sessions].find(
+                ([, route]) => route === parent,
+              )![0];
+        const childId = stringValue(params.sessionId);
+        if (
+          childId === undefined ||
+          childId.length === 0 ||
+          childId.length > 512
+        )
+          return;
+        if (method === "Target.detachedFromTarget") {
+          const detached = [...connection.sessions].find(
+            ([, route]) =>
+              route.parentSessionId === parentId &&
+              route.nativeSessionId === childId,
+          );
+          if (detached !== undefined)
+            this.#retireSession(
+              connection,
+              detached[0],
+              "Chrome iframe detached",
+            );
+          return;
+        }
+        const info = asRecord(params.targetInfo);
+        const childTargetId = stringValue(info?.targetId);
+        const seen =
+          connection.childSessionsSeen.get(tabId) ?? new Set<string>();
+        if (
+          !parent.autoAttach ||
+          seen.has(childId) ||
+          seen.size >= MAX_CHILD_SESSION_HISTORY ||
+          info?.type !== "iframe" ||
+          childTargetId === undefined ||
+          childTargetId.length === 0 ||
+          childTargetId.length > 512 ||
+          parent.depth >= MAX_CHILD_DEPTH ||
+          [...connection.sessions.values()].filter(
+            (route) =>
+              route.tabId === tabId && route.nativeSessionId !== undefined,
+          ).length >= MAX_CHILD_SESSIONS ||
+          [...connection.sessions.values()].some(
+            (route) =>
+              route.tabId === tabId && route.nativeSessionId === childId,
+          )
+        )
+          return;
+        seen.add(childId);
+        connection.childSessionsSeen.set(tabId, seen);
+        const virtualId = randomUUID();
+        connection.sessions.set(virtualId, {
+          socket: parent.socket,
+          targetId: childTargetId,
+          tabId,
+          rootSessionId: parent.rootSessionId,
+          parentSessionId: parentId,
+          nativeSessionId: childId,
+          autoAttach: false,
+          depth: parent.depth + 1,
+        });
+        sendJson(parent.socket, {
+          method,
+          params: { ...params, sessionId: virtualId },
+          sessionId: parentId,
+        });
+        return;
+      }
+      if (nativeSessionId !== undefined) {
+        if (parent === undefined || message.rootSessionId !== rootSessionId)
+          return;
+        const virtualId = [...connection.sessions].find(
+          ([, route]) => route === parent,
+        )![0];
+        if (method === "Inspector.detached") {
+          this.#retireSession(
+            connection,
+            virtualId,
+            "Chrome iframe inspector detached",
+          );
+          return;
+        }
+        sendJson(parent.socket, { method, params, sessionId: virtualId });
+        return;
+      }
       const navigatedUrl = mainFrameUrlFromEvent(method, params);
       if (navigatedUrl !== undefined)
         this.#updateTab(connection, { ...currentTab, url: navigatedUrl });
       for (const [sessionId, session] of connection.sessions) {
-        if (session.targetId !== targetId(currentTab)) continue;
+        if (session.tabId !== tabId || session.nativeSessionId !== undefined)
+          continue;
         sendJson(session.socket, { method, params, sessionId });
       }
     }
@@ -631,6 +772,41 @@ export class ChromeExtensionBridge {
     const sessionId = stringValue(request.sessionId);
     if (id === undefined || method === undefined) {
       socket.close(1007, "Invalid CDP request");
+      return;
+    }
+    if (request.sessionId !== undefined && sessionId === undefined) {
+      this.#reply(socket, id, undefined, {
+        code: -32000,
+        message: "Invalid Chrome session route",
+      });
+      return;
+    }
+    if (
+      sessionId !== undefined &&
+      (method === "ZenX.getCapabilities" ||
+        (method.startsWith("Target.") &&
+          method !== "Target.setAutoAttach" &&
+          method !== "Target.detachFromTarget"))
+    ) {
+      this.#reply(
+        socket,
+        id,
+        undefined,
+        {
+          code: -32000,
+          message: "Browser discovery commands require the browser route",
+        },
+        sessionId,
+      );
+      return;
+    }
+    if (method === "ZenX.getCapabilities") {
+      this.#reply(socket, id, {
+        iframeSessions: connection.iframeSessions,
+        ...(!connection.iframeSessions
+          ? { limitation: IFRAME_SESSION_LIMITATION }
+          : {}),
+      });
       return;
     }
     if (method === "Target.setDiscoverTargets") {
@@ -725,6 +901,12 @@ export class ChromeExtensionBridge {
       connection.sessions.set(nextSession, {
         socket,
         targetId: requestedTarget,
+        tabId: [...connection.tabs.values()].find(
+          (tab) => targetId(tab) === requestedTarget,
+        )!.id,
+        rootSessionId: nextSession,
+        autoAttach: false,
+        depth: 0,
       });
       this.#reply(socket, id, { sessionId: nextSession });
       return;
@@ -740,15 +922,80 @@ export class ChromeExtensionBridge {
         });
         return;
       }
-      connection.sessions.delete(detached);
-      this.#reply(socket, id, {});
+      if (
+        sessionId !== undefined &&
+        sessionId !== detached &&
+        existing.parentSessionId !== sessionId
+      ) {
+        this.#reply(
+          socket,
+          id,
+          undefined,
+          { code: -32000, message: "Chrome iframe parent route changed" },
+          sessionId,
+        );
+        return;
+      }
+      if (existing.nativeSessionId === undefined) {
+        this.#retireSession(
+          connection,
+          detached,
+          "Chrome root lease retired",
+          false,
+        );
+        this.#releaseChildOwner(connection, existing, {
+          socket,
+          id,
+          sessionId,
+        });
+      } else {
+        const parent = connection.sessions.get(existing.parentSessionId!);
+        this.#retireSession(
+          connection,
+          detached,
+          "Chrome iframe lease retired",
+          false,
+        );
+        if (
+          parent === undefined ||
+          connection.native?.readyState !== WebSocket.OPEN
+        ) {
+          this.#reply(
+            socket,
+            id,
+            undefined,
+            { code: -32000, message: "Chrome iframe parent route changed" },
+            sessionId,
+          );
+          return;
+        }
+        const requestId = randomUUID();
+        connection.pending.set(requestId, {
+          socket,
+          id,
+          sessionId,
+          tabId: existing.tabId,
+        });
+        connection.native.send(
+          JSON.stringify({
+            type: "cdp-command",
+            requestId,
+            tabId: existing.tabId,
+            rootSessionId: existing.rootSessionId,
+            ...(parent.nativeSessionId === undefined
+              ? {}
+              : { sessionId: parent.nativeSessionId }),
+            method,
+            params: { sessionId: existing.nativeSessionId },
+          }),
+        );
+      }
       return;
     }
     const session =
       sessionId === undefined ? undefined : connection.sessions.get(sessionId);
-    const tab = [...connection.tabs.values()].find(
-      (tab) => targetId(tab) === session?.targetId,
-    );
+    const tab =
+      session === undefined ? undefined : connection.tabs.get(session.tabId);
     if (
       sessionId === undefined ||
       session?.socket !== socket ||
@@ -760,6 +1007,141 @@ export class ChromeExtensionBridge {
         id,
         undefined,
         { code: -32000, message: "Chrome tab connection is unavailable" },
+        sessionId,
+      );
+      return;
+    }
+    if (method === "Target.setAutoAttach") {
+      if (
+        connection.childUnavailable.has(tab.id) &&
+        params.autoAttach !== false
+      ) {
+        this.#reply(
+          socket,
+          id,
+          undefined,
+          {
+            code: -32000,
+            message:
+              "Chrome iframe cleanup is unconfirmed; reconnect this browser before enabling child sessions",
+          },
+          sessionId,
+        );
+        return;
+      }
+      if (!connection.iframeSessions || !iframeAutoAttachParams(params)) {
+        this.#reply(
+          socket,
+          id,
+          undefined,
+          {
+            code: -32000,
+            message: !connection.iframeSessions
+              ? IFRAME_SESSION_LIMITATION
+              : "Only flattened, non-pausing iframe auto-attach is supported",
+          },
+          sessionId,
+        );
+        return;
+      }
+      if (
+        [...connection.pending.values()].some(
+          (pending) =>
+            pending.sessionId === sessionId && pending.settled !== undefined,
+        )
+      ) {
+        this.#reply(
+          socket,
+          id,
+          undefined,
+          {
+            code: -32000,
+            message: "Chrome iframe subscription change is still pending",
+          },
+          sessionId,
+        );
+        return;
+      }
+      const owner = connection.childOwners.get(tab.id);
+      if (
+        (owner !== undefined && owner !== session.rootSessionId) ||
+        (session.nativeSessionId !== undefined &&
+          owner !== session.rootSessionId)
+      ) {
+        this.#reply(
+          socket,
+          id,
+          undefined,
+          {
+            code: -32000,
+            message:
+              "Chrome iframe routing is pinned to another root lease until native tab retirement or browser reconnect",
+          },
+          sessionId,
+        );
+        return;
+      }
+      if (params.autoAttach === false && owner === undefined) {
+        this.#reply(socket, id, {}, undefined, sessionId);
+        return;
+      }
+      connection.childOwners.set(tab.id, session.rootSessionId);
+      session.autoAttach = params.autoAttach === true;
+      if (!session.autoAttach)
+        this.#retireDescendants(
+          connection,
+          sessionId,
+          "Chrome iframe subscription disabled",
+        );
+      const requestId = randomUUID();
+      connection.pending.set(requestId, {
+        socket,
+        id,
+        sessionId,
+        tabId: tab.id,
+        settled: (failed) => {
+          if (failed) {
+            connection.childUnavailable.add(tab.id);
+            session.autoAttach = false;
+            this.#retireDescendants(
+              connection,
+              sessionId,
+              "Chrome iframe setup failed",
+            );
+          }
+          // Even confirmed disable does not transfer the shared native debugger
+          // attachment to another root lease. Only native/tab retirement can.
+        },
+      });
+      connection.native.send(
+        JSON.stringify({
+          type: "cdp-command",
+          requestId,
+          tabId: tab.id,
+          rootSessionId: session.rootSessionId,
+          ...(session.nativeSessionId === undefined
+            ? {}
+            : { sessionId: session.nativeSessionId }),
+          method,
+          params,
+        }),
+      );
+      return;
+    }
+    if (
+      session.nativeSessionId !== undefined &&
+      method.startsWith("Input.") &&
+      (method !== "Input.dispatchMouseEvent" || !iframeMouseParams(params))
+    ) {
+      this.#reply(
+        socket,
+        id,
+        undefined,
+        {
+          code: -32000,
+          message:
+            "Chrome child input only supports a validated left-button press or release",
+        },
         sessionId,
       );
       return;
@@ -783,7 +1165,9 @@ export class ChromeExtensionBridge {
       id,
       sessionId,
       tabId: tab.id,
-      ...(method === "Page.navigate" && typeof params.url === "string"
+      ...(session.nativeSessionId === undefined &&
+      method === "Page.navigate" &&
+      typeof params.url === "string"
         ? { navigatedUrl: params.url }
         : {}),
     });
@@ -792,8 +1176,99 @@ export class ChromeExtensionBridge {
         type: "cdp-command",
         requestId,
         tabId: tab.id,
+        ...(session.nativeSessionId === undefined
+          ? {}
+          : {
+              sessionId: session.nativeSessionId,
+              rootSessionId: session.rootSessionId,
+            }),
         method,
         params,
+      }),
+    );
+  }
+
+  #retireDescendants(
+    connection: BridgeConnection,
+    parentId: string,
+    reason: string,
+  ): void {
+    for (const [id, route] of [...connection.sessions])
+      if (route.parentSessionId === parentId)
+        this.#retireSession(connection, id, reason);
+  }
+
+  #retireSession(
+    connection: BridgeConnection,
+    id: string,
+    reason: string,
+    notify = true,
+  ): void {
+    const route = connection.sessions.get(id);
+    if (route === undefined) return;
+    this.#retireDescendants(connection, id, reason);
+    connection.sessions.delete(id);
+    for (const [requestId, pending] of [...connection.pending]) {
+      if (pending.sessionId !== id || pending.settled !== undefined) continue;
+      connection.pending.delete(requestId);
+      this.#reply(
+        pending.socket,
+        pending.id,
+        undefined,
+        { code: -32000, message: reason },
+        id,
+      );
+    }
+    if (notify)
+      sendJson(route.socket, {
+        method: "Target.detachedFromTarget",
+        params: { sessionId: id, targetId: route.targetId, reason },
+        ...(route.parentSessionId === undefined
+          ? {}
+          : { sessionId: route.parentSessionId }),
+      });
+  }
+
+  #releaseChildOwner(
+    connection: BridgeConnection,
+    root: CdpSession,
+    reply?: Pick<PendingCommand, "socket" | "id" | "sessionId">,
+  ): void {
+    if (connection.childOwners.get(root.tabId) !== root.rootSessionId) {
+      if (reply !== undefined)
+        this.#reply(reply.socket, reply.id, {}, undefined, reply.sessionId);
+      return;
+    }
+    if (connection.native?.readyState !== WebSocket.OPEN) {
+      if (reply !== undefined)
+        this.#reply(
+          reply.socket,
+          reply.id,
+          undefined,
+          { code: -32000, message: "Chrome iframe cleanup is unconfirmed" },
+          reply.sessionId,
+        );
+      return;
+    }
+    const requestId = randomUUID();
+    connection.pending.set(requestId, {
+      socket: root.socket,
+      id: reply?.id ?? -1,
+      sessionId: reply?.sessionId,
+      tabId: root.tabId,
+      silent: reply === undefined,
+      settled: (failed) => {
+        if (failed) connection.childUnavailable.add(root.tabId);
+      },
+    });
+    connection.native.send(
+      JSON.stringify({
+        type: "cdp-command",
+        requestId,
+        tabId: root.tabId,
+        rootSessionId: root.rootSessionId,
+        method: "Target.setAutoAttach",
+        params: iframeAutoAttach(false),
       }),
     );
   }
@@ -822,13 +1297,13 @@ export class ChromeExtensionBridge {
     const previousTargetId = targetId(previous);
     connection.tabs.delete(tabId);
     for (const [sessionId, session] of [...connection.sessions]) {
-      if (session.targetId !== previousTargetId) continue;
-      connection.sessions.delete(sessionId);
-      sendJson(session.socket, {
-        method: "Target.detachedFromTarget",
-        params: { sessionId, targetId: previousTargetId, reason },
-      });
+      if (session.tabId !== tabId || session.nativeSessionId !== undefined)
+        continue;
+      this.#retireSession(connection, sessionId, reason);
     }
+    connection.childOwners.delete(tabId);
+    connection.childUnavailable.delete(tabId);
+    connection.childSessionsSeen.delete(tabId);
     for (const [requestId, pending] of [...connection.pending]) {
       if (pending.tabId !== tabId) continue;
       connection.pending.delete(requestId);
@@ -861,6 +1336,7 @@ export class ChromeExtensionBridge {
   #disconnectBrowser(connection: BridgeConnection, reason: string): void {
     connection.browserConnected = false;
     connection.nativeReady = false;
+    connection.iframeSessions = false;
     for (const tabId of [...connection.tabs.keys()])
       this.#detachTab(connection, tabId, reason);
     for (const [requestId, pending] of connection.pending) {
@@ -877,11 +1353,22 @@ export class ChromeExtensionBridge {
 
   #dropCdp(connection: BridgeConnection, socket: WebSocket): void {
     connection.cdpSockets.delete(socket);
-    for (const [sessionId, session] of [...connection.sessions]) {
-      if (session.socket === socket) connection.sessions.delete(sessionId);
-    }
     for (const [requestId, pending] of [...connection.pending]) {
-      if (pending.socket === socket) connection.pending.delete(requestId);
+      if (pending.socket === socket) {
+        if (pending.settled !== undefined) pending.silent = true;
+        else connection.pending.delete(requestId);
+      }
+    }
+    for (const [sessionId, session] of [...connection.sessions]) {
+      if (session.socket !== socket || session.nativeSessionId !== undefined)
+        continue;
+      this.#retireSession(
+        connection,
+        sessionId,
+        "Chrome root socket retired",
+        false,
+      );
+      this.#releaseChildOwner(connection, session);
     }
   }
 
@@ -906,6 +1393,24 @@ export class ChromeExtensionBridge {
       });
     }
   }
+}
+
+// The Host chooses the existing exact renderer route; this transport only
+// admits the current left-click pair and never derives or widens that route.
+function iframeMouseParams(params: Record<string, unknown>): boolean {
+  return (
+    (params.type === "mousePressed" || params.type === "mouseReleased") &&
+    typeof params.x === "number" &&
+    Number.isFinite(params.x) &&
+    typeof params.y === "number" &&
+    Number.isFinite(params.y) &&
+    params.button === "left" &&
+    params.buttons === (params.type === "mousePressed" ? 1 : 0) &&
+    params.clickCount === 1 &&
+    Object.keys(params).every((key) =>
+      ["type", "x", "y", "button", "buttons", "clickCount"].includes(key),
+    )
+  );
 }
 
 function targetId(tab: ConnectedTab): string {
@@ -982,4 +1487,46 @@ function sendJson(socket: WebSocket, value: unknown): void {
 async function closeWebSocketServer(server: WebSocketServer): Promise<void> {
   for (const socket of server.clients) socket.terminate();
   await new Promise<void>((resolve) => server.close(() => resolve()));
+}
+
+function iframeAutoAttach(autoAttach: boolean): Record<string, unknown> {
+  return {
+    autoAttach,
+    flatten: true,
+    waitForDebuggerOnStart: false,
+    ...(autoAttach
+      ? { filter: [{ type: "iframe", exclude: false }, { exclude: true }] }
+      : {}),
+  };
+}
+
+function iframeAutoAttachParams(params: Record<string, unknown>): boolean {
+  if (
+    typeof params.autoAttach !== "boolean" ||
+    params.flatten !== true ||
+    params.waitForDebuggerOnStart !== false ||
+    Object.keys(params).some(
+      (key) =>
+        !["autoAttach", "flatten", "waitForDebuggerOnStart", "filter"].includes(
+          key,
+        ),
+    )
+  )
+    return false;
+  // Native CDP rejects a nonempty target filter when auto-attach is disabled.
+  if (!params.autoAttach)
+    return (
+      params.filter === undefined ||
+      (Array.isArray(params.filter) && params.filter.length === 0)
+    );
+  if (!Array.isArray(params.filter) || params.filter.length !== 2) return false;
+  const first = asRecord(params.filter[0]);
+  const last = asRecord(params.filter[1]);
+  return (
+    first?.type === "iframe" &&
+    (first.exclude === false || first.exclude === undefined) &&
+    Object.keys(first).every((key) => key === "type" || key === "exclude") &&
+    last?.exclude === true &&
+    Object.keys(last).length === 1
+  );
 }
