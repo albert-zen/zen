@@ -120,7 +120,7 @@ function inputBlocks(
     return (
       answer.questions
         ? answer.questions.flatMap((part) => [
-            ...part.selectedLabels,
+            part.selectedLabels.join(" · "),
             ...(part.text === undefined ? [] : [part.text]),
           ])
         : [answer.fallbackText ?? ""]

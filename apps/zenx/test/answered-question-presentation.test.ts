@@ -175,11 +175,15 @@ test("transcript search indexes literal displayed answers without hidden reply h
   } as unknown as import("../src/renderer/src/turn-canonical-presentation.js").TurnCanonicalPresentation;
   const entries = indexTurnFindText(turn, canonical);
   assert.deepEqual(entries[0]?.blocks, [
-    "Short summary",
-    "Full report",
+    "Short summary · Full report",
     "Keep the examples.",
     "Literal **text** Second line",
   ]);
+  assert.equal(searchTranscript(entries, "summary · Full").length, 1);
+  assert.equal(
+    searchTranscript(entries, "Short summary · Full report").length,
+    1,
+  );
   assert.equal(searchTranscript(entries, "**text**").length, 1);
   assert.equal(searchTranscript(entries, "call-a").length, 0);
   assert.equal(searchTranscript(entries, "scope:").length, 0);
