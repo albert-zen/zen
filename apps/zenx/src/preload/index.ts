@@ -1,3 +1,4 @@
+import type { AppShotApi, AppShotEvent } from "../app-shot.js";
 import type {
   NativeInformationApi,
   NativeInformationUpdate,
@@ -343,6 +344,41 @@ contextBridge.exposeInMainWorld("zenx", {
     ): Promise<NativeThreadSummary[]> =>
       await ipcRenderer.invoke(ipcChannels.threadSummariesList, options),
   },
+  appShot: {
+    read: async (id: string) =>
+      await ipcRenderer.invoke(ipcChannels.appShotRead, id),
+    attach: async (id: string) =>
+      await ipcRenderer.invoke(ipcChannels.appShotAttach, id),
+    discard: async (id: string) => {
+      await ipcRenderer.invoke(ipcChannels.appShotDiscard, id);
+    },
+    list: async () => await ipcRenderer.invoke(ipcChannels.appShotList),
+    capture: async (sourceId: string, includeAccessibility: boolean) =>
+      await ipcRenderer.invoke(
+        ipcChannels.appShotCapture,
+        sourceId,
+        includeAccessibility,
+      ),
+    arm: async (token: string, includeAccessibility: boolean) =>
+      await ipcRenderer.invoke(
+        ipcChannels.appShotArm,
+        token,
+        includeAccessibility,
+      ),
+    disarm: async (token: string) => {
+      await ipcRenderer.invoke(ipcChannels.appShotDisarm, token);
+    },
+    onCapture: (listener: (event: AppShotEvent) => void) => {
+      const callback = (
+        _event: Electron.IpcRendererEvent,
+        value: AppShotEvent,
+      ) => listener(value);
+      ipcRenderer.on(ipcChannels.appShotCaptured, callback);
+      return () => {
+        ipcRenderer.removeListener(ipcChannels.appShotCaptured, callback);
+      };
+    },
+  } satisfies AppShotApi,
   imageAttachments: {
     readLocal: async (
       source: string,

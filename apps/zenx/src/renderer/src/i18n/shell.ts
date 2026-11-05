@@ -1,4 +1,30 @@
 export const en = {
+  appShotWaiting:
+    "{{count}} more captures waiting for review. Closing discards unadded captures.",
+  appShotQueueFull:
+    "Review the waiting captures first. The latest capture was not added.",
+  appShot: "App Shot",
+  appShotShortcutTitle: "App Shot (⌘/Ctrl+Shift+2)",
+  appShotClose: "Close App Shot",
+  appShotPrivacy:
+    "Choose a window, review the capture, then attach it to this draft. Nothing is sent to the model until you send the message.",
+  appShotWorking: "Preparing capture…",
+  appShotContext: "Captured context",
+  appShotChooseAnother: "Choose another window",
+  appShotAttach: "Attach to draft",
+  appShotIncludeText: "Include application text (macOS)",
+  appShotTextHint:
+    "Optional accessibility text can include content outside the visible screenshot. macOS may require Accessibility permission. Unavailable text is reported explicitly.",
+  appShotWindows: "Available application windows",
+  appShotUntitled: "Untitled window",
+  appShotNoWindows:
+    "No windows available. Check Screen Recording permission and refresh.",
+  appShotRefresh: "Refresh windows",
+  appShotCancel: "Cancel",
+  appShotGlobalShortcut: "Capture the foreground app with ⌘⇧2",
+  appShotGlobalHint:
+    "Enabled only for this composer while it remains open. Capture returns here for review. Disable to release the system shortcut; no keyboard monitoring is installed.",
+
   answeredQuestion: "Original question",
   answeredQuestionSelected: "Selected",
   answeredQuestionNotSelected: "Not selected",
@@ -995,6 +1021,29 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  appShotWaiting: "还有 {{count}} 张快照待检查。关闭会放弃尚未添加的快照。",
+  appShotQueueFull: "请先检查等待中的快照。最新这张尚未添加。",
+  appShot: "应用快照",
+  appShotShortcutTitle: "应用快照（⌘/Ctrl+Shift+2）",
+  appShotClose: "关闭应用快照",
+  appShotPrivacy:
+    "选择窗口并检查快照，再添加到这条草稿。发送消息前，不会传给模型。",
+  appShotWorking: "正在准备快照…",
+  appShotContext: "捕获的上下文",
+  appShotChooseAnother: "选择其他窗口",
+  appShotAttach: "添加到草稿",
+  appShotIncludeText: "包含应用文字（macOS）",
+  appShotTextHint:
+    "可选辅助功能文字可能包含截图可见区域以外的内容。macOS 可能需要辅助功能权限；无法读取时会明确说明。",
+  appShotWindows: "可用应用窗口",
+  appShotUntitled: "无标题窗口",
+  appShotNoWindows: "没有可用窗口。请检查屏幕录制权限后刷新。",
+  appShotRefresh: "刷新窗口",
+  appShotCancel: "取消",
+  appShotGlobalShortcut: "用 ⌘⇧2 捕获前台应用",
+  appShotGlobalHint:
+    "仅在此输入框仍打开时启用，捕获后回到这里检查。关闭可释放系统快捷键；不会安装键盘监听程序。",
+
   answeredQuestion: "原问题",
   answeredQuestionSelected: "已选择",
   answeredQuestionNotSelected: "未选择",

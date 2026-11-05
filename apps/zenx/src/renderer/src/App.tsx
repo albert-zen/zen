@@ -1,3 +1,4 @@
+import { withAppShotContext } from "./app-shot-draft.js";
 import { UserQuestionCards } from "./UserQuestionCards.js";
 import { createUserQuestionStore } from "./user-question-state.js";
 import { useCommittedCallback } from "./use-committed-callback.js";
@@ -2424,8 +2425,9 @@ function AppContent() {
         | import("../../../../../src/item.js").UserInputPart
         | import("../../../../../src/skill-input.js").SkillReference
       )[] = [];
-      if (messageText.trim().length > 0)
-        input.push({ type: "text", text: messageText });
+      const textWithShots = withAppShotContext(messageText, submission.images);
+      if (textWithShots.trim().length > 0)
+        input.push({ type: "text", text: textWithShots });
       for (const skill of skillDraft.skills)
         input.push({ type: "skill", id: skill.id });
       for (const image of submission.images)
@@ -3950,6 +3952,11 @@ function AppContent() {
             addComposerImages(state, images),
           );
         }}
+        onAddAppShot={(image) =>
+          sideChatDrafts.updateComposer(id, (state) =>
+            addComposerImages(state, [image]),
+          )
+        }
         onPickImages={async () => {
           const images = await window.zenx.imageAttachments.pick();
           sideChatDrafts.updateComposer(id, (state) =>
@@ -4587,6 +4594,18 @@ function AppContent() {
                   } finally {
                     releaseNewThreadImageLease(draftId);
                   }
+                }}
+                onAddAppShot={(threadId, image) =>
+                  updateComposer(threadId, (state) =>
+                    addComposerImages(state, [image]),
+                  )
+                }
+                onAddNewThreadAppShot={(image) => {
+                  const id = newThreadDraftRef.current?.id;
+                  if (id)
+                    updateNewThreadComposer(id, (state) =>
+                      addComposerImages(state, [image]),
+                    );
                 }}
                 onPickImages={async (threadId) => {
                   const images = await window.zenx.imageAttachments.pick();
@@ -5365,6 +5384,8 @@ function AgentSurface({
   onImportNewThreadImages,
   onPickImages,
   onPickNewThreadImages,
+  onAddAppShot,
+  onAddNewThreadAppShot,
   onReadAttachment,
   onRemoveImage,
   onRemoveNewThreadImage,
@@ -5442,6 +5463,13 @@ function AgentSurface({
   onImportNewThreadImages(files: readonly File[]): Promise<void>;
   onPickImages(threadId: string): Promise<void>;
   onPickNewThreadImages(): Promise<void>;
+  onAddAppShot(
+    threadId: string,
+    image: import("../../main/image-attachments.js").ZenXImageDraft,
+  ): void;
+  onAddNewThreadAppShot(
+    image: import("../../main/image-attachments.js").ZenXImageDraft,
+  ): void;
   onReadAttachment(
     attachment: import("../../../../../src/attachment.js").AttachmentRef,
   ): Promise<Uint8Array>;
@@ -5649,6 +5677,7 @@ function AgentSurface({
               onDraftChange={onNewThreadDraftChange}
               onImportImages={onImportNewThreadImages}
               onPickImages={onPickNewThreadImages}
+              onAddAppShot={onAddNewThreadAppShot}
               onReadAttachment={onReadAttachment}
               onRemoveImage={onRemoveNewThreadImage}
               onInterrupt={async () => undefined}
@@ -5785,6 +5814,7 @@ function AgentSurface({
             onDraftChange={(draft) => onDraftChange(threadDetail.id, draft)}
             onImportImages={(files) => onImportImages(threadDetail.id, files)}
             onPickImages={() => onPickImages(threadDetail.id)}
+            onAddAppShot={(image) => onAddAppShot(threadDetail.id, image)}
             onReadAttachment={onReadAttachment}
             onRemoveImage={(imageId) => onRemoveImage(threadDetail.id, imageId)}
             onRetryTurn={onRetryTurn}
@@ -6402,8 +6432,9 @@ async function composerSubmissionInput(
   submission: ComposerSubmission,
 ): Promise<import("../../protocol-client/index.js").UserInputPart[]> {
   const input: import("../../protocol-client/index.js").UserInputPart[] = [];
-  if (submission.text.length > 0)
-    input.push({ type: "text", text: submission.text });
+  const textWithShots = withAppShotContext(submission.text, submission.images);
+  if (textWithShots.length > 0)
+    input.push({ type: "text", text: textWithShots });
   for (const image of submission.images) {
     input.push({ type: "attachment", attachment: image.attachment });
   }

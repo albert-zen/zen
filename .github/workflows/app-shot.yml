@@ -1,0 +1,86 @@
+name: App Shot synthetic UI and native bridge
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/app-shot.yml
+      - apps/zenx/src/**/app-shot*
+      - apps/zenx/src/renderer/src/AppShotButton.tsx
+      - apps/zenx/src/renderer/src/ImagePresentation.tsx
+      - apps/zenx/src/renderer/src/ui/controls.tsx
+      - apps/zenx/src/renderer/src/styles.css
+      - apps/zenx/src/renderer/src/theme.css
+      - apps/zenx/test/app-shot*.test.ts
+      - apps/zenx/test/fixtures/app-shot-visual.tsx
+      - apps/zenx/scripts/*app-shot*.mjs
+      - apps/zenx/scripts/preview-browser*.mjs
+      - apps/zenx/scripts/prepare-cjk-fonts.mjs
+      - package-lock.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-shot-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  renderer:
+    name: App Shot actual-component synthetic screenshots
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Verify App Shot contracts
+        run: node --import tsx --test apps/zenx/test/app-shot*.test.ts
+      - name: Resolve and install authenticated CJK font package
+        timeout-minutes: 5
+        run: |
+          node apps/zenx/scripts/prepare-cjk-fonts.mjs resolve "${{ runner.temp }}/zenx-app-shot-fonts"
+          node apps/zenx/scripts/prepare-cjk-fonts.mjs install "${{ runner.temp }}/zenx-app-shot-fonts"
+      - name: Capture production components with synthetic data
+        timeout-minutes: 3
+        run: |
+          node apps/zenx/scripts/build-app-shot-preview.mjs "${{ runner.temp }}/zenx-app-shot"
+          cp "${{ runner.temp }}/zenx-app-shot-fonts/package.json" "${{ runner.temp }}/zenx-app-shot/cjk-package.json"
+          node apps/zenx/scripts/capture-app-shot-preview.mjs "${{ runner.temp }}/zenx-app-shot"
+      - name: Retain screenshots and bounded browser evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-shot-renderer-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-app-shot
+          if-no-files-found: warn
+          retention-days: 14
+
+  macos-jxa:
+    name: App Shot real macOS JXA bridge, not native capture acceptance
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Exercise actual JXA without permission changes or screen capture
+        timeout-minutes: 1
+        env:
+          ZENX_APP_SHOT_JXA_SMOKE: "1"
+          ZENX_APP_SHOT_JXA_EVIDENCE: ${{ runner.temp }}/app-shot-jxa.json
+        run: node --import tsx --test apps/zenx/test/app-shot-native.test.ts apps/zenx/test/app-shot-native-smoke.test.ts
+      - name: Retain native bridge result and explicit blockers
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-shot-jxa-${{ github.sha }}
+          path: ${{ runner.temp }}/app-shot-jxa.json
+          if-no-files-found: warn
+          retention-days: 14

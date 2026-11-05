@@ -1,0 +1,188 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import {
+  createAppShotService,
+  type AppShotNativeSource,
+} from "../src/main/app-shot.js";
+
+function source(
+  id: string,
+  title: string,
+  bytes = new Uint8Array([1, 2, 3]),
+): AppShotNativeSource {
+  return {
+    id,
+    title,
+    image: { isEmpty: () => bytes.length === 0, toPNG: () => bytes },
+  };
+}
+
+function harness(initial: AppShotNativeSource[]) {
+  let sources = initial;
+  const calls: Array<{ width: number; height: number }> = [];
+  const service = createAppShotService({
+    getWindowSources: async (size) => {
+      calls.push(size);
+      return sources;
+    },
+    excludedSourceIds: () => ["window:99:0"],
+  });
+  return {
+    service,
+    calls,
+    setSources: (next: AppShotNativeSource[]) => {
+      sources = next;
+    },
+  };
+}
+
+describe("App Shot capture", () => {
+  it("lists only external windows without collecting preview images", async () => {
+    const h = harness([
+      source("window:1:0", "Report"),
+      source("screen:2:0", "Display"),
+      source("window:99:0", "ZenX"),
+    ]);
+    const listed = await h.service.listSources();
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0]?.title, "Report");
+    assert.notEqual(listed[0]?.id, "window:1:0");
+    assert.deepEqual(h.calls, [{ width: 0, height: 0 }]);
+  });
+
+  it("captures only the exact selected source and labels screenshot-only context", async () => {
+    const h = harness([source("window:1:0", "Report")]);
+    const [selection] = await h.service.listSources();
+    assert.ok(selection);
+    const shot = await h.service.capture(selection.id);
+    assert.deepEqual(shot.bytes, new Uint8Array([1, 2, 3]));
+    assert.equal(shot.mediaType, "image/png");
+    assert.match(shot.context, /Report/);
+    assert.match(shot.context, /screenshot only/i);
+    assert.deepEqual(h.calls, [
+      { width: 0, height: 0 },
+      { width: 1600, height: 1000 },
+    ]);
+  });
+
+  it("rejects unlisted, stale, closed, renamed, ambiguous and empty windows", async () => {
+    const h = harness([source("window:1:0", "Report")]);
+    const [selection] = await h.service.listSources();
+    assert.ok(selection);
+    await assert.rejects(h.service.capture("window:1:0"), /selection/i);
+    h.setSources([]);
+    await assert.rejects(
+      h.service.capture(selection.id),
+      /no longer available/i,
+    );
+    h.setSources([source("window:1:0", "Changed")]);
+    await assert.rejects(h.service.capture(selection.id), /changed/i);
+    h.setSources([
+      source("window:1:0", "Report"),
+      source("window:1:0", "Report"),
+    ]);
+    await assert.rejects(h.service.capture(selection.id), /ambiguous/i);
+    h.setSources([source("window:1:0", "Report", new Uint8Array())]);
+    await assert.rejects(h.service.capture(selection.id), /empty/i);
+    await h.service.listSources();
+    await assert.rejects(h.service.capture(selection.id), /selection/i);
+  });
+
+  it("does not attach accessibility text unless matching the exact window ID and title; bounds it", async () => {
+    const match = createAppShotService({
+      getWindowSources: async () => [source("window:123:0", "Notes")],
+      readAccessibility: async () => ({
+        windowId: 123,
+        windowTitle: "Notes",
+        pid: 456,
+        applicationName: "Editor",
+        text: "x".repeat(10_000),
+      }),
+    });
+    const [selected] = await match.listSources();
+    assert.ok(selected);
+    const shot = await match.capture(selected.id, {
+      includeAccessibility: true,
+    });
+    assert.match(shot.context, /Editor/);
+    assert.ok(shot.context.length < 5_000);
+    const mismatch = createAppShotService({
+      getWindowSources: async () => [source("window:123:0", "Notes")],
+      readAccessibility: async () => ({
+        windowId: 124,
+        windowTitle: "Notes",
+        pid: 456,
+        text: "SECRET_OTHER_WINDOW",
+      }),
+    });
+    const [other] = await mismatch.listSources();
+    assert.ok(other);
+    const otherShot = await mismatch.capture(other.id, {
+      includeAccessibility: true,
+    });
+    assert.doesNotMatch(otherShot.context, /SECRET_OTHER_WINDOW/);
+    assert.match(otherShot.context, /screenshot only/i);
+  });
+  it("captures only a uniquely identified active window and rejects a changed target", async () => {
+    let active = 8;
+    const service = createAppShotService({
+      getWindowSources: async () => [
+        source("window:8:0", "Chosen"),
+        source("window:9:0", "Other"),
+      ],
+      getActiveWindow: async () => ({
+        windowId: active,
+        windowTitle: "Chosen",
+        pid: 22,
+        applicationName: "Editor",
+      }),
+    });
+    const activeShot = await service.captureActive();
+    assert.equal(activeShot.name, "Chosen.png");
+    assert.match(activeShot.context, /Application: Editor/);
+    active = 7;
+    await assert.rejects(service.captureActive(), /unavailable or ambiguous/i);
+    const changed = createAppShotService({
+      getWindowSources: async () => [source("window:8:0", "Chosen")],
+      getActiveWindow: async () => ({
+        windowId: active++ === 7 ? 8 : 9,
+        windowTitle: "Chosen",
+        pid: 22,
+      }),
+    });
+    await assert.rejects(changed.captureActive(), /changed during/i);
+    await assert.rejects(
+      harness([]).service.captureActive(),
+      /unavailable on this platform/i,
+    );
+  });
+  it("includes selected app metadata only when CG ID and title match", async () => {
+    const matching = createAppShotService({
+      getWindowSources: async () => [source("window:22:0", "Report")],
+      getWindowMetadata: async () => ({
+        windowId: 22,
+        windowTitle: "Report",
+        pid: 555,
+        applicationName: "Writer",
+      }),
+    });
+    const [chosen] = await matching.listSources();
+    assert.ok(chosen);
+    assert.match((await matching.capture(chosen.id)).context, /in Writer/);
+    const mismatched = createAppShotService({
+      getWindowSources: async () => [source("window:22:0", "Report")],
+      getWindowMetadata: async () => ({
+        windowId: 23,
+        windowTitle: "Report",
+        pid: 555,
+        applicationName: "SECRET_WRONG_APP",
+      }),
+    });
+    const [other] = await mismatched.listSources();
+    assert.ok(other);
+    assert.doesNotMatch(
+      (await mismatched.capture(other.id)).context,
+      /SECRET_WRONG_APP/,
+    );
+  });
+});

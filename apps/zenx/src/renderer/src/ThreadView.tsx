@@ -1,3 +1,4 @@
+import { AppShotButton } from "./AppShotButton.js";
 import { flushSync } from "react-dom";
 import { AnsweredQuestionBubble } from "./AnsweredQuestionBubble.js";
 import {
@@ -379,6 +380,7 @@ interface ThreadViewProps {
   onOpenMessageLink?(target: { kind: "file" | "browser"; value: string }): void;
   onImportImages?(files: readonly File[]): Promise<void>;
   onPickImages?(): Promise<void>;
+  onAddAppShot?(image: ComposerDraftImage): void;
   onRemoveImage?(imageId: string): void;
   onReadAttachment?(attachment: AttachmentRef): Promise<Uint8Array>;
   onInterrupt(turnId: string): Promise<void>;
@@ -636,6 +638,7 @@ function ThreadViewContent({
   onDraftChange,
   onImportImages = async () => undefined,
   onPickImages = async () => undefined,
+  onAddAppShot,
   onRemoveImage = () => undefined,
   onReadAttachment = unavailableImageReader,
   onInterrupt,
@@ -2451,6 +2454,13 @@ function ThreadViewContent({
               >
                 <Icon name="paperclip" />
               </button>
+              {onAddAppShot && window.zenx?.appShot && (
+                <AppShotButton
+                  key={thread?.id ?? composerId}
+                  disabled={composerDisabled || submitting}
+                  onAttach={onAddAppShot}
+                />
+              )}
               {selectedModel === undefined ? null : (
                 <ComposerModelMenu
                   disabled={composerDisabled || modelDisabled}
@@ -4369,6 +4379,12 @@ function DraftImage({
         onOpen={(_attachment, _name, trigger) => onOpen(trigger)}
         onReadAttachment={onReadAttachment}
       />
+      {image.appShotContext && (
+        <details className="draft-app-shot-context">
+          <summary>App Shot</summary>
+          <pre>{image.appShotContext}</pre>
+        </details>
+      )}
       <button
         className="remove-draft-image"
         type="button"

@@ -1,0 +1,93 @@
+.app-shot-dialog {
+  width: min(680px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+  overflow: auto;
+}
+.app-shot-heading,
+.app-shot-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.app-shot-heading h2 {
+  margin: 0;
+  font-size: 18px;
+}
+.app-shot-option {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+}
+.app-shot-hint {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+.app-shot-sources {
+  display: grid;
+  max-height: 320px;
+  overflow: auto;
+  margin: 14px 0;
+  gap: 4px;
+}
+.app-shot-sources button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  min-height: 40px;
+  border: 1px solid var(--border-control);
+  border-radius: 8px;
+  padding: 9px 12px;
+  background: var(--surface-control);
+  color: inherit;
+}
+.app-shot-sources button span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.app-shot-preview {
+  display: flex;
+  justify-content: center;
+  margin: 16px 0;
+}
+.app-shot-preview .image-thumbnail {
+  max-width: 100%;
+  width: auto;
+  height: auto;
+}
+.app-shot-preview img {
+  max-width: 100%;
+  max-height: 260px;
+  object-fit: contain;
+}
+.app-shot-context {
+  max-height: 180px;
+  overflow: auto;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.app-shot-shortcut {
+  margin-top: 18px;
+  border-top: 1px solid var(--border-control);
+  padding-top: 14px;
+}
+.app-shot-actions {
+  margin-top: 16px;
+}
+.draft-app-shot-context {
+  font-size: 11px;
+  max-width: 180px;
+  overflow-wrap: anywhere;
+}
+.draft-app-shot-context pre {
+  white-space: pre-wrap;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.app-shot-preview.is-expanded img {
+  max-height: none;
+}

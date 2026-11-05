@@ -1,4 +1,12 @@
 export const ipcChannels = {
+  appShotRead: "zenx:app-shot:read",
+  appShotAttach: "zenx:app-shot:attach",
+  appShotDiscard: "zenx:app-shot:discard",
+  appShotList: "zenx:app-shot:list",
+  appShotCapture: "zenx:app-shot:capture",
+  appShotArm: "zenx:app-shot:arm",
+  appShotDisarm: "zenx:app-shot:disarm",
+  appShotCaptured: "zenx:app-shot:captured",
   threadQuestionAttentionChanged: "zenx:thread-question-attention:changed",
   roomQuestionsRequest: "zenx:room-questions:request",
   roomQuestionsChanged: "zenx:room-questions:changed",
