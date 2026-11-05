@@ -1,4 +1,5 @@
 import { stageAppShotDbus } from "./stage-app-shot-dbus.mjs";
+import { copyGnomeAppShotResource } from "./stage-app-shot-gnome.mjs";
 import {
   appShotRuntimeDependencies,
   stageAppShotRuntime,
@@ -175,6 +176,12 @@ export async function packageZenX(arguments_, options = {}) {
             await copyChromeExtensionResource({
               buildPath,
               sourceDirectory: path.join(zenx, "resources", "chrome-extension"),
+            });
+            await copyGnomeAppShotResource({
+              buildPath,
+              sourceDirectory: path.join(zenx, "resources", "app-shot-gnome"),
+              target,
+              platform: process.platform,
             });
             await copyChromeNativeHostResource({
               buildPath,

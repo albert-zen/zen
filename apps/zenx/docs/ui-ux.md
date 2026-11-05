@@ -12,7 +12,11 @@ Composer 的应用快照入口先列出窗口，再捕获用户明确选择的�
 
 其他 Wayland 桌面使用 GlobalShortcuts portal：只有用户明确启用才请求系统快捷键同意，未分配时明确显示未启用；配置按钮单独触发 ConfigureShortcuts v2，显示桌面实际分配的组合键。停止设置、取消启用或离开输入框会关闭该会话，不伪称清除了桌面可能记住的选择。Screenshot portal 的只读能力检查不捕获；只有版本至少 3 且支持 active-window target 8 时捕获像素。能力缺失可打开明确选窗器；拒绝、取消或错误不能自动降级。通用 portal 像素没有可靠窗口身份或 AX 关联，不猜测应用信息，也不声称可以排除 ZenX 自身。
 
-当前与 T3 Snap Shot 的剩余差距：Linux GNOME/KDE/Hyprland 原生 backend 与 setup、Niri 配置提案/保存与 AT-SPI 文字、持久快捷键配置、AX 结构树、反馈动画和有可靠身份的 ZenX 自身窗口捕获尚未完成。Windows 明确窗口列表仍为 screenshot-only，辅助文字限前台捕获。没有自动退回全屏或另一个目标。系统授权/原生捕获需在对应平台单独验收；合成 UI 和主进程测试不能替代。
+GNOME 45–51 Wayland 可使用随完整 Linux 安装包分发的 T3 扩展：界面只读检查版本并以折叠说明展示手动安装、退出/重新登录、明确启用与撤销步骤，不自动安装、更新或启用扩展，不打开全局用户扩展开关。已就绪时优先同次返回窗口身份与像素的 GNOME backend，扩展缺失/不兼容可尝试受支持 portal，但拒绝、取消或捕获失败绝不切换目标。授权边界明确说明同会话总线名称并非可执行程序认证；撤销快捷键不等于撤销扩展权限。未知 PID 不推断自身窗口排除或辅助文字目标。
+
+GNOME/Niri 在捕获身份包含有效 PID、标题和尺寸且用户勾选文字时，可通过既有隔离 worker 读取同窗 AT-SPI name/value 文字。Wayland 一律用逻辑尺寸匹配，不制造屏幕坐标；GNOME 不制造窗口 ID。只有 PID 缺失/成功空列表才允许有界的 Flatpak 代理元数据查找，权限/传输失败不扩大查找；只读取唯一匹配窗口的树。匿名 GTK4 回退只允许在已知 PID 内，重复匹配拒绝。读取失败、超时或身份不足明确为 screenshot-only；不启用系统辅助功能设置，不把 fresh AX 验证声称为像素和文字的原子快照。
+
+当前与 T3 Snap Shot 的剩余差距：KDE/Hyprland 原生 backend、自动化但需明确同意的 GNOME setup、Niri 配置提案/保存、持久快捷键配置、AX 结构树、反馈动画和有可靠身份的 ZenX 自身窗口捕获尚未完成。Windows 明确窗口列表仍为 screenshot-only，辅助文字限前台捕获。没有自动退回全屏或另一个目标。系统授权/原生捕获需在对应平台单独验收；合成 UI 和主进程测试不能替代。
 
 New thread 打开临时本地编辑页；选择或添加 Project 不创建 Thread，第一条有效 Send 才配置所选 Project 或分配无项目目录、创建真实 Thread，并在 Sidebar、usage 等辅助元数据独立刷新时立即启动 Turn。全局入口使用最近 Project，Project 内入口使用该精确 Project；失败以明确、可恢复且不遮盖会话的通知呈现。
 

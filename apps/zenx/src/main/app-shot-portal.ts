@@ -21,7 +21,7 @@
  * SOFTWARE.
  */
 import { randomUUID } from "node:crypto";
-import type { EventEmitter } from "node:events";
+import { EventEmitter } from "node:events";
 import { constants } from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -75,6 +75,8 @@ export interface PortalAppShotOptions {
   /** Test deadline seam. Production defaults are 5s calls and 120s portal response. */
   callTimeoutMs?: number;
   responseTimeoutMs?: number;
+  /** Monotonic clock seam for synchronous decoder deadline regressions. */
+  now?: () => number;
 }
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -223,13 +225,21 @@ async function runPortalOperation(
 ): Promise<PortalAppShotCapture | undefined | boolean> {
   checkCancellation(options.signal);
   const bus = (options.createBus ?? sessionBus)();
+  const now = options.now ?? (() => performance.now());
+  const fileAbort = new AbortController();
+  let failure: Error | undefined;
+  let detachTransport: (() => void) | undefined;
   let fail!: (error: Error) => void;
   const stopped = new Promise<never>((_, reject) => {
     fail = reject;
   });
   void stopped.catch(() => undefined);
-  const onError = (error: Error) => fail(error);
-  const onAbort = () => fail(captureCancelled());
+  const onError = (error: Error) => {
+    failure ??= error;
+    fileAbort.abort();
+    fail(failure);
+  };
+  const onAbort = () => onError(captureCancelled());
   bus.on("error", onError);
   options.signal?.addEventListener("abort", onAbort, { once: true });
   let uniqueName = "";
@@ -240,19 +250,27 @@ async function runPortalOperation(
     // A transport can synchronously abort while producing this promise.
     // Observe rejection even if the cancellation check below throws first.
     void pending.catch(() => undefined);
+    const deadline = now() + timeoutMs;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       checkCancellation(options.signal);
-      return await Promise.race([
+      if (failure) throw failure;
+      const result = await Promise.race([
         pending,
         stopped,
         new Promise<never>((_, reject) => {
-          timer = setTimeout(
-            () => reject(new Error("Portal App Shot timed out.")),
-            timeoutMs,
-          );
+          timer = setTimeout(() => {
+            const error = new Error("Portal App Shot timed out.");
+            onError(error);
+            reject(error);
+          }, timeoutMs);
         }),
       ]);
+      checkCancellation(options.signal);
+      if (failure) throw failure;
+      // Native decoding can block timer dispatch. Never deliver its late result.
+      if (now() >= deadline) throw new Error("Portal App Shot timed out.");
+      return result;
     } finally {
       clearTimeout(timer);
     }
@@ -270,6 +288,24 @@ async function runPortalOperation(
     return reply;
   }
   try {
+    // The pinned dbus-next transport does not forward clean EOF on MessageBus.
+    const connection: unknown = Reflect.get(bus, "_connection");
+    const stream: unknown =
+      connection instanceof EventEmitter
+        ? Reflect.get(connection, "stream")
+        : undefined;
+    if (
+      !(connection instanceof EventEmitter) ||
+      !(stream instanceof EventEmitter)
+    )
+      throw new Error("Unsupported D-Bus transport lifecycle.");
+    const onEnd = () => onError(new Error("Portal session bus disconnected."));
+    connection.on("end", onEnd);
+    stream.on("close", onEnd);
+    detachTransport = () => {
+      connection.removeListener("end", onEnd);
+      stream.removeListener("close", onEnd);
+    };
     const env = options.env ?? process.env;
     if (!env.FLATPAK_ID && !env.SNAP) {
       await call({
@@ -400,10 +436,8 @@ async function runPortalOperation(
         typeof uri.value !== "string"
       )
         throw new Error("Invalid screenshot URI.");
-      return await readPortalPng(
-        uri.value,
-        options.createImage,
-        options.signal,
+      return await wait(
+        readPortalPng(uri.value, options.createImage, fileAbort.signal),
       );
     } finally {
       bus.removeListener("message", listener);
@@ -425,6 +459,8 @@ async function runPortalOperation(
       }
     }
   } finally {
+    fileAbort.abort();
+    detachTransport?.();
     options.signal?.removeEventListener("abort", onAbort);
     // A dedicated disconnect also drops the signal match and portal identity.
     // dbus-next can emit a queued transport error after disconnect. Replace the

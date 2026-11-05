@@ -59,6 +59,7 @@ export function AppShotButton({
   const pending = useRef(false);
   const [configuration, setConfiguration] =
     useState<AppShotConfiguration | null>(null);
+  const [configurationRevision, setConfigurationRevision] = useState(0);
 
   useEffect(() => {
     let current = true;
@@ -77,7 +78,7 @@ export function AppShotButton({
     return () => {
       current = false;
     };
-  }, [api, open]);
+  }, [api, open, configurationRevision]);
 
   useEffect(() => {
     live.current = true;
@@ -186,6 +187,7 @@ export function AppShotButton({
     const generation = ++operation.current;
     pending.current = true;
     setOpen(true);
+    setConfigurationRevision((revision) => revision + 1);
     for (const image of [currentImage.current, ...waitingImages.current])
       if (image) void api.discard(image.id).catch(() => {});
     currentImage.current = null;
@@ -506,6 +508,19 @@ export function AppShotButton({
             </>
           )}
           <div className="app-shot-shortcut">
+            {configuration?.gnomeSupport && (
+              <details className="app-shot-hint">
+                <summary>
+                  {t(
+                    configuration.gnomeSupport === "ready"
+                      ? "appShotGnomeReady"
+                      : "appShotGnomeSetup",
+                  )}
+                </summary>
+                <p>{t("appShotGnomeSetupHint")}</p>
+                <p>{t("appShotGnomeRevokeHint")}</p>
+              </details>
+            )}
             <fieldset disabled={armed || shortcutBusy}>
               <legend>{t("appShotShortcutPreference")}</legend>
               {supportsBothShift && (

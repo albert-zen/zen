@@ -3,6 +3,7 @@ import test from "node:test";
 import { AppShotIpcController } from "../src/main/app-shot-ipc.js";
 import type { PortalAppShotShortcutOptions } from "../src/main/app-shot-portal-shortcut.js";
 import type { AppShotEvent } from "../src/app-shot.js";
+import type { GnomeAppShotSupport } from "../src/main/app-shot-gnome.js";
 import type { AppShotCapture, AppShotService } from "../src/main/app-shot.js";
 import type { ZenXImageDraft } from "../src/main/image-attachments.js";
 
@@ -25,7 +26,12 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function fixture(platform = "darwin", niri = false, portal = false) {
+function fixture(
+  platform = "darwin",
+  niri = false,
+  portal = false,
+  gnomeSupport?: (signal: AbortSignal) => Promise<GnomeAppShotSupport>,
+) {
   type Renderer = { owned: boolean; url: string; frame: object; calls: number };
   const renderer: Renderer = {
     owned: true,
@@ -78,6 +84,7 @@ function fixture(platform = "darwin", niri = false, portal = false) {
   let manualCapture: () => Promise<AppShotCapture> = async () => capture;
   const controller = new AppShotIpcController<Renderer, object>({
     platform,
+    gnomeSupport,
     ...(portal
       ? {
           portalSupport: async () => true,
@@ -606,6 +613,30 @@ test("App Shot retires a staged attachment if its owner or review disappears dur
     assert.deepEqual(f.abandoned, ["image"]);
     f.controller.dispose();
   }
+});
+
+test("GNOME configuration probes readiness without capture or shortcut setup and fences retired owners", async () => {
+  const f = fixture("linux", false, true, async () => ({ status: "ready" }));
+  assert.deepEqual(await f.controller.configuration(f.caller()), {
+    nativeForeground: true,
+    portalShortcut: true,
+    gnomeSupport: "ready",
+  });
+  assert.equal(f.activeCaptures, 0);
+  assert.equal(f.portalStarts.length, 0);
+  f.controller.dispose();
+  const pending = deferred<GnomeAppShotSupport>();
+  let signal: AbortSignal | undefined;
+  const gone = fixture("linux", false, true, async (value) => {
+    signal = value;
+    return pending.promise;
+  });
+  const configuration = gone.controller.configuration(gone.caller());
+  gone.controller.forget(gone.renderer);
+  assert.equal(signal?.aborted, true);
+  pending.resolve({ status: "ready" });
+  await assert.rejects(configuration, /renderer changed/);
+  gone.controller.dispose();
 });
 
 test("Wayland shortcut consent remains disabled until configured, reports the actual chord and closes on revoke", async () => {

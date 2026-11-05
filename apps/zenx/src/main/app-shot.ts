@@ -3,6 +3,15 @@ import { isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { niriSocketPath, type NiriAppShotCapture } from "./app-shot-niri.js";
+import type {
+  GnomeAppShotCapture,
+  GnomeAppShotSupport,
+} from "./app-shot-gnome.js";
+import type { PortalAppShotCapture } from "./app-shot-portal.js";
+import type {
+  AppShotLinuxCaptureIdentity,
+  AppShotText,
+} from "./app-shot-native-contract.js";
 import type { AppShotActiveWindow } from "./app-shot-native.js";
 import {
   APP_SHOT_MAX_TEXT,
@@ -382,6 +391,12 @@ export function createElectronAppShotService(
               return niriAppShotDraft(
                 shot,
                 captureOptions?.includeAccessibility === true,
+                captureOptions?.includeAccessibility
+                  ? await readLinuxAppShotAccessibility(
+                      niriAppShotIdentity(shot),
+                      captureOptions?.signal,
+                    )
+                  : undefined,
               );
             }
           : process.platform === "linux" && isWaylandAppShotSession()
@@ -389,18 +404,41 @@ export function createElectronAppShotService(
                 const { app } = await import("electron");
                 const { capturePortalActiveAppShot } =
                   await import("./app-shot-portal.js");
-                const shot = await capturePortalActiveAppShot({
-                  appId: app.isPackaged
-                    ? "io.github.albert_zen.ZenX"
-                    : "io.github.albert_zen.ZenX.Development",
-                  signal: captureOptions?.signal,
-                });
-                return shot
-                  ? portalAppShotDraft(
-                      shot,
-                      captureOptions?.includeAccessibility === true,
-                    )
-                  : undefined;
+                const {
+                  isGnomeAppShotSession,
+                  checkGnomeAppShotSupport,
+                  captureGnomeActiveAppShot,
+                } = await import("./app-shot-gnome.js");
+                return captureWaylandAppShot(
+                  captureOptions?.includeAccessibility === true,
+                  {
+                    ...(isGnomeAppShotSession()
+                      ? {
+                          gnomeSupport: () =>
+                            checkGnomeAppShotSupport({
+                              signal: captureOptions?.signal,
+                            }),
+                        }
+                      : {}),
+                    captureGnome: () =>
+                      captureGnomeActiveAppShot({
+                        development: !app.isPackaged,
+                        signal: captureOptions?.signal,
+                      }),
+                    readGnomeAccessibility: (shot) =>
+                      readLinuxAppShotAccessibility(
+                        gnomeAppShotIdentity(shot),
+                        captureOptions?.signal,
+                      ),
+                    capturePortal: () =>
+                      capturePortalActiveAppShot({
+                        appId: app.isPackaged
+                          ? "io.github.albert_zen.ZenX"
+                          : "io.github.albert_zen.ZenX.Development",
+                        signal: captureOptions?.signal,
+                      }),
+                  },
+                );
               }
             : undefined,
     readAccessibility:
@@ -510,9 +548,105 @@ export function fitAppShotDimensions(size: { width: number; height: number }): {
   };
 }
 
+/** Wayland AT-SPI matches verified title/size, never an invented screen origin. */
+export function gnomeAppShotIdentity(
+  shot: GnomeAppShotCapture,
+): AppShotLinuxCaptureIdentity | undefined {
+  const window = shot.window;
+  if (!window || window.processId <= 0 || !window.title.trim())
+    return undefined;
+  return {
+    platform: "linux",
+    matchMode: "wayland",
+    pid: window.processId,
+    windowTitle: window.title,
+    bounds: { width: window.bounds.width, height: window.bounds.height },
+  };
+}
+
+export function niriAppShotIdentity(
+  shot: NiriAppShotCapture,
+): AppShotLinuxCaptureIdentity | undefined {
+  const window = shot.window;
+  if (!window?.pid || window.pid <= 0 || !window.title?.trim())
+    return undefined;
+  return {
+    platform: "linux",
+    matchMode: "wayland",
+    windowId: window.id,
+    pid: window.pid,
+    windowTitle: window.title,
+    bounds: { width: window.bounds.width, height: window.bounds.height },
+  };
+}
+
+async function readLinuxAppShotAccessibility(
+  identity: AppShotLinuxCaptureIdentity | undefined,
+  signal?: AbortSignal,
+): Promise<AppShotText | undefined> {
+  if (!identity || signal?.aborted) return undefined;
+  const { app } = await import("electron");
+  const { readCapturedAppShotAccessibility } =
+    await import("./app-shot-native-capture.js");
+  return readCapturedAppShotAccessibility(identity, {
+    workerPath: join(app.getAppPath(), "out/main/app-shot-native-worker.js"),
+    signal,
+  });
+}
+
+/** Prefer an installed compositor backend; never fall through after capture starts. */
+export async function captureWaylandAppShot(
+  includeAccessibility: boolean,
+  dependencies: {
+    gnomeSupport?(): Promise<GnomeAppShotSupport>;
+    captureGnome(): Promise<GnomeAppShotCapture>;
+    readGnomeAccessibility?(
+      shot: GnomeAppShotCapture,
+    ): Promise<AppShotText | undefined>;
+    capturePortal(): Promise<PortalAppShotCapture | undefined>;
+  },
+): Promise<AppShotCapture | undefined> {
+  if ((await dependencies.gnomeSupport?.())?.status === "ready") {
+    const shot = await dependencies.captureGnome();
+    const text =
+      includeAccessibility && gnomeAppShotIdentity(shot)
+        ? await dependencies.readGnomeAccessibility?.(shot)
+        : undefined;
+    return gnomeAppShotDraft(shot, includeAccessibility, text);
+  }
+  const shot = await dependencies.capturePortal();
+  return shot ? portalAppShotDraft(shot, includeAccessibility) : undefined;
+}
+
+export function gnomeAppShotDraft(
+  shot: GnomeAppShotCapture,
+  includeAccessibility: boolean,
+  accessibility?: AppShotText,
+): AppShotCapture {
+  const title = shot.window?.title || shot.window?.appName || "GNOME window";
+  return {
+    name: filename(title),
+    bytes: shot.png,
+    mediaType: "image/png",
+    context: [
+      shot.window
+        ? `App Shot of GNOME window "${plain(title, 1000)}"${shot.window.appName ? ` in ${plain(shot.window.appName, 100)}` : ""}.`
+        : "App Shot of the GNOME window selected at capture start. No verified window identity was supplied; metadata is omitted.",
+      `Captured at: ${new Date().toISOString()}.`,
+      includeAccessibility && gnomeAppShotIdentity(shot) && accessibility?.text
+        ? `Accessibility text from this same window (read-only${accessibility.truncated ? ", truncated" : ""}): ${accessibility.text}`
+        : includeAccessibility
+          ? "Screenshot only. Accessibility text was unavailable or could not be matched to this window."
+          : "Screenshot only. Accessibility text was not requested.",
+      "This is a draft attachment, not permission to control the app.",
+    ].join("\n"),
+  };
+}
+
 export function niriAppShotDraft(
   shot: NiriAppShotCapture,
   includeAccessibility: boolean,
+  accessibility?: AppShotText,
 ): AppShotCapture {
   const title = shot.window?.title ?? shot.window?.appId ?? "Niri window";
   return {
@@ -524,9 +658,11 @@ export function niriAppShotDraft(
         ? `App Shot of Niri window "${plain(title, 1000)}"${shot.window.appId ? ` in ${plain(shot.window.appId, 100)}` : ""}.`
         : "App Shot of the Niri window selected at capture start. Window identity changed or was unavailable afterward; metadata is omitted.",
       `Captured at: ${new Date().toISOString()}.`,
-      includeAccessibility
-        ? "Screenshot only. Niri accessibility text is not implemented in this stage."
-        : "Screenshot only. Accessibility text was not requested.",
+      includeAccessibility && niriAppShotIdentity(shot) && accessibility?.text
+        ? `Accessibility text from this same window (read-only${accessibility.truncated ? ", truncated" : ""}): ${accessibility.text}`
+        : includeAccessibility
+          ? "Screenshot only. Accessibility text was unavailable or could not be matched to this window."
+          : "Screenshot only. Accessibility text was not requested.",
       "This is a draft attachment, not permission to control the app.",
     ].join("\n"),
   };

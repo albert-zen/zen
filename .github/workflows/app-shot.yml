@@ -21,6 +21,8 @@ on:
       - apps/zenx/scripts/stage-app-shot-runtime.mjs
       - apps/zenx/scripts/package-zenx-portable.mjs
       - apps/zenx/test/app-shot*.test.mjs
+      - apps/zenx/test/stage-app-shot*.test.mjs
+      - apps/zenx/resources/app-shot-gnome/**
   workflow_dispatch:
 
 permissions:
@@ -45,7 +47,7 @@ jobs:
       - name: Prepare workspace SDK for packaging tests
         run: npm run prepare:plugin-sdk --workspace @zen/zenx
       - name: Verify App Shot contracts
-        run: node --import tsx --test apps/zenx/test/app-shot*.test.ts apps/zenx/test/app-shot*.test.mjs apps/zenx/test/package-zenx-portable.test.mjs
+        run: node --import tsx --test apps/zenx/test/app-shot*.test.ts apps/zenx/test/app-shot*.test.mjs apps/zenx/test/stage-app-shot*.test.mjs apps/zenx/test/package-zenx-portable.test.mjs
       - name: Typecheck integrated desktop contract
         run: npm run typecheck --workspace @zen/zenx
       - name: Resolve and install authenticated CJK font package
@@ -155,7 +157,7 @@ jobs:
           import { readFile } from "node:fs/promises";
           import { format, resolveConfig } from "prettier";
           const base = execFileSync("git", ["merge-base", "HEAD", "origin/main"], { encoding: "utf8" }).trim();
-          const files = execFileSync("git", ["diff", "--name-only", "--diff-filter=ACMR", base, "HEAD"], { encoding: "utf8" }).trim().split("\n").filter((file) => /\.(?:ts|tsx|mjs|json|md|yml|css)$/u.test(file));
+          const files = execFileSync("git", ["diff", "--name-only", "--diff-filter=ACMR", base, "HEAD"], { encoding: "utf8" }).trim().split("\n").filter((file) => /\.(?:ts|tsx|js|mjs|json|md|yml|css)$/u.test(file));
           const changed = {};
           for (const file of files) {
             const source = await readFile(file, "utf8");

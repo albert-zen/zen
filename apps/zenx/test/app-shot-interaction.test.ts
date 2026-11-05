@@ -512,6 +512,39 @@ test("a late explicit Attach retires its staging lease after cancel, disable or 
   }
 });
 
+test("GNOME setup is disclosed without installing or enabling the extension or shortcut", async () => {
+  await fixture(async ({ api, click, armRequests }) => {
+    let ready = false;
+    api.configuration = async () => ({
+      nativeForeground: ready,
+      portalShortcut: true,
+      gnomeSupport: ready ? "ready" : "extension-unavailable",
+    });
+    await click("App Shot");
+    const disclosure = document.querySelector<HTMLDetailsElement>(
+      ".app-shot-shortcut details",
+    );
+    assert.match(
+      disclosure?.textContent ?? "",
+      /GNOME capture extension needs setup/,
+    );
+    assert.match(
+      disclosure?.textContent ?? "",
+      /does not authenticate an executable/,
+    );
+    assert.match(disclosure?.textContent ?? "", /disable ZenX App Shots/);
+    assert.equal(disclosure?.open, false);
+    assert.equal(armRequests.length, 0);
+    ready = true;
+    await click("Refresh windows");
+    assert.match(
+      document.querySelector(".app-shot-shortcut details")?.textContent ?? "",
+      /GNOME capture extension is available/,
+    );
+    assert.equal(armRequests.length, 0);
+  }, "linux");
+});
+
 test("Wayland consent denial is not armed; configure is explicit and reports the desktop chord", async () => {
   await fixture(async ({ api, click, armed, emit, disarmed }) => {
     let configurations = 0;

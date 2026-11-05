@@ -47,7 +47,8 @@ const shot: ZenXImageDraft = {
     "App Shot\nApplication: Example Notes\nWindow: Product review\nCaptured: 2026-11-05T11:00:00.000Z\nAccessibility: screenshot only (not requested)",
 };
 const niri = params.get("platform") === "niri";
-const portal = params.get("platform") === "portal";
+const gnome = params.get("platform") === "gnome";
+const portal = params.get("platform") === "portal" || gnome;
 const api: AppShotApi = {
   configuration: async () =>
     niri
@@ -57,7 +58,13 @@ const api: AppShotApi = {
             'Ctrl+Shift+2 repeat=false { spawn "gdbus" "call" "--session" "--dest" "io.github.albert_zen.ZenX.AppShot" "--object-path" "/io/github/albert_zen/ZenX/AppShot" "--method" "io.github.albert_zen.ZenX.AppShot.Capture"; }',
         }
       : portal
-        ? { nativeForeground: false, portalShortcut: true }
+        ? {
+            nativeForeground: false,
+            portalShortcut: true,
+            ...(gnome
+              ? { gnomeSupport: "extension-unavailable" as const }
+              : {}),
+          }
         : { nativeForeground: true },
   list: async () => [
     { id: "notes", title: "Product review", applicationName: "Example Notes" },

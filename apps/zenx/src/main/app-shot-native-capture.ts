@@ -31,9 +31,11 @@ import {
   isRecord,
   isAppShotBounds,
   isAppShotIdentity,
+  isAppShotAccessibilityIdentity,
   sameAppShotIdentity,
   type AppShotBounds,
   type AppShotCaptureIdentity,
+  type AppShotAccessibilityIdentity,
   type AppShotText,
 } from "./app-shot-native-contract.js";
 export * from "./app-shot-native-contract.js";
@@ -254,12 +256,15 @@ export async function captureAppShotRegion(
   );
 }
 
-/** Optional text only. Callers must revalidate the native capture identity afterward. */
+/**
+ * Optional text only. Linux revalidates the AX object, not compositor state.
+ * macOS/Windows callers must revalidate the native capture identity afterward.
+ */
 export async function readCapturedAppShotAccessibility(
-  identity: AppShotCaptureIdentity,
+  identity: AppShotAccessibilityIdentity,
   options: AppShotNativeRunOptions = {},
 ): Promise<AppShotText | undefined> {
-  if (!isAppShotIdentity(identity)) return undefined;
+  if (!isAppShotAccessibilityIdentity(identity)) return undefined;
   try {
     const value = await runAppShotNative(
       "accessibility",

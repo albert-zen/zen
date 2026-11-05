@@ -39,6 +39,30 @@ export interface AppShotCaptureIdentity {
   applicationName?: string;
 }
 
+/** Wayland may supply logical size without a global screen position. */
+export interface AppShotAccessibilityBounds {
+  width: number;
+  height: number;
+  x?: number;
+  y?: number;
+}
+
+/** Only trusted compositor metadata can create this identity, never portal pixels. */
+export interface AppShotLinuxCaptureIdentity {
+  platform: "linux";
+  matchMode: "wayland" | "screen-bounds";
+  /** Preserve a compositor ID when supplied; GNOME does not supply one. */
+  windowId?: number;
+  windowTitle: string;
+  pid: number;
+  bounds: AppShotAccessibilityBounds;
+  clientBounds?: AppShotAccessibilityBounds;
+  applicationName?: string;
+}
+
+export type AppShotAccessibilityIdentity =
+  AppShotCaptureIdentity | AppShotLinuxCaptureIdentity;
+
 export const APP_SHOT_MAX_TEXT = 32_000;
 export const APP_SHOT_MAX_NODES = 10_000;
 export const APP_SHOT_MAX_PNG_BYTES = 20 * 1024 * 1024;
@@ -81,6 +105,50 @@ export function isAppShotIdentity(
     value.windowTitle.trim().length > 0 &&
     value.windowTitle.length <= 4096 &&
     isAppShotBounds(value.bounds) &&
+    (value.applicationName === undefined ||
+      (typeof value.applicationName === "string" &&
+        value.applicationName.length <= 4096))
+  );
+}
+
+function isAccessibilityBounds(
+  value: unknown,
+): value is AppShotAccessibilityBounds {
+  if (!isRecord(value)) return false;
+  return (
+    ["width", "height"].every(
+      (key) =>
+        typeof value[key] === "number" &&
+        Number.isFinite(value[key]) &&
+        value[key] > 0 &&
+        value[key] <= 1_000_000,
+    ) &&
+    ((value.x === undefined && value.y === undefined) || isAppShotBounds(value))
+  );
+}
+
+export function isAppShotAccessibilityIdentity(
+  value: unknown,
+): value is AppShotAccessibilityIdentity {
+  if (isAppShotIdentity(value)) return true;
+  if (!isRecord(value) || value.platform !== "linux") return false;
+  const validBounds =
+    value.matchMode === "wayland"
+      ? isAccessibilityBounds
+      : value.matchMode === "screen-bounds"
+        ? isAppShotBounds
+        : undefined;
+  return (
+    validBounds !== undefined &&
+    (value.windowId === undefined ||
+      (Number.isSafeInteger(value.windowId) && Number(value.windowId) >= 0)) &&
+    Number.isSafeInteger(value.pid) &&
+    Number(value.pid) > 0 &&
+    typeof value.windowTitle === "string" &&
+    value.windowTitle.trim().length > 0 &&
+    value.windowTitle.length <= 4096 &&
+    validBounds(value.bounds) &&
+    (value.clientBounds === undefined || validBounds(value.clientBounds)) &&
     (value.applicationName === undefined ||
       (typeof value.applicationName === "string" &&
         value.applicationName.length <= 4096))

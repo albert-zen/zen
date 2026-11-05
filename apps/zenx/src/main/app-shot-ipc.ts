@@ -4,6 +4,10 @@ import type { ZenXDraftAttachments } from "./draft-attachments.js";
 import type { ZenXImageDraft } from "./image-attachments.js";
 import type { AppShotCapture, AppShotService } from "./app-shot.js";
 import { isWaylandAppShotSession } from "./app-shot.js";
+import {
+  isGnomeAppShotSession,
+  type GnomeAppShotSupport,
+} from "./app-shot-gnome.js";
 import type {
   PortalAppShotShortcutHandle,
   PortalAppShotShortcutOptions,
@@ -49,6 +53,7 @@ export interface AppShotIpcDependencies<
 > {
   platform: string;
   portalSupport?(signal: AbortSignal): Promise<boolean>;
+  gnomeSupport?(signal: AbortSignal): Promise<GnomeAppShotSupport>;
   startPortalShortcut?(
     options: PortalAppShotShortcutOptions,
   ): Promise<PortalAppShotShortcutHandle>;
@@ -165,13 +170,17 @@ export class AppShotIpcController<
     caller: Caller<Renderer, Frame>,
   ): Promise<AppShotConfiguration> {
     const session = this.#require(caller);
-    const nativeForeground = this.#deps.portalSupport
-      ? await this.#deps.portalSupport(session.abort.signal)
-      : session.service.hasNativeActiveCapture === true;
+    const gnomeSupport = await this.#deps.gnomeSupport?.(session.abort.signal);
+    const nativeForeground =
+      gnomeSupport?.status === "ready" ||
+      (this.#deps.portalSupport
+        ? await this.#deps.portalSupport(session.abort.signal)
+        : session.service.hasNativeActiveCapture === true);
     if (!this.#still(caller, session))
       throw new Error("App Shot renderer changed during capability check");
     return {
       nativeForeground,
+      ...(gnomeSupport ? { gnomeSupport: gnomeSupport.status } : {}),
       ...(this.#deps.startPortalShortcut
         ? { portalShortcut: true as const }
         : {}),
@@ -635,6 +644,15 @@ export async function installAppShotIpc(options: {
     isWaylandAppShotSession() &&
     !niriSocketPath();
   const controller = new AppShotIpcController<Renderer, Frame>({
+    ...(portal && isGnomeAppShotSession()
+      ? {
+          gnomeSupport: async (signal: AbortSignal) => {
+            const { checkGnomeAppShotSupport } =
+              await import("./app-shot-gnome.js");
+            return checkGnomeAppShotSupport({ signal });
+          },
+        }
+      : {}),
     ...(portal
       ? {
           portalSupport: async (signal: AbortSignal) => {

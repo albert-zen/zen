@@ -1,7 +1,8 @@
 /** Injected D-Bus regressions. No live portal, native decoder or OS grant is exercised. */
 import assert from "node:assert/strict";
 import { EventEmitter, getEventListeners } from "node:events";
-import * as fs from "node:fs/promises";
+import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -36,6 +37,9 @@ afterEach(async () => {
   await fs.rm(directory, { recursive: true, force: true });
 });
 class Bus extends EventEmitter {
+  _connection = Object.assign(new EventEmitter(), {
+    stream: new EventEmitter(),
+  });
   calls: Message[] = [];
   sent: Message[] = [];
   disconnected = false;
@@ -279,6 +283,122 @@ it("propagates disconnect and removes listeners", async () => {
   );
   assert.equal(bus.listenerCount("message"), 0);
 });
+for (const event of ["end", "close"])
+  it(`rejects clean transport ${event} without waiting for the response deadline`, async () => {
+    const bus = new Bus();
+    bus.screenshot = async () => {
+      queueMicrotask(() =>
+        (event === "end" ? bus._connection : bus._connection.stream).emit(
+          event,
+        ),
+      );
+      return new Promise(() => {});
+    };
+    await assert.rejects(
+      capturePortalActiveAppShot(options(bus)),
+      /disconnected/,
+    );
+    assert.equal(bus._connection.listenerCount("end"), 0);
+    assert.equal(bus._connection.stream.listenerCount("close"), 0);
+    assert.equal(bus.disconnected, true);
+  });
+it("rejects image decoding that outlasts its monotonic deadline before a timer runs", async () => {
+  const bus = new Bus();
+  let now = 0;
+  await assert.rejects(
+    capturePortalActiveAppShot(
+      options(bus, {
+        now: () => now,
+        createImage: () => {
+          now = 101;
+          return image();
+        },
+      }),
+    ),
+    /timed out/,
+  );
+  assert.equal(bus.disconnected, true);
+  assert.deepEqual(await fs.readFile(path), png);
+});
+it("rejects a clean disconnect during image decoding instead of delivering pixels", async () => {
+  const bus = new Bus();
+  await assert.rejects(
+    capturePortalActiveAppShot(
+      options(bus, {
+        createImage: () => {
+          bus._connection.emit("end");
+          return image();
+        },
+      }),
+    ),
+    /disconnected/,
+  );
+  assert.equal(bus.disconnected, true);
+});
+for (const failure of ["timeout", "disconnect"])
+  it(
+    `does not begin decoding after ${failure} while file stat is pending`,
+    { timeout: 2_000 },
+    async (t) => {
+      const bus = new Bus();
+      const originalOpen = fs.open;
+      let releaseStat!: () => void;
+      let enteredStat!: () => void;
+      let closedFile!: () => void;
+      let decoded = false;
+      const statGate = new Promise<void>((resolve) => {
+        releaseStat = resolve;
+      });
+      const statEntered = new Promise<void>((resolve) => {
+        enteredStat = resolve;
+      });
+      const fileClosed = new Promise<void>((resolve) => {
+        closedFile = resolve;
+      });
+      t.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+        const file = await originalOpen(...args);
+        const originalStat = file.stat.bind(file);
+        const originalClose = file.close.bind(file);
+        t.mock.method(file, "stat", async () => {
+          enteredStat();
+          await statGate;
+          return originalStat();
+        });
+        t.mock.method(file, "close", async () => {
+          await originalClose();
+          closedFile();
+        });
+        return file;
+      });
+      syncBuiltinESMExports();
+      try {
+        const rejected = assert.rejects(
+          capturePortalActiveAppShot(
+            options(bus, {
+              createImage: () => {
+                decoded = true;
+                return image();
+              },
+            }),
+          ),
+          failure === "timeout" ? /timed out/ : /disconnected/,
+        );
+        await statEntered;
+        if (failure === "disconnect") bus._connection.emit("end");
+        await rejected;
+        assert.equal(bus.disconnected, true);
+        releaseStat();
+        await fileClosed;
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.equal(decoded, false);
+        assert.deepEqual(await fs.readFile(path), png);
+      } finally {
+        releaseStat();
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+      }
+    },
+  );
 for (const invalidUri of [
   "https://example.com/capture.png",
   "file://example.com/capture.png",

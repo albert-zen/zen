@@ -1,4 +1,10 @@
 export const en = {
+  appShotGnomeReady: "GNOME capture extension is available",
+  appShotGnomeSetup: "GNOME capture extension needs setup or an update",
+  appShotGnomeSetupHint:
+    "For GNOME 45–51 Wayland, review the bundled resources/app-shot-gnome/README.md. Install its five runtime files and LICENSE in your user extensions directory, sign out and back in, then explicitly enable ZenX App Shots in GNOME Extensions. This grants focused-window capture to a same-session process owning ZenX's bus name; the name does not authenticate an executable. ZenX does not perform these setup steps or enable other extensions.",
+  appShotGnomeRevokeHint:
+    "To revoke capture access, disable ZenX App Shots in GNOME Extensions. Stopping the Composer shortcut closes only that shortcut session. The desktop shortcut and capture extension are separate choices.",
   appShotPortalEnable: "Ask the desktop to enable this Composer's shortcut",
   appShotPortalHint:
     "Your desktop may ask you to approve or choose a shortcut and may remember that choice. Disable closes this Composer's session. Capture stays in review; Attach and Send remain separate. Unsupported capture opens the window chooser; denial does not fall back.",
@@ -1047,6 +1053,12 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  appShotGnomeReady: "GNOME 捕获扩展可用",
+  appShotGnomeSetup: "GNOME 捕获扩展需要设置或更新",
+  appShotGnomeSetupHint:
+    "GNOME 45–51 Wayland 请先查看安装包中的 resources/app-shot-gnome/README.md。将列明的五个运行文件和 LICENSE 安装到用户扩展目录，退出桌面并重新登录，再在 GNOME Extensions 中明确启用 ZenX App Shots。这会允许同会话中持有 ZenX 总线名称的进程捕获前台窗口，该名称不验证可执行程序身份。ZenX 不会代为执行这些设置，也不会启用其他扩展。",
+  appShotGnomeRevokeHint:
+    "撤销捕获权限请在 GNOME Extensions 中禁用 ZenX App Shots。停止输入框快捷键只关闭该快捷键会话。桌面快捷键与捕获扩展是两项独立选择。",
   appShotPortalEnable: "请求桌面为当前输入框启用快捷键",
   appShotPortalHint:
     "桌面可能要求你批准或选择快捷键，并可能记住这次选择。取消启用会关闭当前输入框的会话。捕获仍需检查，添加与发送分开；不支持前台捕获时打开选窗器，拒绝授权不会自动降级。",

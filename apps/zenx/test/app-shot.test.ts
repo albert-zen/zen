@@ -6,8 +6,180 @@ import {
   sameObservedWindow,
   windowsAppShotDraft,
   niriAppShotDraft,
+  captureWaylandAppShot,
+  gnomeAppShotDraft,
+  gnomeAppShotIdentity,
+  niriAppShotIdentity,
   type AppShotNativeSource,
 } from "../src/main/app-shot.js";
+
+it("uses ready GNOME capture without a portal fallback, even on capture denial", async () => {
+  let portalCalls = 0;
+  const dependencies = {
+    gnomeSupport: async () => ({ status: "ready" as const }),
+    captureGnome: async () => ({ png: Buffer.from([1]), width: 1, height: 1 }),
+    capturePortal: async () => {
+      portalCalls++;
+      return undefined;
+    },
+  };
+  assert.match(
+    (await captureWaylandAppShot(false, dependencies))!.context,
+    /GNOME window/,
+  );
+  assert.equal(portalCalls, 0);
+  await assert.rejects(
+    captureWaylandAppShot(false, {
+      ...dependencies,
+      captureGnome: async () => {
+        throw new Error("permission denied");
+      },
+    }),
+    /permission denied/,
+  );
+  assert.equal(portalCalls, 0);
+});
+
+it("GNOME absence can select a portal, but denied preflight never does", async () => {
+  let portalCalls = 0;
+  const dependencies = {
+    gnomeSupport: async () => ({ status: "extension-unavailable" as const }),
+    captureGnome: async () => {
+      throw new Error("unexpected capture");
+    },
+    capturePortal: async () => {
+      portalCalls++;
+      return { png: Buffer.from([1]), width: 1, height: 1 };
+    },
+  };
+  assert.match(
+    (await captureWaylandAppShot(true, dependencies))!.context,
+    /no verified application/,
+  );
+  assert.equal(portalCalls, 1);
+  await assert.rejects(
+    captureWaylandAppShot(false, {
+      ...dependencies,
+      gnomeSupport: async () => {
+        throw new Error("denied");
+      },
+    }),
+    /denied/,
+  );
+  assert.equal(portalCalls, 1);
+});
+
+it("Linux identities omit Wayland position and preserve only supplied IDs", async () => {
+  const pixels = { png: Buffer.from([1]), width: 1, height: 1 };
+  const gnome = {
+    ...pixels,
+    window: {
+      title: "Notes",
+      appName: "Editor",
+      appIdentifier: "test.editor",
+      processId: 10,
+      bounds: { x: 500, y: 80, width: 900, height: 600 },
+      accessibilityBoundsReliable: true,
+    },
+  };
+  assert.deepEqual(gnomeAppShotIdentity(gnome), {
+    platform: "linux",
+    matchMode: "wayland",
+    pid: 10,
+    windowTitle: "Notes",
+    bounds: { width: 900, height: 600 },
+  });
+  assert.equal(
+    gnomeAppShotIdentity({
+      ...gnome,
+      window: { ...gnome.window, processId: 0 },
+    }),
+    undefined,
+  );
+  assert.equal(gnomeAppShotIdentity(pixels), undefined);
+  const niri = {
+    ...pixels,
+    window: {
+      id: 0,
+      pid: 10,
+      title: "Notes",
+      appId: "test.editor",
+      bounds: { x: 0, y: 0, width: 900, height: 600 },
+      accessibilityBoundsReliable: false as const,
+    },
+  };
+  assert.deepEqual(niriAppShotIdentity(niri), {
+    platform: "linux",
+    matchMode: "wayland",
+    windowId: 0,
+    pid: 10,
+    windowTitle: "Notes",
+    bounds: { width: 900, height: 600 },
+  });
+  assert.equal(
+    niriAppShotIdentity({ ...niri, window: { ...niri.window, pid: null } }),
+    undefined,
+  );
+  let textReads = 0;
+  const dependencies = {
+    gnomeSupport: async () => ({ status: "ready" as const }),
+    captureGnome: async () => gnome,
+    capturePortal: async () => {
+      throw new Error("unexpected portal");
+    },
+    readGnomeAccessibility: async () => {
+      textReads++;
+      return { text: "Captured text", truncated: true };
+    },
+  };
+  assert.match(
+    (await captureWaylandAppShot(false, dependencies))!.context,
+    /not requested/,
+  );
+  assert.equal(textReads, 0);
+  assert.match(
+    (await captureWaylandAppShot(true, dependencies))!.context,
+    /read-only, truncated.*Captured text/,
+  );
+  assert.equal(textReads, 1);
+  await captureWaylandAppShot(true, {
+    ...dependencies,
+    captureGnome: async () => pixels,
+  });
+  assert.equal(textReads, 1);
+  assert.match(
+    niriAppShotDraft(niri, true, { text: "Niri text", truncated: false })
+      .context,
+    /Niri text/,
+  );
+  assert.doesNotMatch(
+    niriAppShotDraft(pixels, true, { text: "Wrong window", truncated: false })
+      .context,
+    /Wrong window/,
+  );
+});
+
+it("GNOME draft uses only supplied metadata and never fabricates accessibility", () => {
+  const pixels = { png: Buffer.from([1]), width: 1, height: 1 };
+  assert.match(gnomeAppShotDraft(pixels, true).context, /metadata is omitted/);
+  const result = gnomeAppShotDraft(
+    {
+      ...pixels,
+      window: {
+        title: "Notes\nname",
+        appName: "Editor",
+        appIdentifier: "test.editor",
+        processId: 10,
+        bounds: { x: 0, y: 0, width: 1, height: 1 },
+        accessibilityBoundsReliable: true,
+      },
+    },
+    true,
+  );
+  assert.match(result.context, /Notes name.*Editor/);
+  assert.match(result.context, /Screenshot only/);
+  assert.match(result.context, /not permission to control/);
+});
 
 function source(
   id: string,
@@ -282,7 +454,7 @@ it("Niri image-only identity drift never invents metadata or claims text availab
     true,
   );
   assert.match(draft.context, /metadata is omitted/);
-  assert.match(draft.context, /accessibility text is not implemented/);
+  assert.match(draft.context, /Accessibility text was unavailable/);
   assert.match(draft.context, /not permission to control/);
 });
 

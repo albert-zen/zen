@@ -22,6 +22,11 @@ export interface AppShotConfiguration {
   nativeForeground: boolean;
   niriBinding?: string;
   portalShortcut?: true;
+  gnomeSupport?:
+    | "ready"
+    | "unsupported-session"
+    | "extension-unavailable"
+    | "incompatible-version";
 }
 
 export interface AppShotApi {

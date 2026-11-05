@@ -27,7 +27,7 @@ import {
   APP_SHOT_MAX_PIXELS,
   APP_SHOT_MAX_PNG_BYTES,
   isAppShotBounds,
-  isAppShotIdentity,
+  isAppShotAccessibilityIdentity,
   isRecord,
 } from "./app-shot-native-contract.js";
 
@@ -54,7 +54,11 @@ async function run(): Promise<unknown> {
     await request;
     return readAppShotWindowsForegroundWithApi(api);
   }
-  if (process.platform !== "win32" && process.platform !== "darwin")
+  if (
+    process.platform !== "win32" &&
+    process.platform !== "darwin" &&
+    !(operation === "accessibility" && process.platform === "linux")
+  )
     throw new Error("Unsupported platform");
   const imported = await import("@crowecawcaw/xa11y");
   const xa11y =
@@ -88,13 +92,21 @@ async function run(): Promise<unknown> {
     };
   }
   if (
-    !isAppShotIdentity(input.identity) ||
+    !isAppShotAccessibilityIdentity(input.identity) ||
     input.identity.platform !== process.platform
   )
     throw new Error("Invalid App Shot accessibility identity");
   const { readAppShotAccessibilityWithApi } =
     await import("./app-shot-accessibility.js");
-  return readAppShotAccessibilityWithApi(xa11y.App, input.identity);
+  const identity = input.identity;
+  return readAppShotAccessibilityWithApi(
+    xa11y.App,
+    identity,
+    // xa11y also maps stale handles onto this class; require the exact PID lookup diagnosis.
+    (error) =>
+      error instanceof xa11y.SelectorNotMatchedError &&
+      error.selector === `application[pid=${identity.pid}]`,
+  );
 }
 
 void run().then(

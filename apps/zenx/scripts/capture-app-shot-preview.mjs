@@ -104,6 +104,8 @@ try {
         { theme: "dark", width: 1280, platform: "niri" },
         { theme: "dark", width: 390, platform: "portal" },
         { theme: "light", width: 1280, platform: "portal" },
+        { theme: "light", width: 390, platform: "gnome" },
+        { theme: "dark", width: 1280, platform: "gnome" },
       ];
       for (const { theme, width, platform } of cases) {
         const height = 900;
@@ -146,7 +148,27 @@ try {
           await screenshot(`${name}-manual-binding.png`);
         }
 
-        if (platform === "portal") {
+        if (platform === "gnome") {
+          await click(".app-shot-shortcut details summary");
+          await wait(
+            "document.querySelector('.app-shot-shortcut details')?.open",
+          );
+          await stable();
+          assert.match(
+            await evaluate(
+              "document.querySelector('.app-shot-shortcut details').textContent",
+            ),
+            /不验证可执行程序身份/,
+          );
+          receipt.states.push({
+            phase: "gnome-manual-setup",
+            ...(await check(width, height)),
+          });
+          await screenshot(`${name}-manual-setup.png`);
+          await click(".app-shot-shortcut details summary");
+          await stable();
+        }
+        if (platform === "portal" || platform === "gnome") {
           await click('.app-shot-shortcut input[type="checkbox"]');
           await wait(
             "document.querySelector('.app-shot-shortcut').textContent.includes('应用快照未启用')",
