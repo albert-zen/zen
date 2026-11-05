@@ -2582,7 +2582,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       loaderId: string;
       url: string;
       alive: boolean;
-      pendingFrameInvalidations: Set<string>;
+      pendingFrameInvalidations: Map<string, string | undefined>;
       invalidExecutionContextIds: Set<number>;
       pendingIsolatedContexts: Map<number, string>;
       isolatedExecutionContextId?: number;
@@ -3897,7 +3897,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       if (state === undefined || state.alive === false)
         throw new UserBrowserDocumentChangedBeforeDispatchError();
       const pendingMainFrameInvalidations = [
-        ...state.pendingFrameInvalidations,
+        ...state.pendingFrameInvalidations.keys(),
       ].filter((event) => event.endsWith(`\u0000${frame.id}`));
       if (pendingMainFrameInvalidations.length > 0) {
         state.pendingFrameInvalidations.clear();
@@ -4355,7 +4355,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         loaderId: "",
         url: "",
         alive: true,
-        pendingFrameInvalidations: new Set(),
+        pendingFrameInvalidations: new Map(),
         invalidExecutionContextIds: new Set(),
         pendingIsolatedContexts: new Map(),
       });
@@ -5216,6 +5216,48 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     }
     if (
       document !== undefined &&
+      document.alive &&
+      document.frameId.length === 0 &&
+      method === "Page.frameNavigated"
+    ) {
+      const frame = asRecord(params.frame);
+      const epoch = this.#sessionEpochs.get(message.sessionId);
+      if (
+        epoch !== undefined &&
+        this.#attachmentClosures.get(targetId) === epoch &&
+        epoch.cdpSessionId === message.sessionId &&
+        frame?.parentId === undefined &&
+        typeof frame?.id === "string" &&
+        frame.id.length > 0 &&
+        typeof frame.loaderId === "string" &&
+        frame.loaderId.length > 0 &&
+        typeof frame.url === "string"
+      ) {
+        // The native commit binds this initially unknown root. Only starts
+        // associated with its exact loader are historical; a newer or missing
+        // loader remains uncertain and must reject preflight, not be retried.
+        const navigating = `Page.frameStartedNavigating\u0000${frame.id}`;
+        const loading = `Page.frameStartedLoading\u0000${frame.id}`;
+        if (
+          document.pendingFrameInvalidations.get(navigating) === frame.loaderId
+        ) {
+          document.pendingFrameInvalidations.delete(navigating);
+          if (
+            document.pendingFrameInvalidations.get(loading) === frame.loaderId
+          )
+            document.pendingFrameInvalidations.delete(loading);
+        }
+        document.frameId = frame.id;
+        document.loaderId = frame.loaderId;
+        document.url = frame.url;
+        // Reconciliation never repairs an in-flight fence or retains a world
+        // from the old document. A fresh operation still reads native identity.
+        this.#invalidateTarget(targetId, false);
+        return;
+      }
+    }
+    if (
+      document !== undefined &&
       document.frameId.length === 0 &&
       typeof params.frameId === "string" &&
       (method === "Page.navigatedWithinDocument" ||
@@ -5226,12 +5268,21 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       if (
         document.pendingFrameInvalidations.size <
           USER_BROWSER_MAX_OPERATION_EVIDENCE ||
-        [...document.pendingFrameInvalidations].some((event) =>
+        [...document.pendingFrameInvalidations.keys()].some((event) =>
           event.endsWith(`\u0000${params.frameId}`),
         )
       ) {
-        document.pendingFrameInvalidations.add(
+        document.pendingFrameInvalidations.set(
           `${method}\u0000${params.frameId}`,
+          method === "Page.frameStartedNavigating" &&
+            typeof params.loaderId === "string" &&
+            params.loaderId.length > 0
+            ? params.loaderId
+            : method === "Page.frameStartedLoading"
+              ? document.pendingFrameInvalidations.get(
+                  `Page.frameStartedNavigating\u0000${params.frameId}`,
+                )
+              : undefined,
         );
       } else {
         document.revision += 1;
@@ -5258,7 +5309,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       loaderId: "",
       url: "",
       alive: true,
-      pendingFrameInvalidations: new Set<string>(),
+      pendingFrameInvalidations: new Map<string, string | undefined>(),
       invalidExecutionContextIds: new Set<number>(),
       pendingIsolatedContexts: new Map<number, string>(),
     };

@@ -1545,3 +1545,180 @@ test("admitted child dialog prevents root input without poisoning root ownership
   assert.equal(epoch.nativeDialogOpen, false);
   assert.ok(f.client.testEpoch() === epoch);
 });
+
+const initialRootCommit = {
+  frame: {
+    id: "frame-1",
+    loaderId: "loader-1",
+    url: "https://owned.test/fixture",
+  },
+};
+const initialRootStart = {
+  frameId: "frame-1",
+  loaderId: "loader-1",
+  url: "https://owned.test/fixture",
+  navigationType: "differentDocument",
+};
+async function initiallyNavigatedFixture() {
+  const f = fixture();
+  await f.client.navigate("target-1", initialRootStart.url, owner);
+  return f;
+}
+function initialNavigationEvents(f, loaderId = "loader-1") {
+  f.event("Page.frameStartedNavigating", { ...initialRootStart, loaderId });
+  f.event("Page.frameStartedLoading", { frameId: "frame-1" });
+}
+
+test("matching native root commit retires historical initial navigation before fresh inspection", async () => {
+  const f = await initiallyNavigatedFixture();
+  initialNavigationEvents(f);
+  const revision = f.client.testEpoch().inputLifecycleRevision;
+  f.event("Page.frameNavigated", initialRootCommit);
+  assert.ok(f.client.testEpoch().inputLifecycleRevision > revision);
+  const fresh = await start(f);
+  f.complete(fresh.request);
+  await fresh.result;
+  assert.equal(f.sends.filter((r) => r.method === "Page.navigate").length, 1);
+  assert.equal(f.sends.filter((r) => r.method.startsWith("Input.")).length, 0);
+  assert.equal(f.observer.counters.observerErrors, 0);
+});
+
+test("initial root commit during preflight rejects that fence and allows a fresh inspection", async () => {
+  const f = await initiallyNavigatedFixture();
+  initialNavigationEvents(f);
+  f.hook((event) => {
+    if (event.kind !== "timer-armed" || event.method !== "Page.getFrameTree")
+      return;
+    f.hook(undefined);
+    f.event("Page.frameNavigated", initialRootCommit);
+  });
+  await assert.rejects(
+    f.inspect(),
+    UserBrowserDocumentChangedBeforeDispatchError,
+  );
+  assert.equal(f.main().length, 0);
+  assert.equal(
+    f.sends.filter((r) => r.method === "Page.createIsolatedWorld").length,
+    0,
+  );
+  const fresh = await start(f);
+  f.complete(fresh.request);
+  await fresh.result;
+});
+
+test("new navigation after initial commit still invalidates an in-flight inspection", async () => {
+  const f = await initiallyNavigatedFixture();
+  initialNavigationEvents(f);
+  f.event("Page.frameNavigated", initialRootCommit);
+  f.hook((event) => {
+    if (event.kind !== "timer-armed" || event.method !== "Page.getFrameTree")
+      return;
+    f.hook(undefined);
+    initialNavigationEvents(f, "loader-newer");
+  });
+  await assert.rejects(
+    f.inspect(),
+    UserBrowserDocumentChangedBeforeDispatchError,
+  );
+  assert.equal(f.main().length, 0);
+  assert.equal(
+    f.sends.filter((r) => r.method === "Page.createIsolatedWorld").length,
+    0,
+  );
+});
+
+for (const pending of [
+  "newer-loader",
+  "missing-loader",
+  "loading-without-start",
+  "unassociated-loading",
+]) {
+  test(`initial root commit preserves ${pending} uncertainty`, async () => {
+    const f = await initiallyNavigatedFixture();
+    if (pending === "newer-loader") {
+      initialNavigationEvents(f);
+      initialNavigationEvents(f, "loader-newer");
+    } else if (pending === "missing-loader") {
+      initialNavigationEvents(f, undefined);
+      // Explicitly malformed native data cannot borrow the earlier loader.
+      f.event("Page.frameStartedNavigating", {
+        ...initialRootStart,
+        loaderId: undefined,
+      });
+      f.event("Page.frameStartedLoading", { frameId: "frame-1" });
+    } else {
+      f.event("Page.frameStartedLoading", { frameId: "frame-1" });
+      if (pending === "unassociated-loading")
+        f.event("Page.frameStartedNavigating", initialRootStart);
+    }
+    f.event("Page.frameNavigated", initialRootCommit);
+    await assert.rejects(
+      f.inspect(),
+      (error) =>
+        error instanceof UserBrowserDocumentChangedBeforeDispatchError &&
+        /pending lifecycle/.test(error.message),
+    );
+    assert.equal(f.main().length, 0);
+    assert.equal(
+      f.sends.filter((r) => r.method === "Page.createIsolatedWorld").length,
+      0,
+    );
+  });
+}
+
+for (const invalid of [
+  "parented",
+  "missing-loader",
+  "empty-frame",
+  "child-session",
+]) {
+  test(`${invalid} commit cannot retire initial root navigation`, async () => {
+    const f = await initiallyNavigatedFixture();
+    initialNavigationEvents(f);
+    if (invalid === "child-session") {
+      f.event("Target.attachedToTarget", {
+        sessionId: "child-route",
+        targetInfo: { targetId: "child-target", type: "iframe" },
+        waitingForDebugger: false,
+      });
+      f.event("Page.frameNavigated", initialRootCommit, "child-route");
+    } else {
+      f.event("Page.frameNavigated", {
+        frame: {
+          ...initialRootCommit.frame,
+          ...(invalid === "parented" ? { parentId: "other-frame" } : {}),
+          ...(invalid === "missing-loader" ? { loaderId: undefined } : {}),
+          ...(invalid === "empty-frame" ? { id: "" } : {}),
+        },
+      });
+    }
+    await assert.rejects(
+      f.inspect(),
+      UserBrowserDocumentChangedBeforeDispatchError,
+    );
+    assert.equal(f.main().length, 0);
+    assert.equal(
+      f.sends.filter((r) => r.method === "Page.createIsolatedWorld").length,
+      0,
+    );
+  });
+}
+
+test("retired root-session commit cannot reconcile a successor attachment", async () => {
+  const f = await initiallyNavigatedFixture();
+  const retired = f.client.testEpoch().cdpSessionId;
+  await f.client.detachTarget("target-1", owner);
+  await f.client.navigate("target-1", initialRootStart.url, owner);
+  assert.notEqual(f.client.testEpoch().cdpSessionId, retired);
+  initialNavigationEvents(f);
+  f.event("Page.frameNavigated", initialRootCommit, retired);
+  await assert.rejects(
+    f.inspect(),
+    UserBrowserDocumentChangedBeforeDispatchError,
+  );
+  assert.equal(f.main().length, 0);
+  assert.equal(
+    f.sends.filter((r) => r.method === "Page.createIsolatedWorld").length,
+    0,
+  );
+});

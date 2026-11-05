@@ -1356,3 +1356,628 @@ test("remote fixture focus prevents setup scrolling and reports actual child vie
     dom.window.close();
   }
 });
+
+async function routeDiagnosticFixture(
+  fault?:
+    | "root-press-unknown"
+    | "child-owner"
+    | "physical-close"
+    | "foreground"
+    | "provider-detach"
+    | "root-visible"
+    | "child-visible"
+    | "unique-context"
+    | "foreign-detach"
+    | `${"destroyed" | "cleared" | "replaced" | "detached"}-${"before" | "after"}`,
+) {
+  const source = await readFile(
+    new URL("../src/main/browser-parallel-input-smoke.ts", import.meta.url),
+    "utf8",
+  );
+  const parsed = ts.createSourceFile(
+    "smoke.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const declaration = parsed.statements.find(
+    (node) =>
+      ts.isFunctionDeclaration(node) &&
+      node.name?.text === "runRemoteFrameRouteDiagnostics",
+  );
+  assert.ok(declaration);
+  const created: {
+    id: string;
+    url: string;
+    closed: boolean;
+    events: ReturnType<typeof remoteEvents>;
+    rootEvents: ReturnType<typeof remoteEvents>;
+    clicks: number;
+  }[] = [];
+  const operations: string[] = [];
+  const inputs: {
+    target: string;
+    route: string;
+    type: unknown;
+    x: unknown;
+    y: unknown;
+  }[] = [];
+  const receipts: Record<string, unknown>[] = [];
+  const listeners = new Set<(event: Record<string, unknown>) => void>();
+  let current: (typeof created)[number] | undefined;
+  let nonce = 0;
+  const placement = (record: (typeof created)[number]) => ({
+    ...base,
+    mode: "cross-origin-oopif" as const,
+    rootFrameId: record.id,
+    childFrameId: `${record.id}-child`,
+    rootContexts: [context(record.id)],
+    childUrl: `http://localhost:30002/${record.id}-child`,
+    targets: [
+      {
+        type: "iframe",
+        targetId: `${record.id}-target`,
+        url: `http://localhost:30002/${record.id}-child`,
+      },
+    ],
+    childSessionId: `${record.id}-observed-session`,
+    childSessionTargetId: `${record.id}-target`,
+    childSessionFrameId: `${record.id}-child`,
+    childSessionParentFrameId: record.id,
+    childContexts: [context(`${record.id}-child`)],
+    childAttachedEvent: {
+      sessionId: `${record.id}-observed-session`,
+      targetInfo: {
+        type: "iframe",
+        targetId: `${record.id}-target`,
+        url: `http://localhost:30002/${record.id}-child`,
+      },
+    },
+  });
+  const state = (record: (typeof created)[number]) =>
+    remoteState({
+      mode: "cross-origin-oopif",
+      documentId: record.id,
+      events: [...record.events],
+      clicks: record.clicks,
+      routeEvents: [...record.events],
+      rootEvents: [...record.rootEvents],
+      visibility:
+        fault === "root-visible" &&
+        record === created[0] &&
+        !record.closed &&
+        inputs.length > 0
+          ? "visible"
+          : "hidden",
+      childVisibility:
+        fault === "child-visible" &&
+        record === created[0] &&
+        !record.closed &&
+        inputs.length > 0
+          ? "visible"
+          : "hidden",
+    });
+  const emitLifecycle = (record: (typeof created)[number]) => {
+    const sessionId = `${record.id}-dispatch-session`;
+    let event: Record<string, unknown>;
+    if (fault?.startsWith("destroyed"))
+      event = {
+        sessionId,
+        method: "Runtime.executionContextDestroyed",
+        params: { executionContextId: 1 },
+      };
+    else if (fault?.startsWith("cleared"))
+      event = {
+        sessionId,
+        method: "Runtime.executionContextsCleared",
+        params: {},
+      };
+    else if (fault?.startsWith("replaced"))
+      event = {
+        sessionId,
+        method: "Runtime.executionContextCreated",
+        params: {
+          context: {
+            ...context(`${record.id}-child`),
+            uniqueId: "replacement-context",
+          },
+        },
+      };
+    else
+      event = {
+        method: "Target.detachedFromTarget",
+        params: {
+          sessionId:
+            fault === "foreign-detach" ? "unrelated-session" : sessionId,
+        },
+      };
+    operations.push(`lifecycle:${String(fault)}`);
+    for (const listener of listeners) listener(event);
+  };
+  const input = (
+    record: (typeof created)[number],
+    route: string,
+    params: Record<string, unknown>,
+  ) => {
+    inputs.push({
+      target: record.id,
+      route,
+      type: params.type,
+      x: params.x,
+      y: params.y,
+    });
+    operations.push(`input:${record.id}:${String(params.type)}`);
+    if (
+      fault === "root-press-unknown" &&
+      record === created[0] &&
+      params.type === "mousePressed"
+    )
+      throw new Error("unknown press outcome");
+    const event = {
+      type: params.type === "mousePressed" ? "pointerdown" : "pointerup",
+      trusted: true,
+      target: route === "root" ? "contract-frame" : "canvas",
+    };
+    if (route === "root") record.rootEvents.push(event);
+    else {
+      record.events.push(event);
+      if (params.type === "mouseReleased") record.clicks++;
+      if (params.type === "mousePressed" && fault?.endsWith("-after"))
+        emitLifecycle(record);
+    }
+    return {};
+  };
+  const browserRpc = {
+    onEvent: (listener: (event: Record<string, unknown>) => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    send: async (
+      method: string,
+      params: Record<string, unknown> = {},
+      sessionId?: string,
+    ) => {
+      assert.ok(current);
+      const evidence = placement(current);
+      if (method === "Target.attachToTarget") {
+        assert.equal(params.targetId, evidence.childSessionTargetId);
+        for (const listener of listeners)
+          listener({
+            method: "Target.attachedToTarget",
+            params: {
+              sessionId: `${current.id}-dispatch-session`,
+              targetInfo: evidence.targets[0],
+            },
+          });
+        return { sessionId: `${current.id}-dispatch-session` };
+      }
+      if (method === "Runtime.enable") {
+        for (const listener of listeners)
+          listener({
+            method: "Runtime.executionContextCreated",
+            sessionId,
+            params: { context: context(`${current.id}-child`) },
+          });
+        return {};
+      }
+      if (method === "Runtime.evaluate") {
+        assert.equal(params.expression, "document.URL");
+        assert.equal(
+          params.uniqueContextId,
+          evidence.childContexts[0]!.uniqueId,
+        );
+        assert.equal(sessionId, `${current.id}-dispatch-session`);
+        operations.push(`unique-context:${current.id}`);
+        if (fault === "unique-context")
+          return { exceptionDetails: { text: "Context is gone" } };
+        return { result: { value: evidence.childUrl } };
+      }
+      if (method === "Page.getFrameTree")
+        return {
+          frameTree: {
+            frame: {
+              id: evidence.childFrameId,
+              parentId: evidence.rootFrameId,
+              url: evidence.childUrl,
+            },
+          },
+        };
+      if (method === "Input.dispatchMouseEvent") {
+        assert.equal(sessionId, `${current.id}-dispatch-session`);
+        return input(current, "child", params);
+      }
+      if (method === "Target.detachFromTarget") {
+        operations.push(`detach-child:${current.id}`);
+        return {};
+      }
+      if (method === "Target.closeTarget") {
+        assert.equal(params.targetId, current.id);
+        operations.push(`physical-close:${current.id}`);
+        if (fault === "physical-close") return { success: false };
+        current.closed = true;
+        return { success: true };
+      }
+      throw new Error(`Unexpected browser command ${method}`);
+    },
+  };
+  const run = runInNewContext(
+    `${ts.transpileModule(declaration.getText(parsed), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText}; runRemoteFrameRouteDiagnostics`,
+    {
+      assert: {
+        ...assert,
+        deepEqual: (a: unknown, b: unknown, message?: string) =>
+          assert.deepEqual(
+            JSON.parse(JSON.stringify(a)),
+            JSON.parse(JSON.stringify(b)),
+            message,
+          ),
+      },
+      URL,
+      AbortSignal,
+      process: { platform: "darwin" },
+      console: { log() {} },
+      randomUUID: () => `diagnostic-nonce-${++nonce}`,
+      assertRemoteFixturePoint,
+      assertRemoteFramePlacement,
+      observeRemoteFramePlacement: async () => {
+        assert.ok(current);
+        return placement(current);
+      },
+      fetch: async () => ({
+        json: async () => [
+          { id: "unrelated-user-target", webSocketDebuggerUrl: "unrelated" },
+          ...created
+            .filter((record) => !record.closed)
+            .map((record) => ({
+              id: record.id,
+              webSocketDebuggerUrl: record.id,
+            })),
+        ],
+      }),
+      poll: async (read: () => Promise<unknown>) => {
+        const result = await read();
+        assert.notEqual(result, undefined);
+        return result;
+      },
+      // The actual bounded settlement helper has separate prefix/deadline tests.
+      // Here two read-only samples model absent delivery without a 20s unit wait.
+      settleRemoteFixturePair: async (
+        read: () => Promise<ReturnType<typeof remoteState>>,
+      ) => {
+        const first = await read();
+        if (first.events.length === 2 && first.clicks === 1)
+          return { state: first, reads: 1 };
+        await read();
+        throw new Error("No child pair observed within diagnostic settlement");
+      },
+      Rpc: {
+        connect: async (id: string) => {
+          const record = created.find((record) => record.id === id)!;
+          return {
+            evaluate: async (expression: string) => {
+              if (expression === "window.contract?.ready === true") return true;
+              if (expression === "document.visibilityState") return "hidden";
+              if (expression === "window.contract.point('canvas')")
+                return { ...remotePoint(1), documentId: record.id };
+              if (expression === "window.contract.state()")
+                return state(record);
+              throw new Error(`Unexpected fixture expression ${expression}`);
+            },
+            send: async (method: string, params: Record<string, unknown>) => {
+              if (method === "Page.captureScreenshot") {
+                if (
+                  record === created[1] &&
+                  (fault?.endsWith("-before") || fault === "foreign-detach")
+                )
+                  emitLifecycle(record);
+                return { data: "synthetic-compositor-image" };
+              }
+              if (method === "DOM.getFrameOwner")
+                return {
+                  backendNodeId:
+                    fault === "child-owner" ? 999 : base.ownerBackendNodeId,
+                };
+              if (method === "Input.dispatchMouseEvent")
+                return input(record, "root", params);
+              throw new Error(`Unexpected root command ${method}`);
+            },
+            close: () => {
+              operations.push(`close-observer:${record.id}`);
+            },
+          };
+        },
+      },
+    },
+  ) as (options: Record<string, unknown>) => Promise<void>;
+  return {
+    run: () =>
+      run({
+        backend: {
+          open: async (_session: string, url: string) => {
+            assert.ok(
+              created.every((record) => record.closed),
+              "Prior target must physically close before a new case",
+            );
+            current = {
+              id: `owned-${created.length}`,
+              url,
+              closed: false,
+              events: [],
+              rootEvents: [],
+              clicks: 0,
+            };
+            created.push(current);
+            operations.push(`open:${current.id}`);
+            return { tabId: current.id };
+          },
+          closeTab: async (_session: string, id: string) => {
+            assert.equal(id, current?.id);
+            operations.push(`provider-detach:${id}`);
+            if (fault === "provider-detach")
+              throw new Error("provider detach failed");
+          },
+        },
+        sessionId: "owned-session",
+        endpoint: "http://127.0.0.1:9222",
+        url: "http://127.0.0.1:30001/input-contract?mode=cross-origin-oopif",
+        browserRpc,
+        guard: async () => {
+          assert.ok(current);
+          operations.push(`guard:${current.id}`);
+          if (
+            fault === "foreground" &&
+            current === created[0] &&
+            !current.closed &&
+            inputs.length === 1
+          )
+            throw new Error("foreground changed");
+        },
+        report: (receipt: Record<string, unknown>) =>
+          receipts.push(JSON.parse(JSON.stringify(receipt))),
+      }),
+    created,
+    receipts,
+    inputs,
+    operations,
+    listeners,
+  };
+}
+
+test("protocol route comparison owns two fresh targets, never falls back, and keeps child coordinates local", async () => {
+  const f = await routeDiagnosticFixture();
+  await f.run();
+  assert.equal(f.created.length, 2);
+  assert.notEqual(
+    new URL(f.created[0]!.url).searchParams.get("nonce"),
+    new URL(f.created[1]!.url).searchParams.get("nonce"),
+  );
+  assert.ok(f.created.every((record) => record.closed));
+  assert.equal(f.listeners.size, 0);
+  assert.deepEqual(f.inputs, [
+    { target: "owned-0", route: "root", type: "mousePressed", x: 132, y: 66 },
+    { target: "owned-0", route: "root", type: "mouseReleased", x: 132, y: 66 },
+    { target: "owned-1", route: "child", type: "mousePressed", x: 100, y: 30 },
+    { target: "owned-1", route: "child", type: "mouseReleased", x: 100, y: 30 },
+  ]);
+  for (const [index, operation] of f.operations.entries()) {
+    if (operation.startsWith("input:"))
+      assert.equal(
+        f.operations[index - 1],
+        `guard:${operation.split(":")[1]}`,
+        "Foreground guard must precede each send, not only each pair",
+      );
+  }
+  assert.equal(f.receipts[0]!.outcome, "inconclusive");
+  assert.equal(f.receipts[1]!.outcome, "observed-exact-leaf-pair-and-effect");
+  for (const receipt of f.receipts) {
+    assert.equal(receipt.providerAcceptance, "not-exercised");
+    assert.equal(receipt.layer, "protocol-diagnostic-only");
+    assert.equal(receipt.platform, "darwin");
+    assert.equal(receipt.dispatchAttempts, 2);
+    assert.equal(receipt.acknowledgedDispatches, 2);
+    assert.equal(receipt.physicallyClosed, true);
+  }
+  assert.equal(
+    (f.receipts[0]!.after as ReturnType<typeof remoteState>).rootEvents!.length,
+    2,
+  );
+  assert.ok(
+    f.operations.indexOf("physical-close:owned-0") <
+      f.operations.indexOf("open:owned-1"),
+  );
+});
+
+for (const fault of [
+  "root-press-unknown",
+  "foreground",
+  "child-owner",
+  "provider-detach",
+] as const) {
+  test(`protocol diagnostic preserves ${fault} and closes the exact target without replay`, async () => {
+    const f = await routeDiagnosticFixture(fault);
+    if (fault === "foreground") {
+      await assert.rejects(f.run(), /foreground changed/);
+      assert.equal(f.created.length, 1);
+      assert.equal(f.receipts[0]!.fatalSafetyFailure, true);
+    } else await f.run();
+    assert.ok(f.created.every((record) => record.closed));
+    assert.equal(f.listeners.size, 0);
+    if (fault === "root-press-unknown" || fault === "foreground")
+      assert.deepEqual(
+        f.inputs
+          .filter((input) => input.target === "owned-0")
+          .map((input) => input.type),
+        ["mousePressed"],
+      );
+    if (fault === "root-press-unknown")
+      assert.equal(f.receipts[0]!.acknowledgedDispatches, 0);
+    if (fault === "foreground")
+      assert.match(
+        String(f.receipts[0]!.foregroundGuardError),
+        /foreground changed/,
+      );
+    if (fault === "child-owner")
+      assert.equal(
+        f.inputs.filter((input) => input.target === "owned-1").length,
+        0,
+      );
+    if (fault === "provider-detach")
+      assert.ok(f.receipts.every((receipt) => receipt.providerDetachError));
+  });
+}
+
+test("protocol diagnostic does not start another case after uncertain physical teardown", async () => {
+  const f = await routeDiagnosticFixture("physical-close");
+  await assert.rejects(f.run(), /physically close/);
+  assert.equal(f.created.length, 1);
+  assert.equal(f.receipts.length, 1);
+  assert.equal(f.receipts[0]!.physicallyClosed, undefined);
+  assert.ok(f.receipts[0]!.teardownError);
+  assert.equal(f.inputs.length, 2);
+});
+
+test("real fixture route witnesses keep root and leaf synthetic events separate and untrusted", async () => {
+  const replies: Record<string, unknown>[] = [];
+  const child = new JSDOM(remoteFrameContractPage("child", configuration), {
+    url: configuration.childOrigin,
+    runScripts: "dangerously",
+    beforeParse(window) {
+      window.postMessage = (message: Record<string, unknown>) => {
+        replies.push(message);
+      };
+    },
+  });
+  const parent = new JSDOM(remoteFrameContractPage("parent", configuration), {
+    url: configuration.parentOrigin,
+    runScripts: "dangerously",
+  });
+  try {
+    child.window.document.querySelector("#canvas")!.dispatchEvent(
+      new child.window.MouseEvent("mousedown", {
+        bubbles: true,
+        clientX: 100,
+        clientY: 30,
+      }),
+    );
+    child.window.dispatchEvent(
+      new child.window.MessageEvent("message", {
+        source: child.window as unknown as Window,
+        origin: configuration.parentOrigin,
+        data: {
+          kind: "request",
+          nonce: configuration.nonce,
+          id: 1,
+          method: "state",
+        },
+      }),
+    );
+    const childState = JSON.parse(JSON.stringify(replies.at(-1)!.result));
+    assert.deepEqual(
+      childState.events,
+      [],
+      "Existing exact pointer/key witness is unchanged",
+    );
+    assert.deepEqual(childState.routeEvents, [
+      {
+        type: "mousedown",
+        trusted: false,
+        target: "canvas",
+        clientX: 100,
+        clientY: 30,
+      },
+    ]);
+    const frame = parent.window.document.querySelector("iframe")!;
+    const send = (data: Record<string, unknown>) =>
+      parent.window.dispatchEvent(
+        new parent.window.MessageEvent("message", {
+          source: frame.contentWindow!,
+          origin: configuration.childOrigin,
+          data: { nonce: configuration.nonce, ...data },
+        }),
+      );
+    frame.contentWindow!.postMessage = (message: Record<string, unknown>) => {
+      send({ kind: "reply", id: message.id, result: childState });
+    };
+    send({ kind: "ready" });
+    frame.dispatchEvent(
+      new parent.window.MouseEvent("mousedown", {
+        bubbles: true,
+        clientX: 132,
+        clientY: 66,
+      }),
+    );
+    const result = JSON.parse(
+      JSON.stringify(await parent.window.contract.state()),
+    );
+    assert.deepEqual(result.routeEvents, childState.routeEvents);
+    assert.deepEqual(result.rootEvents, [
+      {
+        type: "mousedown",
+        trusted: false,
+        target: "contract-frame",
+        clientX: 132,
+        clientY: 66,
+      },
+    ]);
+    assert.equal(result.childVisibility, childState.visibility);
+  } finally {
+    child.window.close();
+    parent.window.close();
+  }
+});
+
+for (const fault of ["root-visible", "child-visible"] as const) {
+  test(`protocol diagnostic treats ${fault} as fatal even when physical cleanup restores state`, async () => {
+    const f = await routeDiagnosticFixture(fault);
+    await assert.rejects(f.run(), /must stay hidden/);
+    assert.equal(f.created.length, 1);
+    assert.equal(f.created[0]!.closed, true);
+    assert.equal(f.inputs.length, 1);
+    assert.equal(f.receipts[0]!.fatalSafetyFailure, true);
+    assert.ok(f.receipts[0]!.visibilityGuardError);
+  });
+}
+
+for (const lifecycle of [
+  "destroyed",
+  "cleared",
+  "replaced",
+  "detached",
+] as const) {
+  for (const timing of ["before", "after"] as const) {
+    test(`diagnostic child ${lifecycle} ${timing} press prevents dispatch to a successor context`, async () => {
+      const f = await routeDiagnosticFixture(`${lifecycle}-${timing}`);
+      await f.run();
+      assert.ok(f.created.every((record) => record.closed));
+      assert.equal(f.listeners.size, 0);
+      const childInputs = f.inputs.filter(
+        (input) => input.target === "owned-1",
+      );
+      assert.deepEqual(
+        childInputs.map((input) => input.type),
+        timing === "before" ? [] : ["mousePressed"],
+      );
+      assert.equal(f.receipts[1]!.outcome, "inconclusive");
+      assert.ok(f.receipts[1]!.childLifecycleInvalidatedBy);
+      assert.match(String(f.receipts[1]!.error), /context\/session changed/);
+    });
+  }
+}
+
+test("diagnostic evaluates the pinned child unique context before input and ignores unrelated detach", async () => {
+  const stale = await routeDiagnosticFixture("unique-context");
+  await stale.run();
+  assert.equal(
+    stale.inputs.filter((input) => input.target === "owned-1").length,
+    0,
+  );
+  assert.ok(stale.created.every((record) => record.closed));
+  const unrelated = await routeDiagnosticFixture("foreign-detach");
+  await unrelated.run();
+  assert.equal(
+    unrelated.receipts[1]!.outcome,
+    "observed-exact-leaf-pair-and-effect",
+  );
+});

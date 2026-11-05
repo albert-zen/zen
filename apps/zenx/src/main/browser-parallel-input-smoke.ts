@@ -406,7 +406,7 @@ frame.src=${JSON.stringify(leafUrl.href)};document.documentElement.append(frame)
 <style>body{margin:0;min-height:900px}canvas,input{position:absolute;box-sizing:border-box;left:0}canvas{top:0;background:#acf}input{width:190px;height:32px}#text-a{top:90px}#text-b{top:140px}</style>
 <canvas id="canvas" tabindex="0" width="200" height="60"></canvas><input id="text-a"><input id="text-b">
 <script>
-const config=${config},events=[];let clicks=0,replaceOnPress=false,documentId=crypto.randomUUID();
+const config=${config},events=[],routeEvents=[];let clicks=0,replaceOnPress=false,documentId=crypto.randomUUID();
 const node=id=>['canvas','text-a','text-b'].includes(id)?document.getElementById(id):null;
 const witness=event=>{
   events.push({type:event.type,trusted:event.isTrusted,target:event.target.id});
@@ -417,12 +417,13 @@ const witness=event=>{
   }
 };
 const bind=()=>{
+  for(const type of ['pointermove','pointerdown','pointerup','mousemove','mousedown','mouseup','click','keydown','keyup'])window.addEventListener(type,event=>routeEvents.push({type:event.type,trusted:event.isTrusted,target:event.target.id||event.target.localName,clientX:event.clientX,clientY:event.clientY}),true);
   for(const type of ['pointerdown','pointerup','keydown','keyup'])window.addEventListener(type,witness,true);
   window.addEventListener('message',receive);
   node('canvas').onclick=event=>{if(!event.isTrusted)throw Error('Untrusted fixture click');clicks++;event.currentTarget.focus({preventScroll:true})};
 };
 const viewport=()=>({width:innerWidth,height:innerHeight,scrollX,scrollY});
-const state=()=>({mode:config.mode,documentId,viewport:viewport(),events:[...events],clicks,widgets:{},values:{'text-a':node('text-a').value,'text-b':node('text-b').value},inner:document.activeElement?.id,visibility:document.visibilityState});
+const state=()=>({mode:config.mode,documentId,viewport:viewport(),routeEvents:[...routeEvents],events:[...events],clicks,widgets:{},values:{'text-a':node('text-a').value,'text-b':node('text-b').value},inner:document.activeElement?.id,visibility:document.visibilityState});
 const receive=event=>{
   const message=event.data;
   if(event.source!==parent||event.origin!==config.parentOrigin||!message||message.nonce!==config.nonce||message.kind!=='request'||!Number.isSafeInteger(message.id)||message.id<1)return;
@@ -446,7 +447,8 @@ parent.postMessage({kind:'ready',nonce:config.nonce,documentId},config.parentOri
   return `<!doctype html><meta charset="utf-8"><title>ZenX remote frame contract</title>
 <style>body{margin:0}iframe{position:absolute;display:block;left:20px;top:20px;width:620px;height:480px;border:5px solid #345;padding:11px 7px}</style>
 <script>
-const config=${config},childUrl=${JSON.stringify(childUrl.href)},pending=new Map();
+const config=${config},childUrl=${JSON.stringify(childUrl.href)},pending=new Map(),rootEvents=[];
+for(const type of ['pointermove','pointerdown','pointerup','mousemove','mousedown','mouseup','click','keydown','keyup'])window.addEventListener(type,event=>rootEvents.push({type:event.type,trusted:event.isTrusted,target:event.target.id||event.target.localName,clientX:event.clientX,clientY:event.clientY}),true);
 const frame=document.createElement('iframe');frame.id='contract-frame';
 let sequence=0,revision=0,ready=false;
 window.addEventListener('message',event=>{
@@ -462,7 +464,7 @@ const request=(method,argument)=>new Promise((resolve,reject)=>{
   pending.set(id,{resolve,reject,timer});frame.contentWindow.postMessage({kind:'request',nonce:config.nonce,id,method,argument},config.childOrigin);
 });
 window.contract={mode:config.mode,get ready(){return ready},
-  async state(){return {...await request('state'),visibility:document.visibilityState,outer:document.activeElement?.id}},
+  async state(){const child=await request('state');return {...child,childVisibility:child.visibility,rootEvents:[...rootEvents],visibility:document.visibilityState,outer:document.activeElement?.id}},
   async focus(id){return {...await request('focus',id),outer:document.activeElement?.id}},
   async point(id){const point=await request('point',id),x=point.x+20+5+7,y=point.y+20+5+11,r=frame.getBoundingClientRect();return {...point,x,y,owners:[{id:frame.id,left:r.left,top:r.top,width:r.width,height:r.height,hitId:document.elementFromPoint?.(x,y)?.id||'',scrollX,scrollY},...(point.owners||[])]}},
   mutate(){return request('mutate')},
@@ -582,6 +584,21 @@ node(mode==='ordinary-dom'?'editor':'text-a').focus();
 interface ContractState {
   mode: string;
   documentId?: string;
+  childVisibility?: string;
+  routeEvents?: {
+    type: string;
+    trusted: boolean;
+    target: string;
+    clientX?: number;
+    clientY?: number;
+  }[];
+  rootEvents?: {
+    type: string;
+    trusted: boolean;
+    target: string;
+    clientX?: number;
+    clientY?: number;
+  }[];
   widgets: Record<string, number>;
   values: Record<string, string | undefined>;
   events: { type: string; trusted: boolean; target: string }[];
@@ -1116,6 +1133,359 @@ export async function observeRemoteFramePlacement(
   }
 }
 
+/** Independent protocol diagnostics, never retries or provider acceptance. */
+async function runRemoteFrameRouteDiagnostics(options: {
+  backend: ZenXBrowserBackend;
+  sessionId: string;
+  endpoint: string;
+  url: string;
+  browserRpc: FixtureCdpEndpoint;
+  guard(): Promise<void>;
+  report(receipt: Record<string, unknown>): void;
+}): Promise<void> {
+  const { backend, sessionId, browserRpc, guard } = options;
+  // Both sequences are planned before input. A failed case cannot select a
+  // fallback route on its target; each case physically retires its own tab.
+  for (const route of ["root-pair", "child-session-pair"] as const) {
+    const url = new URL(options.url);
+    url.searchParams.set("nonce", randomUUID());
+    assert.equal(url.searchParams.get("mode"), "cross-origin-oopif");
+    const owned = await backend.open(sessionId, url.href);
+    let rpc: Rpc | undefined;
+    let childSessionId: string | undefined;
+    let removeChild: (() => void) | undefined;
+    let fatalSafetyError: unknown;
+    let childLifecycleInvalidatedBy: string | undefined;
+    let admittedChildContext: FixtureExecutionContext | undefined;
+    const receipt: Record<string, unknown> = {
+      scenario: "independent-remote-protocol-route",
+      layer: "protocol-diagnostic-only",
+      providerAcceptance: "not-exercised",
+      nativeExtensionRouting: "not-exercised",
+      platform: process.platform,
+      route,
+      ownedTargetId: owned.tabId,
+      dispatchAttempts: 0,
+      acknowledgedDispatches: 0,
+      settlementReads: 0,
+      outcome: "inconclusive",
+    };
+    const checkForeground = async (stage: string) => {
+      receipt.stage = stage;
+      try {
+        await guard();
+      } catch (error) {
+        fatalSafetyError = error;
+        receipt.fatalSafetyFailure = true;
+        receipt.foregroundGuardError ??= String(error);
+        receipt.foregroundGuardErrorAt ??= stage;
+        throw error;
+      }
+    };
+    const checkHidden = (current: ContractState, stage: string) => {
+      try {
+        assert.equal(
+          current.visibility,
+          "hidden",
+          "Diagnostic target must stay hidden",
+        );
+        assert.equal(
+          current.childVisibility,
+          "hidden",
+          "Diagnostic child must stay hidden",
+        );
+      } catch (error) {
+        fatalSafetyError = error;
+        receipt.fatalSafetyFailure = true;
+        receipt.visibilityGuardError ??= String(error);
+        receipt.visibilityGuardErrorAt ??= stage;
+        throw error;
+      }
+    };
+    const checkChildLifecycle = () =>
+      assert.equal(
+        childLifecycleInvalidatedBy,
+        undefined,
+        "Diagnostic child context/session changed; never dispatch to a replacement",
+      );
+    try {
+      const target = await poll(async () => {
+        const targets = (await (
+          await fetch(`${options.endpoint}/json/list`, {
+            redirect: "error",
+            signal: AbortSignal.timeout(5_000),
+          })
+        ).json()) as Target[];
+        return targets.find((target) => target.id === owned.tabId);
+      }, "dedicated route-diagnostic target");
+      rpc = await Rpc.connect(target.webSocketDebuggerUrl);
+      const fixture = rpc;
+      await poll(
+        async () =>
+          (await fixture.evaluate<boolean>("window.contract?.ready === true"))
+            ? true
+            : undefined,
+        "route-diagnostic remote child",
+      );
+      const placement = await observeRemoteFramePlacement(
+        fixture,
+        browserRpc,
+        "cross-origin-oopif",
+        url.href,
+      );
+      receipt.placement = placement;
+      if (route === "child-session-pair") {
+        const childContexts: FixtureExecutionContext[] = [];
+        const attachedEvents: NonNullable<
+          FramePlacementEvidence["childAttachedEvent"]
+        >[] = [];
+        removeChild = browserRpc.onEvent((event) => {
+          if (event.method === "Target.attachedToTarget") {
+            const attached = event.params as unknown as NonNullable<
+              FramePlacementEvidence["childAttachedEvent"]
+            >;
+            if (attached.targetInfo.targetId === placement.childSessionTargetId)
+              attachedEvents.push(attached);
+          }
+          const invalidate = (reason: string) => {
+            childLifecycleInvalidatedBy ??= reason;
+            receipt.childLifecycleInvalidatedBy = childLifecycleInvalidatedBy;
+          };
+          if (
+            event.method === "Target.detachedFromTarget" &&
+            ((childSessionId && event.params?.sessionId === childSessionId) ||
+              event.params?.targetId === placement.childSessionTargetId)
+          )
+            invalidate(event.method);
+          if (event.sessionId !== childSessionId || !childSessionId) return;
+          if (
+            event.method === "Runtime.executionContextsCleared" ||
+            event.method === "Runtime.executionContextDestroyed"
+          )
+            invalidate(event.method);
+          if (event.method === "Runtime.executionContextCreated") {
+            const context = event.params?.context as FixtureExecutionContext;
+            childContexts.push(context);
+            if (
+              context.auxData?.isDefault &&
+              (admittedChildContext ||
+                context.uniqueId !==
+                  placement.childContexts!.find(
+                    (value) => value.auxData.isDefault,
+                  )?.uniqueId)
+            )
+              invalidate("default-context-replaced");
+          }
+        });
+        const attached = await browserRpc.send("Target.attachToTarget", {
+          targetId: placement.childSessionTargetId,
+          flatten: true,
+        });
+        assert.equal(typeof attached.sessionId, "string");
+        childSessionId = attached.sessionId as string;
+        await browserRpc.send("Runtime.enable", {}, childSessionId);
+        const tree = (
+          await browserRpc.send("Page.getFrameTree", {}, childSessionId)
+        ).frameTree as {
+          frame: { id: string; url: string; parentId?: string };
+        };
+        assert.equal(tree.frame.url, placement.childUrl);
+        assert.equal(attachedEvents.length, 1);
+        const current = {
+          ...placement,
+          childSessionId,
+          childAttachedEvent: attachedEvents[0],
+          childSessionFrameId: tree.frame.id,
+          childSessionParentFrameId: tree.frame.parentId,
+          childContexts,
+        };
+        assertRemoteFramePlacement(current);
+        assert.deepEqual(
+          childContexts
+            .filter((context) => context.auxData.isDefault)
+            .map((context) => context.uniqueId),
+          placement
+            .childContexts!.filter((context) => context.auxData.isDefault)
+            .map((context) => context.uniqueId),
+          "Diagnostic attachment must retain the exact child document context",
+        );
+        const owner = await fixture.send("DOM.getFrameOwner", {
+          frameId: tree.frame.id,
+        });
+        assert.equal(owner.backendNodeId, placement.ownerBackendNodeId);
+        admittedChildContext = childContexts.find(
+          (context) => context.auxData.isDefault,
+        );
+        assert.ok(admittedChildContext);
+        checkChildLifecycle();
+        receipt.dispatchSessionEvidence = current;
+      }
+      const capture = await fixture.send("Page.captureScreenshot", {
+        format: "png",
+        fromSurface: true,
+        captureBeyondViewport: false,
+      });
+      assert.ok(typeof capture.data === "string" && capture.data.length > 0);
+      const position = await fixture.evaluate<RemoteFixturePoint>(
+        "window.contract.point('canvas')",
+      );
+      receipt.position = position;
+      assertRemoteFixturePoint(position, "canvas", 1);
+      const before = await fixture.evaluate<ContractState>(
+        "window.contract.state()",
+      );
+      receipt.before = before;
+      checkHidden(before, "setup");
+      assert.equal(before.documentId, position.documentId);
+      assert.equal(before.events.length, 0);
+      assert.equal(before.routeEvents?.length, 0);
+      assert.equal(before.rootEvents?.length, 0);
+      assert.equal(before.clicks, 0);
+      await checkForeground("before-pair");
+      const point =
+        route === "root-pair"
+          ? { x: position.x, y: position.y }
+          : position.localPoint;
+      receipt.inputPoint = point;
+      receipt.setupVerified = true;
+      for (const type of ["mousePressed", "mouseReleased"]) {
+        if (route === "child-session-pair") {
+          checkChildLifecycle();
+          assert.ok(childSessionId && admittedChildContext);
+          const document = await browserRpc.send(
+            "Runtime.evaluate",
+            {
+              expression: "document.URL",
+              uniqueContextId: admittedChildContext.uniqueId,
+              returnByValue: true,
+              awaitPromise: false,
+            },
+            childSessionId,
+          );
+          assert.equal(
+            document.exceptionDetails,
+            undefined,
+            "Exact diagnostic child context must remain live",
+          );
+          assert.equal(
+            (document.result as { value: string }).value,
+            placement.childUrl,
+          );
+        }
+        const current = await fixture.evaluate<ContractState>(
+          "window.contract.state()",
+        );
+        checkHidden(current, `before-${type}`);
+        assert.equal(
+          current.documentId,
+          before.documentId,
+          "Diagnostic child document changed before dispatch",
+        );
+        await checkForeground(`before-${type}`);
+        checkChildLifecycle();
+        receipt.dispatchAttempts = Number(receipt.dispatchAttempts) + 1;
+        const params = {
+          type,
+          ...point,
+          button: "left",
+          buttons: type === "mousePressed" ? 1 : 0,
+          clickCount: 1,
+        };
+        if (route === "root-pair")
+          await fixture.send("Input.dispatchMouseEvent", params);
+        else {
+          assert.ok(childSessionId);
+          await browserRpc.send(
+            "Input.dispatchMouseEvent",
+            params,
+            childSessionId,
+          );
+        }
+        receipt.acknowledgedDispatches =
+          Number(receipt.acknowledgedDispatches) + 1;
+        await checkForeground(`after-${type}`);
+        const afterEvent = await fixture.evaluate<ContractState>(
+          "window.contract.state()",
+        );
+        receipt.after = afterEvent;
+        checkHidden(afterEvent, `after-${type}`);
+        checkChildLifecycle();
+      }
+      await settleRemoteFixturePair(
+        async () => {
+          await checkForeground("read-only-settlement");
+          const current = await fixture.evaluate<ContractState>(
+            "window.contract.state()",
+          );
+          receipt.after = current;
+          checkHidden(current, "read-only-settlement");
+          checkChildLifecycle();
+          receipt.settlementReads = Number(receipt.settlementReads) + 1;
+          return current;
+        },
+        before,
+        "click",
+        "canvas",
+      );
+      receipt.outcome = "observed-exact-leaf-pair-and-effect";
+    } catch (error) {
+      receipt.error = error instanceof Error ? error.message : String(error);
+    } finally {
+      // Even a failed/unknown press retires this exact owned target. Never
+      // release/retry on another session, and do not run another case if close fails.
+      removeChild?.();
+      if (childSessionId) {
+        try {
+          await browserRpc.send("Target.detachFromTarget", {
+            sessionId: childSessionId,
+          });
+        } catch (error) {
+          receipt.detachError = String(error);
+        }
+      }
+      rpc?.close();
+      try {
+        try {
+          await backend.closeTab(sessionId, owned.tabId);
+        } catch (error) {
+          receipt.providerDetachError = String(error);
+        }
+        const closed = await browserRpc.send("Target.closeTarget", {
+          targetId: owned.tabId,
+        });
+        assert.equal(
+          closed.success,
+          true,
+          "Exact diagnostic target must physically close",
+        );
+        await poll(async () => {
+          const targets = (await (
+            await fetch(`${options.endpoint}/json/list`, {
+              redirect: "error",
+              signal: AbortSignal.timeout(5_000),
+            })
+          ).json()) as Target[];
+          return targets.some((target) => target.id === owned.tabId)
+            ? undefined
+            : true;
+        }, "physical route-diagnostic target closure");
+        receipt.physicallyClosed = true;
+        await checkForeground("after-physical-close");
+      } catch (error) {
+        receipt.teardownError = String(error);
+        throw error;
+      } finally {
+        options.report(receipt);
+        console.log(
+          "Independent remote protocol route",
+          JSON.stringify(receipt),
+        );
+      }
+    }
+    if (receipt.fatalSafetyFailure) throw fatalSafetyError;
+  }
+}
+
 /** Intentional unknown outcome owns a separate tab and physically closes it. */
 async function runInterruptedRemoteFrameSmoke(options: {
   backend: ZenXBrowserBackend;
@@ -1320,13 +1690,16 @@ export async function runTargetedInputContractSmoke(options: {
   const inputs: ContractInput[] = [];
   const reports: Record<string, unknown>[] = [];
   let remoteWitness: Record<string, unknown> | undefined;
+  const protocolRouteDiagnostics: Record<string, unknown>[] = [];
   // A passive, scoped tap on actual outgoing ws messages. No mock transport,
   // rewritten events, retries, tracker access or synthetic trusted-event shims.
-  // Only the provider's browser socket/session-scoped Input is counted.
+  // Only provider Input is counted. The independent placement/diagnostic
+  // socket is excluded even when its explicit child-session probe sends Input.
   const originalSend = WebSocket.prototype.send;
   WebSocket.prototype.send = function (this: WebSocket, ...args: unknown[]) {
     if (
       this.url === version.webSocketDebuggerUrl &&
+      this !== placementRpc.socket &&
       typeof args[0] === "string"
     ) {
       const message = JSON.parse(args[0]) as {
@@ -1563,6 +1936,25 @@ export async function runTargetedInputContractSmoke(options: {
         });
       }
       if (remoteMode) {
+        if (mode === "cross-origin-oopif") {
+          options.onPhase?.(
+            "input-contracts:independent-remote-route-diagnostics",
+          );
+          await runRemoteFrameRouteDiagnostics({
+            backend,
+            sessionId,
+            endpoint,
+            url: contractUrl.href,
+            browserRpc: placementRpc,
+            guard,
+            report: (receipt) => protocolRouteDiagnostics.push(receipt),
+          });
+          options.onPhase?.(`input-contracts:${mode}:actions`);
+          cases.push({
+            case: "independent-protocol-route-diagnostics",
+            receipts: protocolRouteDiagnostics,
+          });
+        }
         const placement = await observeRemoteFramePlacement(
           rpc,
           placementRpc,
@@ -2081,6 +2473,7 @@ export async function runTargetedInputContractSmoke(options: {
       scenario: "targeted-input-contracts",
       completedReports: reports,
       lastDirectRemoteWitness: remoteWitness,
+      protocolRouteDiagnostics,
       error: error instanceof Error ? error.message : String(error),
     };
     // Preserve the current authored point, owner/inner hits and final read in
