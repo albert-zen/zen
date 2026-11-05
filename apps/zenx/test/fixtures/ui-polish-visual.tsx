@@ -580,20 +580,29 @@ function SideChatFixture() {
 }
 
 function AuxiliaryFixture() {
+  const discovery = params.has("tabDiscovery");
   const [collapsed, setCollapsed] = React.useState(window.innerWidth <= 720);
   const [width, setWidth] = React.useState(520);
   const [selected, setSelected] = React.useState("custom:browser");
-  const [order, setOrder] = React.useState([
-    "custom:files",
-    "custom:browser",
-    "custom:computer",
-    "custom:subagents",
-    "custom:triggers",
-  ]);
+  const [order, setOrder] = React.useState(
+    discovery
+      ? ["custom:files", "custom:browser"]
+      : [
+          "custom:files",
+          "custom:browser",
+          "custom:computer",
+          "custom:subagents",
+          "custom:triggers",
+        ],
+  );
   const writes = React.useRef<string[][]>([]);
   const customTabs = [
-    ["files", "PLAN.md", "file"],
-    ["browser", "Browser", "browser"],
+    ["files", discovery ? "项目反馈汇总与下一阶段计划" : "PLAN.md", "file"],
+    [
+      "browser",
+      discovery ? "协作工作流与表单发布检查" : "Browser",
+      discovery ? "users" : "browser",
+    ],
     ["computer", "Computer", "computer"],
     ["subagents", "Subagents", "users"],
     ["triggers", "Triggers", "trigger"],
@@ -628,7 +637,11 @@ function AuxiliaryFixture() {
       <main className="workspace">
         <section className="agent-surface">
           <div style={{ padding: 24 }}>
-            <h1>Auxiliary tab reorder</h1>
+            <h1>
+              {discovery
+                ? "Workspace tab discoverability"
+                : "Auxiliary tab reorder"}
+            </h1>
             <p>Production AuxiliaryPanel with synthetic tabs and content.</p>
           </div>
         </section>
@@ -658,6 +671,17 @@ function AuxiliaryFixture() {
             ),
           }))}
         />
+        {discovery ? (
+          <div className="information-toolbar">
+            <button
+              className="icon-button"
+              title="Synthetic information control"
+              aria-label="Synthetic information control"
+            >
+              ≡
+            </button>
+          </div>
+        ) : null}
         <span className="sr-only" aria-hidden="true">
           {width}
         </span>

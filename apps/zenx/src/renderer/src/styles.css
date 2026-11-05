@@ -8415,11 +8415,16 @@ button:disabled {
 .workspace-content-tab {
   display: inline-flex;
   align-items: center;
-  flex: 0 0 auto;
+  flex: 0 1 210px;
   max-width: min(210px, 100%);
-  min-width: 0;
+  min-width: min(112px, 100%);
   height: 30px;
-  border-radius: 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px 8px 4px 4px;
+  background: var(--color-surface-wash);
+}
+.workspace-content-tab:hover {
+  background: var(--color-surface-hover);
 }
 .workspace-content-tab[data-active="true"] {
   background: var(--color-surface-hover);
@@ -8429,12 +8434,14 @@ button:disabled {
   align-items: center;
   gap: 7px;
   min-width: 0;
-  flex-shrink: 1;
+  flex: 1 1 auto;
+  text-align: left;
   padding: 6px 3px 6px 9px;
   line-height: 18px;
   background: transparent;
 }
 .workspace-content-tab .workspace-tab-title {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -8977,7 +8984,11 @@ button:disabled {
 }
 .workspace-content-tab[data-active="true"] {
   box-shadow: none;
-  background: var(--color-surface-hover);
+  background: var(--color-surface-active);
+  border-color: var(--color-border-strong);
+}
+.workspace-content-tab[data-active="true"] [role="tab"] {
+  font-weight: 600;
 }
 [data-plugin-surface] :where(button:not([class])) {
   min-height: var(--control-height);
