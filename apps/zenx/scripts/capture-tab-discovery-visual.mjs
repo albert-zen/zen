@@ -68,11 +68,10 @@ await withPreviewBrowser(
         deviceScaleFactor: 1,
         mobile: false,
       });
-      await send("Page.navigate", {
-        url: `${url}/ui-polish-visual.html?scene=auxiliary&tabDiscovery&lang=zh-CN&platform=${platform}&theme=${theme}`,
-      });
+      const destination = `${url}/ui-polish-visual.html?scene=auxiliary&tabDiscovery&lang=zh-CN&platform=${platform}&theme=${theme}`;
+      await send("Page.navigate", { url: destination });
       await wait(
-        "document.body.dataset.previewReady === 'true' && document.querySelectorAll('[role=tab]').length === 2",
+        `location.href === ${JSON.stringify(destination)} && document.body?.dataset.previewReady === 'true' && document.querySelectorAll('[role=tab]').length === 2`,
       );
       await delay(300);
       const state = await geometry();
@@ -116,11 +115,10 @@ await withPreviewBrowser(
       deviceScaleFactor: 1,
       mobile: false,
     });
-    await send("Page.navigate", {
-      url: `${url}/ui-polish-visual.html?scene=auxiliary&platform=darwin`,
-    });
+    const destination = `${url}/ui-polish-visual.html?scene=auxiliary&platform=darwin`;
+    await send("Page.navigate", { url: destination });
     await wait(
-      "document.body.dataset.previewReady === 'true' && document.querySelectorAll('[role=tab]').length === 5",
+      `location.href === ${JSON.stringify(destination)} && document.body?.dataset.previewReady === 'true' && document.querySelectorAll('[role=tab]').length === 5`,
     );
     await delay(300);
     const start = await geometry();
