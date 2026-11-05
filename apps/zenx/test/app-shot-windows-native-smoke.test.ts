@@ -28,12 +28,19 @@ after(() => {
   }
 });
 
-test("real Windows metadata bridge loads and reads under a hard process deadline", {
-  skip: !enabled, timeout: 12_000,
-}, (t) => {
-  evidence.nativeLibrary = "failed";
-  const moduleUrl = new URL("../src/main/app-shot-windows-foreground.ts", import.meta.url).href;
-  const source = `
+test(
+  "real Windows metadata bridge loads and reads under a hard process deadline",
+  {
+    skip: !enabled,
+    timeout: 12_000,
+  },
+  (t) => {
+    evidence.nativeLibrary = "failed";
+    const moduleUrl = new URL(
+      "../src/main/app-shot-windows-foreground.ts",
+      import.meta.url,
+    ).href;
+    const source = `
     const { loadAppShotWindowsApi } = await import(${JSON.stringify(moduleUrl)});
     const api = await loadAppShotWindowsApi();
     const handle = api.getForegroundWindow();
@@ -50,20 +57,37 @@ test("real Windows metadata bridge loads and reads under a hard process deadline
     }
     process.stdout.write(JSON.stringify(result));
   `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", source], {
-    encoding: "utf8", timeout: 8000, maxBuffer: 4096, windowsHide: true,
-  });
-  assert.ifError(result.error);
-  assert.equal(result.signal, null);
-  // Never publish arbitrary native stderr, window titles, paths or process IDs.
-  assert.equal(result.status, 0, "Windows ffi-rs production metadata bridge failed");
-  const value = JSON.parse(result.stdout) as { library: boolean; foreground: boolean };
-  assert.equal(value.library, true);
-  evidence.nativeLibrary = "passed";
-  if (!value.foreground) {
-    evidence.foreground = "blocked-no-stable-named-foreground";
-    t.skip("Hosted runner has no stable named foreground; capture remains unverified");
-    return;
-  }
-  evidence.foreground = "passed-metadata-only";
-});
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "-e", source],
+      {
+        encoding: "utf8",
+        timeout: 8000,
+        maxBuffer: 4096,
+        windowsHide: true,
+      },
+    );
+    assert.ifError(result.error);
+    assert.equal(result.signal, null);
+    // Never publish arbitrary native stderr, window titles, paths or process IDs.
+    assert.equal(
+      result.status,
+      0,
+      "Windows ffi-rs production metadata bridge failed",
+    );
+    const value = JSON.parse(result.stdout) as {
+      library: boolean;
+      foreground: boolean;
+    };
+    assert.equal(value.library, true);
+    evidence.nativeLibrary = "passed";
+    if (!value.foreground) {
+      evidence.foreground = "blocked-no-stable-named-foreground";
+      t.skip(
+        "Hosted runner has no stable named foreground; capture remains unverified",
+      );
+      return;
+    }
+    evidence.foreground = "passed-metadata-only";
+  },
+);

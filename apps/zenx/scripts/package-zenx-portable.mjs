@@ -1233,7 +1233,11 @@ export async function copyMarketplaceCatalogResource(options) {
   return destination;
 }
 
-export function packageManifest(target, zenxPackage, platform = process.platform) {
+export function packageManifest(
+  target,
+  zenxPackage,
+  platform = process.platform,
+) {
   return target === "app"
     ? {
         name: "zenx",

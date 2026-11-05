@@ -532,7 +532,10 @@ export async function installAppShotIpc(options: {
     startModifierPair: (modifierOptions) =>
       startAppShotModifierPair({
         ...modifierOptions,
-        workerPath: join(app.getAppPath(), "out/main/app-shot-shortcut-worker.js"),
+        workerPath: join(
+          app.getAppPath(),
+          "out/main/app-shot-shortcut-worker.js",
+        ),
       }),
     registerShortcut: (accelerator, callback) =>
       globalShortcut.register(accelerator, callback),
@@ -589,12 +592,8 @@ export async function installAppShotIpc(options: {
   );
   ipcMain.handle(
     CHANNELS.arm,
-    (
-      event,
-      token: unknown,
-      includeAccessibility: unknown,
-      kind: unknown,
-    ) => controller.arm(caller(event), token, includeAccessibility, kind),
+    (event, token: unknown, includeAccessibility: unknown, kind: unknown) =>
+      controller.arm(caller(event), token, includeAccessibility, kind),
   );
   ipcMain.handle(CHANNELS.disarm, (event, token: unknown) =>
     controller.disarm(caller(event), token),

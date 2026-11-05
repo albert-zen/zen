@@ -157,7 +157,10 @@ describe("App Shot physical Shift-pair native logic", () => {
   });
 
   it("contains only modifier observation, with no key event hook or input API", () => {
-    assert.match(MAC_APP_SHOT_MODIFIER_PAIR_JXA, /CGEventSourceFlagsState\(0\)/);
+    assert.match(
+      MAC_APP_SHOT_MODIFIER_PAIR_JXA,
+      /CGEventSourceFlagsState\(0\)/,
+    );
     assert.doesNotMatch(
       MAC_APP_SHOT_MODIFIER_PAIR_JXA,
       /CGEventTap|CGEventPost|AXIsProcessTrusted|keyCode|keyDown|keyUp/,
@@ -375,6 +378,65 @@ describe("App Shot modifier monitor lifecycle", () => {
     assert.equal(process.listenerCount("exit"), baseline);
   });
 
+  it("settles Windows exit and pipe closure when aggregate close is omitted", async () => {
+    const h = harness({
+      platform: "win32",
+      workerPath: "C:\\zenx\\out\\main\\app-shot-shortcut-worker.js",
+    });
+    h.child.closeOnSignal = false;
+    const pending = h.start();
+    h.child.emit("message", "ready");
+    const monitor = await pending;
+    h.child.connected = false;
+    h.child.emit("disconnect");
+    let settled = false;
+    const stopping = monitor.stop().then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    assert.equal(settled, false, "disconnect alone is not proof of exit");
+    h.child.emit("exit", 0, null);
+    await Promise.resolve();
+    assert.equal(settled, false, "exit alone does not close owned pipes");
+    h.child.stdout.destroy();
+    h.child.stderr.destroy();
+    await stopping;
+    assert.equal(settled, true);
+    assert.equal(h.failures.length, 1);
+    assert.equal(h.child.listenerCount("message"), 0);
+    assert.equal(h.child.listenerCount("close"), 0);
+  });
+
+  it("rejects a shutdown deadline instead of claiming an unconfirmed exit", async () => {
+    const baseline = process.listenerCount("exit");
+    const h = harness({}, { stopGraceMs: 1, stopTimeoutMs: 10 });
+    h.child.closeOnSignal = false;
+    const pending = h.start();
+    h.child.stderr.write("ready\n");
+    const monitor = await pending;
+    await assert.rejects(monitor.stop(), /child exit was not confirmed/);
+    assert.ok(h.child.signals.includes("SIGKILL"));
+    h.child.stderr.write("trigger\n");
+    assert.equal(h.triggers, 0);
+    assert.equal(process.listenerCount("exit"), baseline + 1);
+    // Ownership survives the rejected wait until the real close is observed.
+    h.child.finish();
+    assert.equal(process.listenerCount("exit"), baseline);
+  });
+
+  it("rejects startup even if readiness and process shutdown both time out", async () => {
+    const h = harness(
+      {},
+      { readyTimeoutMs: 1, stopGraceMs: 1, stopTimeoutMs: 10 },
+    );
+    h.child.closeOnSignal = false;
+    await assert.rejects(
+      h.start(),
+      /ready timed out; .*child exit was not confirmed/,
+    );
+    h.child.finish();
+  });
+
   it("still stops if trigger and failure callbacks throw", async () => {
     const h = harness({
       onTrigger: () => {
@@ -406,8 +468,14 @@ describe("App Shot Windows physical modifier worker", () => {
       true,
     );
     assert.deepEqual(keys, [0xa0, 0xa1]);
-    assert.equal(windowsShiftPairPressed(() => 0x0001), false);
-    assert.equal(windowsShiftPairPressed(() => 0x8000), true);
+    assert.equal(
+      windowsShiftPairPressed(() => 0x0001),
+      false,
+    );
+    assert.equal(
+      windowsShiftPairPressed(() => 0x8000),
+      true,
+    );
     assert.equal(
       windowsShiftPairPressed((key) => (key === 0xa0 ? 0x8000 : 0)),
       false,
@@ -422,15 +490,10 @@ describe("App Shot Windows physical modifier worker", () => {
     const samples = [true, true, false, true, false, false, true];
     let index = 0;
     const edge = createWindowsShiftPairEdgeDetector(() => samples[index++]!);
-    assert.deepEqual(samples.map(() => edge()), [
-      true,
-      false,
-      false,
-      true,
-      false,
-      false,
-      true,
-    ]);
+    assert.deepEqual(
+      samples.map(() => edge()),
+      [true, false, false, true, false, false, true],
+    );
   });
 
   it("forks only the explicitly supplied worker path and uses ready/trigger IPC", async () => {

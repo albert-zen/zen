@@ -1,4 +1,13 @@
-import { cp, lstat, mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  cp,
+  lstat,
+  mkdir,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 
@@ -15,23 +24,45 @@ export function appShotRuntimeDependencies(platform = process.platform) {
 export function appShotRuntimePackages(
   platform = process.platform,
   arch = process.arch,
-  { libc = process.report?.getReport()?.header.glibcVersionRuntime ? "glibc" : "unknown" } = {},
+  {
+    libc = process.report?.getReport()?.header.glibcVersionRuntime
+      ? "glibc"
+      : "unknown",
+  } = {},
 ) {
-  if (!["darwin", "win32", "linux"].includes(platform) ||
-      !["x64", "arm64"].includes(arch) ||
-      (platform === "linux" && libc !== "glibc")) {
-    throw new Error(`Unsupported App Shot native target: ${platform}-${arch}-${libc}`);
+  if (
+    !["darwin", "win32", "linux"].includes(platform) ||
+    !["x64", "arm64"].includes(arch) ||
+    (platform === "linux" && libc !== "glibc")
+  ) {
+    throw new Error(
+      `Unsupported App Shot native target: ${platform}-${arch}-${libc}`,
+    );
   }
   const target = `${platform}-${arch}${platform === "win32" ? "-msvc" : platform === "linux" ? "-gnu" : ""}`;
   const result = [];
   for (const [name, version, prefix, scope, files] of [
-    ["@crowecawcaw/xa11y", APP_SHOT_XA11Y_VERSION, "xa11y", "@crowecawcaw", ["index.js", "native.js"]],
-    ...(platform === "win32" ? [["ffi-rs", APP_SHOT_FFI_VERSION, "ffi-rs", "@yuuang", ["index.js"]]] : []),
+    [
+      "@crowecawcaw/xa11y",
+      APP_SHOT_XA11Y_VERSION,
+      "xa11y",
+      "@crowecawcaw",
+      ["index.js", "native.js"],
+    ],
+    ...(platform === "win32"
+      ? [["ffi-rs", APP_SHOT_FFI_VERSION, "ffi-rs", "@yuuang", ["index.js"]]]
+      : []),
   ]) {
     const native = `${scope}/${prefix}-${target}`;
     result.push({ name, version, files, native, main: "index.js" });
     const binary = `${prefix}.${target}.node`;
-    result.push({ name: native, version, files: [binary], main: binary, parent: name });
+    result.push({
+      name: native,
+      version,
+      files: [binary],
+      main: binary,
+      parent: name,
+    });
   }
   return result;
 }
@@ -40,7 +71,8 @@ export function appShotRuntimePackages(
 // upstream MIT notice, as T3 does, instead of dropping attribution.
 // xa11y: https://github.com/xa11y/xa11y/blob/v0.13.0/LICENSE
 // ffi-rs: https://github.com/zhangyuang/node-ffi-rs/blob/9c5ba3452d8cedbb0b30c7ce4dd0138135bd06ea/LICENSE
-const MIT_NOTICE = "MIT License\n\n__COPYRIGHT__\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n";
+const MIT_NOTICE =
+  'MIT License\n\n__COPYRIGHT__\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the "Software"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n';
 
 function pinnedNotice(name) {
   return MIT_NOTICE.replace(
@@ -72,7 +104,9 @@ async function regularFile(filename, required = true) {
     entry = await lstat(filename);
   } catch (error) {
     if (error?.code === "ENOENT" && !required) return false;
-    throw new Error(`App Shot runtime file is missing: ${filename}`, { cause: error });
+    throw new Error(`App Shot runtime file is missing: ${filename}`, {
+      cause: error,
+    });
   }
   if (!entry.isFile() || entry.isSymbolicLink() || entry.size === 0)
     throw new Error(`Non-regular or empty App Shot runtime file: ${filename}`);
@@ -104,16 +138,31 @@ export async function stageAppShotRuntime(
       : path.resolve(rootDirectory, "apps", "zenx", "package.json");
     const source = await packageSource(plan.name, fromManifest);
     await regularFile(path.join(source, "package.json"));
-    const manifest = JSON.parse(await readFile(path.join(source, "package.json"), "utf8"));
-    if (manifest.name !== plan.name || manifest.version !== plan.version ||
-        manifest.main !== plan.main || manifest.license !== "MIT" ||
-        Object.keys(manifest.dependencies ?? {}).length > 0) {
+    const manifest = JSON.parse(
+      await readFile(path.join(source, "package.json"), "utf8"),
+    );
+    if (
+      manifest.name !== plan.name ||
+      manifest.version !== plan.version ||
+      manifest.main !== plan.main ||
+      manifest.license !== "MIT" ||
+      Object.keys(manifest.dependencies ?? {}).length > 0
+    ) {
       throw new Error(`Unaudited App Shot runtime package: ${plan.name}`);
     }
-    if (plan.native && manifest.optionalDependencies?.[plan.native] !== plan.version)
+    if (
+      plan.native &&
+      manifest.optionalDependencies?.[plan.native] !== plan.version
+    )
       throw new Error(`App Shot native version does not match: ${plan.native}`);
-    if (plan.parent && (!manifest.os?.includes(platform) || !manifest.cpu?.includes(arch) ||
-        (platform === "linux" && manifest.libc !== undefined && !manifest.libc.includes("glibc"))))
+    if (
+      plan.parent &&
+      (!manifest.os?.includes(platform) ||
+        !manifest.cpu?.includes(arch) ||
+        (platform === "linux" &&
+          manifest.libc !== undefined &&
+          !manifest.libc.includes("glibc")))
+    )
       throw new Error(`App Shot native target does not match: ${plan.name}`);
     const files = [...plan.files, "package.json"];
     for (const file of files) await regularFile(path.join(source, file));
@@ -149,11 +198,20 @@ export async function stageAppShotRuntime(
     for (const file of entry.files)
       await cp(path.join(entry.source, file), path.join(destination, file));
     const notice = entry.licenses.length
-      ? (await Promise.all(entry.licenses.map((file) => readFile(path.join(entry.source, file), "utf8")))).join("\n")
+      ? (
+          await Promise.all(
+            entry.licenses.map((file) =>
+              readFile(path.join(entry.source, file), "utf8"),
+            ),
+          )
+        ).join("\n")
       : pinnedNotice(entry.name);
     if (entry.licenses.length === 0)
       await writeFile(path.join(destination, "LICENSE"), notice);
-    const noticePath = path.join(licenseDirectory, `${entry.name.replaceAll("/", "-")}.txt`);
+    const noticePath = path.join(
+      licenseDirectory,
+      `${entry.name.replaceAll("/", "-")}.txt`,
+    );
     await rm(noticePath, { force: true });
     await writeFile(noticePath, notice);
   }
@@ -161,6 +219,8 @@ export async function stageAppShotRuntime(
     platform,
     arch,
     packages: plans.map((entry) => entry.name),
-    nativeFiles: plans.filter((entry) => entry.parent).map((entry) => `${entry.name}/${entry.main}`),
+    nativeFiles: plans
+      .filter((entry) => entry.parent)
+      .map((entry) => `${entry.name}/${entry.main}`),
   };
 }

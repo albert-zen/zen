@@ -35,9 +35,15 @@ process.once("disconnect", () => process.exit(0));
 
 async function run(): Promise<unknown> {
   const operation = process.argv[2];
-  if (operation !== "foreground" && operation !== "region" && operation !== "accessibility")
+  if (
+    operation !== "foreground" &&
+    operation !== "region" &&
+    operation !== "accessibility"
+  )
     throw new Error("Invalid App Shot native operation");
-  const request = new Promise<unknown>((resolve) => process.once("message", resolve));
+  const request = new Promise<unknown>((resolve) =>
+    process.once("message", resolve),
+  );
   // Import only the native package needed for this operation, and only in this child.
   if (operation === "foreground") {
     if (process.platform !== "win32") throw new Error("Unsupported platform");
@@ -51,27 +57,43 @@ async function run(): Promise<unknown> {
   if (process.platform !== "win32" && process.platform !== "darwin")
     throw new Error("Unsupported platform");
   const imported = await import("@crowecawcaw/xa11y");
-  const xa11y = (imported as unknown as { default?: typeof imported }).default ?? imported;
+  const xa11y =
+    (imported as unknown as { default?: typeof imported }).default ?? imported;
   process.send?.("ready");
   const input = await request;
   if (!isRecord(input)) throw new Error("Invalid App Shot request");
   if (operation === "region") {
-    if (process.platform !== "win32" || !isAppShotBounds(input.region) ||
-        input.region.width * input.region.height > APP_SHOT_MAX_PIXELS)
+    if (
+      process.platform !== "win32" ||
+      !isAppShotBounds(input.region) ||
+      input.region.width * input.region.height > APP_SHOT_MAX_PIXELS
+    )
       throw new Error("Invalid App Shot capture region");
     const shot = await xa11y.screenshot({ region: input.region });
-    if (!Number.isSafeInteger(shot.width) || !Number.isSafeInteger(shot.height) ||
-        shot.width <= 0 || shot.height <= 0 ||
-        shot.width * shot.height > APP_SHOT_MAX_PIXELS)
+    if (
+      !Number.isSafeInteger(shot.width) ||
+      !Number.isSafeInteger(shot.height) ||
+      shot.width <= 0 ||
+      shot.height <= 0 ||
+      shot.width * shot.height > APP_SHOT_MAX_PIXELS
+    )
       throw new Error("App Shot image exceeds the pixel budget");
     const png = shot.toPng();
     if (png.byteLength > APP_SHOT_MAX_PNG_BYTES)
       throw new Error("App Shot image exceeds the byte budget");
-    return { width: shot.width, height: shot.height, png: png.toString("base64") };
+    return {
+      width: shot.width,
+      height: shot.height,
+      png: png.toString("base64"),
+    };
   }
-  if (!isAppShotIdentity(input.identity) || input.identity.platform !== process.platform)
+  if (
+    !isAppShotIdentity(input.identity) ||
+    input.identity.platform !== process.platform
+  )
     throw new Error("Invalid App Shot accessibility identity");
-  const { readAppShotAccessibilityWithApi } = await import("./app-shot-accessibility.js");
+  const { readAppShotAccessibilityWithApi } =
+    await import("./app-shot-accessibility.js");
   return readAppShotAccessibilityWithApi(xa11y.App, input.identity);
 }
 

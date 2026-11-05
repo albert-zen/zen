@@ -92,7 +92,12 @@ describe("macOS trusted capture geometry", () => {
   it("keeps valid CoreGraphics bounds for exact AX matching", async () => {
     const bounds = { x: -800, y: 20, width: 800, height: 600 };
     const result = await readMacWindowMetadata(42, async () => ({
-      stdout: JSON.stringify({ windowId: 42, windowTitle: "Editor", pid: 12, bounds }),
+      stdout: JSON.stringify({
+        windowId: 42,
+        windowTitle: "Editor",
+        pid: 12,
+        bounds,
+      }),
     }));
     assert.deepEqual(result.bounds, bounds);
     assert.match(MAC_WINDOW_METADATA_JXA, /kCGWindowBounds/);
@@ -101,7 +106,12 @@ describe("macOS trusted capture geometry", () => {
 
   it("does not trust malformed geometry", async () => {
     const result = await readMacWindowMetadata(42, async () => ({
-      stdout: JSON.stringify({ windowId: 42, windowTitle: "Editor", pid: 12, bounds: { x: 0, y: 0, width: -2, height: 10 } }),
+      stdout: JSON.stringify({
+        windowId: 42,
+        windowTitle: "Editor",
+        pid: 12,
+        bounds: { x: 0, y: 0, width: -2, height: 10 },
+      }),
     }));
     assert.equal(result.bounds, undefined);
   });

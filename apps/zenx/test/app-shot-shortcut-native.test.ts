@@ -35,7 +35,12 @@ it(
         String(process.pid),
         "4",
       ],
-      { timeout: 5000, killSignal: "SIGKILL", maxBuffer: 4096, encoding: "utf8" },
+      {
+        timeout: 5000,
+        killSignal: "SIGKILL",
+        maxBuffer: 4096,
+        encoding: "utf8",
+      },
     );
     const lines = result.stderr.trim().split(/\r?\n/u);
     assert.equal(result.stdout.trim(), "");
@@ -68,7 +73,12 @@ it(
         String(process.pid + 1),
         "4",
       ],
-      { timeout: 5000, killSignal: "SIGKILL", maxBuffer: 4096, encoding: "utf8" },
+      {
+        timeout: 5000,
+        killSignal: "SIGKILL",
+        maxBuffer: 4096,
+        encoding: "utf8",
+      },
     );
     assert.deepEqual(result.stderr.trim().split(/\r?\n/u), [
       "ready",
@@ -123,14 +133,18 @@ const windowsSkip =
 // app.getAppPath()/out/main path and never resolves from a bundled shared chunk.
 const windowsWorkerPath =
   process.env.ZENX_APP_SHOT_WORKER_PATH ??
-  fileURLToPath(new URL("../out/main/app-shot-shortcut-worker.js", import.meta.url));
+  fileURLToPath(
+    new URL("../out/main/app-shot-shortcut-worker.js", import.meta.url),
+  );
 
-function forkWindowsWorker(file: string, args: readonly string[]): ChildProcess {
+function forkWindowsWorker(
+  file: string,
+  args: readonly string[],
+): ChildProcess {
   return fork(file, [...args], {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
     execArgv: [],
     stdio: ["ignore", "pipe", "pipe", "ipc"],
-    windowsHide: true,
   });
 }
 
@@ -144,22 +158,66 @@ function observeWindowsWorker(disconnectOnReady: boolean): Promise<unknown[]> {
     );
     const messages: unknown[] = [];
     let failure: Error | undefined;
+    let exited = false;
+    let exitCode: number | null = null;
+    let signalCode: NodeJS.Signals | null = null;
+    let stdoutClosed = !child.stdout;
+    let stderrClosed = !child.stderr;
+    let ipcClosed = !child.connected;
     const fail = (error: Error) => {
       failure ??= error;
       child.kill("SIGKILL");
     };
-    const timer = setTimeout(
-      () => fail(new Error("Windows modifier native smoke timed out")),
-      5000,
-    );
-    child.once("error", (error) => {
-      failure ??= error;
+    const timer = setTimeout(() => {
+      fail(
+        new Error(
+          "Windows modifier native smoke timed out: " +
+            JSON.stringify({ exited, stdoutClosed, stderrClosed, ipcClosed }),
+        ),
+      );
+      // Missing lifecycle evidence is a failed test, never a pending promise.
+      reject(failure);
+    }, 5000);
+    const finish = () => {
+      // Node 22 may omit aggregate "close" after explicit IPC disconnect.
+      // Success still requires actual process exit plus every owned channel.
+      if (!exited || !stdoutClosed || !stderrClosed || !ipcClosed) return;
+      clearTimeout(timer);
+      if (failure) reject(failure);
+      else if (exitCode !== 0 || signalCode !== null)
+        reject(
+          new Error("Windows modifier native smoke exited unsuccessfully"),
+        );
+      else resolve(messages);
+    };
+    child.once("error", (error) => fail(error));
+    child.once("exit", (code, signal) => {
+      exited = true;
+      exitCode = code;
+      signalCode = signal;
+      finish();
+    });
+    child.once("disconnect", () => {
+      ipcClosed = true;
+      finish();
+    });
+    child.stdout?.once("close", () => {
+      stdoutClosed = true;
+      finish();
+    });
+    child.stderr?.once("close", () => {
+      stderrClosed = true;
+      finish();
     });
     child.stdout?.on("data", () =>
-      fail(new Error("Windows modifier native smoke returned unexpected stdout")),
+      fail(
+        new Error("Windows modifier native smoke returned unexpected stdout"),
+      ),
     );
     child.stderr?.on("data", () =>
-      fail(new Error("Windows modifier native smoke returned unexpected stderr")),
+      fail(
+        new Error("Windows modifier native smoke returned unexpected stderr"),
+      ),
     );
     child.on("message", (message: unknown) => {
       if (messages.length >= 32) {
@@ -180,13 +238,6 @@ function observeWindowsWorker(disconnectOnReady: boolean): Promise<unknown[]> {
       }
       messages.push(message);
       if (disconnectOnReady && message === "ready") child.disconnect();
-    });
-    child.once("close", (code, signal) => {
-      clearTimeout(timer);
-      if (failure) reject(failure);
-      else if (code !== 0 || signal !== null)
-        reject(new Error("Windows modifier native smoke exited unsuccessfully"));
-      else resolve(messages);
     });
   });
 }

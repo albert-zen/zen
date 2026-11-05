@@ -1,6 +1,9 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { isAppShotBounds, type AppShotBounds } from "./app-shot-native-contract.js";
+import {
+  isAppShotBounds,
+  type AppShotBounds,
+} from "./app-shot-native-contract.js";
 
 export interface AppShotActiveWindow {
   windowId: number;

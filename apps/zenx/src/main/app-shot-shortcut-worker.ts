@@ -4,8 +4,7 @@ export function windowsShiftPairPressed(
   readKeyState: (virtualKey: number) => number,
 ): boolean {
   return (
-    (readKeyState(0xa0) & 0x8000) !== 0 &&
-    (readKeyState(0xa1) & 0x8000) !== 0
+    (readKeyState(0xa0) & 0x8000) !== 0 && (readKeyState(0xa1) & 0x8000) !== 0
   );
 }
 

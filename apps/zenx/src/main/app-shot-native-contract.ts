@@ -55,25 +55,51 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function isAppShotBounds(value: unknown): value is AppShotBounds {
   if (!isRecord(value)) return false;
-  return ["x", "y", "width", "height"].every((key) =>
-    typeof value[key] === "number" && Number.isFinite(value[key]) && Math.abs(value[key] as number) <= 1_000_000,
-  ) && Number(value.width) > 0 && Number(value.height) > 0;
+  return (
+    ["x", "y", "width", "height"].every(
+      (key) =>
+        typeof value[key] === "number" &&
+        Number.isFinite(value[key]) &&
+        Math.abs(value[key] as number) <= 1_000_000,
+    ) &&
+    Number(value.width) > 0 &&
+    Number(value.height) > 0
+  );
 }
 
-export function isAppShotIdentity(value: unknown): value is AppShotCaptureIdentity {
-  return isRecord(value) &&
+export function isAppShotIdentity(
+  value: unknown,
+): value is AppShotCaptureIdentity {
+  return (
+    isRecord(value) &&
     (value.platform === "win32" || value.platform === "darwin") &&
-    Number.isSafeInteger(value.windowId) && Number(value.windowId) > 0 &&
-    Number.isSafeInteger(value.pid) && Number(value.pid) > 0 &&
-    typeof value.windowTitle === "string" && value.windowTitle.trim().length > 0 &&
-    value.windowTitle.length <= 4096 && isAppShotBounds(value.bounds) &&
-    (value.applicationName === undefined || (typeof value.applicationName === "string" && value.applicationName.length <= 4096));
+    Number.isSafeInteger(value.windowId) &&
+    Number(value.windowId) > 0 &&
+    Number.isSafeInteger(value.pid) &&
+    Number(value.pid) > 0 &&
+    typeof value.windowTitle === "string" &&
+    value.windowTitle.trim().length > 0 &&
+    value.windowTitle.length <= 4096 &&
+    isAppShotBounds(value.bounds) &&
+    (value.applicationName === undefined ||
+      (typeof value.applicationName === "string" &&
+        value.applicationName.length <= 4096))
+  );
 }
 
-export function sameAppShotIdentity(a: AppShotCaptureIdentity, b: AppShotCaptureIdentity): boolean {
-  return isAppShotIdentity(a) && isAppShotIdentity(b) &&
-    a.platform === b.platform && a.windowId === b.windowId &&
-    a.pid === b.pid && a.windowTitle === b.windowTitle &&
-    (["x", "y", "width", "height"] as const).every((key) => a.bounds[key] === b.bounds[key]);
+export function sameAppShotIdentity(
+  a: AppShotCaptureIdentity,
+  b: AppShotCaptureIdentity,
+): boolean {
+  return (
+    isAppShotIdentity(a) &&
+    isAppShotIdentity(b) &&
+    a.platform === b.platform &&
+    a.windowId === b.windowId &&
+    a.pid === b.pid &&
+    a.windowTitle === b.windowTitle &&
+    (["x", "y", "width", "height"] as const).every(
+      (key) => a.bounds[key] === b.bounds[key],
+    )
+  );
 }
-

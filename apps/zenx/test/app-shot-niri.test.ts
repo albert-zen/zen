@@ -187,10 +187,9 @@ describe(
 
     async function assertPrivateCaptureRemoved(): Promise<void> {
       assert.ok(capturePath);
-      await assert.rejects(
-        NodeFSP.stat(NodePath.dirname(capturePath)),
-        { code: "ENOENT" },
-      );
+      await assert.rejects(NodeFSP.stat(NodePath.dirname(capturePath)), {
+        code: "ENOENT",
+      });
     }
 
     it("captures the original window ID and cleans up", async () => {
@@ -308,7 +307,10 @@ describe(
       focused = null;
       await assert.rejects(capture(), /no focused window/);
       assert.equal(capturePath, undefined);
-      assert.equal(calls.some((call) => typeof call !== "string"), false);
+      assert.equal(
+        calls.some((call) => typeof call !== "string"),
+        false,
+      );
     });
 
     it("propagates denial without fallback and cleans up", async () => {
@@ -456,10 +458,7 @@ describe(
       it("rejects an image exceeding a byte limit: " + bytes, async () => {
         const original = handler;
         handler = async (request, socket) => {
-          if (
-            typeof request !== "string" &&
-            request.Action.ScreenshotWindow
-          ) {
+          if (typeof request !== "string" && request.Action.ScreenshotWindow) {
             capturePath = request.Action.ScreenshotWindow.path;
             await NodeFSP.writeFile(capturePath, png);
             await NodeFSP.truncate(capturePath, bytes);

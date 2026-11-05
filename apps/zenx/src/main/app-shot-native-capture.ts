@@ -57,27 +57,30 @@ export interface AppShotNativeRunOptions {
   fork?: (operation: AppShotNativeOperation) => AppShotNativeChild;
 }
 
-function forkNativeChild(operation: AppShotNativeOperation, workerPath: string): AppShotNativeChild {
-  const child = nodeFork(
-    workerPath,
-    [operation],
-    {
-      // On macOS the default Electron Helper does not inherit the main app AX grant.
-      execPath: process.execPath,
-      execArgv: [],
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
-      stdio: ["ignore", "ignore", "ignore", "ipc"],
-    },
-  );
+function forkNativeChild(
+  operation: AppShotNativeOperation,
+  workerPath: string,
+): AppShotNativeChild {
+  const child = nodeFork(workerPath, [operation], {
+    // On macOS the default Electron Helper does not inherit the main app AX grant.
+    execPath: process.execPath,
+    execArgv: [],
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+    stdio: ["ignore", "ignore", "ignore", "ipc"],
+  });
   return {
     send: (request, callback) => child.send(request as object, callback),
-    onMessage: (listener) => { child.on("message", listener); },
+    onMessage: (listener) => {
+      child.on("message", listener);
+    },
     onExit: (listener) => {
       // Spawn errors also produce close; an error alone is not proof of exit.
       child.once("error", () => {});
       child.once("close", listener);
     },
-    kill: (signal = "SIGTERM") => { child.kill(signal); },
+    kill: (signal = "SIGTERM") => {
+      child.kill(signal);
+    },
   };
 }
 
@@ -111,7 +114,12 @@ export function runAppShotNative(
     const shutdownGraceMs = options.shutdownGraceMs ?? 500;
     const timeout = setTimeout(
       () => finish(new Error("App Shot native helper timed out")),
-      options.timeoutMs ?? (operation === "region" ? 15_000 : operation === "accessibility" ? 4_000 : 2_000),
+      options.timeoutMs ??
+        (operation === "region"
+          ? 15_000
+          : operation === "accessibility"
+            ? 4_000
+            : 2_000),
     );
     const onAbort = () => {
       if (completed) return;
@@ -147,9 +155,17 @@ export function runAppShotNative(
       // Fence all output now, but do not report success/cleanup before exit.
       shutdownTimer = setTimeout(() => {
         shutdownTimer = setTimeout(() => complete(true), shutdownGraceMs);
-        try { child.kill("SIGKILL"); } catch { /* Await close or report unconfirmed shutdown. */ }
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* Await close or report unconfirmed shutdown. */
+        }
       }, shutdownGraceMs);
-      try { child.kill("SIGTERM"); } catch { /* Escalate only this owned child. */ }
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        /* Escalate only this owned child. */
+      }
     }
     child.onMessage((message) => {
       if (finishing) return;
@@ -166,7 +182,9 @@ export function runAppShotNative(
         return;
       }
       if (!sent || !isRecord(message))
-        return finish(new Error("App Shot native helper returned invalid data"));
+        return finish(
+          new Error("App Shot native helper returned invalid data"),
+        );
       if (message.type === "result") finish(undefined, message.value);
       else finish(new Error("App Shot native operation failed"));
     });
@@ -197,17 +215,30 @@ export interface AppShotRegionImage {
 
 /** Fail before decoding oversized IPC output; verify PNG dimensions against the receipt. */
 export function parseAppShotRegionImage(value: unknown): AppShotRegionImage {
-  if (!isRecord(value) || !Number.isSafeInteger(value.width) || !Number.isSafeInteger(value.height) ||
-      Number(value.width) <= 0 || Number(value.height) <= 0 ||
-      Number(value.width) * Number(value.height) > APP_SHOT_MAX_PIXELS ||
-      typeof value.png !== "string" || value.png.length > Math.ceil(APP_SHOT_MAX_PNG_BYTES / 3) * 4 ||
-      value.png.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(value.png))
+  if (
+    !isRecord(value) ||
+    !Number.isSafeInteger(value.width) ||
+    !Number.isSafeInteger(value.height) ||
+    Number(value.width) <= 0 ||
+    Number(value.height) <= 0 ||
+    Number(value.width) * Number(value.height) > APP_SHOT_MAX_PIXELS ||
+    typeof value.png !== "string" ||
+    value.png.length > Math.ceil(APP_SHOT_MAX_PNG_BYTES / 3) * 4 ||
+    value.png.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]*={0,2}$/u.test(value.png)
+  )
     throw new Error("App Shot returned invalid image data");
   const png = Buffer.from(value.png, "base64");
-  if (png.length < 33 || png.length > APP_SHOT_MAX_PNG_BYTES ||
-      !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ||
-      png.toString("ascii", 12, 16) !== "IHDR" ||
-      png.readUInt32BE(16) !== value.width || png.readUInt32BE(20) !== value.height)
+  if (
+    png.length < 33 ||
+    png.length > APP_SHOT_MAX_PNG_BYTES ||
+    !png
+      .subarray(0, 8)
+      .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ||
+    png.toString("ascii", 12, 16) !== "IHDR" ||
+    png.readUInt32BE(16) !== value.width ||
+    png.readUInt32BE(20) !== value.height
+  )
     throw new Error("App Shot returned invalid PNG dimensions");
   return { png, width: Number(value.width), height: Number(value.height) };
 }
@@ -216,8 +247,11 @@ export async function captureAppShotRegion(
   region: AppShotBounds,
   options: AppShotNativeRunOptions = {},
 ): Promise<AppShotRegionImage> {
-  if (!isAppShotBounds(region)) throw new Error("App Shot capture region is invalid");
-  return parseAppShotRegionImage(await runAppShotNative("region", { region }, options));
+  if (!isAppShotBounds(region))
+    throw new Error("App Shot capture region is invalid");
+  return parseAppShotRegionImage(
+    await runAppShotNative("region", { region }, options),
+  );
 }
 
 /** Optional text only. Callers must revalidate the native capture identity afterward. */
@@ -227,11 +261,21 @@ export async function readCapturedAppShotAccessibility(
 ): Promise<AppShotText | undefined> {
   if (!isAppShotIdentity(identity)) return undefined;
   try {
-    const value = await runAppShotNative("accessibility", { identity }, options);
-    if (!isRecord(value) || typeof value.text !== "string" ||
-        value.text.length > APP_SHOT_MAX_TEXT || typeof value.truncated !== "boolean")
+    const value = await runAppShotNative(
+      "accessibility",
+      { identity },
+      options,
+    );
+    if (
+      !isRecord(value) ||
+      typeof value.text !== "string" ||
+      value.text.length > APP_SHOT_MAX_TEXT ||
+      typeof value.truncated !== "boolean"
+    )
       return undefined;
-    return value.text ? { text: value.text, truncated: value.truncated } : undefined;
+    return value.text
+      ? { text: value.text, truncated: value.truncated }
+      : undefined;
   } catch {
     return undefined;
   }
@@ -239,9 +283,14 @@ export async function readCapturedAppShotAccessibility(
 
 export interface AppShotWindowsCaptureDependencies {
   getForeground(): Promise<AppShotCaptureIdentity>;
-  screenToDipRect(window: null, bounds: AppShotBounds): AppShotBounds | Promise<AppShotBounds>;
+  screenToDipRect(
+    window: null,
+    bounds: AppShotBounds,
+  ): AppShotBounds | Promise<AppShotBounds>;
   captureRegion(region: AppShotBounds): Promise<AppShotRegionImage>;
-  readAccessibility(identity: AppShotCaptureIdentity): Promise<AppShotText | undefined>;
+  readAccessibility(
+    identity: AppShotCaptureIdentity,
+  ): Promise<AppShotText | undefined>;
 }
 
 export interface AppShotWindowsCapture extends AppShotRegionImage {
@@ -253,27 +302,50 @@ export interface AppShotWindowsCapture extends AppShotRegionImage {
 }
 
 export async function captureWindowsActiveAppShot(
-  options: { workerPath?: string; includeAccessibility?: boolean; excludedWindowIds?: readonly number[]; signal?: AbortSignal } = {},
+  options: {
+    workerPath?: string;
+    includeAccessibility?: boolean;
+    excludedWindowIds?: readonly number[];
+    signal?: AbortSignal;
+  } = {},
   injected?: AppShotWindowsCaptureDependencies,
 ): Promise<AppShotWindowsCapture> {
   if (options.signal?.aborted) throw new Error("App Shot cancelled");
   const dependencies = injected ?? {
-    getForeground: () => readWindowsAppShotForeground({ signal: options.signal, workerPath: options.workerPath }),
+    getForeground: () =>
+      readWindowsAppShotForeground({
+        signal: options.signal,
+        workerPath: options.workerPath,
+      }),
     screenToDipRect: async (_window: null, bounds: AppShotBounds) =>
       (await import("electron")).screen.screenToDipRect(null, bounds),
-    captureRegion: (region: AppShotBounds) => captureAppShotRegion(region, { signal: options.signal, workerPath: options.workerPath }),
+    captureRegion: (region: AppShotBounds) =>
+      captureAppShotRegion(region, {
+        signal: options.signal,
+        workerPath: options.workerPath,
+      }),
     readAccessibility: (identity: AppShotCaptureIdentity) =>
-      readCapturedAppShotAccessibility(identity, { signal: options.signal, workerPath: options.workerPath }),
+      readCapturedAppShotAccessibility(identity, {
+        signal: options.signal,
+        workerPath: options.workerPath,
+      }),
   };
   const active = await dependencies.getForeground();
-  if (!isAppShotIdentity(active) || active.platform !== "win32" ||
-      active.pid === process.pid || options.excludedWindowIds?.includes(active.windowId))
-    throw new Error("App Shot requires an identified external foreground window");
+  if (
+    !isAppShotIdentity(active) ||
+    active.platform !== "win32" ||
+    active.pid === process.pid ||
+    options.excludedWindowIds?.includes(active.windowId)
+  )
+    throw new Error(
+      "App Shot requires an identified external foreground window",
+    );
   // Bound physical pixels before the worker converts logical coordinates back.
   if (active.bounds.width * active.bounds.height > APP_SHOT_MAX_PIXELS)
     throw new Error("App Shot image exceeds the pixel budget");
   const region = await dependencies.screenToDipRect(null, active.bounds);
-  if (!isAppShotBounds(region)) throw new Error("App Shot capture region is invalid");
+  if (!isAppShotBounds(region))
+    throw new Error("App Shot capture region is invalid");
   // Reject a switch while converting DPI coordinates, before collecting any pixels.
   if (!sameAppShotIdentity(active, await dependencies.getForeground()))
     throw new Error("Active window changed before App Shot");
@@ -284,11 +356,22 @@ export async function captureWindowsActiveAppShot(
   if (options.includeAccessibility) {
     // xa11y UIA bounds are logical; native foreground identity stays physical.
     try {
-      accessibility = await dependencies.readAccessibility({ ...active, bounds: region });
-    } catch { /* Optional text. */ }
+      accessibility = await dependencies.readAccessibility({
+        ...active,
+        bounds: region,
+      });
+    } catch {
+      /* Optional text. */
+    }
     if (!sameAppShotIdentity(active, await dependencies.getForeground()))
       throw new Error("Active window changed during App Shot");
   }
   if (options.signal?.aborted) throw new Error("App Shot cancelled");
-  return { ...image, identity: active, captureKind: "screen-region", region, ...(accessibility ? { accessibility } : {}) };
+  return {
+    ...image,
+    identity: active,
+    captureKind: "screen-region",
+    region,
+    ...(accessibility ? { accessibility } : {}),
+  };
 }

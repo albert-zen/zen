@@ -38,7 +38,7 @@ function run(argv) {
 `;
 
 export interface AppShotModifierPair {
-  /** Resolves only after this monitor's child has closed. Safe to call twice. */
+  /** Resolves after child exit and owned channel closure; rejects if unconfirmed. */
   stop(): Promise<void>;
 }
 
@@ -61,6 +61,7 @@ export interface AppShotModifierPairDependencies {
   /** Tests may shorten the production bounds, never make them unbounded. */
   readyTimeoutMs?: number;
   stopGraceMs?: number;
+  stopTimeoutMs?: number;
 }
 
 function boundedTimeout(value: number | undefined, maximum: number): number {
@@ -95,10 +96,13 @@ export async function startAppShotModifierPair(
     platform === "win32" &&
     (!options.workerPath || !win32.isAbsolute(options.workerPath))
   )
-    throw new Error("App Shot modifier shortcut requires an absolute worker path");
+    throw new Error(
+      "App Shot modifier shortcut requires an absolute worker path",
+    );
 
   const readyTimeoutMs = boundedTimeout(dependencies.readyTimeoutMs, 5000);
   const stopGraceMs = boundedTimeout(dependencies.stopGraceMs, 250);
+  const stopTimeoutMs = boundedTimeout(dependencies.stopTimeoutMs, 2000);
   const launch =
     dependencies.spawn ??
     ((file: string, args: readonly string[]) =>
@@ -114,7 +118,6 @@ export async function startAppShotModifierPair(
         env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
         execArgv: [],
         stdio: ["ignore", "pipe", "pipe", "ipc"],
-        windowsHide: true,
       }));
   const child =
     platform === "win32"
@@ -131,13 +134,23 @@ export async function startAppShotModifierPair(
   return await new Promise<AppShotModifierPair>((resolve, reject) => {
     let phase: "starting" | "running" | "stopping" | "stopped" = "starting";
     let closed = false;
+    let exited = false;
+    let stdoutClosed = !child.stdout;
+    let stderrClosed = !child.stderr;
+    let ipcClosed = platform !== "win32" || !child.connected;
     let buffered = "";
     let readyTimer: ReturnType<typeof setTimeout> | undefined;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
+    let closeTimer: ReturnType<typeof setTimeout> | undefined;
     let settleClosed!: () => void;
-    const childClosed = new Promise<void>((done) => {
+    let rejectClosed!: (error: Error) => void;
+    const childClosed = new Promise<void>((done, failed) => {
       settleClosed = done;
+      rejectClosed = failed;
     });
+    // Automatic failure cleanup may have no external stop waiter. The original
+    // promise still rejects for callers that explicitly await stop().
+    void childClosed.catch(() => {});
 
     const kill = (signal: NodeJS.Signals) => {
       try {
@@ -154,6 +167,15 @@ export async function startAppShotModifierPair(
       buffered = "";
       if (!closed) {
         killTimer = setTimeout(() => kill("SIGKILL"), stopGraceMs);
+        closeTimer = setTimeout(() => {
+          kill("SIGKILL");
+          rejectClosed(
+            new Error(
+              "App Shot modifier shortcut child exit was not confirmed",
+            ),
+          );
+          // Keep ownership/listeners until actual exit, even after reporting failure.
+        }, stopTimeoutMs);
         kill("SIGTERM");
       }
       return childClosed;
@@ -170,7 +192,11 @@ export async function startAppShotModifierPair(
         }
       } else {
         // A rejected start does not abandon its still-owned native child.
-        void stopped.then(() => reject(error));
+        void stopped.then(
+          () => reject(error),
+          (cleanupError: Error) =>
+            reject(new Error(error.message + "; " + cleanupError.message)),
+        );
       }
     };
     const onAbort = () => {
@@ -180,7 +206,8 @@ export async function startAppShotModifierPair(
     };
     const onError = () =>
       fail(new Error("App Shot modifier shortcut helper failed"));
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) =>
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      exited = true;
       fail(
         new Error(
           "App Shot modifier shortcut helper exited (" +
@@ -188,6 +215,8 @@ export async function startAppShotModifierPair(
             ")",
         ),
       );
+      maybeClosed();
+    };
     const onStdout = (chunk: Buffer) => {
       // This protocol has no stdout. Do not collect or echo unexpected output.
       if (chunk.length)
@@ -212,8 +241,11 @@ export async function startAppShotModifierPair(
         fail(new Error("App Shot modifier shortcut returned invalid output"));
       }
     };
-    const onDisconnect = () =>
+    const onDisconnect = () => {
+      ipcClosed = true;
       fail(new Error("App Shot modifier shortcut helper disconnected"));
+      maybeClosed();
+    };
     const onStderr = (chunk: Buffer) => {
       if (platform === "win32") {
         if (chunk.length) onError();
@@ -237,14 +269,19 @@ export async function startAppShotModifierPair(
         fail(new Error("App Shot modifier shortcut output exceeded its limit"));
     };
     const onClose = () => {
+      if (closed) return;
       closed = true;
       fail(new Error("App Shot modifier shortcut helper closed"));
       phase = "stopped";
       buffered = "";
       clearTimeout(readyTimer);
       clearTimeout(killTimer);
+      clearTimeout(closeTimer);
       child.stdout?.off("data", onStdout);
+      child.stdout?.off("close", onStdoutClose);
       child.stderr?.off("data", onStderr);
+      child.stderr?.off("close", onStderrClose);
+      child.off("close", onClose);
       child.off("error", onError);
       child.off("exit", onExit);
       child.off("message", acceptMessage);
@@ -252,6 +289,21 @@ export async function startAppShotModifierPair(
       options.signal?.removeEventListener("abort", onAbort);
       process.off("exit", onParentExit);
       settleClosed();
+    };
+
+    // Node 22 can omit aggregate ChildProcess "close" after a parent-initiated
+    // IPC disconnect. These independent facts still prove the owned process
+    // exited and every channel closed. Disconnect alone never proves exit.
+    const maybeClosed = () => {
+      if (exited && stdoutClosed && stderrClosed && ipcClosed) onClose();
+    };
+    const onStdoutClose = () => {
+      stdoutClosed = true;
+      maybeClosed();
+    };
+    const onStderrClose = () => {
+      stderrClosed = true;
+      maybeClosed();
     };
 
     child.once("close", onClose);
@@ -262,7 +314,9 @@ export async function startAppShotModifierPair(
       child.once("disconnect", onDisconnect);
     }
     child.stdout?.on("data", onStdout);
+    child.stdout?.once("close", onStdoutClose);
     child.stderr?.on("data", onStderr);
+    child.stderr?.once("close", onStderrClose);
     process.once("exit", onParentExit);
     options.signal?.addEventListener("abort", onAbort, { once: true });
     readyTimer = setTimeout(

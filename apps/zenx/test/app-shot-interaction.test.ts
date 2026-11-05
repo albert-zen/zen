@@ -290,9 +290,9 @@ test("a repeated shortcut cannot supersede an explicit attach in flight", async 
 });
 
 function shortcutCheckbox(): HTMLInputElement {
-  const checkbox = [...document.querySelectorAll<HTMLInputElement>(
-    'input[type="checkbox"]',
-  )].at(-1);
+  const checkbox = [
+    ...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+  ].at(-1);
   assert.ok(checkbox);
   return checkbox;
 }
@@ -300,7 +300,7 @@ function shortcutCheckbox(): HTMLInputElement {
 test("Windows defaults to both Shift but requires explicit enable", async () => {
   await fixture(async ({ click, armed, armRequests }) => {
     assert.equal(armed(), null);
-    assert.deepEqual(armRequests, []);
+    assert.equal(armRequests.length, 0);
     await click("App Shot");
     const both = document.querySelector<HTMLInputElement>(
       'input[type="radio"][value="both-shift"]',
@@ -315,9 +315,9 @@ test("Windows defaults to both Shift but requires explicit enable", async () => 
     await act(async () => shortcutCheckbox().click());
     assert.equal(armed(), null);
     await act(async () =>
-      document.querySelector<HTMLInputElement>(
-        'input[type="radio"][value="chord"]',
-      )!.click(),
+      document
+        .querySelector<HTMLInputElement>('input[type="radio"][value="chord"]')!
+        .click(),
     );
     await act(async () => shortcutCheckbox().click());
     assert.equal(armRequests[1]?.kind, "chord");

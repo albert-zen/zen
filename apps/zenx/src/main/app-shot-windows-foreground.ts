@@ -22,7 +22,10 @@
  * SOFTWARE.
  */
 
-import type { AppShotBounds, AppShotCaptureIdentity } from "./app-shot-native-contract.js";
+import type {
+  AppShotBounds,
+  AppShotCaptureIdentity,
+} from "./app-shot-native-contract.js";
 
 /** Read operations only. No focus, keyboard, pointer or permission methods. */
 export interface AppShotWindowsApi {
@@ -63,7 +66,9 @@ export function loadAppShotWindowsApi(): Promise<AppShotWindowsApi> {
           paramsType: [DataType.BigInt, DataType.U8Array, DataType.I32],
           paramsValue: [window, buffer, buffer.byteLength / 2],
         });
-        return length > 0 ? buffer.subarray(0, length * 2).toString("utf16le") : "";
+        return length > 0
+          ? buffer.subarray(0, length * 2).toString("utf16le")
+          : "";
       },
       getWindowRect: (window) => {
         const rect = Buffer.alloc(16);
@@ -112,10 +117,17 @@ export function loadAppShotWindowsApi(): Promise<AppShotWindowsApi> {
             library: kernel32,
             funcName: "QueryFullProcessImageNameW",
             retType: DataType.Boolean,
-            paramsType: [DataType.BigInt, DataType.U32, DataType.U8Array, DataType.U8Array],
+            paramsType: [
+              DataType.BigInt,
+              DataType.U32,
+              DataType.U8Array,
+              DataType.U8Array,
+            ],
             paramsValue: [handle, 0, buffer, size],
           });
-          return ok ? buffer.subarray(0, size.readUInt32LE(0) * 2).toString("utf16le") : "";
+          return ok
+            ? buffer.subarray(0, size.readUInt32LE(0) * 2).toString("utf16le")
+            : "";
         } finally {
           load({
             library: kernel32,
@@ -141,7 +153,13 @@ export function readAppShotWindowsForegroundWithApi(
   const bounds = api.getWindowRect(handle);
   const { processId: pid } = api.getWindowThreadAndProcessId(handle);
   const windowTitle = api.getWindowText(handle);
-  if (!bounds || bounds.width <= 0 || bounds.height <= 0 || pid <= 0 || !windowTitle.trim())
+  if (
+    !bounds ||
+    bounds.width <= 0 ||
+    bounds.height <= 0 ||
+    pid <= 0 ||
+    !windowTitle.trim()
+  )
     throw new Error("Foreground window metadata is unavailable");
   const applicationName = api.getProcessImagePath(pid).split(/[\\/]/u).pop();
   // A foreground switch while reading the row invalidates it; never retarget.

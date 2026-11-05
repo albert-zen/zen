@@ -10,23 +10,30 @@ export async function writeAppShotRuntimeFixture(
   const plans = new Map();
   for (const platform of ["darwin", "win32", "linux"]) {
     for (const arch of ["x64", "arm64"]) {
-      for (const entry of appShotRuntimePackages(platform, arch, { libc: "glibc" })) {
+      for (const entry of appShotRuntimePackages(platform, arch, {
+        libc: "glibc",
+      })) {
         if (!plans.has(entry.name)) {
           plans.set(entry.name, {
-            ...entry, platform, arch, optionalDependencies: {},
+            ...entry,
+            platform,
+            arch,
+            optionalDependencies: {},
           });
         }
         if (entry.native)
-          plans.get(entry.name).optionalDependencies[entry.native] = entry.version;
+          plans.get(entry.name).optionalDependencies[entry.native] =
+            entry.version;
       }
     }
   }
   const modules = path.join(rootDirectory, "node_modules");
   const paths = new Map();
   for (const entry of plans.values()) {
-    const directory = nested && entry.parent
-      ? path.join(modules, entry.parent, "node_modules", entry.name)
-      : path.join(modules, entry.name);
+    const directory =
+      nested && entry.parent
+        ? path.join(modules, entry.parent, "node_modules", entry.name)
+        : path.join(modules, entry.name);
     paths.set(entry.name, directory);
     await mkdir(directory, { recursive: true });
     await writeFile(
@@ -42,9 +49,15 @@ export async function writeAppShotRuntimeFixture(
       }),
     );
     for (const file of entry.files)
-      await writeFile(path.join(directory, file), "synthetic fixture; not native code");
+      await writeFile(
+        path.join(directory, file),
+        "synthetic fixture; not native code",
+      );
     if (licenses)
-      await writeFile(path.join(directory, "LICENSE"), `Synthetic license for ${entry.name}\n`);
+      await writeFile(
+        path.join(directory, "LICENSE"),
+        `Synthetic license for ${entry.name}\n`,
+      );
   }
   return paths;
 }

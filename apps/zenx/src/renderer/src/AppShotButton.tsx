@@ -315,9 +315,7 @@ export function AppShotButton({
             </p>
           )}
           {busy && <p role="status">{t("appShotWorking")}</p>}
-          {shortcutBusy && (
-            <p role="status">{t("appShotShortcutWorking")}</p>
-          )}
+          {shortcutBusy && <p role="status">{t("appShotShortcutWorking")}</p>}
           {waitingCount > 0 && (
             <p role="status">{t("appShotWaiting", { count: waitingCount })}</p>
           )}
