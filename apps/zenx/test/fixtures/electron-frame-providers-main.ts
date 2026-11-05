@@ -397,6 +397,9 @@ async function main() {
                   view,
                 ).map((index) => windows[index]!)
               : [targetWindow!];
+            const displays = screen
+              .getAllDisplays()
+              .map((display) => display.bounds);
             return {
               provider,
               webContentsId: web.id,
@@ -409,18 +412,26 @@ async function main() {
                     viewVisible: view.getVisible(),
                   }
                 : {}),
-              displays: screen
-                .getAllDisplays()
-                .map((display) => display.bounds),
-              owners: owners.map((window) => ({
-                id: window.id,
-                ownsTargetContents: window.webContents === web,
-                visible: window.isVisible(),
-                focused: window.isFocused(),
-                focusable: window.isFocusable(),
-                opacity: window.getOpacity(),
-                bounds: window.getBounds(),
-              })),
+              displays,
+              owners: owners.map((window) => {
+                const bounds = window.getBounds();
+                return {
+                  id: window.id,
+                  ownsTargetContents: window.webContents === web,
+                  visible: window.isVisible(),
+                  focused: window.isFocused(),
+                  focusable: window.isFocusable(),
+                  opacity: window.getOpacity(),
+                  bounds,
+                  intersectsDisplay: displays.some(
+                    (display) =>
+                      bounds.x + bounds.width > display.x &&
+                      bounds.y + bounds.height > display.y &&
+                      bounds.x < display.x + display.width &&
+                      bounds.y < display.y + display.height,
+                  ),
+                };
+              }),
             };
           };
           const transport = recordTransport(web, readPresentation);
@@ -434,8 +445,18 @@ async function main() {
             webContentsId: web.id,
             transport: "Electron webContents.debugger.sendCommand",
             presentation: workspace
-              ? "unmounted WebContentsView with production render lease"
+              ? "unmounted WebContentsView with transparent nonactivating production render host"
               : "hidden production BrowserWindow",
+            ...(workspace
+              ? {
+                  sourceDerivedRenderRequest: {
+                    source: "src/main/workspace-browser-renderer.ts",
+                    bounds: { x: -10000, y: -10000, width: 1280, height: 800 },
+                    meaning:
+                      "Source-derived requested bounds only; AppKit can constrain native placement. Observed bounds and display intersections are recorded per Input.",
+                  },
+                }
+              : {}),
             status: "incomplete",
             inputs: transport.inputs,
             inputPresentations: transport.inputPresentations,

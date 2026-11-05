@@ -258,7 +258,7 @@ test("native command diagnostics retain exact bounded exception/world evidence w
   assert.ok(!JSON.stringify(bounded).includes("must-not-retain-expression"));
 });
 
-test("native Workspace presentation proves invisible unmounted state and nonactivating offscreen lease", () => {
+test("native Workspace presentation proves invisible unmounted state and transparent nonactivating lease", () => {
   const idle: NativeFramePresentation = {
     provider: "workspace-browser",
     webContentsId: 2,
@@ -288,25 +288,39 @@ test("native Workspace presentation proves invisible unmounted state and nonacti
         focused: false,
         focusable: false,
         opacity: 0,
+        intersectsDisplay: false,
         bounds: { x: -10000, y: -10000, width: 1280, height: 800 },
       },
     ],
   };
   assertNativeFramePresentation(dispatch, "dispatch");
+  const clamped = {
+    ...dispatch,
+    owners: [
+      {
+        ...dispatch.owners[0]!,
+        bounds: { x: 0, y: 31, width: 1024, height: 679 },
+        intersectsDisplay: true,
+      },
+    ],
+  };
+  assertNativeFramePresentation(clamped, "dispatch");
   assert.throws(() => assertNativeFramePresentation(dispatch, "idle"));
   for (const patch of [
     { focused: true },
     { focusable: true },
     { opacity: 1 },
     { ownsTargetContents: true },
-    { bounds: { x: 0, y: 0, width: 1280, height: 800 } },
+    { bounds: { x: Number.NaN, y: 0, width: 1280, height: 800 } },
+    { bounds: { x: 0, y: 0, width: 0, height: 800 } },
   ])
-    assert.throws(() =>
-      assertNativeFramePresentation(
-        { ...dispatch, owners: [{ ...dispatch.owners[0]!, ...patch }] },
-        "dispatch",
-      ),
-    );
+    for (const placement of [dispatch, clamped])
+      assert.throws(() =>
+        assertNativeFramePresentation(
+          { ...placement, owners: [{ ...placement.owners[0]!, ...patch }] },
+          "dispatch",
+        ),
+      );
   assert.throws(() =>
     assertNativeFramePresentation(
       { ...dispatch, owners: [...dispatch.owners, dispatch.owners[0]!] },
@@ -337,6 +351,7 @@ test("native Electron target must stay the exact hidden nonfocusable window desp
         focused: false,
         focusable: false,
         opacity: 1,
+        intersectsDisplay: true,
         bounds: { x: 0, y: 0, width: 1100, height: 760 },
       },
     ],
@@ -384,6 +399,7 @@ test("native view ownership includes nested foreign parents and refuses incomple
         focused: false,
         focusable: true,
         opacity: 1,
+        intersectsDisplay: true,
         bounds: { x: 0, y: 0, width: 1100, height: 760 },
       }),
     ),

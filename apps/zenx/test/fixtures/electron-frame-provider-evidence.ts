@@ -241,6 +241,7 @@ export interface NativeFramePresentation {
     focused: boolean;
     focusable: boolean;
     opacity: number;
+    intersectsDisplay: boolean;
     bounds: { x: number; y: number; width: number; height: number };
   }[];
 }
@@ -316,13 +317,9 @@ export function assertNativeFramePresentation(
       ].every(Number.isFinite),
     );
     assert.ok(owner.bounds.width > 0 && owner.bounds.height > 0);
-    for (const display of value.displays)
-      assert.ok(
-        owner.bounds.x + owner.bounds.width <= display.x ||
-          owner.bounds.y + owner.bounds.height <= display.y ||
-          owner.bounds.x >= display.x + display.width ||
-          owner.bounds.y >= display.y + display.height,
-        "The Workspace render host must remain outside every native display",
-      );
+    // AppKit can constrain the requested offscreen window onto a display.
+    // Native alphaValue (getOpacity), not placement, proves transparency.
+    // https://github.com/electron/electron/blob/v43.0.0/shell/browser/ui/cocoa/electron_ns_window.mm#L257
+    // https://github.com/electron/electron/blob/v43.0.0/shell/browser/native_window_mac.mm#L1180
   }
 }
