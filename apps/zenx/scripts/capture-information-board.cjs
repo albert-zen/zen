@@ -59,14 +59,14 @@ const query = (selector) =>
 async function resizeWindow(width, height) {
   window.setSize(width, height);
   // setSize returns before Chromium necessarily consumes the native resize.
-  // Do not locate or dispatch the next input against the previous viewport.
+  // Do not locate or dispatch the next input against the previous width.
+  // macOS hidden-titlebar renderer height excludes the native titlebar and is
+  // not identical to getContentSize().height; responsive bounds use the width.
   await until(async () => {
     const [outerWidth, outerHeight] = window.getSize();
     if (outerWidth !== width || outerHeight !== height) return false;
-    const [contentWidth, contentHeight] = window.getContentSize();
-    return evaluate(
-      `window.innerWidth === ${contentWidth} && window.innerHeight === ${contentHeight}`,
-    );
+    const [contentWidth] = window.getContentSize();
+    return evaluate(`window.innerWidth === ${contentWidth}`);
   }, "native resize delivered to renderer");
 }
 async function click(selector, label = selector, systemPointer = false) {
@@ -380,7 +380,7 @@ async function run() {
   assert.equal(prefs.sandbox, true);
   assert.equal(prefs.contextIsolation, true);
   assert.equal(prefs.nodeIntegration, false);
-  await resizeWindow(1600, 1000);
+  window.setSize(1600, 1000);
   window.show();
   window.focus();
   await until(

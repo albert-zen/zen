@@ -401,7 +401,7 @@ test("rejected controlled selection fails readback without retrying or bypassing
   assert.deepEqual(f.result.steps, []);
 });
 
-test("native resize waits for both the requested window and the renderer viewport", async () => {
+test("native resize waits for requested native size and renderer width across titlebar differences", async () => {
   let native = [1600, 1000];
   const browser = { innerWidth: 1600, innerHeight: 970 };
   let requests = 0;
@@ -421,9 +421,11 @@ test("native resize waits for both the requested window and the renderer viewpor
       native = [1000, 820];
       assert.equal(await check(), false, "old renderer size is not ready");
       browser.innerWidth = 1000;
-      assert.equal(await check(), false, "renderer height must also settle");
-      browser.innerHeight = 790;
-      assert.equal(await check(), true);
+      assert.equal(
+        await check(),
+        true,
+        "native titlebar height is not the renderer viewport height",
+      );
     },
   });
   await helpers.resizeWindow(1000, 820);
