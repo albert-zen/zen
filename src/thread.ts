@@ -370,7 +370,9 @@ export class Thread {
     for (const semantic of context) this.appendContext(semantic);
   }
 
-  deriveTurns(options: { activeTurnId?: string } = {}): DerivedTurn[] {
+  deriveTurns(
+    options: { activeTurnId?: string; turnIds?: ReadonlySet<string> } = {},
+  ): DerivedTurn[] {
     const turns: DerivedTurn[] = [];
     const byId = new Map<string, DerivedTurn>();
     let configuration: EffectiveThreadConfiguration | undefined;
@@ -380,7 +382,10 @@ export class Thread {
         configuration = applyConfigurationItem(this.id, configuration, item);
         continue;
       }
-      if (item.turnId === undefined) {
+      if (
+        item.turnId === undefined ||
+        (options.turnIds !== undefined && !options.turnIds.has(item.turnId))
+      ) {
         continue;
       }
       let turn = byId.get(item.turnId);

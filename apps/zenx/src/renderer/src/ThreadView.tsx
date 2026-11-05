@@ -1,3 +1,7 @@
+import {
+  ThreadHistoryContext,
+  useThreadHistoryPages,
+} from "./use-thread-history-pages.js";
 import { flushSync } from "react-dom";
 import { abandonDraftImage } from "./draft-image-lifecycle.js";
 import { AnsweredQuestionBubble } from "./AnsweredQuestionBubble.js";
@@ -314,6 +318,24 @@ function goToMessageQuoteSource(
   return true;
 }
 
+function HistoryBackfillControl() {
+  const history = useContext(ThreadHistoryContext);
+  const { t } = useTranslation("shell");
+  if (!history || (!history.hasMore && !history.error)) return null;
+  return (
+    <div className="thread-history-backfill" role="status">
+      {history.error ? <p role="alert">{history.error}</p> : null}
+      <button
+        type="button"
+        disabled={history.loading}
+        onClick={() => void history.loadOlder().catch(() => {})}
+      >
+        {history.loading ? t("historyLoading") : t("historyLoadEarlier")}
+      </button>
+    </div>
+  );
+}
+
 interface ThreadViewProps {
   steerRecallStore?: SteerRecallStore;
   onRestoreRecalled?(result: RecoveredSteerRecall): boolean | Promise<boolean>;
@@ -408,6 +430,15 @@ const unavailableImageReader = async (): Promise<Uint8Array> => {
 };
 
 export function ThreadView(props: ThreadViewProps) {
+  const history = useThreadHistoryPages(props.thread);
+  return (
+    <ThreadHistoryContext.Provider value={history.controller}>
+      <HistoryThreadView {...props} thread={history.thread} />
+    </ThreadHistoryContext.Provider>
+  );
+}
+
+function HistoryThreadView(props: ThreadViewProps) {
   const pendingSteer = useMemo(
     () => pendingSteerMessages(props.thread?.canonicalItems ?? []),
     [props.thread?.canonicalItems],
@@ -849,6 +880,7 @@ function ThreadViewContent({
   useEffect(() => {
     if (!queuePreviewCurrent) setPreview(null);
   }, [queuePreviewCurrent]);
+  const history = useContext(ThreadHistoryContext);
   const [atLive, setAtLive] = useState(readingState.scroll?.following ?? true);
   const [skills, setSkills] = useState<SkillEntry[]>([]);
   const [skillError, setSkillError] = useState<string | null>(null);
@@ -1206,11 +1238,91 @@ function ThreadViewContent({
       return element;
     },
   );
+  const sourceRequest = useRef(0);
+  useEffect(() => {
+    const cancel = () => {
+      sourceRequest.current++;
+    };
+    for (const type of ["pointerdown", "keydown", "wheel"])
+      document.addEventListener(type, cancel, true);
+    return () => {
+      for (const type of ["pointerdown", "keydown", "wheel"])
+        document.removeEventListener(type, cancel, true);
+    };
+  }, []);
+  useEffect(() => {
+    const anchor = readingState.virtualAnchor;
+    if (
+      !anchor ||
+      !history?.hasMore ||
+      readingState.scroll?.following !== false
+    )
+      return;
+    let parts: unknown;
+    try {
+      parts = JSON.parse(anchor.key);
+    } catch {
+      return;
+    }
+    if (
+      !Array.isArray(parts) ||
+      parts[0] !== displayedThread?.id ||
+      parts[1] !== "turn" ||
+      typeof parts[2] !== "string" ||
+      turns.some((turn) => turn.id === parts[2])
+    )
+      return;
+    const request = sourceRequest.current;
+    let active = true;
+    void history
+      .ensureTurn(parts[2])
+      .then((found) => {
+        if (found && active && sourceRequest.current === request)
+          return virtualViewport.current?.reveal(
+            anchor.key,
+            undefined,
+            anchor.offset,
+          );
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [
+    readingState,
+    displayedThread?.id,
+    displayedThread?.recoveryEpoch,
+    history?.ensureTurn,
+  ]);
   const navigateQuoteSource = useCommittedCallback(
     (quote: SentMessageQuote): boolean => {
       pauseFollowing();
+      const request = ++sourceRequest.current;
       const source = resolveQuoteSource(quote);
-      if (!source) return false;
+      if (!source) {
+        if (!history?.hasMore || quote.threadId !== currentThreadRef.current)
+          return false;
+        const owner = currentThreadRef.current;
+        void history
+          .ensureItem(quote.id)
+          .then((found) => {
+            if (
+              currentThreadRef.current !== owner ||
+              sourceRequest.current !== request
+            )
+              return;
+            if (!found) {
+              setAttachmentError(i18n.t("shell:referenceSourceUnavailable"));
+              return;
+            }
+            const target = resolveQuoteSource(quote);
+            if (target) focusMessageQuoteSource(target, quote.excerpt);
+          })
+          .catch(() => {
+            /* The history header exposes the failure and retry. */
+          });
+        return true;
+      }
       focusMessageQuoteSource(source, quote.excerpt);
       return true;
     },
@@ -1806,6 +1918,7 @@ function ThreadViewContent({
               rows={virtualTranscriptRows}
               header={
                 <>
+                  <HistoryBackfillControl />
                   <ImportedThreadNotice
                     items={displayedThread?.canonicalItems ?? []}
                   />
@@ -1878,6 +1991,15 @@ function ThreadViewContent({
               }}
               onViewportScroll={(target, layoutCorrection) => {
                 const top = target.scrollTop;
+                if (
+                  !layoutCorrection &&
+                  top < 120 &&
+                  !shouldFollowRef.current &&
+                  history?.hasMore &&
+                  !history.loading &&
+                  !history.error
+                )
+                  void history.loadOlder().catch(() => {});
                 const atBottom =
                   target.scrollHeight - top - target.clientHeight <= 1;
                 // Native/programmatic scroll delivery can lag behind content growth.
@@ -1901,6 +2023,7 @@ function ThreadViewContent({
               }}
             >
               <div className="messages-inner">
+                <HistoryBackfillControl />
                 <ImportedThreadNotice
                   items={displayedThread?.canonicalItems ?? []}
                 />
@@ -2654,8 +2777,19 @@ function ThreadViewContent({
             onReferenceSource={(reference) => {
               if (currentThreadRef.current !== session.threadId) return null;
               const target = resolveQuoteSource(reference);
-              if (target) pauseFollowing();
-              return target;
+              if (target) {
+                pauseFollowing();
+                return target;
+              }
+              if (!history?.hasMore || reference.threadId !== session.threadId)
+                return null;
+              return history.ensureItem(reference.id).then((found) => {
+                if (!found || currentThreadRef.current !== session.threadId)
+                  return null;
+                const target = resolveQuoteSource(reference);
+                if (target) pauseFollowing();
+                return target;
+              });
             }}
             referenceSourceGuard={
               virtualTranscript

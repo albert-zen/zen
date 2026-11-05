@@ -1,4 +1,9 @@
 import {
+  selectThreadHistoryWindow,
+  type ThreadHistoryWindow,
+  type ThreadHistoryWindowOptions,
+} from "./thread-history-window.js";
+import {
   prepareSampleImages,
   preparedImageDimensions,
   unavailableImageTokenEstimate,
@@ -198,6 +203,8 @@ export interface StartThreadInput {
 }
 
 export interface ThreadSnapshot {
+  /** Present only for explicitly requested native presentation windows. */
+  history?: ThreadHistoryWindow;
   /** Derived from semantic publication and existing native input facts. */
   userQuestions?: readonly UserQuestionState[];
   /** Bounded first attention page; absence never proves a response was claimed. */
@@ -1447,6 +1454,14 @@ export class ZenAppServer {
   async readThread(threadId: string): Promise<ThreadSnapshot> {
     const thread = await this.#requireThread(threadId);
     return await this.#snapshot(thread);
+  }
+
+  async readThreadHistory(
+    threadId: string,
+    options: ThreadHistoryWindowOptions = {},
+  ): Promise<ThreadSnapshot> {
+    const thread = await this.#requireThread(threadId);
+    return await this.#snapshot(thread, options);
   }
 
   /** Host-only launch fence; the existing task manager registers before unlock. */
@@ -6689,7 +6704,10 @@ export class ZenAppServer {
       });
   }
 
-  async #snapshot(thread: Thread): Promise<ThreadSnapshot> {
+  async #snapshot(
+    thread: Thread,
+    historyOptions?: ThreadHistoryWindowOptions,
+  ): Promise<ThreadSnapshot> {
     let productMetadata: ThreadProductMetadata = {};
     try {
       productMetadata = await this.#threadMetadata.read(thread.id);
@@ -6709,14 +6727,21 @@ export class ZenAppServer {
     const displayName =
       productMetadata.name ??
       (metadata?.importedFrom ? importedThreadDisplayName(items) : undefined);
-    const turns = thread.deriveTurns(
-      activeTurnId === undefined ? {} : { activeTurnId },
-    );
+    const window =
+      historyOptions === undefined
+        ? undefined
+        : selectThreadHistoryWindow(thread.id, items, historyOptions);
+    const turns = thread.deriveTurns({
+      ...(activeTurnId === undefined ? {} : { activeTurnId }),
+      ...(window === undefined ? {} : { turnIds: window.turnIds }),
+    });
     return {
       id: thread.id,
       ...(parentThreadId === undefined ? {} : { parentThreadId }),
-      items,
-      itemList: thread.itemList,
+      items: window?.items ?? items,
+      ...(window === undefined
+        ? { itemList: thread.itemList }
+        : { history: window.history }),
       userQuestions: questionPage.questions,
       userQuestionsPage: {
         totalPending: questionPage.totalPending,

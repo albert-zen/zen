@@ -35,7 +35,7 @@ export interface QueuedMessageEditorProps {
   /** Exact current-viewport target, not a label search; source navigation suspends this draft. */
   onReferenceSource?(
     reference: Extract<Reference, { kind: "message" }>,
-  ): HTMLElement | null;
+  ): HTMLElement | null | Promise<HTMLElement | null>;
   /** Capture the exact source request before closing; newer navigation may supersede it. */
   referenceSourceGuard?(target: HTMLElement): () => boolean;
   trigger: HTMLElement | null;
@@ -228,21 +228,39 @@ function EditorSession(props: QueuedMessageEditorProps) {
 
   const openReferenceSource = (reference: Reference): boolean => {
     if (reference.kind !== "message" || !canEdit()) return false;
-    const target = latest.current.onReferenceSource?.(reference);
-    if (!target) return false;
-    const isCurrent =
-      latest.current.referenceSourceGuard?.(target) ?? (() => true);
-    restoreRequested.current = false;
-    latest.current.onClose("source");
-    requestAnimationFrame(() => {
+    const owner = latest.current.identity;
+    const finish = (target: HTMLElement | null | undefined) => {
       if (
-        target.isConnected &&
-        isCurrent() &&
-        (latest.current.canRestoreFocus?.() ?? true)
-      ) {
-        focusMessageQuoteSource(target, reference.excerpt);
+        !mounted.current ||
+        !latest.current.open ||
+        latest.current.identity !== owner
+      )
+        return;
+      if (!target) {
+        setLocalError(t("referenceSourceUnavailable"));
+        return;
       }
-    });
+      const isCurrent =
+        latest.current.referenceSourceGuard?.(target) ?? (() => true);
+      restoreRequested.current = false;
+      latest.current.onClose("source");
+      requestAnimationFrame(() => {
+        if (
+          target.isConnected &&
+          isCurrent() &&
+          (latest.current.canRestoreFocus?.() ?? true)
+        )
+          focusMessageQuoteSource(target, reference.excerpt);
+      });
+    };
+    const result = latest.current.onReferenceSource?.(reference);
+    if (!result) return false;
+    if (result instanceof Promise)
+      void result.then(finish).catch((cause: unknown) => {
+        if (mounted.current)
+          setLocalError(cause instanceof Error ? cause.message : String(cause));
+      });
+    else finish(result);
     return true;
   };
   return (

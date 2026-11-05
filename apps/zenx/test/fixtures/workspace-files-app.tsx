@@ -39,7 +39,10 @@ const fixtureTitles: ThreadTitleSnapshot = {};
 let titleVersion = 0;
 const options = {
   request: async (method: string, request?: unknown) => {
-    if (method === "zen/thread/resume") {
+    if (
+      method === "zen/thread/resume" ||
+      method === "zen/thread/resume-window"
+    ) {
       const threadId =
         (request as { threadId?: string } | undefined)?.threadId ?? "thread-1";
       const recovery = resumed(

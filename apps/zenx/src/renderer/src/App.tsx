@@ -1346,9 +1346,14 @@ function AppContent() {
     setThreadError(null);
     void loadComposerCatalog();
     try {
-      const result = await window.zenx.protocol.request("zen/thread/resume", {
-        threadId,
-      });
+      const result = await window.zenx.protocol.request(
+        debugMode || (preserveNavigation && debugThreadId === threadId)
+          ? "zen/thread/resume"
+          : "zen/thread/resume-window",
+        {
+          threadId,
+        },
+      );
       if (selectionEpoch.current !== epoch) {
         if (propagateFailure)
           throw new Error(i18n.t("shell:importOpenSuperseded"));
@@ -2360,9 +2365,12 @@ function AppContent() {
     if (threadProjectionCacheRef.current.get(threadId)?.processEpoch === null) {
       // Promote the draft before this read: a failed bootstrap must retry the
       // same Thread, not create another one or send with unowned CAS history.
-      const recovery = await window.zenx.protocol.request("zen/thread/resume", {
-        threadId,
-      });
+      const recovery = await window.zenx.protocol.request(
+        "zen/thread/resume-window",
+        {
+          threadId,
+        },
+      );
       const current = threadProjectionCacheRef.current.get(threadId);
       if (
         current === undefined ||
@@ -4251,8 +4259,6 @@ function AppContent() {
             toggle: (threadId) => {
               if (page === "agent" && debugThreadId === threadId)
                 setDebugThreadId(null);
-              else if (page === "agent" && selectedThreadId === threadId)
-                setDebugThreadId(threadId);
               else void resumeThread(threadId, false, false, true);
             },
           }}

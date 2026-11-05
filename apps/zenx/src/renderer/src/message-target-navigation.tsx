@@ -1,3 +1,4 @@
+import { ThreadHistoryContext } from "./use-thread-history-pages.js";
 import type { SentMessageQuote } from "./reference-draft.js";
 import {
   createContext,
@@ -31,6 +32,7 @@ export function useMessageTargetNavigation(
   navigateQuote?: (quote: SentMessageQuote) => boolean,
 ) {
   const navigation = useContext(MessageTargetNavigationContext);
+  const history = useContext(ThreadHistoryContext);
   const reading = useContext(ThreadReadingContext);
   const consumed = useRef<string | null>(null);
   const retired = useRef(new Set<string>());
@@ -66,7 +68,11 @@ export function useMessageTargetNavigation(
           ["threadMessage", "userMessage"].includes(item.type),
       ),
     );
-    if (!turn) return; // Await the target viewport's authoritative resume, not a title/text lookup.
+    if (!turn) {
+      if (history?.hasMore)
+        void history.ensureItem(request.itemId).catch(() => {});
+      return; // Exact canonical target only, never a title/text lookup.
+    }
     reading?.set(disclosureKey("turn", turn.id), true);
     pauseFollowing();
     let active = true;
@@ -119,5 +125,7 @@ export function useMessageTargetNavigation(
     navigation,
     materializeTurn,
     navigateQuote,
+    history?.ensureItem,
+    history?.hasMore,
   ]);
 }
