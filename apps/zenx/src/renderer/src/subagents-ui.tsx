@@ -3,6 +3,7 @@ import { i18n } from "./i18n.js";
 import React, {
   createContext,
   useContext,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -120,14 +121,16 @@ function contextThreads(value: unknown): RelatedThread[] {
 function useRelatedThreads(sdk: PluginUiSurfaceProps["sdk"]) {
   const parent =
     typeof sdk.context.threadId === "string" ? sdk.context.threadId : "";
-  const [loaded, setLoaded] = useState<RelatedThread[]>([]);
+  const [loaded, setLoaded] = useState<{
+    parent: string;
+    threads: RelatedThread[];
+  }>({ parent, threads: [] });
   const [error, setError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
   const commands = useRef(sdk.commands);
   commands.current = sdk.commands;
   useEffect(() => {
     let current = true;
-    setLoaded([]);
     setError(null);
     if (!parent) return;
     void commands.current
@@ -135,7 +138,7 @@ function useRelatedThreads(sdk: PluginUiSurfaceProps["sdk"]) {
       .then((result: unknown) => {
         if (!current) return;
         const data = result as { threads?: unknown };
-        setLoaded(contextThreads(data?.threads));
+        setLoaded({ parent, threads: contextThreads(data?.threads) });
       })
       .catch((cause: unknown) => {
         if (current) setError(message(cause));
@@ -147,18 +150,14 @@ function useRelatedThreads(sdk: PluginUiSurfaceProps["sdk"]) {
   // Live Host summaries override the initial bounded plugin query.
   const all = [
     ...new Map(
-      [...loaded, ...contextThreads(sdk.context.threads)].map((entry) => [
-        entry.threadId,
-        entry,
-      ]),
+      [
+        ...(loaded.parent === parent ? loaded.threads : []),
+        ...contextThreads(sdk.context.threads),
+      ].map((entry) => [entry.threadId, entry]),
     ).values(),
   ];
-  return {
-    parent,
-    all,
-    error,
-    refresh: () => setRevision((value) => value + 1),
-  };
+  const refresh = useCallback(() => setRevision((value) => value + 1), []);
+  return { parent, all, error, refresh };
 }
 
 function CreateSideChat({
@@ -485,6 +484,12 @@ function SubagentSidebarVisibility({
   );
 }
 
+/** Native presentation feedback; never enters the cloned plugin SDK context. */
+export const SubagentsInformationVisibilityContext = createContext<{
+  report(visible: boolean): void;
+  manageMode: boolean;
+} | null>(null);
+
 function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
   useTranslation("panels");
   const { parent, all, error, refresh } = useRelatedThreads(sdk);
@@ -539,6 +544,20 @@ function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
     );
   };
   const tree = render(parent, new Set([parent]));
+  const information = useContext(SubagentsInformationVisibilityContext);
+  const hasArchived = all.some(
+    (entry) => entry.archived && entry.parentThreadId === parent,
+  );
+  const visible = !!tree || hasArchived;
+  useEffect(() => {
+    information?.report(visible);
+  }, [information, visible]);
+  useEffect(() => {
+    if (!information) return;
+    const timer = setInterval(refresh, 5_000);
+    return () => clearInterval(timer);
+  }, [information, refresh]);
+  if (information && !information.manageMode && !visible) return null;
   return (
     <section
       className="subagents-panel"

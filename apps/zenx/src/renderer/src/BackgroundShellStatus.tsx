@@ -11,9 +11,13 @@ import { Icon } from "./icons.js";
 export function BackgroundShellStatus({
   threadId,
   presentation = "compact",
+  onVisibilityChange,
+  manageMode = false,
 }: {
   threadId: string;
   presentation?: "compact" | "information";
+  onVisibilityChange?: (visible: boolean) => void;
+  manageMode?: boolean;
 }) {
   const { t } = useTranslation("panels");
   const navigation = useContext(ShellTargetNavigationContext);
@@ -24,7 +28,6 @@ export function BackgroundShellStatus({
     sessions: ShellSessionSummary[];
     error: string | null;
   } | null>(null);
-  const [refresh, setRefresh] = useState(0);
   const [expanded, setExpanded] = useState(presentation === "information");
   const [navigationError, setNavigationError] = useState("");
   const [opening, setOpening] = useState<string | null>(null);
@@ -64,7 +67,11 @@ export function BackgroundShellStatus({
           });
       } catch (error) {
         if (!retired)
-          setObservation({ threadId, sessions: [], error: String(error) });
+          setObservation((previous) => ({
+            threadId,
+            sessions: previous?.threadId === threadId ? previous.sessions : [],
+            error: String(error),
+          }));
       } finally {
         if (!retired) timer = setTimeout(() => void read(), 1000);
       }
@@ -74,22 +81,29 @@ export function BackgroundShellStatus({
       retired = true;
       clearTimeout(timer);
     };
-  }, [threadId, api, refresh]);
+  }, [threadId, api]);
   const current = observation?.threadId === threadId ? observation : null;
-  if (!api || !current)
-    return presentation === "information" ? (
-      <p role="status">{t(!api ? "unavailable" : "boardLoading")}</p>
-    ) : null;
-  const pending = current.sessions.filter(
+  const pending = (current?.sessions ?? []).filter(
     (s) => backgroundShellPhase(s) !== "ended",
   );
+  const visible = !!api && pending.length > 0;
+  useEffect(() => {
+    onVisibilityChange?.(visible);
+  }, [onVisibilityChange, visible]);
+  if (
+    !visible &&
+    !manageMode &&
+    !(presentation === "compact" && current?.error)
+  )
+    return null;
+  if (!api || !current)
+    return <p role="status">{t(!api ? "unavailable" : "boardLoading")}</p>;
   // A background command surface is live work only. Ended commands are
   // history; keeping one beside "no commands running" is never meaningful.
   const listed = pending;
   const running = pending.filter(
     (s) => backgroundShellPhase(s) === "running",
   ).length;
-  if (!current.error && !pending.length && !expanded) return null;
   const otherPhases = (
     ["starting", "queued", "output", "stopping", "unconfirmed"] as const
   )
@@ -157,13 +171,6 @@ export function BackgroundShellStatus({
           ) : null}
           <Icon name={expanded ? "chevron-down" : "chevron-right"} size={14} />
         </button>
-        <button
-          type="button"
-          className="text-button"
-          onClick={() => setRefresh((value) => value + 1)}
-        >
-          {t("backgroundShellRefresh")}
-        </button>
       </div>
       {current.error ? (
         <details className="background-shell-error">
@@ -171,7 +178,7 @@ export function BackgroundShellStatus({
           <pre>{current.error}</pre>
         </details>
       ) : null}
-      {expanded && !current.error && listed.length > 0 ? (
+      {expanded && listed.length > 0 ? (
         <ul className="background-shell-list">
           {listed.map((session) => (
             <li key={session.taskId}>

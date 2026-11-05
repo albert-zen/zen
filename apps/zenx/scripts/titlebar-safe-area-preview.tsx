@@ -5,6 +5,8 @@ import { WindowTitleBar } from "../src/renderer/src/App.js";
 import { Sidebar } from "../src/renderer/src/Sidebar.js";
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 import { AuxiliaryPanel } from "../src/renderer/src/auxiliary-panel.js";
+import { PluginInformationHost } from "../src/renderer/src/plugin-information-host.js";
+import { createPluginUiRegistry } from "../src/renderer/src/plugin-ui-host.js";
 import { subagentsManifest } from "../../../packages/zenx-subagents-plugin/src/manifest.js";
 import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
 import {
@@ -15,6 +17,8 @@ import { i18n } from "../src/renderer/src/i18n.js";
 import "../src/renderer/src/theme.css";
 import "../src/renderer/src/styles.css";
 const query = new URLSearchParams(location.search);
+const informationPreview = query.has("information");
+const informationRegistry = createPluginUiRegistry();
 const platform = query.get("platform") ?? "darwin";
 document.documentElement.dataset.platform = platform;
 document.documentElement.dataset.appearance = query.get("theme") ?? "light";
@@ -114,7 +118,7 @@ function Preview() {
   const [newProjectless, setNewProjectless] = useState(false);
   const [selectedThread, setSelectedThread] = useState("recent");
   const [collapsed, setCollapsed] = useState(query.get("sidebar") !== "open");
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(query.get("resource") !== "closed");
   const [width, setWidth] = useState(0);
   const widthTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reportWidth = useCallback((value: number) => {
@@ -155,7 +159,7 @@ function Preview() {
       : undefined;
   useEffect(() => {
     Object.assign(window, {
-      __titlebarPreview: { setCollapsed, setSelected, setTabs },
+      __titlebarPreview: { setCollapsed, setSelected, setTabs, setOpen },
     });
     void document.fonts.ready.then(() => {
       document.body.dataset.previewReady = "true";
@@ -264,14 +268,46 @@ function Preview() {
         </aside>
       )}
       <main className="workspace">
-        <section className="agent-surface">
+        <section className="agent-surface" id="primary-conversation-content">
           <p style={{ padding: 24 }}>
             {newProjectless
               ? "No-project draft. No folder or Thread has been created."
               : "Actual WindowTitleBar, Sidebar and AuxiliaryPanel. Synthetic data only."}
           </p>
+          {informationPreview && (
+            <textarea
+              id="synthetic-composer"
+              aria-label="Synthetic chat draft"
+              defaultValue="Keep this unsent draft through all panel states."
+            />
+          )}
         </section>
+        {informationPreview && (
+          <PluginInformationHost
+            snapshot={subjectSnapshot}
+            registry={informationRegistry}
+            owner={{ kind: "thread", threadId: "synthetic-safe-area-thread" }}
+            resourcePanelWidth={width}
+            theme={query.get("theme") === "dark" ? "dark" : "light"}
+            contextContent={
+              <p style={{ padding: 20 }}>
+                Synthetic information. No Host or private data.
+              </p>
+            }
+            navigate={() => {}}
+            executeCommand={async () => null}
+            readHandle={async () => null}
+          />
+        )}
         <AuxiliaryPanel
+          primaryConversation={
+            informationPreview
+              ? {
+                  title: "Main conversation",
+                  contentId: "primary-conversation-content",
+                }
+              : undefined
+          }
           threadId="synthetic-safe-area-thread"
           title="Synthetic workspace"
           open={open}

@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { EditableInformationPanel } from "../src/renderer/src/EditableInformationPanel.js";
 import { PluginInformationHost } from "../src/renderer/src/plugin-information-host.js";
 import { createPluginUiRegistry } from "../src/renderer/src/plugin-ui-host.js";
+import { registerSubagentsUi } from "../src/renderer/src/subagents-ui.js";
 import { registerBoardUi } from "../src/renderer/src/board-ui.js";
 import {
   applyInformationOperations,
@@ -26,15 +27,31 @@ document.documentElement.dataset.platform = "linux";
 void i18n.changeLanguage("en");
 const registry = createPluginUiRegistry();
 registerBoardUi(registry);
-registry.registerTrusted("zenx/bundled/subagents-ui", {
-  "subagents-panel": () => (
-    <p>
-      Review component boundaries · Idle
-      <br />
-      Run synthetic contract checks · Idle
-    </p>
-  ),
-});
+registerSubagentsUi(registry);
+let scene = query.get("scene") ?? "populated";
+const triggerFacts = [
+  {
+    id: "synthetic-timer",
+    threadId: "synthetic-thread",
+    kind: "timer",
+    active: true,
+    label: "Daily project review",
+    definitionRevision: 1,
+  },
+  {
+    id: "synthetic-paused",
+    threadId: "synthetic-thread",
+    kind: "signal",
+    active: false,
+    label: "Release signal",
+    definitionRevision: 1,
+  },
+];
+const triggerUpdates: {
+  command: string;
+  triggerId: string;
+  active: boolean;
+}[] = [];
 const snapshot = {
   ...workspaceLauncherSnapshot,
   plugins: [
@@ -202,31 +219,40 @@ const information: NativeInformationApi = {
   plugins: {
     readHandle: async () => null,
     executeCommand: async (pluginId: string, command: string, input?: any) => {
+      if (pluginId === "zenx-subagents" && command === "list")
+        return { threads: [] };
       if (pluginId === "zenx-triggers" && command === "sidebar-facts")
         return {
-          triggers: [
-            {
-              id: "synthetic-timer",
-              threadId: "synthetic-thread",
-              kind: "timer",
-              active: true,
-              label: "Daily project review",
-            },
-            {
-              id: "synthetic-paused",
-              threadId: "synthetic-thread",
-              kind: "signal",
-              active: false,
-              label: "Release signal",
-            },
-          ],
+          triggers: scene === "empty" ? [] : structuredClone(triggerFacts),
         };
+      if (
+        pluginId === "zenx-triggers" &&
+        ["cancel", "resume"].includes(command)
+      ) {
+        const fact = triggerFacts.find(
+          (entry) => entry.id === input?.triggerId,
+        );
+        if (!fact) throw Error("Unknown synthetic trigger");
+        if (
+          command === "resume" &&
+          input.expectedRevision !== fact.definitionRevision
+        )
+          throw Error("Synthetic trigger revision conflict");
+        fact.active = command === "resume";
+        fact.definitionRevision++;
+        triggerUpdates.push({
+          command,
+          triggerId: fact.id,
+          active: fact.active,
+        });
+        return { ok: true };
+      }
       if (pluginId !== "zenx-board" || command !== "ui")
         throw Error("No real Host access in synthetic preview");
       const key = input.instanceKey ?? "default";
       const current = bodies.get(key);
       if (input.operation === "read")
-        return input.owner?.kind === "room"
+        return input.owner?.kind === "room" || scene !== "populated"
           ? null
           : current
             ? structuredClone(current)
@@ -251,15 +277,21 @@ const information: NativeInformationApi = {
   },
 };
 (window as any).__informationFixture = {
+  navigationToken: query.get("capture"),
+  triggerUpdates: () => structuredClone(triggerUpdates),
   read,
   bodies: () => [...bodies],
   updates: () => updates,
+  setScene: (next: string) => {
+    scene = next;
+    window.dispatchEvent(new Event("focus"));
+  },
   conflict: () => {
     conflictNext = true;
   },
 };
 function Fixture() {
-  const [question, setQuestion] = useState(true);
+  const [question, setQuestion] = useState(query.get("question") !== "0");
   const conversation =
     owner.kind === "thread"
       ? { kind: "thread" as const, threadId: owner.id }
@@ -324,8 +356,8 @@ function Fixture() {
               Boards.
             </p>
             <p style={{ lineHeight: 1.7, color: "var(--color-text-muted)" }}>
-              PR and artifact providers report unavailable. They do not pretend
-              to have observed an empty list.
+              Empty and unavailable cards stay hidden. New content appears
+              automatically; Manage keeps saved placement controls available.
             </p>
           </div>
           <div style={{ marginTop: "auto" }}>

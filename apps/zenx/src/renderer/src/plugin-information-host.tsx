@@ -93,6 +93,7 @@ export function PluginInformationHost({
     top: 12,
     right: 12,
     dock: false,
+    available: true,
   });
   useLayoutEffect(() => {
     const workspace = toolbar.current?.closest(".workspace");
@@ -132,6 +133,8 @@ export function PluginInformationHost({
       );
       const next = {
         headerBottom,
+        available:
+          !resourceOpen || panel?.dataset.expanded !== "true" || primaryActive,
         // Render must not synchronously flush the transcript's dirty layout,
         // including when Radix keeps the information popover closed.
         triggerBottom: trigger.current?.getBoundingClientRect().bottom,
@@ -218,10 +221,27 @@ export function PluginInformationHost({
   }, [contributions.length, !!contextContent, setOpen]);
   const active =
     contributions.find((item) => item.key === selected) ?? contributions[0];
+  const presentedOpen = open && layout.available;
   if (!active && !contextContent) return null;
   const admissionId = snapshot.plugins.find(
     (plugin) => plugin.id === active?.pluginId,
   )?.admissionId;
+  const closeControl = (
+    <div className="information-dismiss-toolbar">
+      <button
+        type="button"
+        className="quiet-button"
+        aria-label={t("informationClose")}
+        onClick={() => {
+          setOpen(false);
+          trigger.current?.focus({ preventScroll: true });
+        }}
+      >
+        <Icon name="x" size={14} />
+        {t("informationClose")}
+      </button>
+    </div>
+  );
   const surface = (
     <div className="information-content">
       {contextContent}
@@ -264,9 +284,13 @@ export function PluginInformationHost({
     ) : null;
   return (
     <>
-      <div ref={toolbar} className="information-toolbar">
+      <div
+        ref={toolbar}
+        className="information-toolbar"
+        hidden={!layout.available}
+      >
         <Popover
-          open={open && !layout.dock}
+          open={presentedOpen && !layout.dock}
           onOpenChange={(next) => {
             focusOnOpen.current = next;
             setOpen((current) => (layout.dock ? !current : next));
@@ -279,8 +303,8 @@ export function PluginInformationHost({
               className="icon-button"
               aria-label={t("boardTitle")}
               title={t("boardTitle")}
-              aria-pressed={open}
-              aria-expanded={open}
+              aria-pressed={presentedOpen}
+              aria-expanded={presentedOpen}
               aria-controls={contentId}
             >
               <Icon name="list-detail" />
@@ -305,13 +329,14 @@ export function PluginInformationHost({
               )}
               aria-label={active?.title ?? t("boardTitle")}
             >
+              {closeControl}
               {tabs}
               {surface}
             </PopoverContent>
           )}
         </Popover>
       </div>
-      {open && layout.dock ? (
+      {presentedOpen && layout.dock ? (
         <aside
           id={contentId}
           className="information-dock"
@@ -322,6 +347,7 @@ export function PluginInformationHost({
             maxHeight: `calc(100% - ${layout.top + 12}px)`,
           }}
         >
+          {closeControl}
           {tabs}
           {surface}
         </aside>

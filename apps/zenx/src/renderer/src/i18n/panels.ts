@@ -4,6 +4,9 @@ export const en = {
   informationComponents: "Information",
   informationRefresh: "Refresh information",
   informationCustomize: "Customize information",
+  informationManage: "Customize",
+  informationDone: "Done",
+  informationClose: "Close information",
   informationPullRequests: "Related pull requests",
   informationLineage: "Subagents",
   informationArtifacts: "Related artifacts",
@@ -33,7 +36,7 @@ export const en = {
   informationAdd: "Add component",
   informationReset: "Reset layout",
   informationRemovalHint:
-    "Removing a component only removes its placement. Board content is kept. Drag rows or use Alt + ↑ / ↓ to reorder.",
+    "Changes are saved immediately. Removing a component only removes its placement. Board content is kept. Drag rows or use Alt + ↑ / ↓ to reorder.",
   informationMoveUp: "Move up",
   informationMoveDown: "Move down",
   informationHide: "Hide",
@@ -47,7 +50,7 @@ export const en = {
   informationFilterEvent: "Events",
   informationShowPaused: "Show paused",
   informationNoVisible:
-    "All components are hidden. Use Customize to show or add them.",
+    "No components to display. Use Customize to show or add them.",
 
   questionTitle: "Needs your input",
   roomQuestionTitle: "Room questions",
@@ -78,6 +81,7 @@ export const en = {
   questionUnknown:
     "Response outcome is unconfirmed. Check before sending again.",
   questionFailed: "Response was not accepted. See details.",
+  questionDraftStorage: "Draft storage",
   questionDraftNote:
     "Unsent drafts stay in this window, not across app reloads.",
   "questionState.open": "Needs your input",
@@ -1152,6 +1156,9 @@ export const zhCN = {
   informationComponents: "资料",
   informationRefresh: "刷新资料",
   informationCustomize: "自定义资料",
+  informationManage: "管理",
+  informationDone: "完成",
+  informationClose: "收起资料板",
   informationPullRequests: "相关拉取请求",
   informationLineage: "子对话",
   informationArtifacts: "相关产物",
@@ -1179,7 +1186,7 @@ export const zhCN = {
   informationAdd: "添加组件",
   informationReset: "重置布局",
   informationRemovalHint:
-    "移除组件仅移除摆放，Board 内容会保留。拖动组件或按 Alt + ↑ / ↓ 调整顺序。",
+    "更改即时保存。移除组件仅移除摆放，Board 内容会保留。拖动组件或按 Alt + ↑ / ↓ 调整顺序。",
   informationMoveUp: "上移",
   informationMoveDown: "下移",
   informationHide: "隐藏",
@@ -1192,7 +1199,7 @@ export const zhCN = {
   informationFilterTimer: "定时",
   informationFilterEvent: "事件",
   informationShowPaused: "显示已暂停",
-  informationNoVisible: "所有组件均已隐藏。可在自定义中显示或添加组件。",
+  informationNoVisible: "暂无可显示的资料。可在管理中显示或添加组件。",
 
   questionTitle: "需要你的输入",
   roomQuestionTitle: "聊天室问题",
@@ -1219,6 +1226,7 @@ export const zhCN = {
   questionMore: "加载更多（{{loaded}} / {{total}}）",
   questionUnknown: "回答结果尚未确认，请先检查状态，不要重复发送。",
   questionFailed: "回答未被接纳，请查看详情。",
+  questionDraftStorage: "草稿保存说明",
   questionDraftNote: "未发送草稿仅保留在当前窗口，应用重载后不保留。",
   "questionState.open": "需要你的输入",
   "questionState.sending": "正在发送回答…",

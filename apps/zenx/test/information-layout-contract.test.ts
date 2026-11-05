@@ -158,7 +158,7 @@ test("defaults are pure, owner-typed, and do not materialize legacy state", asyn
     assert.equal(first.scope.kind, "thread");
     assert.equal(first.information.content, "not-read");
     assert.equal(first.information.availability, "not-observed");
-    assert.equal(first.information.widgets.length, 6);
+    assert.equal(first.information.widgets.length, 4);
     assert.equal((await f.store.read(threadOwner)).revision, 0);
     assert.equal(
       Object.hasOwn(await f.store.read(threadOwner), "informationLayout"),
@@ -168,7 +168,7 @@ test("defaults are pure, owner-typed, and do not materialize legacy state", asyn
     assert.deepEqual(await f.read(), first);
     assert.equal(defaultInformationLayout(roomOwner).widgets.length, 2);
     const paw = defaultInformationLayout(roomOwner, caller);
-    assert.equal(paw.widgets.length, 7);
+    assert.equal(paw.widgets.length, 5);
     const lineage = paw.widgets.find((widget) => widget.type === "lineage")!;
     assert.deepEqual(lineage.binding, {
       kind: "member",
@@ -199,7 +199,7 @@ test("actual facade and native tool edit the same store with CAS; unseen instanc
     assert.equal([a, b].filter((reply) => reply.applied).length, 1);
     const saved = await f.store.read(threadOwner);
     assert.equal(saved.revision, 1);
-    assert.equal(saved.informationLayout?.widgets.length, 6);
+    assert.equal(saved.informationLayout?.widgets.length, 4);
     assert.deepEqual(saved.tabs, []);
     assert.equal(saved.open, false);
     assert.equal(saved.fullscreen, false);
@@ -494,7 +494,7 @@ test("more than 256 widgets remain reachable across pages; partial reads cannot 
       Array.from({ length: 300 }, () => ({ op: "add", type: "triggers" })),
     );
     assert.equal(result.applied, true);
-    assert.equal(result.information.total, 306);
+    assert.equal(result.information.total, 304);
     let page = await f.read({ pageSize: 17 });
     const snapshot = page.snapshot;
     const target = page.information.widgets[0]!.ref;
@@ -504,11 +504,11 @@ test("more than 256 widgets remain reachable across pages; partial reads cannot 
       if (!page.information.cursor) break;
       page = await f.read({ cursor: page.information.cursor, pageSize: 17 });
     }
-    assert.equal(refs.size, 306);
+    assert.equal(refs.size, 304);
     await f.edit(snapshot, [{ op: "set", id: target, collapsed: true }]);
     assert.equal(
       (await f.store.read(threadOwner)).informationLayout!.widgets.length,
-      306,
+      304,
     );
     await assert.rejects(
       f.call("zenx_self_control_sidebar_update", {
@@ -566,7 +566,7 @@ test("reset restores placements without deleting custom content references or re
         config: { filter: "event", showPaused: false },
         visible: false,
       },
-      { op: "move", id: "authored-instance", before: "default:pull-requests" },
+      { op: "move", id: "authored-instance", before: "default:lineage" },
     ],
   });
   const restored = applyInformationOperations(configured, {
@@ -864,7 +864,7 @@ test("native tool rejects raw full replacement and forged bindings, without prov
       informationPage(defaultInformationLayout(threadOwner), 0, caller, {
         pageSize: 1000,
       }).widgets.length,
-      6,
+      4,
     );
     assert.ok(f.requests.every(({ method }) => method === "thread/read"));
   } finally {

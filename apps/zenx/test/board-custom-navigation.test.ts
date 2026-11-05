@@ -21,6 +21,7 @@ type Reply = {
 async function fixture() {
   const dom = new JSDOM('<input id="composer"><div id="root"></div>', {
     url: "https://zenx.local/",
+    pretendToBeVisual: true,
   });
   Object.assign(globalThis, {
     window: dom.window,
@@ -168,9 +169,7 @@ async function fixture() {
     async updateDocument() {
       snapshot = { ...snapshot, revision: snapshot.revision + 1 };
       await act(async () =>
-        document
-          .querySelector<HTMLButtonElement>(".board-footer button")!
-          .click(),
+        window.dispatchEvent(new dom.window.Event("focus")),
       );
     },
     async switchOwner() {
