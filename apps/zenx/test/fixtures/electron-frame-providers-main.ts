@@ -12,6 +12,8 @@ import {
   webContents,
   type WebContents,
   type WebFrameMain,
+  type WebContentsView,
+  type View,
 } from "electron";
 import {
   ElectronBrowserBackend,
@@ -29,10 +31,13 @@ import {
 import {
   assertNativeFramePlacement,
   assertNativeInputRoute,
+  assertNativeFramePresentation,
   nativeFrameCommandReceipt,
+  nativeViewOwnerIndices,
   type NativeInputAttempt,
   type NativeChildRoute,
   type NativeFrameIdentity,
+  type NativeFramePresentation,
 } from "./electron-frame-provider-evidence.js";
 
 type Mode = "nested-same-process" | "nested-oopif";
@@ -68,8 +73,13 @@ async function waitFor<T>(
   throw new Error(`Timed out: ${label}`);
 }
 
-function recordTransport(web: WebContents) {
+function recordTransport(
+  web: WebContents,
+  readPresentation: () => NativeFramePresentation,
+) {
   const inputs: NativeInputAttempt[] = [];
+  const inputPresentations: NativeFramePresentation[] = [];
+  const presentationErrors: string[] = [];
   const routes: NativeChildRoute[] = [];
   const failures: Record<string, unknown>[] = [];
   const commands: Record<string, unknown>[] = [];
@@ -107,13 +117,20 @@ function recordTransport(web: WebContents) {
   web.debugger.on("message", listener);
   web.debugger.sendCommand = function (method, params, sessionId) {
     const requestSequence = ++sequence;
-    if (method.startsWith("Input."))
+    if (method.startsWith("Input.")) {
       inputs.push({
         method,
         type: params?.type,
         sessionId: sessionId ?? "",
         ...(params?.x === undefined ? {} : { x: params.x, y: params.y }),
       });
+      try {
+        inputPresentations.push(readPresentation());
+      } catch (error) {
+        if (presentationErrors.length < 8)
+          presentationErrors.push(String(error));
+      }
+    }
     // Passive observers never replace the original native promise, add commands,
     // inject events, retry input or change the native failure.
     const pending = original.call(this, method, params, sessionId);
@@ -157,6 +174,18 @@ function recordTransport(web: WebContents) {
   };
   return {
     inputs,
+    inputPresentations,
+    presentationErrors,
+    assertPresentations() {
+      assert.deepEqual(
+        presentationErrors,
+        [],
+        "Every native Input must have a physical presentation witness",
+      );
+      assert.equal(inputPresentations.length, inputs.length);
+      for (const value of inputPresentations)
+        assertNativeFramePresentation(value, "dispatch");
+    },
     routes,
     failures,
     commands,
@@ -297,9 +326,11 @@ async function main() {
     };
     for (const provider of ["workspace-browser", "electron-browser"] as const) {
       const sessionId = `frame-${provider}`;
+      const views = new Map<number, WebContentsView>();
       const workspace =
         provider === "workspace-browser"
           ? createElectronWorkspaceBrowser({
+              onCreateView: (view) => views.set(view.webContents.id, view),
               artifactDirectory: path.join(
                 privateDirectory,
                 `${provider}-artifacts`,
@@ -344,7 +375,55 @@ async function main() {
             "Find only the exact nonce-bound provider-created root",
           );
           const web = matches[0]!;
-          const transport = recordTransport(web);
+          const view = views.get(web.id);
+          if (workspace)
+            assert.ok(
+              view?.webContents === web,
+              "The exact production-created view owns this target",
+            );
+          const targetWindow = workspace
+            ? undefined
+            : BrowserWindow.fromWebContents(web);
+          if (!workspace)
+            assert.ok(
+              targetWindow?.webContents === web,
+              "The exact production-created window owns this target",
+            );
+          const readPresentation = (): NativeFramePresentation => {
+            const windows = BrowserWindow.getAllWindows();
+            const owners = view
+              ? nativeViewOwnerIndices<View>(
+                  windows.map((window) => window.contentView),
+                  view,
+                ).map((index) => windows[index]!)
+              : [targetWindow!];
+            return {
+              provider,
+              webContentsId: web.id,
+              sentinelWindowId: sentinel!.id,
+              focusedWindowId: BrowserWindow.getFocusedWindow()?.id ?? null,
+              backgroundThrottling: web.backgroundThrottling,
+              ...(view
+                ? {
+                    viewWebContentsId: view.webContents.id,
+                    viewVisible: view.getVisible(),
+                  }
+                : {}),
+              displays: screen
+                .getAllDisplays()
+                .map((display) => display.bounds),
+              owners: owners.map((window) => ({
+                id: window.id,
+                ownsTargetContents: window.webContents === web,
+                visible: window.isVisible(),
+                focused: window.isFocused(),
+                focusable: window.isFocusable(),
+                opacity: window.getOpacity(),
+                bounds: window.getBounds(),
+              })),
+            };
+          };
+          const transport = recordTransport(web, readPresentation);
           const preparation = observeFramePreparation(
             BrowserFrameInputObserver.prototype,
           );
@@ -359,6 +438,10 @@ async function main() {
               : "hidden production BrowserWindow",
             status: "incomplete",
             inputs: transport.inputs,
+            inputPresentations: transport.inputPresentations,
+            presentationErrors: transport.presentationErrors,
+            pageVisibilityMeaning:
+              "Recorded only: backgroundThrottling:false keeps Electron Page Visibility visible even for hidden native targets",
             routes: transport.routes,
             nativeFailures: transport.failures,
             nativeCommands: transport.commands,
@@ -368,8 +451,25 @@ async function main() {
           cases.push(receipt);
           const evaluate = async <T>(expression: string): Promise<T> =>
             (await web.executeJavaScript(expression)) as T;
-          const state = async () =>
-            await evaluate<State>("window.contract.state()");
+          const visibilitySamples: Record<string, unknown>[] = [];
+          receipt.visibilitySamples = visibilitySamples;
+          const guardTarget = async () => {
+            await guard();
+            const native = readPresentation();
+            assertNativeFramePresentation(native, "idle");
+            receipt.lastNativePresentation = native;
+          };
+          const state = async () => {
+            const current = await evaluate<State>("window.contract.state()");
+            await guardTarget();
+            visibilitySamples.push({
+              phase,
+              root: current.visibility,
+              leaf: current.childVisibility,
+            });
+            if (visibilitySamples.length > 12) visibilitySamples.shift();
+            return current;
+          };
           const inspect = async (): Promise<BrowserInspection> =>
             await waitFor(async () => {
               const start = transport.inputs.length;
@@ -380,7 +480,7 @@ async function main() {
                 start,
                 "Inspection is read-only",
               );
-              await guard();
+              await guardTarget();
               return observed.inputViewport ? observed : undefined;
             }, `${phase}: coherent provider screenshot (read-only)`);
           try {
@@ -447,9 +547,7 @@ async function main() {
                 await evaluate("window.contract.focus('text-a')");
               const observed = await inspect();
               const before = await state();
-              assert.equal(before.visibility, "hidden");
-              assert.equal(before.childVisibility, "hidden");
-              await guard();
+              await guardTarget();
               const start = transport.inputs.length;
               if (kind === "click")
                 await backend.pointerClick!(
@@ -466,6 +564,7 @@ async function main() {
                   observed.observationId,
                   "Space",
                 );
+              transport.assertPresentations();
               assertNativeInputRoute(
                 transport.inputs.slice(start),
                 transport.routes,
@@ -484,9 +583,7 @@ async function main() {
               }));
               const after = await waitFor(async () => {
                 const current = await state();
-                await guard();
-                assert.equal(current.visibility, "hidden");
-                assert.equal(current.childVisibility, "hidden");
+                await guardTarget();
                 assert.equal(current.documentId, before.documentId);
                 assert.deepEqual(
                   current.events.slice(0, before.events.length),
@@ -504,7 +601,7 @@ async function main() {
                   ? current
                   : undefined;
               }, `${phase}: trusted pair and application effect, no replay`);
-              await guard();
+              await guardTarget();
               receipt[kind] = {
                 trustedEvents: after.events.slice(before.events.length),
                 clicks: after.clicks,
@@ -521,7 +618,7 @@ async function main() {
               assert.equal(before.outer, changed.outer);
               assert.equal(changed.inner, "text-b");
               const count = transport.inputs.length;
-              await guard();
+              await guardTarget();
               await assert.rejects(
                 backend.keyPress!(
                   sessionId,
@@ -533,7 +630,7 @@ async function main() {
               );
               assert.equal(transport.inputs.length, count);
               assert.deepEqual((await state()).events, before.events);
-              await guard();
+              await guardTarget();
               receipt.staleFocus = { rejected: true, inputDispatches: 0 };
             } else {
               phase = `${provider}/${mode}/interrupted-press`;
@@ -541,7 +638,7 @@ async function main() {
               const observed = await inspect();
               const before = await state();
               const start = transport.inputs.length;
-              await guard();
+              await guardTarget();
               await assert.rejects(
                 backend.pointerClick!(
                   sessionId,
@@ -562,9 +659,8 @@ async function main() {
                   .map(({ method, type }) => ({ method, type })),
                 [{ method: "Input.dispatchMouseEvent", type: "mousePressed" }],
               );
+              transport.assertPresentations();
               const after = await state();
-              assert.equal(after.visibility, "hidden");
-              assert.equal(after.childVisibility, "hidden");
               assert.notEqual(after.documentId, before.documentId);
               assert.deepEqual(after.events.slice(before.events.length), [
                 { type: "pointerdown", trusted: true, target: "canvas" },
@@ -575,7 +671,7 @@ async function main() {
               assert.equal(fresh.inputViewport, undefined);
               // Explicitly different operations prove the tab quarantine, never
               // replay or release the earlier unknown mouse press.
-              await guard();
+              await guardTarget();
               await assert.rejects(
                 backend.keyPress!(
                   sessionId,
@@ -585,7 +681,7 @@ async function main() {
                 ),
                 /blocked|held|pressed|close.*tab/iu,
               );
-              await guard();
+              await guardTarget();
               await assert.rejects(
                 backend.pointerClick!(
                   sessionId,
@@ -598,7 +694,7 @@ async function main() {
               );
               assert.equal(transport.inputs.length, start + 1);
               assert.deepEqual((await state()).events, after.events);
-              await guard();
+              await guardTarget();
               receipt.quarantine = {
                 inputDispatches: 1,
                 successorReleaseDispatches: 0,

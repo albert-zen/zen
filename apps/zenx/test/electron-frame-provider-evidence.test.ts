@@ -4,9 +4,12 @@ import { readFile } from "node:fs/promises";
 import {
   assertNativeFramePlacement,
   assertNativeInputRoute,
+  assertNativeFramePresentation,
   nativeFrameCommandReceipt,
+  nativeViewOwnerIndices,
   type NativeChildRoute,
   type NativeInputAttempt,
+  type NativeFramePresentation,
 } from "./fixtures/electron-frame-provider-evidence.js";
 
 const urls = [
@@ -253,4 +256,174 @@ test("native command diagnostics retain exact bounded exception/world evidence w
   );
   assert.ok(JSON.stringify(bounded).length < 2400);
   assert.ok(!JSON.stringify(bounded).includes("must-not-retain-expression"));
+});
+
+test("native Workspace presentation proves invisible unmounted state and nonactivating offscreen lease", () => {
+  const idle: NativeFramePresentation = {
+    provider: "workspace-browser",
+    webContentsId: 2,
+    viewWebContentsId: 2,
+    sentinelWindowId: 1,
+    focusedWindowId: 1,
+    backgroundThrottling: false,
+    viewVisible: false,
+    displays: [{ x: 0, y: 0, width: 1440, height: 900 }],
+    owners: [],
+  };
+  assertNativeFramePresentation(idle, "idle");
+  assert.throws(() =>
+    assertNativeFramePresentation({ ...idle, viewVisible: true }, "idle"),
+  );
+  assert.throws(() =>
+    assertNativeFramePresentation({ ...idle, viewWebContentsId: 3 }, "idle"),
+  );
+  const dispatch: NativeFramePresentation = {
+    ...idle,
+    viewVisible: true,
+    owners: [
+      {
+        id: 3,
+        ownsTargetContents: false,
+        visible: true,
+        focused: false,
+        focusable: false,
+        opacity: 0,
+        bounds: { x: -10000, y: -10000, width: 1280, height: 800 },
+      },
+    ],
+  };
+  assertNativeFramePresentation(dispatch, "dispatch");
+  assert.throws(() => assertNativeFramePresentation(dispatch, "idle"));
+  for (const patch of [
+    { focused: true },
+    { focusable: true },
+    { opacity: 1 },
+    { ownsTargetContents: true },
+    { bounds: { x: 0, y: 0, width: 1280, height: 800 } },
+  ])
+    assert.throws(() =>
+      assertNativeFramePresentation(
+        { ...dispatch, owners: [{ ...dispatch.owners[0]!, ...patch }] },
+        "dispatch",
+      ),
+    );
+  assert.throws(() =>
+    assertNativeFramePresentation(
+      { ...dispatch, owners: [...dispatch.owners, dispatch.owners[0]!] },
+      "dispatch",
+    ),
+  );
+  assert.throws(() =>
+    assertNativeFramePresentation(
+      { ...dispatch, focusedWindowId: 3 },
+      "dispatch",
+    ),
+  );
+});
+
+test("native Electron target must stay the exact hidden nonfocusable window despite Page Visibility", () => {
+  const value: NativeFramePresentation = {
+    provider: "electron-browser",
+    webContentsId: 2,
+    sentinelWindowId: 1,
+    focusedWindowId: 1,
+    backgroundThrottling: false,
+    displays: [{ x: 0, y: 0, width: 1440, height: 900 }],
+    owners: [
+      {
+        id: 2,
+        ownsTargetContents: true,
+        visible: false,
+        focused: false,
+        focusable: false,
+        opacity: 1,
+        bounds: { x: 0, y: 0, width: 1100, height: 760 },
+      },
+    ],
+  };
+  for (const phase of ["idle", "dispatch"] as const) {
+    assertNativeFramePresentation(value, phase);
+    for (const patch of [
+      { visible: true },
+      { focused: true },
+      { focusable: true },
+      { ownsTargetContents: false },
+    ])
+      assert.throws(() =>
+        assertNativeFramePresentation(
+          { ...value, owners: [{ ...value.owners[0]!, ...patch }] },
+          phase,
+        ),
+      );
+  }
+});
+
+test("native view ownership includes nested foreign parents and refuses incomplete trees", () => {
+  interface View {
+    children: View[];
+  }
+  const target: View = { children: [] };
+  const unrelated: View = { children: [] };
+  const foreign: View = { children: [{ children: [target] }] };
+  assert.deepEqual(nativeViewOwnerIndices([unrelated], target), []);
+  assert.deepEqual(nativeViewOwnerIndices([unrelated, foreign], target), [1]);
+  const presentation: NativeFramePresentation = {
+    provider: "workspace-browser",
+    webContentsId: 2,
+    viewWebContentsId: 2,
+    sentinelWindowId: 1,
+    focusedWindowId: 1,
+    backgroundThrottling: false,
+    viewVisible: false,
+    displays: [{ x: 0, y: 0, width: 1440, height: 900 }],
+    owners: nativeViewOwnerIndices([unrelated, foreign], target).map(
+      (index) => ({
+        id: index + 3,
+        ownsTargetContents: false,
+        visible: true,
+        focused: false,
+        focusable: true,
+        opacity: 1,
+        bounds: { x: 0, y: 0, width: 1100, height: 760 },
+      }),
+    ),
+  };
+  assert.throws(() => assertNativeFramePresentation(presentation, "idle"));
+  assert.throws(
+    () => nativeViewOwnerIndices([foreign, { children: [target] }], target),
+    /cycle or duplicate/,
+  );
+  const cycle: View = { children: [] };
+  cycle.children.push(cycle);
+  assert.throws(
+    () => nativeViewOwnerIndices([cycle], target),
+    /cycle or duplicate/,
+  );
+  assert.throws(
+    () =>
+      nativeViewOwnerIndices(
+        Array.from({ length: 17 }, () => ({ children: [] })),
+        target,
+      ),
+    /window tree count/,
+  );
+  assert.throws(
+    () =>
+      nativeViewOwnerIndices(
+        [{ children: Array.from({ length: 128 }, () => ({ children: [] })) }],
+        target,
+      ),
+    /tree size/,
+  );
+  assert.throws(
+    () =>
+      nativeViewOwnerIndices(
+        [{ children: Array.from({ length: 129 }, () => ({ children: [] })) }],
+        target,
+      ),
+    /child count/,
+  );
+  let deep: View = { children: [] };
+  for (let index = 0; index < 17; index++) deep = { children: [deep] };
+  assert.throws(() => nativeViewOwnerIndices([deep], target), /tree depth/);
 });

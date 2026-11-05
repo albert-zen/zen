@@ -192,3 +192,137 @@ export function nativeFrameCommandReceipt(
         }),
   };
 }
+
+/** Search every fixture-owned native View tree; an incomplete tree is no proof. */
+export function nativeViewOwnerIndices<
+  T extends { readonly children: readonly T[] },
+>(roots: readonly T[], target: T): number[] {
+  assert.ok(
+    roots.length <= 16,
+    "Native window tree count exceeds fixture bound",
+  );
+  const seen = new Set<T>();
+  const owners: number[] = [];
+  const pending = roots.map((view, owner) => ({ view, owner, depth: 0 }));
+  while (pending.length) {
+    const { view, owner, depth } = pending.pop()!;
+    assert.ok(depth <= 16, "Native view tree depth exceeds fixture bound");
+    assert.ok(
+      !seen.has(view),
+      "Native view tree contains a cycle or duplicate",
+    );
+    seen.add(view);
+    assert.ok(seen.size <= 128, "Native view tree size exceeds fixture bound");
+    if (view === target) owners.push(owner);
+    const children = view.children;
+    assert.ok(
+      children.length <= 128,
+      "Native child count exceeds fixture bound",
+    );
+    for (const child of children)
+      pending.push({ view: child, owner, depth: depth + 1 });
+  }
+  return owners;
+}
+
+export interface NativeFramePresentation {
+  provider: "workspace-browser" | "electron-browser";
+  webContentsId: number;
+  sentinelWindowId: number;
+  focusedWindowId: number | null;
+  backgroundThrottling: boolean;
+  viewWebContentsId?: number;
+  viewVisible?: boolean;
+  displays: { x: number; y: number; width: number; height: number }[];
+  owners: {
+    id: number;
+    ownsTargetContents: boolean;
+    visible: boolean;
+    focused: boolean;
+    focusable: boolean;
+    opacity: number;
+    bounds: { x: number; y: number; width: number; height: number };
+  }[];
+}
+
+/**
+ * Electron Page Visibility is not native hiddenness when throttling is off.
+ * https://www.electronjs.org/docs/latest/api/browser-window#page-visibility
+ */
+export function assertNativeFramePresentation(
+  value: NativeFramePresentation,
+  phase: "idle" | "dispatch",
+): void {
+  assert.equal(value.backgroundThrottling, false);
+  assert.equal(value.focusedWindowId, value.sentinelWindowId);
+  assert.ok(
+    Number.isSafeInteger(value.webContentsId) && value.webContentsId > 0,
+  );
+  if (value.provider === "workspace-browser") {
+    assert.equal(value.viewWebContentsId, value.webContentsId);
+    if (phase === "idle") {
+      assert.equal(
+        value.viewVisible,
+        false,
+        "Unmounted target view must be natively invisible between operations",
+      );
+      assert.equal(
+        value.owners.length,
+        0,
+        "No native window may retain the unmounted target outside its render lease",
+      );
+      return;
+    }
+    assert.equal(
+      value.viewVisible,
+      true,
+      "Input uses the exact temporarily rendered view",
+    );
+  }
+  assert.equal(
+    value.owners.length,
+    1,
+    "Exactly one native owner may hold this target",
+  );
+  const owner = value.owners[0]!;
+  assert.notEqual(owner.id, value.sentinelWindowId);
+  assert.equal(owner.focused, false);
+  assert.equal(owner.focusable, false);
+  if (value.provider === "electron-browser") {
+    assert.equal(owner.ownsTargetContents, true);
+    assert.equal(
+      owner.visible,
+      false,
+      "The exact Electron target window must stay hidden",
+    );
+  } else {
+    assert.equal(
+      owner.ownsTargetContents,
+      false,
+      "The render host lends a view, never becomes the target WebContents",
+    );
+    assert.equal(
+      owner.opacity,
+      0,
+      "The Workspace render host must remain transparent",
+    );
+    assert.ok(value.displays.length > 0);
+    assert.ok(
+      [
+        owner.bounds.x,
+        owner.bounds.y,
+        owner.bounds.width,
+        owner.bounds.height,
+      ].every(Number.isFinite),
+    );
+    assert.ok(owner.bounds.width > 0 && owner.bounds.height > 0);
+    for (const display of value.displays)
+      assert.ok(
+        owner.bounds.x + owner.bounds.width <= display.x ||
+          owner.bounds.y + owner.bounds.height <= display.y ||
+          owner.bounds.x >= display.x + display.width ||
+          owner.bounds.y >= display.y + display.height,
+        "The Workspace render host must remain outside every native display",
+      );
+  }
+}
