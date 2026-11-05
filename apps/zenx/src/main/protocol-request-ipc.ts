@@ -14,6 +14,7 @@ import type { Thread } from "../protocol-client/index.js";
 export function registerProtocolRequestIpc(
   manager: Pick<AppServerManager, "request">,
   observeThread: (thread: Thread) => void,
+  prepareRequest?: (method: string, params: unknown) => Promise<void>,
 ): void {
   ipcMain.handle(
     ipcChannels.request,
@@ -23,6 +24,7 @@ export function registerProtocolRequestIpc(
       }
       let result;
       try {
+        await prepareRequest?.(method, params);
         result = await manager.request(method, params as never);
       } catch (error) {
         if (method.startsWith("zen/thread/questions/"))

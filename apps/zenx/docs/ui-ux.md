@@ -265,6 +265,9 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 
 ### 4.5 图片草稿与预览
 
+- 新图片草稿先进入独立暂存区；本机发送或保存队列编辑前按原始 SHA、长度和媒体类型发布到长期附件库。明确移除且没有共享草稿或冻结提交引用的暂存图片，一分钟后复核并回收；切换会话、窗口关闭与重启都不证明放弃。旧会话附件、结果未知的发送及归属不明的暂存图片保持保留，不自动删除。
+- 侧聊首发成功后，剩余输入与尚未完成的图片导入同步转交到真实 child Composer，再进行侧栏异步写入；转交不是丢弃，迟到导入不得删除图片或覆盖 child 中的新编辑。只有明确关闭未转交草稿才释放其新导入图片，不能仅凭原草稿不再显示判断放弃。
+
 - Composer 的 typed draft 同时保存文字与有序图片引用；可以只发送图片。picker、clipboard paste 与 drop
   均支持一次加入多张 PNG / JPEG / GIF / WebP，顺序与用户选择或系统提供的文件顺序一致。
 - picker 与 payload 读取只经 Electron main/preload 的 typed image boundary；renderer 草稿和 canonical journal

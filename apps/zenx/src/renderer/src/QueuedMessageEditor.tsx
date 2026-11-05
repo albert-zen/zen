@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import type { AttachmentRef } from "../../../../../src/attachment.js";
 import type { ComposerDraft, ComposerDraftImage } from "./composer-state.js";
 import { composerDraftHasContent } from "./composer-state.js";
+import { abandonDraftImage } from "./draft-image-lifecycle.js";
 import { ComposerEditor, ComposerShell } from "./Composer.js";
 import { AttachmentImage, ImagePreview } from "./ImagePresentation.js";
 import { Icon } from "./icons.js";
@@ -81,6 +82,7 @@ function EditorSession(props: QueuedMessageEditorProps) {
   const mounted = useRef(true);
   const saveLock = useRef(false);
   const importLock = useRef(false);
+  const explicitlyDiscarded = useRef(false);
   const restoreRequested = useRef(false);
   const [saving, setSaving] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -119,6 +121,7 @@ function EditorSession(props: QueuedMessageEditorProps) {
     setDraft(nextDraft);
     setLocalError(null);
     restoreRequested.current = false;
+    explicitlyDiscarded.current = false;
     const frame = requestAnimationFrame(() => {
       if (mounted.current && latest.current.open) textarea.current?.focus();
     });
@@ -140,6 +143,7 @@ function EditorSession(props: QueuedMessageEditorProps) {
     !latest.current.disabledReason;
   const dismiss = (reason: "cancel" | "saved") => {
     if (!mounted.current || !latest.current.open) return;
+    if (reason === "cancel") explicitlyDiscarded.current = true;
     restoreRequested.current = true;
     setPreview(null);
     latest.current.onClose(reason);
@@ -192,6 +196,10 @@ function EditorSession(props: QueuedMessageEditorProps) {
     setLocalError(null);
     try {
       const images = await operation();
+      if (explicitlyDiscarded.current) {
+        for (const image of images) abandonDraftImage(image.id);
+        return;
+      }
       if (!mounted.current || images.length === 0) return;
       updateDraft({
         ...draftRef.current,

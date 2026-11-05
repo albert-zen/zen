@@ -268,7 +268,8 @@ try {
         let i = 0;
         i < 100 &&
         !(await evaluate(
-          `!!document.querySelector('[data-thread-find-item-id="agent-0"]')`,
+          `!!document.querySelector('[data-thread-find-item-id="agent-0"]') &&
+        Array.from(window.CSS?.highlights?.get('zenx-thread-find-active') ?? []).some(range => range.toString() === 'Answer 0:')`,
         ));
         i++
       )
@@ -276,9 +277,10 @@ try {
       report.checks.oldestFind = await evaluate(`({
         mounted: !!document.querySelector('[data-thread-find-item-id="agent-0"]'),
         count: document.querySelector('.virtual-transcript-find [role="status"]')?.textContent,
-        highlighted: !!window.CSS?.highlights?.get('zenx-transcript-find'),
+        highlighted: Array.from(window.CSS?.highlights?.get('zenx-thread-find-active') ?? []).some(range => range.toString() === 'Answer 0:'),
       })`);
       assert.equal(report.checks.oldestFind.mounted, true);
+      assert.equal(report.checks.oldestFind.highlighted, true);
       assert.match(report.checks.oldestFind.count, /1.*1/);
       await screenshot("native-history-find.png");
     },

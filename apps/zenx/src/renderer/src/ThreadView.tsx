@@ -3,6 +3,7 @@ import {
   useThreadHistoryPages,
 } from "./use-thread-history-pages.js";
 import { flushSync } from "react-dom";
+import { abandonDraftImage } from "./draft-image-lifecycle.js";
 import { AnsweredQuestionBubble } from "./AnsweredQuestionBubble.js";
 import {
   indexAnsweredQuestions,
@@ -2763,8 +2764,14 @@ function ThreadViewContent({
                 current?.owner === editOwner.current &&
                 !current.pending &&
                 !current.confirmed
-              )
+              ) {
                 updateEditSession(key, { ...current, draft });
+                const retainedIds = new Set(
+                  draft.images.map((image) => image.id),
+                );
+                for (const image of current.draft.images)
+                  if (!retainedIds.has(image.id)) abandonDraftImage(image.id);
+              }
             }}
             onSave={(draft) => saveQueuedEdit(key, draft)}
             onReferenceSource={(reference) => {
@@ -2798,9 +2805,15 @@ function ThreadViewContent({
                 else if (
                   !current.pending &&
                   (!current.confirmed || observedEdit(current))
-                )
+                ) {
+                  // Only this owner actually discarding an edit retires new
+                  // image leases. Source navigation and pending writes
+                  // retain their independent drafts.
+                  if (reason === "cancel")
+                    for (const image of current.draft.images)
+                      abandonDraftImage(image.id);
                   updateEditSession(key, null);
-                else updateEditSession(key, { ...current, owner: undefined });
+                } else updateEditSession(key, { ...current, owner: undefined });
               }
               setOpenEditKey((value) => (value === key ? null : value));
             }}

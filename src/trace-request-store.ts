@@ -16,8 +16,8 @@ interface Range {
   limit: number;
 }
 
-/** Private storage representation: neither recipe paths nor image block paths leave Trace. */
-export class TraceRequestImageStore {
+/** Private, lossless representations: recipe and shared block paths never leave Trace. */
+export class TraceRequestStore {
   readonly #artifacts: string;
   constructor(private readonly root: string) {
     this.#artifacts = path.join(root, "artifacts");
@@ -29,13 +29,19 @@ export class TraceRequestImageStore {
       payload.byteOffset,
       payload.byteLength,
     );
-    if (!body.includes(dataUrl)) return false;
-    const name = this.#requestName(ref);
+    const hasImages = body.includes(dataUrl);
+    if (
+      !hasImages &&
+      (body.length < textBlockBytes || body.length > 0xffffffff)
+    )
+      return false;
     const verification = { offset: ref.byteLength, limit: 1 };
     if ((await this.read(ref, verification)) !== undefined) {
       await syncDirectory(this.#artifacts);
       return true;
     }
+    if (!hasImages) return this.#storeText(ref, body);
+    const name = this.#requestName(ref);
     const images: RequestImage[] = [];
     const seen = new Set<string>();
     for (const { image, bytes } of requestImages(body)) {
@@ -46,7 +52,7 @@ export class TraceRequestImageStore {
       );
       seen.add(image.sha256);
     }
-    if (images.length === 0) return false;
+    if (images.length === 0) return this.#storeText(ref, body);
     function* pieces() {
       yield encodeRequestImageIndex(images);
       let position = 0;
@@ -65,13 +71,52 @@ export class TraceRequestImageStore {
     return true;
   }
 
+  async #storeText(ref: TraceArtifactRef, body: Buffer): Promise<boolean> {
+    // Fixed byte boundaries reuse an unchanged growing prefix without retaining
+    // another request, a dictionary, or a chain of dependent historical recipes.
+    // Short requests stay raw; the last partial block stays inline in the recipe.
+    if (body.length < textBlockBytes || body.length > 0xffffffff) return false;
+    const count = Math.floor(body.length / textBlockBytes);
+    const index = Buffer.alloc(4 + count * 32);
+    index.writeUInt32BE(count);
+    const seen = new Set<string>();
+    for (let number = 0; number < count; number++) {
+      const bytes = body.subarray(
+        number * textBlockBytes,
+        (number + 1) * textBlockBytes,
+      );
+      const sha256 = createHash("sha256").update(bytes).digest("hex");
+      index.write(sha256, 4 + number * 32, 32, "hex");
+      if (seen.has(sha256)) continue;
+      await this.#publish(this.#blockName(sha256), [bytes], async () => {
+        await this.#readBlock(sha256);
+      });
+      seen.add(sha256);
+    }
+    await this.#publish(
+      this.#textName(ref),
+      [index, body.subarray(count * textBlockBytes)],
+      async () => {
+        if (
+          (await this.read(ref, { offset: ref.byteLength, limit: 1 })) ===
+          undefined
+        )
+          throw new Error(
+            "Trace request text recipe disappeared during publication",
+          );
+      },
+    );
+    return true;
+  }
+
   /** Undefined means no recipe was published. Damage inside a recipe fails closed. */
   async read(
     ref: TraceArtifactRef,
     range?: Range,
   ): Promise<Buffer | undefined> {
-    const name = this.#requestName(ref);
-    if (!(await this.#exists(name))) return undefined;
+    const imageRecipe = await this.#exists(this.#requestName(ref));
+    const name = imageRecipe ? this.#requestName(ref) : this.#textName(ref);
+    if (!imageRecipe && !(await this.#exists(name))) return undefined;
     const hash = createHash("sha256");
     const page =
       range === undefined
@@ -97,6 +142,31 @@ export class TraceRequestImageStore {
     }
     await this.#withEntry(name, (filename) =>
       withOwnedFile(filename, async (file, metadata) => {
+        if (!imageRecipe) {
+          const count = (await readExact(file, 0, 4)).readUInt32BE();
+          const literalStart = 4 + count * 32;
+          const literalLength = metadata.size - literalStart;
+          if (
+            count < 1 ||
+            count > maxTextBlocks ||
+            literalLength < 0 ||
+            literalLength >= textBlockBytes ||
+            count * textBlockBytes + literalLength !== ref.byteLength
+          )
+            throw new Error("Invalid Trace request text index");
+          const index = await readExact(file, 4, count * 32);
+          for (let number = 0; number < count; number++)
+            accept(
+              await this.#readBlock(
+                index.toString("hex", number * 32, (number + 1) * 32),
+              ),
+            );
+          if (literalLength > 0)
+            accept(await readExact(file, literalStart, literalLength));
+          if ((await file.stat()).size !== metadata.size)
+            throw integrityError();
+          return;
+        }
         const count = requestImageCount(await readExact(file, 0, 4));
         const indexLength = count * requestImageEntryBytes;
         let literalPosition = 4 + indexLength;
@@ -123,6 +193,21 @@ export class TraceRequestImageStore {
     if (position !== ref.byteLength || hash.digest("hex") !== ref.sha256)
       throw integrityError();
     return page ?? Buffer.concat(full, position);
+  }
+
+  async #readBlock(sha256: string): Promise<Buffer> {
+    return this.#withEntry(this.#blockName(sha256), (filename) =>
+      withOwnedFile(filename, async (file, metadata) => {
+        if (metadata.size !== textBlockBytes) throw integrityError();
+        const bytes = await readExact(file, 0, textBlockBytes);
+        if (
+          (await file.stat()).size !== textBlockBytes ||
+          createHash("sha256").update(bytes).digest("hex") !== sha256
+        )
+          throw integrityError();
+        return bytes;
+      }),
+    );
   }
 
   async #readImage(
@@ -154,6 +239,12 @@ export class TraceRequestImageStore {
 
   #requestName(ref: TraceArtifactRef): string {
     return `${ref.sha256}.request-v1`;
+  }
+  #textName(ref: TraceArtifactRef): string {
+    return `${ref.sha256}.request-text-v1`;
+  }
+  #blockName(sha256: string): string {
+    return `${sha256}.text-v1`;
   }
   #imageName(image: RequestImage): string {
     return `${image.sha256}.image-v1`;
@@ -258,6 +349,8 @@ function integrityError(): Error {
 }
 
 const dataUrl = Buffer.from('"data:image/');
+const textBlockBytes = 64 * 1024;
+const maxTextBlocks = Math.floor(0xffffffff / textBlockBytes);
 const mimeHeader = /^[a-z0-9][a-z0-9.+-]*;base64,/i;
 const base64Alphabet =
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

@@ -35,6 +35,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      - name: Typecheck the production-component browser fixture
+        run: npx --no-install tsc -p apps/zenx/evals/native-history/tsconfig.json
       - name: Verify native windows and recovery compatibility
         run: node --test dist/test/thread-history-window.test.js dist/test/native-history-window.test.js
       - name: Verify page merge, source navigation, drafts and reconnect

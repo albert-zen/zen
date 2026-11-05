@@ -52,7 +52,9 @@ function Fixture() {
         const start = performance.now();
         selectedDataset = id;
         requests = 0;
-        const snapshot = await fetch(manifest[id].initial).then((response) =>
+        const dataset = manifest[id];
+        if (!dataset) throw new Error(`Unknown history dataset: ${id}`);
+        const snapshot = await fetch(dataset.initial).then((response) =>
           response.json(),
         );
         setThread(projectNativeRecovery(snapshot));

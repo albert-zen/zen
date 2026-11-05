@@ -110,6 +110,10 @@ import type {
   ApprovalDecision,
 } from "../../main/app-server-manager.js";
 import type { ZenXThreadAttachmentProjection } from "../../main/image-attachments.js";
+import {
+  abandonClosedComposerImages,
+  abandonUnusedComposerImage,
+} from "./draft-image-lifecycle.js";
 import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
 import type {
   ZenXProjectProjectionEntry,
@@ -629,6 +633,7 @@ function AppContent() {
       () => refreshSideChatDrafts((revision) => revision + 1),
       () => crypto.randomUUID(),
       () => i18n.t("panels:sideChatCreationUnconfirmed"),
+      abandonClosedComposerImages,
     ),
   ).current;
 
@@ -3944,31 +3949,31 @@ function AppContent() {
             editComposer(state, text),
           )
         }
-        onImportImages={async (files) => {
-          const images = await window.zenx.imageAttachments.import(
-            await Promise.all(
-              files.map(async (file) => ({
-                name: file.name,
-                mediaType: file.type,
-                bytes: new Uint8Array(await file.arrayBuffer()),
-              })),
+        onImportImages={(files) =>
+          sideChatDrafts.importImages(id, async () =>
+            window.zenx.imageAttachments.import(
+              await Promise.all(
+                files.map(async (file) => ({
+                  name: file.name,
+                  mediaType: file.type,
+                  bytes: new Uint8Array(await file.arrayBuffer()),
+                })),
+              ),
             ),
-          );
-          sideChatDrafts.updateComposer(id, (state) =>
-            addComposerImages(state, images),
-          );
-        }}
-        onPickImages={async () => {
-          const images = await window.zenx.imageAttachments.pick();
-          sideChatDrafts.updateComposer(id, (state) =>
-            addComposerImages(state, images),
-          );
-        }}
-        onRemoveImage={(image) =>
-          sideChatDrafts.updateComposer(id, (state) =>
-            removeComposerImage(state, image),
           )
         }
+        onPickImages={() =>
+          sideChatDrafts.importImages(id, () =>
+            window.zenx.imageAttachments.pick(),
+          )
+        }
+        onRemoveImage={(image) => {
+          sideChatDrafts.updateComposer(id, (state) =>
+            removeComposerImage(state, image),
+          );
+          const state = sideChatDrafts.get(id)?.composer;
+          if (state !== undefined) abandonUnusedComposerImage(image, state);
+        }}
         onReadAttachment={async (attachment) =>
           await window.zenx.imageAttachments.read(attachment)
         }
@@ -4017,7 +4022,15 @@ function AppContent() {
             const nativeOwner = current.roomId
               ? { kind: "room" as const, id: current.roomId }
               : current.parentThreadId;
-            updateComposer(child, () => current.composer);
+            // Transfer before sidebar awaits can reveal the child. Later
+            // imports follow this owner, and never overwrite edits made in
+            // the child's Composer while those sidebar writes are pending.
+            if (
+              !sideChatDrafts.transfer(id, (change) =>
+                updateComposer(child, change),
+              )
+            )
+              return;
             const draftTab = `custom:side-chat-draft-${id}`;
             const order = (
               sideChatTabOrdersRef.current[owner] ??
@@ -4059,7 +4072,6 @@ function AppContent() {
                   [owner]: `thread:${child}`,
                 }));
             }
-            sideChatDrafts.close(id);
             void loadThreadSummaries();
           }
         }}
@@ -4613,17 +4625,20 @@ function AppContent() {
                     releaseNewThreadImageLease(draftId);
                   }
                 }}
-                onRemoveImage={(threadId, imageId) =>
-                  updateComposer(threadId, (state) =>
+                onRemoveImage={(threadId, imageId) => {
+                  const next = updateComposer(threadId, (state) =>
                     removeComposerImage(state, imageId),
-                  )
-                }
-                onRemoveNewThreadImage={(imageId) =>
-                  updateNewThreadDraft((current) => ({
+                  );
+                  abandonUnusedComposerImage(imageId, next);
+                }}
+                onRemoveNewThreadImage={(imageId) => {
+                  const next = updateNewThreadDraft((current) => ({
                     ...current,
                     composer: removeComposerImage(current.composer, imageId),
-                  }))
-                }
+                  }));
+                  if (next !== null)
+                    abandonUnusedComposerImage(imageId, next.composer);
+                }}
                 onReadAttachment={readAttachment}
                 onRetryTurn={async (turnId) => {
                   if (
