@@ -234,6 +234,25 @@ try {
   assert.match(verified.visibleText, /Attached action complete/u);
   const accountVisibilityBeforeOpen = visibilityState(verified.visibleText);
   const foregroundBeforeOpen = foregroundWindowHandle();
+  console.log(
+    "Windows fixture foreground readiness " +
+      JSON.stringify({
+        fixtureBrowserHwnd,
+        foregroundBeforeOpen,
+        accountVisibilityBeforeOpen,
+        browserPid: browser.pid,
+      }),
+  );
+  assert.equal(
+    foregroundBeforeOpen,
+    fixtureBrowserHwnd,
+    "The disposable browser must actually own OS foreground before acceptance begins",
+  );
+  assert.equal(
+    accountVisibilityBeforeOpen,
+    "visible",
+    "The original account fixture must be visible before background acceptance begins",
+  );
   const targetsBeforeOpen = await browserTargetSnapshot(
     endpoint,
     fixtureBrowserHwnd,
