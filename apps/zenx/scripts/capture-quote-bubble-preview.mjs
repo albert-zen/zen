@@ -37,11 +37,48 @@ for (const scene of [
         i++
       )
         await delay(50);
+      // The token can mount before CJK fonts and transcript follow-bottom settle.
+      // Wait for its actual hit target to stay in place before one native hover.
+      await evaluate("document.fonts.ready.then(() => true)");
+      let previousBounds;
+      let stableFrames = 0;
+      for (let i = 0; i < 100 && stableFrames < 3; i++) {
+        const current = await evaluate(
+          `(() => { const el = document.querySelector('.user-bubble .reference-token-details'); const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, hit: el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)) }; })()`,
+        );
+        stableFrames =
+          current.hit &&
+          JSON.stringify(current) === JSON.stringify(previousBounds)
+            ? stableFrames + 1
+            : 0;
+        previousBounds = current;
+        await delay(50);
+      }
+      assert.equal(
+        stableFrames,
+        3,
+        "quote token must be stable and hit-testable",
+      );
       const bounds = await evaluate(
         `(() => { const r = document.querySelector('.user-bubble .reference-token-details').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
       );
       await send("Input.dispatchMouseEvent", { type: "mouseMoved", ...bounds });
-      await delay(300);
+      for (let i = 0; i < 60; i++) {
+        if (
+          await evaluate("!!document.querySelector('.reference-exact-excerpt')")
+        )
+          break;
+        await delay(50);
+      }
+      if (
+        !(await evaluate(
+          "!!document.querySelector('.reference-exact-excerpt')",
+        ))
+      ) {
+        await screenshot(
+          `quote-hover-failed-${scene.theme}-${scene.width}.png`,
+        );
+      }
       assert.equal(
         await evaluate(
           "document.querySelector('.reference-exact-excerpt')?.textContent",
