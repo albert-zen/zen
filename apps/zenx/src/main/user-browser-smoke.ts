@@ -4,7 +4,6 @@ import {
   verifyBrowserExtensions,
 } from "./browser-extensions-smoke.js";
 import { smokeConnectedActivity } from "./browser-connected-activity-smoke.js";
-import { BrowserInputUnsupportedError } from "./capabilities/browser-targeted-input.js";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
@@ -89,7 +88,7 @@ const server = createServer((request, response) => {
       <p id="visibility"></p><output id="result">No canvas click</output><p id="focus">Focus none</p>
       <canvas width="200" height="80" tabindex="0" onclick="this.focus();document.querySelector('#result').textContent='Canvas clicked '+event.isTrusted"></canvas>
       <form onsubmit="event.preventDefault();document.querySelector('#result').textContent='Submitted '+document.querySelector('#text').value"><input id="text" aria-label="Targeted text"><button type="button" id="next">Next focus</button></form>
-      <input type="file" id="native-file"><label for="native-file" style="position:absolute;left:10px;top:350px"><span>Choose native file</span></label>
+      <input type="file" id="native-file" onclick="event.preventDefault();document.querySelector('#result').textContent='File clicked '+event.isTrusted"><label onclick="event.preventDefault();document.querySelector('#result').textContent='File label clicked '+event.isTrusted" for="native-file" style="position:absolute;left:10px;top:350px"><span>Choose native file</span></label>
       <script>window.__zenProgrammableSmoke=42;const updateVisibility=()=>document.querySelector('#visibility').textContent='Visibility '+document.visibilityState;updateVisibility();document.addEventListener('visibilitychange',updateVisibility);document.addEventListener('focusin',()=>document.querySelector('#focus').textContent='Focus '+(document.activeElement.id||document.activeElement.tagName));</script>`);
     return;
   }
@@ -389,32 +388,21 @@ try {
     /Focus next/u,
     "Tab must move page-local focus",
   );
-  await assert.rejects(
-    backend.pointerClick(
+  // Cancel only the fixture's picker default action, not trusted CDP input.
+  for (const [y, expected] of [
+    [310, /File clicked true/u],
+    [360, /File label clicked true/u],
+  ] as const) {
+    await backend.pointerClick(
       "windows-smoke",
       opened.tabId,
       inputInspection.observationId,
       30,
-      310,
-    ),
-    (error: unknown) =>
-      error instanceof BrowserInputUnsupportedError &&
-      error.code === "BROWSER_INPUT_UNSUPPORTED" &&
-      error.reason === "native-surface",
-  );
-  await assert.rejects(
-    backend.pointerClick(
-      "windows-smoke",
-      opened.tabId,
-      inputInspection.observationId,
-      30,
-      360,
-    ),
-    (error: unknown) =>
-      error instanceof BrowserInputUnsupportedError &&
-      error.code === "BROWSER_INPUT_UNSUPPORTED" &&
-      error.reason === "native-surface",
-  );
+      y,
+    );
+    inputInspection = await backend.inspect("windows-smoke", opened.tabId);
+    assert.match(inputInspection.visibleText, expected);
+  }
   const afterTargetedInput = await browserTargetSnapshot(
     endpoint,
     fixtureBrowserHwnd,

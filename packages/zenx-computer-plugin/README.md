@@ -9,12 +9,12 @@ locked, using fresh controls and an actual post-action inspection; native errors
 remain failures. Other providers, window images and foreground input require an
 active session. System suspension blocks all Computer work. The Host never
 unlocks the desktop or replays input. On Windows and the bundled macOS provider,
-`computer_list_windows({})` returns up to 32 open windows with exact, owner-scoped
+`computer_list_windows({})` returns open windows with exact, owner-scoped
 short `ref` values. Pass a window ref to `computer_inspect`,
 `computer_screenshot` or `computer_select_target`. Native callers can still
 use the exact target object. Listing does not activate windows or enumerate
 installed applications. Use `query` to filter by application name, PID or
-title before the result limit.
+title. Discovery does not silently omit windows after an arbitrary count; normal provider output and operation budgets still apply.
 
 Titles are preserved exactly, including empty titles and titles longer than 256
 characters; targeted operations accept titles up to 4096 characters. Re-list after a window closes or is renamed. Identical titles within
@@ -189,10 +189,13 @@ English/CJK recognition and geometry; it does not certify DingTalk or WeCom.
 The Chinese-first requirement follows [Apple’s Vision language guidance](https://developer.apple.com/documentation/vision/recognizing-text-in-images)
 and [WWDC21’s explanation of script-model selection](https://developer.apple.com/videos/play/wwdc2021/10041/).
 
-Native macOS `computer_background_click` is a distinct left-click tool with the
+Native macOS `computer_background_click` is a distinct pointer-click tool with the
 local-device `computer.window.background_click` permission. Supply only a current
 screenshot `capture` short reference and `x`/`y` pixels from that exact full-window
-image. The capture is consumed once. The native helper checks availability of its
+image. Optional `button` is `left` (default), `right` or `middle`; the selected
+helper must explicitly advertise right/middle support; older helpers retain left
+clicks and cannot silently substitute a left click. Invalid or unsupported buttons do not consume
+the capture. The capture is consumed once. The native helper checks availability of its
 Apple window-local primitive and revalidates the original PID launch, retained
 window, bounds and desktop before posting. It never substitutes AXPress or global
 input. The native route supports known console sessions, including locked or display-off,
@@ -205,9 +208,14 @@ their existing AX/foreground path and refuse the new verified native capture exp
 This operation does not activate/raise the desktop window or move the hardware
 pointer; application-internal focus may change. App-local deactivation is best
 effort. A posted receipt and matching release-post receipt leave application effect
-unverified. Observe afresh to confirm the effect, and never automatically replay an
-uncertain result. Cancellation asks the owned helper to stop cooperatively, always
-posting the prebuilt matching up after a possible down; the Host retains the
+unverified. A right-click context menu can change the desktop window-order fence;
+that remains an uncertain result, not permission to relax the fence or replay.
+Construction and stub tests do not establish real native delivery. Observe afresh to confirm the effect, and never automatically replay an
+uncertain result. Cancellation asks the owned helper to stop cooperatively. After
+possible down, the helper attempts the prebuilt matching up if application birth
+identity still matches; cancellation and stale window state alone do not suppress
+that release. Lost process identity skips release/deactivation and reports release
+unknown. The identity check and event posting are not atomic. The Host retains the
 process until real close and permits a two-second cleanup grace. Forced termination
 or missing cleanup proof makes release unknown and blocks further background input
 on that provider instance, even after reselection.
@@ -263,7 +271,7 @@ exact window uniqueness, identity and geometry before capture or input.
 
 ## Background application keyboard
 
-Native macOS `computer_background_type` and `computer_background_key_press` derive the application identity from this thread’s existing selected binding. Input targets the application’s **current focus**, which may change inside the application; it is not scoped to the original window or control. The separate local-device `computer.app.background_keyboard` permission and an explicit new helper capability are required. Text accepts 1–1024 well-formed Unicode scalars in surrogate-safe chunks; basic keys have no modifiers or clipboard. There is no global activation, pointer movement, wake/unlock or fallback. Posted/release receipts do not prove application effect; partial/unknown input must never be replayed. Old helper capabilities fail before dispatch.
+Native macOS `computer_background_type`, `computer_background_key_press` and `computer_background_shortcut` derive the application identity from this thread’s existing selected binding. Input targets the application’s **current focus**, which may change inside the application; it is not scoped to the original window or control. The separate local-device `computer.app.background_keyboard` permission and an explicit new helper capability are required. Text accepts 1–1024 well-formed Unicode scalars in surrogate-safe chunks; basic keys have no modifiers or clipboard. Shortcuts require explicit modifiers and uniquely resolved current-layout logical keys; a changed layout fails before the key pair posts. A separate helper shortcut capability gates older helpers. No direct clipboard API is used, but shortcut effects are application-defined, including app paste commands. There is no global activation, pointer movement, wake/unlock or fallback. Posted/release receipts do not prove application effect; partial/unknown input must never be replayed. Old helper capabilities fail before dispatch.
 
 Application keyboard desktop fencing permits only target-app window reordering
 behind every current foreground-app layer-zero window. Foreign window identities,
@@ -295,7 +303,8 @@ ordinary tool result (including nonzero failures).
   left-button path inside that same selected window.
 - Native local OCR: `computer.capture(ref).extensions.vision.ocr({languages})`
 - Explicit application-current-focus input:
-  `computer.appCurrentFocus(bindingRef).type({text})` / `.keyPress({key})`.
+  `computer.appCurrentFocus(bindingRef).type({text})` / `.keyPress({key})` /
+  `.shortcut({key,modifiers})`.
   This intentionally does **not** promise input into the selected window.
 
 Methods exist only when the provider's tool is exposed. Windows and Peekaboo do
@@ -344,3 +353,24 @@ drag in that provider instance. A release-post receipt is not proof that the
 application received it or completed a drop. Reobserve rather than replaying.
 Native receiver fixtures record drag events independently; Linux tests cannot
 establish macOS delivery or application effect.
+
+Native macOS key input and shortcuts support layout-independent navigation keys
+(`home`, `end`, `pageUp`, `pageDown`, forward `delete`), the existing basic keys,
+and `f1` through `f20`. These use the same selected binding, permissions and
+release checks; individual applications still decide how to handle posted keys.
+Other providers retain their own advertised key vocabulary.
+
+Foreground input waits for the activity indicator to be painted, without a fixed
+one-second sleep on every operation. Cancellation, permission and exact target
+checks still precede dispatch. Native typing retains a 1024-Unicode-scalar
+resource budget: the helper preconstructs Unicode events before posting, checks
+application/desktop identity between chunks and has a ten-second operation
+deadline. Larger text needs an explicit later
+operation, not automatic continuation after a partial or uncertain result.
+
+Native foreground and application-current-focus shortcuts accept printable single-character logical keys,
+including punctuation such as `[`, `]`, `-`, `=` and `,`, as well as named keys.
+The current keyboard layout must resolve the key uniquely; unavailable or
+ambiguous mappings still fail before posting. There is no assumed ANSI layout.
+
+Shortcut coverage includes Host/session/facade tests and the macOS Swift algorithm fixture (in-memory event ports, not desktop delivery). These tests do not establish real application shortcut delivery or effect.

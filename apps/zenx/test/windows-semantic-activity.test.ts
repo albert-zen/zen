@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test, { type TestContext } from "node:test";
+import test from "node:test";
 import { ChildProcess } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
@@ -195,14 +195,8 @@ function fixture(
     },
   };
 }
-async function advanceNotice(t: TestContext) {
-  await tick();
-  t.mock.timers.tick(1000);
-  await tick();
-}
-
 for (const name of ["computer_press", "computer_set_value"] as const) {
-  test(`${name} waits for paint ACK and the full notice before any WinApp launch`, async (t) => {
+  test(`${name} waits for paint ACK then launches without an artificial notice delay`, async (t) => {
     t.mock.timers.enable({ apis: ["setTimeout"] });
     const painted = deferred();
     const state = fixture({
@@ -221,15 +215,17 @@ for (const name of ["computer_press", "computer_set_value"] as const) {
       }),
     );
     // Advancing the clock cannot substitute for the renderer's paint ACK.
-    await advanceNotice(t);
+    await tick();
+    t.mock.timers.tick(1000);
+    await tick();
     assert.equal(state.calls.length, 0);
     assert.equal(state.activity.snapshot.activities.length, 1);
     painted.resolve();
     await tick();
-    t.mock.timers.tick(999);
-    await tick();
-    assert.equal(state.calls.length, 0);
-    t.mock.timers.tick(1);
+    assert.ok(
+      state.calls.length > 0,
+      "paint ACK admits input without advancing the mocked clock",
+    );
     const result = (await running) as { impact: string };
     assert.equal(result.impact, "foreground_takeover");
     assert.ok(
@@ -298,13 +294,13 @@ for (const name of ["computer_press", "computer_set_value"] as const) {
       state.computer.invoke(name, call),
       /paint failed/,
     );
-    await advanceNotice(t);
+    await tick();
     await rejected;
     assert.equal(state.calls.length, 0);
     assert.equal(state.activity.snapshot.activities.length, 0);
     failed = false;
     const retry = state.computer.invoke(name, call);
-    await advanceNotice(t);
+    await tick();
     await retry;
     assert.ok(
       state.calls.some(
@@ -315,7 +311,7 @@ for (const name of ["computer_press", "computer_set_value"] as const) {
     await state.computer.close();
   });
 
-  for (const stage of ["paint", "notice"] as const) {
+  for (const stage of ["pending paint", "paint ACK"] as const) {
     for (const cancellation of ["abort", "revoke"] as const) {
       test(`${name} ${cancellation} during ${stage} cannot dispatch or revive after re-enable`, async (t) => {
         t.mock.timers.enable({ apis: ["setTimeout"] });
@@ -323,8 +319,7 @@ for (const name of ["computer_press", "computer_set_value"] as const) {
         const controller = new AbortController();
         const state = fixture({
           paint: async (snapshot) => {
-            if (stage === "paint" && snapshot.activities.length)
-              await painted.promise;
+            if (snapshot.activities.length) await painted.promise;
           },
         });
         const inspected = await state.inspect();
@@ -345,6 +340,11 @@ for (const name of ["computer_press", "computer_set_value"] as const) {
         );
         await tick();
         assert.equal(state.activity.snapshot.activities.length, 1);
+        if (stage === "paint ACK") {
+          // Cancellation after ACK resolution must still fence dispatch in the
+          // pending admission continuation, without an artificial notice timer.
+          painted.resolve();
+        }
         if (cancellation === "abort")
           controller.abort(new Error("external abort"));
         else {
@@ -352,7 +352,7 @@ for (const name of ["computer_press", "computer_set_value"] as const) {
           state.computer.setForegroundControlAllowed(true);
         }
         painted.resolve();
-        await advanceNotice(t);
+        await tick();
         await rejected;
         assert.equal(state.calls.length, 0);
         assert.equal(state.activity.snapshot.activities.length, 0);
@@ -429,7 +429,7 @@ test("semantic Stop owns one exact call, retains unsettled helpers and ignores s
     ),
   );
   const rejected = assert.rejects(first, /stopped by user/);
-  await advanceNotice(t);
+  await tick();
   const firstId = state.activity.snapshot.activities[0]!.id;
   const secondInspection = await state.inspect();
   const second = state.computer.invoke(
@@ -440,7 +440,7 @@ test("semantic Stop owns one exact call, retains unsettled helpers and ignores s
       { callId: "second", canonicalToolCallId: "second-canonical" },
     ),
   );
-  await advanceNotice(t);
+  await tick();
   state.activity.stop([firstId, "forged"]);
   state.activity.stop([firstId]);
   assert.equal(nativeCalls.length, 2);
@@ -508,7 +508,7 @@ for (const phase of [
       }),
     );
     const rejected = assert.rejects(running, /native timed out/);
-    await advanceNotice(t);
+    await tick();
     assert.equal(state.activity.snapshot.activities[0]?.stopping, true);
     assert.equal(
       state.owners.length,

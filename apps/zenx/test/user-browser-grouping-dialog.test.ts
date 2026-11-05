@@ -126,7 +126,7 @@ for (const kind of ["pointer", "key"] as const) {
               observed.observationId,
               "Enter",
             ),
-        /Native dialog requires human control/,
+        /Browser targeted input cannot operate this open native dialog; use an available dialog or Computer capability/,
       );
       assert.equal(
         cdp.commandRequests().length,
@@ -152,7 +152,7 @@ for (const kind of ["pointer", "key"] as const) {
           1,
           1,
         ),
-        /Native dialog requires human control/,
+        /Browser targeted input cannot operate this open native dialog; use an available dialog or Computer capability/,
       );
       cdp.emitSessionEvent("Page.javascriptDialogClosed", { result: false });
       await connection.backend.listTabs("work");
@@ -194,14 +194,27 @@ test("a dialog after mouse press reports unknown and never releases or auto-acce
         1,
         1,
       ),
-      /outcome is unknown.*Native dialog requires human control/,
+      /outcome is unknown.*Browser targeted input cannot operate this open native dialog; use an available dialog or Computer capability/,
     );
     assert.equal(cdp.count("Input.dispatchMouseEvent"), 1);
     assert.equal(cdp.methods().includes("Page.handleJavaScriptDialog"), false);
     cdp.emitSessionEvent("Page.javascriptDialogClosed", { result: false });
+    const refreshed = await connection.backend.inspect("work", "target-1");
+    assert.notEqual(refreshed.observationId, observed.observationId);
     await assert.rejects(
-      connection.backend.inspect("work", "target-1"),
-      /tainted|outcome is unknown/,
+      connection.backend.pointerClick!(
+        "work",
+        "target-1",
+        refreshed.observationId,
+        1,
+        1,
+      ),
+      /input is blocked|held input/,
+    );
+    assert.equal(
+      cdp.count("Input.dispatchMouseEvent"),
+      1,
+      "inspection and dialog dismissal cannot release or replay held input",
     );
   } finally {
     await Promise.resolve(connection.backend.close()).catch(() => undefined);

@@ -156,7 +156,7 @@ test("verifies each WinApp process launch once at the runner boundary", async ()
   assert.equal(verifications, 2);
 });
 
-test("discovery narrows a truncated desktop and preserves sibling windows and exact long or empty titles", async () => {
+test("discovery returns the complete desktop and preserves sibling windows and exact long or empty titles", async () => {
   const runner = new FixtureWinAppRunner();
   runner.windows = Array.from({ length: 40 }, (_, index) => ({
     ...fixtureWindow(),
@@ -171,8 +171,8 @@ test("discovery narrows a truncated desktop and preserves sibling windows and ex
     "computer_list_windows",
     invocation({}),
   )) as { windows: unknown[]; truncated: boolean };
-  assert.equal(listed.windows.length, 32);
-  assert.equal(listed.truncated, true);
+  assert.equal(listed.windows.length, 40);
+  assert.equal(listed.truncated, false);
   const narrowed = (await capability.invoke(
     "computer_list_windows",
     invocation({ query: "DOCUMENT 39" }),

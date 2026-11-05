@@ -330,10 +330,14 @@ for (const kind of ["click", "key"] as const) {
                   (interruption === "navigation" || interruption === "detach")
                 )
               ) {
-                await assert.rejects(
-                  f.backend.inspect("work", "target-1"),
-                  /taint|outcome is unknown|unavailable/,
-                );
+                if (interruption === "disconnect") {
+                  await assert.rejects(
+                    f.backend.inspect("work", "target-1"),
+                    /taint|outcome is unknown|unavailable/,
+                  );
+                } else {
+                  await f.backend.inspect("work", "target-1");
+                }
                 await assert.rejects(
                   f.backend.pointerClick!(
                     "work",
@@ -394,9 +398,20 @@ for (const kind of ["click", "key"] as const) {
           .length,
         1,
       );
+      const fresh = await f.backend.inspect("work", "target-1");
+      assert.equal(fresh.inputViewport, undefined);
       await assert.rejects(
-        f.backend.inspect("work", "target-1"),
-        /tainted|outcome is unknown/,
+        f.backend.pointerClick!("work", "target-1", fresh.observationId, 1, 1),
+        /outcome is unknown/,
+      );
+      await f.backend.navigate(
+        "work",
+        "target-1",
+        "https://example.test/recovery",
+      );
+      assert.equal(
+        f.cdp.count("Input.dispatchMouseEvent"),
+        kind === "key" ? 0 : 1,
       );
     } finally {
       await f.close();
@@ -428,12 +443,16 @@ test("unknown input retains late settlement before attachment cleanup", async ()
     await new Promise((resolve) => setTimeout(resolve, 25));
     assert.equal(f.cdp.count("Target.detachFromTarget"), 0);
     gate.resolve();
-    await assert.rejects(closing, /outcome is unknown/);
+    await closing;
     assert.equal(f.cdp.count("Input.dispatchMouseEvent"), 1);
+    await f.backend.listTabs("work");
+    const fresh = await f.backend.inspect("work", "target-1");
+    assert.equal(fresh.inputViewport, undefined);
     await assert.rejects(
-      f.backend.listTabs("work"),
-      /tainted|outcome is unknown/,
+      f.backend.pointerClick!("work", "target-1", fresh.observationId, 1, 1),
+      /outcome is unknown/,
     );
+    assert.equal(f.cdp.count("Input.dispatchMouseEvent"), 1);
   } finally {
     gate.resolve();
     await f.close();
@@ -541,10 +560,18 @@ for (const change of ["viewport", "hit-target"] as const) {
         /outcome is unknown/,
       );
       assert.equal(f.cdp.count("Input.dispatchMouseEvent"), 1);
+      const fresh = await f.backend.inspect("work", "target-1");
+      assert.equal(fresh.inputViewport, undefined);
       await assert.rejects(
-        f.backend.inspect("work", "target-1"),
-        /tainted|outcome is unknown/,
+        f.backend.pointerClick!("work", "target-1", fresh.observationId, 1, 1),
+        /outcome is unknown/,
       );
+      await f.backend.navigate(
+        "work",
+        "target-1",
+        "https://example.test/recovery",
+      );
+      assert.equal(f.cdp.count("Input.dispatchMouseEvent"), 1);
     } finally {
       await f.close();
     }

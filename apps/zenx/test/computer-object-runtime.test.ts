@@ -91,6 +91,9 @@ test("fresh Computer object programs use the same owned native refs and explicit
   await execute(
     `await ${computer}.capture('${captured.capture}').foreground.drag({x:10,y:20,toX:30,toY:40});`,
   );
+  await execute(
+    `await ${computer}.appCurrentFocus('${captured.binding}').shortcut({key:'a',modifiers:['command']});`,
+  );
   assert.deepEqual(calls, [
     ["computer_inspect", { target, full: true }],
     ["computer_inspect", { full: true, target }],
@@ -119,6 +122,10 @@ test("fresh Computer object programs use the same owned native refs and explicit
         captureId: "capture-native",
       },
     ],
+    [
+      "computer_background_shortcut",
+      { key: "a", modifiers: ["command"], bindingId: "binding-native" },
+    ],
   ]);
   for (const [owner, epoch] of [
     ["other", "epoch"],
@@ -134,7 +141,7 @@ test("fresh Computer object programs use the same owned native refs and explicit
   }
   assert.equal(
     calls.length,
-    5,
+    6,
     "stale/foreign refs never reach the native dispatch port",
   );
   const omitted = await execute(

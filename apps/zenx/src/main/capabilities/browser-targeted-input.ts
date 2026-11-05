@@ -19,7 +19,7 @@ export const browserTargetedInputPolicy = {
   interactionMode: "background_safe",
   userActivation: true,
   siteDialogsPopupsOrFocusPossible: true,
-  nativeSurfaceFallback: "reject-use-human-control",
+  nativeSurfaceFallback: "use-provider-capability",
 } as const;
 
 export type BrowserInputKey = (typeof browserInputKeys)[number];
@@ -57,14 +57,14 @@ export class BrowserInputUnsupportedError extends Error {
   readonly code = "BROWSER_INPUT_UNSUPPORTED";
   constructor(readonly reason: BrowserInputUnsupportedReason) {
     super(
-      `BROWSER_INPUT_UNSUPPORTED:${reason}: This local surface is unsupported for targeted input; use human control`,
+      `BROWSER_INPUT_UNSUPPORTED:${reason}: This surface needs frame-aware or shadow-aware targeting; use a provider capability that resolves the exact inner target`,
     );
   }
 }
 
 /** Open-root traversal only; actual closed roots are checked by trusted CDP metadata. */
 const browserInputElementResolutionScript = `
-  const unsupported = 'iframe,frame,object,embed,select,input[type="file"],input[type="color"],input[type="date"],input[type="datetime-local"],input[type="month"],input[type="time"],input[type="week"]';
+  const unsupported = 'iframe,frame,object,embed';
   const canHostShadow = element => element.namespaceURI === 'http://www.w3.org/1999/xhtml' && (element.localName.includes('-') || /^(article|aside|blockquote|body|div|footer|h[1-6]|header|main|nav|p|section|span)$/.test(element.localName));
   const nativeSurface = element => !!(element?.closest(unsupported) || element?.closest('label')?.control?.matches(unsupported));
   const resolveFocus = () => {
@@ -305,26 +305,9 @@ export async function resolveBrowserInputEvidence(
       )
     )
       throw new Error("Browser input node attributes are malformed");
-    const typeIndex = attributes.findIndex(
-      (attribute, index) => index % 2 === 0 && attribute === "type",
-    );
-    const inputType =
-      typeIndex >= 0 ? String(attributes[typeIndex + 1]).toLowerCase() : "text";
-    if (
-      ["iframe", "frame", "object", "embed", "select"].includes(
-        node.localName,
-      ) ||
-      (node.localName === "input" &&
-        [
-          "file",
-          "color",
-          "date",
-          "datetime-local",
-          "month",
-          "time",
-          "week",
-        ].includes(inputType))
-    )
+    // Ordinary HTML controls (including native pickers) accept CDP input on
+    // the observed page. Embedded documents still need inner-target evidence.
+    if (["iframe", "frame", "object", "embed"].includes(node.localName))
       entry.reason = "native-surface";
     else if (
       Array.isArray(roots) &&
