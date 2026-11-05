@@ -821,11 +821,13 @@ test("queue excerpt source opens the exact visible message and suspends unsaved 
     await h.click(
       '.inline-composer-editor [data-reference-kind="message"] .reference-token-details',
     );
-    await h.click(".reference-open-source");
     await flush();
-    assert.equal(editor(), null);
+    assert.ok(editor() === null, "queue editor should close");
     assert.equal(scrolled, 1);
-    assert.equal(document.activeElement, target);
+    assert.ok(
+      document.activeElement === target,
+      "focus should be on exact source",
+    );
     assert.equal(saves, 0);
     await h.click('[data-queue-id="queue-0"] .queue-row-edit');
     assert.equal(editor()!.dataset.queueEditorIdentity, identity);
@@ -854,7 +856,6 @@ test("missing queue excerpt source keeps the editor and unsaved reference draft 
     await h.click('[data-queue-id="queue-0"] .queue-row-edit');
     await changeText("尚未保存");
     await h.click(".inline-composer-editor .reference-token-details");
-    await h.click(".reference-open-source");
     await flush();
     assert.ok(editor());
     assert.equal(text().value, "尚未保存");

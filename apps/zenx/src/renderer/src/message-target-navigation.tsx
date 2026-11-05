@@ -1,3 +1,4 @@
+import type { SentMessageQuote } from "./reference-draft.js";
 import {
   createContext,
   useContext,
@@ -11,6 +12,7 @@ export interface MessageTargetRequest {
   threadId: string;
   itemId: string;
   requestId: number;
+  excerpt?: string;
 }
 export const MessageTargetNavigationContext = createContext<{
   request: MessageTargetRequest | null;
@@ -26,6 +28,7 @@ export function useMessageTargetNavigation(
     turnId: string,
     onRevealed: () => void,
   ) => Promise<boolean>,
+  navigateQuote?: (quote: SentMessageQuote) => boolean,
 ) {
   const navigation = useContext(MessageTargetNavigationContext);
   const reading = useContext(ThreadReadingContext);
@@ -36,6 +39,26 @@ export function useMessageTargetNavigation(
     if (!request || request.threadId !== thread?.id) return;
     const identity = JSON.stringify([request.threadId, request.requestId]);
     if (consumed.current === identity || retired.current.has(identity)) return;
+    if (request.excerpt !== undefined && navigateQuote) {
+      let active = true;
+      // Virtual materialization uses flushSync and must run outside React's layout commit.
+      queueMicrotask(() => {
+        if (!active) return;
+        if (
+          navigateQuote({
+            threadId: request.threadId,
+            id: request.itemId,
+            excerpt: request.excerpt!,
+          })
+        ) {
+          consumed.current = identity;
+          navigation?.consumed(request.requestId);
+        }
+      });
+      return () => {
+        active = false;
+      };
+    }
     const turn = thread.turns.find((turn) =>
       turn.items.some(
         (item) =>
@@ -95,5 +118,6 @@ export function useMessageTargetNavigation(
     viewport,
     navigation,
     materializeTurn,
+    navigateQuote,
   ]);
 }

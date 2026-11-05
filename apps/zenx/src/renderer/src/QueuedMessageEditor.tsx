@@ -1,3 +1,4 @@
+import { focusMessageQuoteSource } from "./quote-source-navigation.js";
 import { InlineComposerEditor } from "./InlineComposerEditor.js";
 import type { ComposerInput } from "./composer-input.js";
 import { useEffect, useId, useRef, useState } from "react";
@@ -231,8 +232,7 @@ function EditorSession(props: QueuedMessageEditorProps) {
         isCurrent() &&
         (latest.current.canRestoreFocus?.() ?? true)
       ) {
-        target.scrollIntoView({ block: "center", behavior: "auto" });
-        target.focus({ preventScroll: true });
+        focusMessageQuoteSource(target, reference.excerpt);
       }
     });
     return true;

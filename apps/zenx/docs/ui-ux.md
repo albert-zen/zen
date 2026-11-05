@@ -1143,3 +1143,20 @@ advance only after all destinations accept. Old recalled client identities are
 terminal; a later explicit new answer receives a fresh identity. Restoration
 never sends, navigates, steals focus, enables shared Host publication or promises
 cross-window automatic insertion.
+
+### Quote bubble source navigation (2026-11-05)
+
+Message and selected-text reference bubbles reveal their complete stored excerpt
+on hover or keyboard focus. Activating the bubble navigates directly to its exact
+source; the same compact card retains its title, Close and Open source action.
+Do not display the explanatory transport sentence, source UUIDs or workspace path
+in excerpt cards. Identity remains in the structured reference, never inferred
+from visible text. File and Thread pointer cards keep their existing details.
+
+Source navigation materializes the canonical virtual row and required disclosures,
+centers the matching rendered excerpt when scroll boundaries permit, and paints a
+brief static highlight without editing message text or browser selection. Repeated
+activation restarts the highlight; subsequent interaction clears it. Missing
+sources keep the excerpt readable with an explicit unavailable status. Cross-source
+excerpts retain access to every source, while direct activation opens the first.
+Navigation, dismissal and newer reference identities invalidate stale async reads.

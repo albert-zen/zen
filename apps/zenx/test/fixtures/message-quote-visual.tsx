@@ -233,7 +233,9 @@ const initial = params.has("legacy-quote")
                 cwd: base.cwd,
                 threadId: base.id,
                 id: "synthetic-answer",
-                excerpt: "按需展开",
+                excerpt: params.has("quote-bubble")
+                  ? "选中文字后，复制不会改变输入框；引用则作为上下文，问题仍写在原来的输入框。"
+                  : "按需展开",
               },
               3,
             );
