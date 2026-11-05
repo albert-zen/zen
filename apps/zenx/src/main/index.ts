@@ -73,6 +73,7 @@ import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { windowBackdropOptions } from "./window-appearance.js";
 import { FileAttachmentStore } from "../../../../src/attachment.js";
+import { ZenXDraftAttachments } from "./draft-attachments.js";
 
 import { isAllowedZenXExternalUrl } from "../external-link-policy.js";
 import { type ServerNotificationParams } from "../protocol-client/index.js";
@@ -154,8 +155,6 @@ import {
   runProjectWorkspaceAcceptance,
 } from "./project-workspace-smoke.js";
 import {
-  importImageDrafts,
-  importLocalImageDrafts,
   readAttachmentPayload,
   readLocalImagePayload,
   type ZenXImageImport,
@@ -631,9 +630,16 @@ async function bootstrapZenX(): Promise<void> {
       return skills.setMode(id, mode as SkillMode | null);
     },
   );
-  const imageAttachments = new FileAttachmentStore(
-    join(zenDataDirectory, "attachments"),
+  const imageAttachments = new ZenXDraftAttachments(
+    join(zenDataDirectory, "draft-attachments"),
+    new FileAttachmentStore(join(zenDataDirectory, "attachments")),
   );
+  // Only explicitly abandoned draft leases are eligible, including after a crash.
+  void imageAttachments
+    .collectAbandoned()
+    .catch((error: unknown) =>
+      console.warn("Could not collect abandoned draft attachments", error),
+    );
   const directoryBrowser = new ZenXDirectoryBrowser({
     home: app.getPath("home"),
     documents: app.getPath("documents"),
@@ -1665,7 +1671,7 @@ function installProtocolIpc(
   manager: AppServerManager,
   titles: ZenXThreadTitleCoordinator,
   projects: ZenXProjectProjection,
-  attachments: FileAttachmentStore,
+  attachments: ZenXDraftAttachments,
   settings: ZenXSettingsService,
 ): void {
   const applications = async () =>
@@ -1799,14 +1805,32 @@ function installProtocolIpc(
         ? await dialog.showOpenDialog(options)
         : await dialog.showOpenDialog(owner, options);
     if (result.canceled) return [];
-    return await importLocalImageDrafts(attachments, result.filePaths);
+    return await attachments.importLocalImages(
+      event.sender.id,
+      result.filePaths,
+    );
   });
   ipcMain.handle(
     ipcChannels.imageAttachmentsImport,
-    async (_event, value: unknown) => {
+    async (event, value: unknown) => {
       const images = readImageImports(value);
-      return await importImageDrafts(attachments, images);
+      return await attachments.importImages(event.sender.id, images);
     },
+  );
+  ipcMain.handle(
+    ipcChannels.imageAttachmentsAbandon,
+    async (event, ids: unknown) => {
+      if (
+        !Array.isArray(ids) ||
+        ids.length > 1_024 ||
+        !ids.every((id) => typeof id === "string")
+      )
+        throw new Error("Invalid draft image identities");
+      await attachments.abandon(event.sender.id, ids);
+    },
+  );
+  ipcMain.handle(ipcChannels.imageAttachmentsInventory, () =>
+    attachments.inventory(),
   );
   ipcMain.handle(
     ipcChannels.imageLocalRead,
@@ -1897,11 +1921,20 @@ function installProtocolIpc(
       return manager.shellPanelRequest(input);
     },
   );
-  registerProtocolRequestIpc(manager, (thread) => {
-    void observeThreadSnapshotTitle(titles, thread).catch((error: unknown) => {
-      console.warn("Could not observe Thread snapshot for ZenX title", error);
-    });
-  });
+  registerProtocolRequestIpc(
+    manager,
+    (thread) => {
+      void observeThreadSnapshotTitle(titles, thread).catch(
+        (error: unknown) => {
+          console.warn(
+            "Could not observe Thread snapshot for ZenX title",
+            error,
+          );
+        },
+      );
+    },
+    (method, params) => attachments.prepareRequest(method, params),
+  );
   ipcMain.handle(
     ipcChannels.respondApproval,
     (_event, requestId: unknown, decision: unknown) => {
@@ -2030,6 +2063,8 @@ function installFailedProtocolIpc(message: string): void {
   for (const channel of [
     ipcChannels.imageAttachmentsPick,
     ipcChannels.imageAttachmentsImport,
+    ipcChannels.imageAttachmentsAbandon,
+    ipcChannels.imageAttachmentsInventory,
     ipcChannels.imageAttachmentsRead,
     ipcChannels.imageLocalRead,
     ipcChannels.threadAttachmentsRead,

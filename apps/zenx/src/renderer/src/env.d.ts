@@ -210,6 +210,10 @@ declare global {
         ): Promise<NativeThreadSummary[]>;
       };
       imageAttachments: {
+        abandon(ids: readonly string[]): Promise<void>;
+        inventory(): Promise<
+          import("../../main/draft-attachments.js").DraftAttachmentInventory
+        >;
         readLocal(
           source: string,
           cwd?: string,

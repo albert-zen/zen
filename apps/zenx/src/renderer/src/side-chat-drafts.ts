@@ -5,9 +5,15 @@ import {
   beginComposerSubmission,
   acceptComposerSubmission,
   failComposerSubmission,
+  addComposerImages,
   type ComposerState,
   type ComposerSubmission,
+  type ComposerDraftImage,
 } from "./composer-state.js";
+
+type ComposerUpdater = (
+  change: (state: ComposerState) => ComposerState,
+) => void;
 
 /** App-owned, renderer-local editing state; no Thread exists until first Send. */
 export interface SideChatDraft<Boundary = unknown> {
@@ -29,11 +35,18 @@ export interface SideChatDraft<Boundary = unknown> {
 
 export class SideChatDrafts<Boundary = unknown> {
   #drafts = new Map<string, SideChatDraft<Boundary>>();
+  // Only pending async imports keep a closed draft alive. A missing tab alone
+  // never means its images were discarded: promotion transfers their owner.
+  #closed = new WeakMap<
+    SideChatDraft<Boundary>,
+    { kind: "discarded" } | { kind: "transferred"; update: ComposerUpdater }
+  >();
   constructor(
     private changed: () => void,
     private id: () => string = () => crypto.randomUUID(),
     private unconfirmedMessage = () =>
       "Unable to confirm side chat creation. Check the conversation list and reopen a side chat. Your input has been kept.",
+    private discardImages?: (state: ComposerState) => void,
   ) {}
   entries() {
     return [...this.#drafts.values()];
@@ -66,8 +79,47 @@ export class SideChatDrafts<Boundary = unknown> {
     return draft;
   }
   close(id: string) {
+    const draft = this.get(id);
+    if (draft !== undefined) this.#closed.set(draft, { kind: "discarded" });
     this.#drafts.delete(id);
     this.changed();
+    if (draft !== undefined && !draft.sending && !draft.creationUnconfirmed)
+      this.discardImages?.(draft.composer);
+  }
+  /** Transfer the latest input synchronously, without retiring any image lease. */
+  transfer(id: string, update: ComposerUpdater): boolean {
+    const draft = this.get(id);
+    if (
+      draft === undefined ||
+      draft.sending ||
+      draft.creationUnconfirmed ||
+      !draft.threadId ||
+      draft.composer.submission !== null
+    )
+      return false;
+    update(() => draft.composer);
+    this.#closed.set(draft, { kind: "transferred", update });
+    this.#drafts.delete(id);
+    this.changed();
+    return true;
+  }
+  /** Keep the import's original editing owner across admission and sidebar awaits. */
+  async importImages(
+    id: string,
+    operation: () => Promise<readonly ComposerDraftImage[]>,
+  ): Promise<void> {
+    const draft = this.get(id);
+    if (draft === undefined) return;
+    const images = await operation();
+    const disposition = this.#closed.get(draft);
+    if (disposition?.kind === "transferred") {
+      disposition.update((state) => addComposerImages(state, images));
+    } else if (disposition?.kind === "discarded") {
+      this.discardImages?.(addComposerImages(emptyComposerState(), images));
+    } else if (this.get(id) === draft) {
+      this.updateComposer(id, (state) => addComposerImages(state, images));
+    }
+    // Unknown ownership is deliberately retained, never cleanup authority.
   }
   updateComposer(id: string, change: (state: ComposerState) => ComposerState) {
     const draft = this.get(id);

@@ -344,6 +344,11 @@ contextBridge.exposeInMainWorld("zenx", {
       await ipcRenderer.invoke(ipcChannels.threadSummariesList, options),
   },
   imageAttachments: {
+    abandon: async (ids: readonly string[]): Promise<void> =>
+      await ipcRenderer.invoke(ipcChannels.imageAttachmentsAbandon, ids),
+    inventory: async (): Promise<
+      import("../main/draft-attachments.js").DraftAttachmentInventory
+    > => await ipcRenderer.invoke(ipcChannels.imageAttachmentsInventory),
     readLocal: async (
       source: string,
       cwd?: string,
