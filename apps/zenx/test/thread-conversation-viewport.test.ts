@@ -16,7 +16,7 @@ import {
 import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
 
 function recovery(id: string) {
-  return nativeRecoveryForThread({
+  const snapshot = nativeRecoveryForThread({
     id,
     sessionId: id,
     forkedFromId: null,
@@ -40,6 +40,14 @@ function recovery(id: string) {
     name: null,
     turns: [],
   } satisfies Thread);
+  snapshot.thread.history = {
+    before: null,
+    preview: "",
+    itemPositions: Object.fromEntries(
+      snapshot.thread.items.map((item, index) => [item.id, index]),
+    ),
+  };
+  return snapshot;
 }
 function model() {
   return {
@@ -100,7 +108,9 @@ async function harness(
       platform: "darwin",
       protocol: {
         request: async (method: string, params: { threadId: string }) => {
-          assert.equal(method, "zen/thread/resume");
+          if (method === "zen/trace/client-activation")
+            return { observed: true };
+          assert.equal(method, "zen/thread/resume-window");
           return await new Promise<NativeThreadRecoverySnapshot>((resolve) =>
             pending.set(params.threadId, resolve),
           );
