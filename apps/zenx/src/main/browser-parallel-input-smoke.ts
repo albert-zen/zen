@@ -148,10 +148,28 @@ class Rpc {
     sessionId?: string,
   ): Promise<Record<string, unknown>> {
     const id = ++this.#id;
+    const startedAt = Date.now();
+    let transportAccepted = false;
     return await new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#pending.delete(id);
-        reject(new Error(`${method} fixture timeout; never replay an input`));
+        // A returned socket.send is transport acceptance, not browser execution.
+        // In particular a screenshot timeout does not imply an input was sent.
+        reject(
+          Object.assign(
+            new Error(`${method} fixture timeout; never replay an input`),
+            {
+              fixtureCdp: {
+                method,
+                id,
+                transportAccepted,
+                sessionScoped: sessionId !== undefined,
+                elapsedMs: Date.now() - startedAt,
+                timeoutMs: 10_000,
+              },
+            },
+          ),
+        );
       }, 10_000);
       this.#pending.set(id, {
         resolve: (value) => {
@@ -172,6 +190,7 @@ class Rpc {
             ...(sessionId ? { sessionId } : {}),
           }),
         );
+        transportAccepted = true;
       } catch (error) {
         clearTimeout(timer);
         this.#pending.delete(id);
@@ -2638,6 +2657,10 @@ export async function runTargetedInputContractSmoke(options: {
       protocolRouteDiagnostics,
       interruptedRouteFailures,
       error: error instanceof Error ? error.message : String(error),
+      fixtureCdp:
+        error instanceof Error && "fixtureCdp" in error
+          ? error.fixtureCdp
+          : undefined,
     };
     // Preserve the current authored point, owner/inner hits and final read in
     // both native entrypoint failure receipts, without replaying any action.
@@ -3568,6 +3591,10 @@ async function main(): Promise<void> {
           stderr: browserError,
         },
         error: error instanceof Error ? error.message : String(error),
+        fixtureCdp:
+          error instanceof Error && "fixtureCdp" in error
+            ? error.fixtureCdp
+            : undefined,
       }),
     );
     throw error;
