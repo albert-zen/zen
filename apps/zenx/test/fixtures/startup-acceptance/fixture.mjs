@@ -567,8 +567,16 @@ export function productObservation(seed, stage) {
       const rawRects = Array.from(range.getClientRects()); const box = label.getBoundingClientRect();
       ranges.push({selector:spec.selector,rawRects:rawRects.map(rect),box:rect(box)});
       if (rawRects.some(r => ![r.x,r.y,r.width,r.height].every(Number.isFinite) || r.width < 0 || r.height <= 0)) return null;
-      // Pre-wrap newlines can have zero-width layout rectangles, not glyph pixels.
-      const rects = rawRects.filter(r => r.width > 0);
+      // Spaces/newlines have layout rectangles but no ink. Cover every non-space
+      // run in the exact already-checked text; never demand pixels from whitespace.
+      const glyphRects = [];
+      for (const match of label.firstChild.textContent.matchAll(/\\S+/g)) {
+        range.setStart(label.firstChild, match.index);
+        range.setEnd(label.firstChild, match.index + match[0].length);
+        glyphRects.push(...range.getClientRects());
+      }
+      if (glyphRects.some(r => ![r.x,r.y,r.width,r.height].every(Number.isFinite) || r.width < 0 || r.height <= 0)) return null;
+      const rects = glyphRects.filter(r => r.width > 0);
       if (!rects.length || rects.some(r => !inside(r) || r.left < box.left || r.top < box.top || r.right > box.right || r.bottom > box.bottom)) return null;
       if (rects.some(r => [0.1,0.5,0.9].some(f => !label.contains(document.elementFromPoint(r.x + r.width * f, r.y + r.height / 2))))) return null;
       return {selector:spec.selector,textPresent:true,...rect(element.getBoundingClientRect()),textRects:rects.map(rect),style:{color:style.color,fill:style.webkitTextFillColor,font:style.font,opacity:style.opacity,spacing:style.letterSpacing,transform:style.transform}};

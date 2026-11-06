@@ -245,3 +245,23 @@ fixed selection/range geometry in `*-rejected-dom.json`, explicitly marked
 `accepted: false`; this is diagnostic data, never presentation acceptance.
 The original deadline and screenshot acceptance rules are unchanged. Fresh
 Windows receipts and screenshot inspection are still required.
+
+[Run 42148987445](https://github.com/albert-zen/zen/actions/runs/42148987445)
+for head `8a2a1d7b` again failed the conversation gate. Its diagnostic confirms
+`ready: true`, one presented frame, a zero-width newline rectangle, and a
+3.84375px trailing-whitespace rectangle with no glyph pixels. Replaying the
+actual rejected image against the pixel validator fails with that whitespace
+crop and succeeds when only that crop is omitted. The observer therefore now
+samples every non-whitespace run in the exact complete text. It does not drop
+words, relax pixel thresholds or substitute a DOM-only check. The regression
+fails before this change and passes afterward.
+
+The matching
+[artifact 13472306364](https://github.com/albert-zen/zen/actions/runs/42148987445/artifacts/13472306364)
+ZIP digest is `3e7bb22cf194e177ccfdd260230625822310d0a33b795da94e22289cc7a13c93`.
+Initial visibility was 404.9ms, the hold 3013ms, and original HWND 524486 regained
+foreground. The failure scenario did not run. The actual rejected conversation
+image shows the synthetic messages, but also a trusted-document sidebar error
+and background-command status error. Those observed errors remain unresolved;
+this fixture-only correction does not change production trust checks or claim
+the broader product is accepted. Fresh native acceptance remains required.

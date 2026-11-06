@@ -947,6 +947,7 @@ for (const stage of ["sidebar", "conversation"]) {
     "hidden-text",
     "occluded-text",
     "line-break-rect",
+    "whitespace-rect",
     "only-line-break-rect",
     "negative-width-rect",
     "nonfinite-rect",
@@ -1006,10 +1007,20 @@ for (const stage of ["sidebar", "conversation"]) {
           return label;
         });
         document.createRange = () => {
-          let node;
+          let node, start, end;
           return {
             selectNodeContents(value) {
               node = value;
+              start = undefined;
+              end = undefined;
+            },
+            setStart(value, offset) {
+              node = value;
+              start = offset;
+            },
+            setEnd(value, offset) {
+              node = value;
+              end = offset;
             },
             getClientRects: () => {
               const glyph = node.parentElement.getBoundingClientRect();
@@ -1019,6 +1030,16 @@ for (const stage of ["sidebar", "conversation"]) {
                 left: glyph.right,
                 width: 0,
               };
+              if (invalid === "whitespace-rect" && start === undefined)
+                return [
+                  glyph,
+                  { ...lineBreak, width: 4, right: glyph.right + 4 },
+                ];
+              if (invalid === "whitespace-rect")
+                assert(
+                  !/\s/u.test(node.textContent.slice(start, end)),
+                  "Only non-whitespace glyph runs are sampled",
+                );
               if (invalid === "only-line-break-rect") return [lineBreak];
               if (invalid === "negative-width-rect")
                 return [glyph, { ...lineBreak, width: -1 }];
@@ -1053,6 +1074,7 @@ for (const stage of ["sidebar", "conversation"]) {
           result.ready,
           invalid === null ||
             invalid === "line-break-rect" ||
+            invalid === "whitespace-rect" ||
             (stage === "sidebar" && invalid === "unselected"),
         );
         assert.equal(
