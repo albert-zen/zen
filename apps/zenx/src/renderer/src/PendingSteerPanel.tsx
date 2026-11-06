@@ -29,8 +29,8 @@ import {
 } from "./steer-recall-state.js";
 import { queuedInputDraft } from "./queue-edit-draft.js";
 import { parseSkillDraft } from "./skill-draft.js";
-import { inlineReferenceParts, referenceTitle } from "./reference-draft.js";
-import { ReferenceToken } from "./ReferenceToken.js";
+import { referenceTitle } from "./reference-draft.js";
+import { InlineReferenceContent } from "./InlineReferenceContent.js";
 import { Icon } from "./icons.js";
 import { localErrorDetail } from "../../local-error-detail.js";
 import type { AttachmentRef } from "../../../../../src/attachment.js";
@@ -422,64 +422,72 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
                   parsed === null ? (
                     t("steerStructuredInput")
                   ) : (
-                    <span className="pending-steer-text">
-                      {inlineReferenceParts(parsed.text, parsed.references).map(
-                        (part, index) =>
-                          "text" in part ? (
-                            part.text
-                          ) : (
-                            <ReferenceToken
-                              key={index}
-                              reference={part.reference}
-                            />
-                          ),
-                      )}
-                    </span>
+                    <div className="pending-steer-text">
+                      <InlineReferenceContent
+                        text={parsed.text}
+                        references={parsed.references}
+                      />
+                    </div>
                   );
                 return (
-                  <li className="queue-row steer-shelf-row" key={item.id}>
-                    {text.length > 240 ? (
-                      <details className="pending-steer-message">
-                        <summary>{text.slice(0, 240)}…</summary>
-                        {body}
-                      </details>
-                    ) : (
-                      body
-                    )}
-                    {draft?.images.length
-                      ? ` · ${t("steerImageCount", { count: draft.images.length })}`
-                      : ""}
-                    {detailsOpen &&
-                    draft?.images.length &&
-                    props.onReadAttachment ? (
-                      <div className="pending-steer-images">
-                        {draft.images.map((image) => (
-                          <AttachmentImage
-                            key={image.id}
-                            attachment={image.attachment}
-                            name={image.name}
-                            onReadAttachment={readPendingImage}
-                            onOpen={(attachment, name, trigger) => {
-                              if (
-                                isCurrentImage(
-                                  attachment,
-                                  item.id,
-                                  item.clientId,
+                  <li
+                    className="queue-row user-row steer-shelf-row"
+                    key={item.id}
+                  >
+                    {detailsOpen && draft?.images.length ? (
+                      <div
+                        className="message-images pending-steer-images"
+                        aria-label={t("steerImageCount", {
+                          count: draft.images.length,
+                        })}
+                      >
+                        {props.onReadAttachment ? (
+                          draft.images.map((image) => (
+                            <AttachmentImage
+                              key={image.id}
+                              attachment={image.attachment}
+                              name={image.name}
+                              onReadAttachment={readPendingImage}
+                              onOpen={(attachment, name, trigger) => {
+                                if (
+                                  isCurrentImage(
+                                    attachment,
+                                    item.id,
+                                    item.clientId,
+                                  )
                                 )
-                              )
-                                setPreview({
-                                  queuedItemId: item.id,
-                                  clientId: item.clientId,
-                                  attachment,
-                                  name,
-                                  trigger,
-                                });
-                            }}
-                            lazy
-                            retryOnError
-                            compact
-                          />
-                        ))}
+                                  setPreview({
+                                    queuedItemId: item.id,
+                                    clientId: item.clientId,
+                                    attachment,
+                                    name,
+                                    trigger,
+                                  });
+                              }}
+                              lazy
+                              retryOnError
+                              compact
+                            />
+                          ))
+                        ) : (
+                          <span className="image-placeholder">
+                            {t("steerImageCount", {
+                              count: draft.images.length,
+                            })}
+                          </span>
+                        )}
+                      </div>
+                    ) : null}
+                    {parsed === null || text.length > 0 ? (
+                      <div className="user-bubble">
+                        {text.length > 240 ? (
+                          <details className="pending-steer-message">
+                            <summary>{text.slice(0, 240)}…</summary>
+                            {body}
+                          </details>
+                        ) : (
+                          body
+                        )}
                       </div>
                     ) : null}
                   </li>

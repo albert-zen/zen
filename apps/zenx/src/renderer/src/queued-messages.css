@@ -39,7 +39,8 @@
   padding: 0 6px;
 }
 
-.queue-shelf button {
+.queue-shelf:where(:not(.steer-shelf)) button,
+.steer-shelf button:where(:not(.image-thumbnail)) {
   border: 0;
   background: transparent;
   color: inherit;
@@ -474,7 +475,14 @@
 .steer-shelf .queue-shelf-header {
   flex-wrap: wrap;
 }
+.steer-shelf {
+  width: 100%;
+  max-width: var(--conversation-width);
+  border-inline: 0;
+}
 .steer-shelf-details {
+  scrollbar-gutter: auto;
+  scrollbar-width: thin;
   max-height: min(196px, 32dvh);
 }
 .steer-shelf-details[hidden] {
@@ -484,20 +492,19 @@
   display: grid;
   gap: 6px;
   justify-items: end;
-  padding: 0 10px 10px;
+  padding: 0 0 10px;
 }
-.steer-shelf-row,
-.steer-shelf-row + .steer-shelf-row {
+.steer-shelf-row {
+  width: 100%;
   min-width: 0;
   max-width: 100%;
-  padding: 9px 12px;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: 13px 13px 4px 13px;
-  background: var(--color-surface);
-  color: var(--color-text-primary);
-  font-size: var(--font-size-body);
-  line-height: 1.55;
+  padding: 0;
+  border: 0;
+  background: none;
   overflow-wrap: anywhere;
+}
+.steer-shelf-row + .steer-shelf-row {
+  border: 0;
 }
 .steer-shelf-notice,
 .steer-shelf > p,
@@ -537,7 +544,6 @@
 }
 
 .pending-steer-text {
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .pending-steer-message > .pending-steer-text {
@@ -546,11 +552,7 @@
 }
 
 .pending-steer-images {
-  display: flex;
-  flex-wrap: wrap;
   align-items: flex-start;
-  gap: 6px;
-  margin: 6px 0;
 }
 
 /* Unknown-outcome and recovery actions remain distinct, keyboard-visible controls. */
