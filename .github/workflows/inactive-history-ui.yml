@@ -5,6 +5,8 @@ on:
     paths:
       - .github/workflows/inactive-history-ui.yml
       - apps/zenx/scripts/*inactive-history-preview.mjs
+      - apps/zenx/scripts/inactive-history-baseline.*
+      - apps/zenx/test/inactive-history-baseline.test.mjs
       - apps/zenx/scripts/preview-browser-lifecycle.mjs
       - apps/zenx/test/fixtures/inactive-history-visual.tsx
       - apps/zenx/test/native-recovery-fixture.ts
@@ -28,6 +30,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build --workspace @zenx/plugin-sdk
+      - name: Verify cache-only counterfactual contract
+        run: node --test apps/zenx/test/inactive-history-baseline.test.mjs
       - name: Check synthetic fixture and production renderer types
         run: npx tsc -p apps/zenx/tsconfig.inactive-history-preview.json --noEmit
       - name: Verify cache protections and evicted draft recovery

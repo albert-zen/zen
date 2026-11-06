@@ -648,11 +648,62 @@ test("missing compositor frame times out with zero operation calls and restored 
     f.render(async () => {
       assert.fail("dispatch forbidden");
     }),
-    /compositor frame timed out/,
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /compositor frame timed out/);
+      assert.deepEqual(error.cause, {
+        kind: "workspace-compositor-frame-timeout",
+        callbacks: 0,
+        beforeActivation: 0,
+        emptyFrames: 0,
+        mismatchedFrames: 0,
+        lastFrameSize: undefined,
+        expectedFrameSize: { width: 640, height: 480 },
+        displayScale: 1,
+      });
+      return true;
+    },
   );
   assert.equal(f.view.unsubscriptions, 1);
   assert.equal(f.view.parent, f.owner);
   assert.equal(f.windows[0]!.destroyed, true);
+});
+
+test("frame timeout reports bounded callback metadata without dispatch or replay", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = fixture(50);
+  f.view.autoFrame = false;
+  const pending = f.render(async () => assert.fail("dispatch forbidden"));
+  const rejected = assert.rejects(pending, (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /compositor frame timed out/);
+    assert.deepEqual(error.cause, {
+      kind: "workspace-compositor-frame-timeout",
+      callbacks: 3,
+      beforeActivation: 1,
+      emptyFrames: 1,
+      mismatchedFrames: 1,
+      lastFrameSize: { width: 600, height: 400 },
+      expectedFrameSize: { width: 640, height: 480 },
+      displayScale: 1,
+    });
+    return true;
+  });
+  const begin = f.view.webContents.beginFrameSubscription;
+  f.view.webContents.beginFrameSubscription = (dirty, callback) => {
+    begin(dirty, callback);
+    callback(frame());
+  };
+  await tick();
+  const late = f.view.frame!;
+  late(frame(640, 480, true));
+  late(frame(600, 400));
+  t.mock.timers.tick(50);
+  await rejected;
+  late(frame());
+  assert.equal(f.view.subscriptions, 1);
+  assert.equal(f.view.unsubscriptions, 1);
+  assert.equal(f.view.parent, f.owner);
 });
 
 test("frame subscription cleanup failure prevents dispatch and retains the cleanup error", async () => {
