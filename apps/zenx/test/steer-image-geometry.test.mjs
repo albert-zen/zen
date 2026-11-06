@@ -210,3 +210,64 @@ test("reader scrolling requires trusted delivery and observed progress before an
     /no observed/,
   );
 });
+
+test("image acceptance remains visibility-based when layout shifts an idle offset", async () => {
+  const { measureImageVisibility } =
+    await import("../scripts/steer-image-visibility.mjs");
+  const keys = ["innerWidth", "innerHeight", "getComputedStyle", "document"];
+  const prior = Object.fromEntries(
+    keys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
+  );
+  let top = 34;
+  const viewport = {
+    parentElement: null,
+    getBoundingClientRect: () => ({
+      left: 0,
+      right: 390,
+      top: 40,
+      bottom: 700,
+    }),
+  };
+  const image = {
+    complete: true,
+    naturalWidth: 480,
+    parentElement: viewport,
+    contains: () => false,
+    getBoundingClientRect: () => ({
+      left: 269,
+      right: 363,
+      top,
+      bottom: top + 70,
+      width: 94,
+      height: 70,
+    }),
+  };
+  Object.assign(globalThis, {
+    innerWidth: 390,
+    innerHeight: 700,
+    document: { elementFromPoint: () => image },
+    getComputedStyle: (node) => ({
+      display: "block",
+      visibility: "visible",
+      opacity: "1",
+      overflowX: "visible",
+      overflowY: node === viewport ? "auto" : "visible",
+    }),
+  });
+  try {
+    const shifted = measureImageVisibility(image);
+    assert.equal(shifted.visible, true);
+    assert.equal(shifted.coverage, 64 / 70);
+    top = 32;
+    assert.equal(
+      measureImageVisibility(image).visible,
+      false,
+      "below 90% remains a failure",
+    );
+  } finally {
+    for (const [key, descriptor] of Object.entries(prior)) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else delete globalThis[key];
+    }
+  }
+});

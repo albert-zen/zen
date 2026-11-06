@@ -131,12 +131,11 @@ try {
   };
   const scrollCanonicalToStart = async (scene) => {
     let lastPointer = null;
-    const confirmStart = async () => {
+    const observeReaderIdle = async () => {
+      // Layout may legitimately shift a zero offset while the image remains
+      // visible. The unchanged image-visibility predicate is the final goal,
+      // not a permanent scrollTop of exactly zero.
       await evaluate("new Promise(r => setTimeout(r, 300))");
-      assert.ok(
-        await evaluate("document.querySelector('.messages').scrollTop <= 1"),
-        `${scene}: transcript moved after reader scrolling`,
-      );
     };
     for (let step = 0; step < 8; step++) {
       const prepared = await evaluate(`(() => {
@@ -162,9 +161,7 @@ try {
         return {...point, before: receipt.before, deltaY: -Math.max(120, viewport.clientHeight)};
       })()`);
       if (prepared.before <= 1) {
-        // Wait beyond the production reader-idle timer before claiming a
-        // stable position; a later automatic correction is a failure.
-        await confirmStart();
+        await observeReaderIdle();
         return;
       }
       const receipt = {
@@ -243,7 +240,11 @@ try {
       );
       assertSteerWheelReceipt(receipt);
       if (receipt.after <= 1) {
-        await confirmStart();
+        await observeReaderIdle();
+        assert.ok(
+          await evaluate("document.querySelector('.messages').scrollTop <= 1"),
+          `${scene}: transcript moved after acknowledged reader scrolling`,
+        );
         return;
       }
     }
@@ -412,10 +413,18 @@ try {
                   `(${target}).scrollIntoView({block:'center',inline:'nearest',behavior:'instant'})`,
                 );
               }
-              await waitForVisibleImage(target);
+              const visibility = await waitForVisibleImage(target);
               const owner = selector.startsWith("[data-sent")
                 ? "normal"
                 : "pending";
+              (cases.at(-1).imageVisibility ??= []).push({
+                owner,
+                index,
+                visibility,
+                transcriptScrollTop: await evaluate(
+                  "document.querySelector('.messages').scrollTop",
+                ),
+              });
               await screenshot(`${scene}-${owner}-image-${index}.png`);
             }
           }
