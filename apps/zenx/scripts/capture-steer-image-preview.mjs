@@ -293,9 +293,21 @@ try {
           ]) {
             for (let index = 0; index < count; index++) {
               const target = `document.querySelectorAll(${JSON.stringify(selector)})[${index}]`;
-              await evaluate(
-                `(${target}).scrollIntoView({block:'center',inline:'nearest',behavior:'instant'})`,
-              );
+              if (selector.startsWith("[data-sent")) {
+                // The canonical images are at the start of this one-turn
+                // fixture. Reach them by real reader scrolling, rather than
+                // a programmatic correction that live-follow may undo.
+                await send("Input.dispatchMouseEvent", {
+                  type: "mouseWheel",
+                  ...readerPoint,
+                  deltaX: 0,
+                  deltaY: -10000,
+                });
+              } else {
+                await evaluate(
+                  `(${target}).scrollIntoView({block:'center',inline:'nearest',behavior:'instant'})`,
+                );
+              }
               await waitForVisibleImage(target);
               const owner = selector.startsWith("[data-sent")
                 ? "normal"
