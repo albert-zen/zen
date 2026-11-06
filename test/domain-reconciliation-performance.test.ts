@@ -67,6 +67,74 @@ async function setup() {
   };
 }
 
+test("cold Thread snapshot reads and validates Trace once for both projections", async (t) => {
+  const options = await setup();
+  const writer = new DomainThreadJournal(options);
+  await writer.create(facts(8));
+  await writer.close();
+  const journal = new DomainThreadJournal(options);
+  const read = t.mock.method(options.trace, "readSnapshot");
+  const publicRead = t.mock.method(options.trace, "read");
+  try {
+    const snapshot = await journal.readSnapshot("t");
+    assert.deepEqual(snapshot.items, facts(8));
+    assert.equal(snapshot.itemList?.length, 16);
+    assert.equal(read.mock.callCount() + publicRead.mock.callCount(), 1);
+    snapshot.items[0]!.id = "caller-owned";
+    assert.deepEqual((await journal.readSnapshot("t")).items, facts(8));
+  } finally {
+    await journal.close();
+    await rm(options.root, { recursive: true, force: true });
+  }
+});
+
+test("Thread snapshot and a concurrent append share the existing serialization boundary", async (t) => {
+  const options = await setup();
+  const journal = new DomainThreadJournal(options);
+  await journal.create(facts(1));
+  let release!: () => void;
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const read = options.trace.readSnapshot.bind(options.trace);
+  let held = false;
+  const mocked = t.mock.method(
+    options.trace,
+    "readSnapshot",
+    async (...args: Parameters<FileTraceStore["readSnapshot"]>) => {
+      const snapshot = await read(...args);
+      if (!held) {
+        held = true;
+        entered();
+        await gate;
+      }
+      return snapshot;
+    },
+  );
+  try {
+    const reading = journal.readSnapshot("t");
+    await started;
+    const appending = journal.append(nextUser("concurrent"));
+    release();
+    const before = await reading;
+    assert.deepEqual(before.items, facts(1));
+    assert.equal(before.itemList.length, 2);
+    await appending;
+    const after = await journal.readSnapshot("t");
+    assert.deepEqual(after.items, [...facts(1), nextUser("concurrent")]);
+    assert.equal(after.itemList.length, 3);
+  } finally {
+    release();
+    mocked.mock.restore();
+    await journal.close();
+    await rm(options.root, { recursive: true, force: true });
+  }
+});
+
 for (const turns of [32, 128]) {
   test(`compiled ${turns}-turn history does not copy context per lifecycle fact`, async (t) => {
     const options = await setup();
