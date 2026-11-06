@@ -86,7 +86,7 @@ test("capture verifies no card across prepared, unavailable, selected and naviga
 });
 
 test("Ubuntu image capture is bounded and retains artifacts on failure without replacing prior coverage", () => {
-  const job = workflow.jobs.zenx;
+  const job = workflow.jobs["zenx-ui"];
   assert.equal(job["runs-on"], "ubuntu-24.04");
   const captureStep = job.steps.find((step) =>
     step.run?.includes("capture-image-preparation-preview.mjs"),
