@@ -1,0 +1,410 @@
+[
+  {
+    "width": 1280,
+    "example": "short-answer",
+    "metrics": {
+      "bubble": {
+        "left": 808,
+        "right": 1192,
+        "width": 384,
+        "clientWidth": 382,
+        "scrollWidth": 382
+      },
+      "trigger": {
+        "left": 824,
+        "right": 1084,
+        "width": 260,
+        "clientWidth": 258,
+        "scrollWidth": 258
+      },
+      "row": {
+        "left": 352,
+        "right": 1192,
+        "width": 840,
+        "clientWidth": 840,
+        "scrollWidth": 840
+      },
+      "answer": {
+        "left": 1092,
+        "right": 1176,
+        "width": 84,
+        "clientWidth": 84,
+        "scrollWidth": 84
+      }
+    }
+  },
+  {
+    "width": 1280,
+    "example": "short-prompt",
+    "metrics": {
+      "bubble": {
+        "left": 978.984375,
+        "right": 1192,
+        "width": 213.015625,
+        "clientWidth": 211,
+        "scrollWidth": 211
+      },
+      "trigger": {
+        "left": 994.984375,
+        "right": 1084,
+        "width": 89.015625,
+        "clientWidth": 87,
+        "scrollWidth": 87
+      },
+      "row": {
+        "left": 352,
+        "right": 1192,
+        "width": 840,
+        "clientWidth": 840,
+        "scrollWidth": 840
+      },
+      "answer": {
+        "left": 1092,
+        "right": 1176,
+        "width": 84,
+        "clientWidth": 84,
+        "scrollWidth": 84
+      }
+    }
+  },
+  {
+    "width": 1280,
+    "example": "long-answer",
+    "metrics": {
+      "bubble": {
+        "left": 503.1875,
+        "right": 1192,
+        "width": 688.8125,
+        "clientWidth": 687,
+        "scrollWidth": 687
+      },
+      "trigger": {
+        "left": 519.1875,
+        "right": 779.1875,
+        "width": 260,
+        "clientWidth": 258,
+        "scrollWidth": 258
+      },
+      "row": {
+        "left": 352,
+        "right": 1192,
+        "width": 840,
+        "clientWidth": 840,
+        "scrollWidth": 840
+      },
+      "answer": {
+        "left": 519.1875,
+        "right": 1176,
+        "width": 656.8125,
+        "clientWidth": 657,
+        "scrollWidth": 657
+      }
+    }
+  },
+  {
+    "width": 1280,
+    "example": "unbroken-answer",
+    "metrics": {
+      "bubble": {
+        "left": 503.1875,
+        "right": 1192,
+        "width": 688.8125,
+        "clientWidth": 687,
+        "scrollWidth": 687
+      },
+      "trigger": {
+        "left": 519.1875,
+        "right": 779.1875,
+        "width": 260,
+        "clientWidth": 258,
+        "scrollWidth": 258
+      },
+      "row": {
+        "left": 352,
+        "right": 1192,
+        "width": 840,
+        "clientWidth": 840,
+        "scrollWidth": 840
+      },
+      "answer": {
+        "left": 519.1875,
+        "right": 1176,
+        "width": 656.8125,
+        "clientWidth": 657,
+        "scrollWidth": 657
+      }
+    }
+  },
+  {
+    "width": 390,
+    "example": "short-answer",
+    "metrics": {
+      "bubble": {
+        "left": 44.625,
+        "right": 374,
+        "width": 329.375,
+        "clientWidth": 327,
+        "scrollWidth": 327
+      },
+      "trigger": {
+        "left": 60.625,
+        "right": 320.625,
+        "width": 260,
+        "clientWidth": 258,
+        "scrollWidth": 258
+      },
+      "row": {
+        "left": 16,
+        "right": 374,
+        "width": 358,
+        "clientWidth": 358,
+        "scrollWidth": 358
+      },
+      "answer": {
+        "left": 60.625,
+        "right": 358,
+        "width": 297.375,
+        "clientWidth": 297,
+        "scrollWidth": 297
+      }
+    }
+  },
+  {
+    "width": 390,
+    "example": "short-prompt",
+    "metrics": {
+      "bubble": {
+        "left": 166.96875,
+        "right": 374,
+        "width": 207.03125,
+        "clientWidth": 205,
+        "scrollWidth": 205
+      },
+      "trigger": {
+        "left": 182.96875,
+        "right": 271.984375,
+        "width": 89.015625,
+        "clientWidth": 87,
+        "scrollWidth": 87
+      },
+      "row": {
+        "left": 16,
+        "right": 374,
+        "width": 358,
+        "clientWidth": 358,
+        "scrollWidth": 358
+      },
+      "answer": {
+        "left": 279.984375,
+        "right": 358,
+        "width": 78.015625,
+        "clientWidth": 78,
+        "scrollWidth": 78
+      }
+    }
+  },
+  {
+    "width": 390,
+    "example": "long-answer",
+    "metrics": {
+      "bubble": {
+        "left": 43.828125,
+        "right": 364,
+        "width": 320.171875,
+        "clientWidth": 318,
+        "scrollWidth": 318
+      },
+      "trigger": {
+        "left": 59.828125,
+        "right": 319.828125,
+        "width": 260,
+        "clientWidth": 258,
+        "scrollWidth": 258
+      },
+      "row": {
+        "left": 16,
+        "right": 364,
+        "width": 348,
+        "clientWidth": 348,
+        "scrollWidth": 348
+      },
+      "answer": {
+        "left": 59.828125,
+        "right": 348,
+        "width": 288.171875,
+        "clientWidth": 288,
+        "scrollWidth": 288
+      }
+    }
+  },
+  {
+    "width": 390,
+    "example": "unbroken-answer",
+    "metrics": {
+      "bubble": {
+        "left": 44.625,
+        "right": 374,
+        "width": 329.375,
+        "clientWidth": 327,
+        "scrollWidth": 327
+      },
+      "trigger": {
+        "left": 60.625,
+        "right": 320.625,
+        "width": 260,
+        "clientWidth": 258,
+        "scrollWidth": 258
+      },
+      "row": {
+        "left": 16,
+        "right": 374,
+        "width": 358,
+        "clientWidth": 358,
+        "scrollWidth": 358
+      },
+      "answer": {
+        "left": 60.625,
+        "right": 358,
+        "width": 297.375,
+        "clientWidth": 297,
+        "scrollWidth": 297
+      }
+    }
+  },
+  {
+    "width": 320,
+    "example": "short-answer",
+    "metrics": {
+      "bubble": {
+        "left": 27.515625,
+        "right": 304,
+        "width": 276.484375,
+        "clientWidth": 274,
+        "scrollWidth": 274
+      },
+      "trigger": {
+        "left": 43.515625,
+        "right": 288,
+        "width": 244.484375,
+        "clientWidth": 242,
+        "scrollWidth": 242
+      },
+      "row": {
+        "left": 16,
+        "right": 304,
+        "width": 288,
+        "clientWidth": 288,
+        "scrollWidth": 288
+      },
+      "answer": {
+        "left": 43.515625,
+        "right": 288,
+        "width": 244.484375,
+        "clientWidth": 244,
+        "scrollWidth": 244
+      }
+    }
+  },
+  {
+    "width": 320,
+    "example": "short-prompt",
+    "metrics": {
+      "bubble": {
+        "left": 96.96875,
+        "right": 304,
+        "width": 207.03125,
+        "clientWidth": 205,
+        "scrollWidth": 205
+      },
+      "trigger": {
+        "left": 112.96875,
+        "right": 201.984375,
+        "width": 89.015625,
+        "clientWidth": 87,
+        "scrollWidth": 87
+      },
+      "row": {
+        "left": 16,
+        "right": 304,
+        "width": 288,
+        "clientWidth": 288,
+        "scrollWidth": 288
+      },
+      "answer": {
+        "left": 209.984375,
+        "right": 288,
+        "width": 78.015625,
+        "clientWidth": 78,
+        "scrollWidth": 78
+      }
+    }
+  },
+  {
+    "width": 320,
+    "example": "long-answer",
+    "metrics": {
+      "bubble": {
+        "left": 27.109375,
+        "right": 294,
+        "width": 266.890625,
+        "clientWidth": 265,
+        "scrollWidth": 265
+      },
+      "trigger": {
+        "left": 43.109375,
+        "right": 278,
+        "width": 234.890625,
+        "clientWidth": 233,
+        "scrollWidth": 233
+      },
+      "row": {
+        "left": 16,
+        "right": 294,
+        "width": 278,
+        "clientWidth": 278,
+        "scrollWidth": 278
+      },
+      "answer": {
+        "left": 43.109375,
+        "right": 278,
+        "width": 234.890625,
+        "clientWidth": 235,
+        "scrollWidth": 235
+      }
+    }
+  },
+  {
+    "width": 320,
+    "example": "unbroken-answer",
+    "metrics": {
+      "bubble": {
+        "left": 27.109375,
+        "right": 294,
+        "width": 266.890625,
+        "clientWidth": 265,
+        "scrollWidth": 265
+      },
+      "trigger": {
+        "left": 43.109375,
+        "right": 278,
+        "width": 234.890625,
+        "clientWidth": 233,
+        "scrollWidth": 233
+      },
+      "row": {
+        "left": 16,
+        "right": 294,
+        "width": 278,
+        "clientWidth": 278,
+        "scrollWidth": 278
+      },
+      "answer": {
+        "left": 43.109375,
+        "right": 278,
+        "width": 234.890625,
+        "clientWidth": 235,
+        "scrollWidth": 235
+      }
+    }
+  }
+]
