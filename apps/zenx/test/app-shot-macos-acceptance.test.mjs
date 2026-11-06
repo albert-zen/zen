@@ -244,7 +244,153 @@ test("real harness preserves production worker/service and never requests grants
   );
   assert.doesNotMatch(
     swift,
-    /CGWindowListCreateImage|CGRequestScreenCaptureAccess|AXIsProcessTrustedWithOptions|\.activate\(/,
+    /CGWindowListCreateImage|CGRequestScreenCaptureAccess|AXIsProcessTrustedWithOptions|NSRunningApplication|CGEvent/,
+  );
+  assert.equal((swift.match(/NSApp\.activate\(/g) ?? []).length, 1);
+  assert.match(swift, /if !foregroundRequested,[\s\S]*request == nonce/);
+  assert.match(swift, /foregroundRequested = true[^\n]*\n\s*NSApp\.activate/);
+  assert.match(launcher, /join\(scratch, "foreground-request"\)/);
+  assert.match(launcher, /"--foreground-request",\s*foregroundRequest/);
+  const foreground = main.slice(main.indexOf('await branch("foreground"'));
+  const gates = [
+    "await foregroundOwnedFixture()",
+    "requireAcceptance(fresh.active",
+    "await readMacActiveWindow()",
+    "sameObservedWindow(initial, active)",
+    "await service.captureActive",
+    "expectedIdentity: initial",
+  ].map((part) => foreground.indexOf(part));
+  assert.ok(
+    gates.every((index, i) => index >= 0 && (i === 0 || index > gates[i - 1])),
+  );
+});
+
+test("owned foreground setup requests once then only observes, without replay after failure", async () => {
+  const source = await readFile(
+    new URL("./fixtures/app-shot-macos-main.mjs", import.meta.url),
+    "utf8",
+  );
+  const parsed = ts.createSourceFile(
+    "acceptance.mjs",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.JS,
+  );
+  const operation = parsed.statements.find(
+    (node) =>
+      ts.isFunctionDeclaration(node) &&
+      node.name?.text === "foregroundOwnedFixture",
+  );
+  assert.ok(
+    Boolean(operation),
+    "Exercise the actual foreground setup operation",
+  );
+  function scenario({
+    failPermission = false,
+    failIdentity = false,
+    failWrite = false,
+    neverActive = false,
+    aborted = false,
+    identityLostAfterRequest = false,
+    abortAfterRequest = false,
+  } = {}) {
+    let clock = 0;
+    let observations = 0;
+    const writes = [];
+    const signal = { aborted };
+    const run = runInNewContext(
+      "let foregroundRequested = false;\n" +
+        operation.getText(parsed) +
+        "\nforegroundOwnedFixture",
+      {
+        checkPermissions: () => {
+          if (failPermission)
+            throw new AcceptanceError("screen-permission-unavailable", true);
+        },
+        observedFixture: async () => {
+          if (failIdentity || (identityLostAfterRequest && writes.length))
+            throw new AcceptanceError("fixture-identity-changed", true);
+          observations++;
+          return { active: !neverActive && observations >= 3 };
+        },
+        signal,
+        requireAcceptance: (condition, code, blocked) => {
+          if (!condition) throw new AcceptanceError(code, blocked);
+        },
+        config: {
+          foregroundRequest: "/owned/private/foreground-request",
+          owned: { nonce },
+        },
+        writeFile: async (path, content, options) => {
+          writes.push({
+            path,
+            content,
+            mode: options.mode,
+            flag: options.flag,
+          });
+          if (failWrite) throw new Error("uncertain request write");
+          if (abortAfterRequest) signal.aborted = true;
+        },
+        Date: { now: () => clock },
+        setTimeout: (callback, duration) => {
+          clock += duration;
+          callback();
+        },
+        AcceptanceError,
+      },
+    );
+    return { run, writes, observations: () => observations };
+  }
+  const ok = scenario();
+  await ok.run();
+  assert.equal(ok.observations(), 3);
+  assert.deepEqual(ok.writes, [
+    {
+      path: "/owned/private/foreground-request",
+      content: nonce,
+      mode: 0o600,
+      flag: "wx",
+    },
+  ]);
+  await assert.rejects(ok.run(), /already-requested/);
+  assert.equal(ok.writes.length, 1);
+  for (const options of [
+    { failPermission: true },
+    { failIdentity: true },
+    { aborted: true },
+  ]) {
+    const denied = scenario(options);
+    await assert.rejects(denied.run());
+    assert.equal(denied.writes.length, 0);
+  }
+  for (const options of [{ failWrite: true }, { neverActive: true }]) {
+    const failed = scenario(options);
+    await assert.rejects(failed.run());
+    await assert.rejects(failed.run(), /already-requested/);
+    assert.equal(failed.writes.length, 1);
+    assert.ok(
+      failed.observations() <= 82,
+      "Only bounded read-only settlement follows the request",
+    );
+  }
+  for (const options of [
+    { identityLostAfterRequest: true },
+    { abortAfterRequest: true },
+  ]) {
+    const retired = scenario(options);
+    await assert.rejects(retired.run());
+    assert.equal(retired.writes.length, 1);
+  }
+  const overlapping = scenario();
+  const outcomes = await Promise.allSettled([
+    overlapping.run(),
+    overlapping.run(),
+  ]);
+  assert.equal(overlapping.writes.length, 1);
+  assert.equal(
+    outcomes.filter((outcome) => outcome.status === "fulfilled").length,
+    1,
   );
 });
 

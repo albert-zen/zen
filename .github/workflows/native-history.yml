@@ -40,6 +40,8 @@ jobs:
       - name: Verify native windows and recovery compatibility
         run: node --test dist/test/thread-history-window.test.js dist/test/native-history-window.test.js
       - name: Verify page merge, source navigation, drafts and reconnect
+        # Every PR runs these files in CI / ZenX; keep standalone manual coverage.
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         run: node --import tsx --test apps/zenx/test/thread-history-pages.test.ts apps/zenx/test/protocol-client.test.ts apps/zenx/test/virtual-quote-source-interaction.test.ts apps/zenx/test/virtual-transcript-find.test.ts
       - name: Measure production Host and Chromium page operations
         run: node --expose-gc apps/zenx/scripts/measure-native-history.mjs "${{ runner.temp }}/native-history"

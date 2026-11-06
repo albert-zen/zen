@@ -496,6 +496,34 @@ export function updateThreadProjectionCache(
   return next;
 }
 
+/** Drafts live separately; only reconstructable, inactive history is disposable. */
+export function trimThreadProjectionCache(
+  cache: Map<string, ThreadProjectionCacheEntry>,
+  selectedThreadId: string | null,
+  composers: Readonly<Record<string, ComposerState>>,
+): void {
+  if (selectedThreadId !== null) {
+    const selected = cache.get(selectedThreadId);
+    if (selected !== undefined) {
+      cache.delete(selectedThreadId);
+      cache.set(selectedThreadId, selected);
+    }
+  }
+  const inactive = [...cache].filter(([threadId, entry]) => {
+    const composer = composers[threadId];
+    return (
+      threadId !== selectedThreadId &&
+      entry.thread.status.type !== "active" &&
+      !entry.thread.turns.some((turn) => turn.status === "inProgress") &&
+      !entry.thread.queuedMessages?.length &&
+      composer?.submission == null &&
+      !composer?.pendingSends?.length &&
+      composer?.compactionRequest === undefined
+    );
+  });
+  for (const [threadId] of inactive.slice(0, -4)) cache.delete(threadId);
+}
+
 export function AppConversationProviders({
   models,
   modelCatalogError,
@@ -921,6 +949,15 @@ function AppContent() {
   const [composerStates, setComposerStates] = useState<
     Record<string, ComposerState>
   >({});
+  const trimThreadHistoryCache = () =>
+    trimThreadProjectionCache(
+      threadProjectionCacheRef.current,
+      selectedThreadIdRef.current,
+      composerStatesRef.current,
+    );
+  useEffect(() => {
+    trimThreadHistoryCache();
+  }, [selectedThreadId, threadDetail, composerStates]);
   const [threadAttachments, setThreadAttachments] =
     useState<ZenXThreadAttachmentProjection>({});
   const [threadUsage, setThreadUsage] = useState<
@@ -1856,6 +1893,7 @@ function AppContent() {
               .threadId,
           );
         }
+        trimThreadHistoryCache();
       },
     );
     const disposeApprovals = window.zenx.protocol.onApprovalRequest((event) => {

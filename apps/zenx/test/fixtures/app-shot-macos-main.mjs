@@ -33,6 +33,7 @@ const receipt = initialReceipt();
 const service = createElectronAppShotService();
 const signal = AbortSignal.timeout(35_000);
 let initial;
+let foregroundRequested = false;
 
 async function freshFixture() {
   const token = randomBytes(16).toString("hex");
@@ -86,6 +87,28 @@ async function observedFixture() {
     true,
   );
   return snapshot;
+}
+async function foregroundOwnedFixture() {
+  checkPermissions();
+  await observedFixture();
+  requireAcceptance(!signal.aborted, "fixture-foreground-cancelled", true);
+  requireAcceptance(
+    !foregroundRequested,
+    "fixture-foreground-already-requested",
+  );
+  // This private launcher-owned path reaches only its nonce-bound child.
+  // A failed/uncertain write is never retried and never permits capture.
+  foregroundRequested = true;
+  await writeFile(config.foregroundRequest, config.owned.nonce, {
+    mode: 0o600,
+    flag: "wx",
+  });
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline && !signal.aborted) {
+    if ((await observedFixture()).active) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new AcceptanceError("fixture-not-foreground", true);
 }
 async function captureSelected(includeAccessibility) {
   checkPermissions();
@@ -167,6 +190,7 @@ async function runAcceptance() {
       );
       await branch("foreground", async () => {
         checkPermissions();
+        await foregroundOwnedFixture();
         const fresh = await observedFixture();
         requireAcceptance(fresh.active, "fixture-not-foreground", true);
         let active;
@@ -180,7 +204,7 @@ async function runAcceptance() {
           "fixture-not-foreground",
           true,
         );
-        return validateShot(
+        const verified = await validateShot(
           await service.captureActive({
             expectedIdentity: initial,
             includeAccessibility: false,
@@ -188,6 +212,7 @@ async function runAcceptance() {
           }),
           "foreground.png",
         );
+        return { ...verified, activation: "owned-fixture-once" };
       });
     } else {
       receipt.accessibility = {

@@ -9,6 +9,7 @@ func argument(_ name: String) -> String {
 let nonce = argument("--nonce")
 let probe = argument("--probe")
 let snapshot = argument("--snapshot")
+let foregroundRequest = argument("--foreground-request")
 let stop = argument("--stop")
 guard nonce.count == 32 && nonce.allSatisfy({ $0.isHexDigit && !$0.isUppercase }) else { exit(2) }
 let title = "App Shot owned \(nonce)"
@@ -48,11 +49,20 @@ final class Delegate: NSObject, NSApplicationDelegate {
     label.setAccessibilityLabel(contentLabel)
     pattern.addSubview(label); window.contentView = pattern
     window.makeKeyAndOrderFront(nil)
-    // No activate(), input, permission request or repeated foreground acquisition.
+    // Initial display is not foreground evidence. A private, one-shot request
+    // below may activate only this directly owned synthetic application.
     window.displayIfNeeded()
     var previous = ""
+    var foregroundRequested = false
     Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [self] _ in
       if FileManager.default.fileExists(atPath: stop) { window.close(); NSApp.terminate(nil); return }
+      if !foregroundRequested,
+         let request = try? String(contentsOfFile: foregroundRequest, encoding: .utf8),
+         request == nonce {
+        foregroundRequested = true // Consume before activation; never retry.
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+      }
       guard let token = try? String(contentsOfFile: probe, encoding: .utf8),
             token != previous, token.count == 32 else { return }
       previous = token

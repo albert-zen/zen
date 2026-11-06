@@ -121,8 +121,15 @@ visible/accessibility label and known colored blocks. Its child PID, executable,
 bundle, window ID, title and bounds must agree with fresh observations. Only
 production exact-window capture is allowed. The selected and foreground calls
 carry the original host-only expected identity; no screen-region fallback, input,
-physical shortcut injection or foreground-acquisition loop is used. A fixture
-that is not naturally foreground blocks that branch rather than activating it.
+physical shortcut injection or foreground-acquisition loop is used. After fresh
+ownership and permission checks, the launcher-owned fixture can receive one
+nonce-bound request through its private scratch directory to activate itself.
+The request is consumed before activation and never retried, including after an
+uncertain write. Only bounded foreground/identity observation and private nonce
+probe writes follow, with no further activation or input. The fixture's own
+active flag and the real production foreground PID/window identity must both
+agree before capture; failure remains blocked. This test-only setup never
+activates another application and does not change production capture behavior.
 
 The exact Electron main process must already report Screen Recording `granted`;
 AX additionally requires `isTrustedAccessibilityClient(false)`. The harness never

@@ -134,6 +134,7 @@ try {
   const nonce = randomBytes(16).toString("hex");
   stop = join(scratch, "stop");
   const probe = join(scratch, "probe");
+  const foregroundRequest = join(scratch, "foreground-request");
   const snapshot = join(scratch, "snapshot.json");
   ({ child: fixture, closed: fixtureClose } = start(executable, [
     "--nonce",
@@ -142,6 +143,8 @@ try {
     probe,
     "--snapshot",
     snapshot,
+    "--foreground-request",
+    foregroundRequest,
     "--stop",
     stop,
   ]));
@@ -159,6 +162,7 @@ try {
       owned: { pid: fixture.pid, nonce, bundle, executable },
       probe,
       snapshot,
+      foregroundRequest,
       artifacts,
       result,
       userData,
