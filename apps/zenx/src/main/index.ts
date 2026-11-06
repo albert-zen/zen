@@ -1,3 +1,4 @@
+import { installAppShotIpc } from "./app-shot-ipc.js";
 import {
   NativeRoomQuestionService,
   subscribeRoomQuestionInvalidations,
@@ -1138,6 +1139,14 @@ async function bootstrapZenX(): Promise<void> {
       imageAttachments,
       settingsService!,
     );
+    const disposeAppShot = await installAppShotIpc({
+      attachments: imageAttachments,
+      ownedWindowIds: ownedAppWindowIds,
+      rendererUrl:
+        process.env["ELECTRON_RENDERER_URL"] ??
+        pathToFileURL(join(__dirname, "../renderer/index.html")).href,
+    });
+    app.once("will-quit", disposeAppShot);
     const marketplace = new MarketplaceCatalogService(
       new JsonFileMarketplaceCatalogTransport(
         join(resourcesDirectory, "marketplace", "catalog.json"),
@@ -2061,6 +2070,15 @@ function installFailedProtocolIpc(message: string): void {
     throw new Error(`Zen App Server is not ready: ${message}`);
   });
   for (const channel of [
+    ipcChannels.appShotRead,
+    ipcChannels.appShotAttach,
+    ipcChannels.appShotDiscard,
+    ipcChannels.appShotList,
+    ipcChannels.appShotCapture,
+    ipcChannels.appShotArm,
+    ipcChannels.appShotBeginRecording,
+    ipcChannels.appShotEndRecording,
+    ipcChannels.appShotDisarm,
     ipcChannels.imageAttachmentsPick,
     ipcChannels.imageAttachmentsImport,
     ipcChannels.imageAttachmentsAbandon,

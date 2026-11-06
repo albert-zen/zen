@@ -220,6 +220,7 @@ test("npm ci lifecycle keeps the dependency pin and invokes the local preparer",
   );
   assert.match(
     packageJson.scripts.postinstall,
-    /&& npm run prepare:legend-list$/,
+    /&&\s*npm run prepare:legend-list\s*(?=&&|$)/,
+    "postinstall must run the pinned Legend List preparer in its success-only chain",
   );
 });

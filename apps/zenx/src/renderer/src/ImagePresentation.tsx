@@ -8,6 +8,10 @@ import type { AttachmentRef } from "../../../../../src/attachment.js";
 import type { ZenXThreadAttachmentProjection } from "../../main/image-attachments.js";
 import { Icon } from "./icons.js";
 
+export interface ImagePreviewUnavailable {
+  detail?: string;
+}
+
 export const ThreadImagesContext = createContext<{
   cwd?: string;
   attachments: ZenXThreadAttachmentProjection;
@@ -47,6 +51,7 @@ export function AttachmentImage({
   lazy = false,
   retryOnError = false,
   compact = false,
+  previewWhenUnavailable = false,
 }: {
   attachment: AttachmentRef;
   name: string;
@@ -54,12 +59,15 @@ export function AttachmentImage({
     attachment: AttachmentRef,
     name: string,
     trigger: HTMLButtonElement,
+    unavailable?: ImagePreviewUnavailable,
   ): void;
   onReadAttachment(attachment: AttachmentRef): Promise<Uint8Array>;
   /** Defer payload access until this thumbnail is in the visible scroll area. */
   lazy?: boolean;
   retryOnError?: boolean;
   compact?: boolean;
+  /** Captured context remains inspectable even when its pixels cannot be read. */
+  previewWhenUnavailable?: boolean;
 }) {
   useTranslation("panels");
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -98,14 +106,21 @@ export function AttachmentImage({
           { name },
         )}
         aria-busy={visible && url === null && error === null}
-        disabled={url === null && !retryable}
+        disabled={url === null && !retryable && !previewWhenUnavailable}
         title={
           url === null
             ? i18n.t(error ? "panels:imageUnavailable" : "panels:loadingImage")
             : name
         }
         onClick={(event) =>
-          retryable ? retry() : onOpen(attachment, name, event.currentTarget)
+          retryable
+            ? retry()
+            : onOpen(
+                attachment,
+                name,
+                event.currentTarget,
+                error === null ? undefined : { detail },
+              )
         }
       >
         {url === null ? (
@@ -156,6 +171,8 @@ export function ImagePreview({
   trigger,
   restoreFocus,
   portalContainer,
+  appShotContext,
+  unavailable,
 }: {
   attachment: AttachmentRef;
   name: string;
@@ -164,23 +181,32 @@ export function ImagePreview({
   trigger: HTMLButtonElement;
   restoreFocus?(): void;
   portalContainer?: HTMLElement;
+  /** The exact captured data carried by this draft image on ordinary Send. */
+  appShotContext?: string;
+  unavailable?: ImagePreviewUnavailable;
 }) {
   useTranslation("panels");
   const { url, error, detail, invalidate } = useAttachmentUrl(
     attachment,
     onReadAttachment,
+    unavailable === undefined,
   );
   return (
     <ImageUrlPreview
       url={url}
-      error={error !== null ? i18n.t("panels:imageUnavailable") : null}
-      errorDetail={detail}
+      error={
+        unavailable !== undefined || error !== null
+          ? i18n.t("panels:imageUnavailable")
+          : null
+      }
+      errorDetail={unavailable?.detail ?? detail}
       name={name}
       onClose={onClose}
       trigger={trigger}
       restoreFocus={restoreFocus}
       onImageError={invalidate}
       portalContainer={portalContainer}
+      appShotContext={appShotContext}
     />
   );
 }
@@ -195,6 +221,7 @@ export function ImageUrlPreview({
   restoreFocus,
   onImageError,
   portalContainer,
+  appShotContext,
 }: {
   url: string | null;
   error: string | null;
@@ -205,6 +232,7 @@ export function ImageUrlPreview({
   restoreFocus?(): void;
   onImageError?(): void;
   portalContainer?: HTMLElement;
+  appShotContext?: string;
 }) {
   useTranslation("panels");
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -254,7 +282,7 @@ export function ImageUrlPreview({
   return createPortal(
     <div
       ref={layerRef}
-      className="image-preview-layer"
+      className={`image-preview-layer${appShotContext === undefined ? "" : " app-shot-attachment-preview"}`}
       role="dialog"
       aria-modal="true"
       aria-label={name}
@@ -285,6 +313,21 @@ export function ImageUrlPreview({
             <pre tabIndex={0}>{errorDetail}</pre>
           </details>
         ) : null}
+        {appShotContext === undefined ? null : (
+          <section
+            className="app-shot-attachment-context"
+            aria-label={i18n.t("shell:appShotContext")}
+          >
+            <header>
+              <strong>{i18n.t("shell:appShot")}</strong>
+              <span>{name}</span>
+            </header>
+            <h2>{i18n.t("shell:appShotContext")}</h2>
+            <pre tabIndex={0} aria-label={i18n.t("shell:appShotContext")}>
+              {appShotContext}
+            </pre>
+          </section>
+        )}
       </div>
     </div>,
     portalContainer ?? document.body,

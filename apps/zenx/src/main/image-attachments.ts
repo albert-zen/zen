@@ -22,6 +22,8 @@ export interface ZenXImageDraft {
   id: string;
   name: string;
   attachment: AttachmentRef;
+  /** Read-only captured data, attached to this image until the user sends. */
+  appShotContext?: string;
 }
 
 export interface ZenXImageImport {
