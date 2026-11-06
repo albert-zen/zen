@@ -51,6 +51,7 @@ await writeFile(path.join(directory, "steer-image.html"), html);
 const sources = [
   "apps/zenx/src/renderer/src/ThreadView.tsx",
   "apps/zenx/src/renderer/src/PendingSteerPanel.tsx",
+  "apps/zenx/src/renderer/src/steer-preview-column.ts",
   "apps/zenx/src/renderer/src/queued-messages.css",
   "apps/zenx/src/renderer/src/ImagePresentation.tsx",
   "apps/zenx/src/renderer/src/styles.css",

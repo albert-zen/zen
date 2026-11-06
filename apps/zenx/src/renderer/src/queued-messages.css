@@ -481,6 +481,9 @@
   border-inline: 0;
 }
 .steer-shelf-details {
+  position: relative;
+  left: var(--steer-column-left, 0px);
+  width: var(--steer-column-width, 100%);
   scrollbar-gutter: auto;
   scrollbar-width: thin;
   max-height: min(196px, 32dvh);

@@ -30,6 +30,8 @@ import {
 import { queuedInputDraft } from "./queue-edit-draft.js";
 import { parseSkillDraft } from "./skill-draft.js";
 import { referenceTitle } from "./reference-draft.js";
+import { Markdown } from "./Markdown.js";
+import { steerPreviewColumn } from "./steer-preview-column.js";
 import { InlineReferenceContent } from "./InlineReferenceContent.js";
 import { Icon } from "./icons.js";
 import { localErrorDetail } from "../../local-error-detail.js";
@@ -70,6 +72,39 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(true);
   const detailsId = useId();
+  const shelfRef = useRef<HTMLElement>(null);
+  // Match the real transcript column, including independent native scrollbars.
+  // Geometry changes never alter admission, recall, or scroll ownership.
+  useLayoutEffect(() => {
+    const shelf = shelfRef.current;
+    const details = shelf?.querySelector<HTMLElement>(".steer-shelf-details");
+    const view = shelf?.closest(".thread-view");
+    const column = view?.querySelector<HTMLElement>(
+      ".virtual-transcript-header, .messages-inner",
+    );
+    if (!shelf || !details || !column || !detailsOpen) return;
+    const measure = () => {
+      const rect = column.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      const geometry = steerPreviewColumn(
+        rect,
+        shelf.getBoundingClientRect().left,
+        details.offsetWidth - details.clientWidth,
+      );
+      for (const [name, value] of Object.entries(geometry)) {
+        const pixel = `${value}px`;
+        if (details.style.getPropertyValue(`--steer-column-${name}`) !== pixel)
+          details.style.setProperty(`--steer-column-${name}`, pixel);
+      }
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(column);
+    observer.observe(shelf);
+    observer.observe(details);
+    return () => observer.disconnect();
+  });
   const [preview, setPreview] = useState<{
     queuedItemId: string;
     clientId: string;
@@ -345,6 +380,7 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
     return null;
   return (
     <section
+      ref={shelfRef}
       className={`pending-steer-panel queue-shelf steer-shelf${detailsOpen ? " is-open" : ""}`}
       aria-label={t("steerPendingLabel")}
     >
@@ -423,10 +459,14 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
                     t("steerStructuredInput")
                   ) : (
                     <div className="pending-steer-text">
-                      <InlineReferenceContent
-                        text={parsed.text}
-                        references={parsed.references}
-                      />
+                      {parsed.references.length > 0 ? (
+                        <InlineReferenceContent
+                          text={parsed.text}
+                          references={parsed.references}
+                        />
+                      ) : (
+                        <Markdown text={parsed.text} />
+                      )}
                     </div>
                   );
                 return (
