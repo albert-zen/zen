@@ -1,4 +1,111 @@
 export const en = {
+  appShotNativeDataHome:
+    "Use the fixed user-owned paths below. $XDG_DATA_HOME defaults to ~/.local/share. Follow the README's ownership and permission checks; do not use symlinks.",
+  appShotKdeReady: "KDE native capture is available",
+  appShotKdeSetup: "KDE native capture needs manual setup",
+  appShotKdeUnavailable: "KDE native capture is unavailable in this session",
+  appShotKdeError: "KDE capture check failed",
+  appShotKdeSetupHint:
+    "For KDE Wayland, review resources/app-shot-linux/kde/README.md in the installation package. Manually install its helper and desktop authorization entry. ZenX does not install, update or authorize them. The desktop entry grants this helper screenshot access.",
+  appShotKdeRevokeHint:
+    "To revoke native capture access, remove the desktop authorization entry and helper. Disable this Composer's shortcut separately to close its session.",
+  appShotHyprlandReady: "Hyprland native capture is available",
+  appShotHyprlandSetup: "Hyprland native capture needs manual setup",
+  appShotHyprlandUpdate: "Hyprland helper needs a manual update or repair",
+  appShotHyprlandUnavailable:
+    "Hyprland native capture is unavailable in this session",
+  appShotHyprlandError: "Hyprland capture check failed",
+  appShotHyprlandSetupHint:
+    "Review resources/app-shot-linux/hyprland/README.md in the installation package. Manually install or replace the helper. ZenX does not install, update or grant permissions. Hyprland may request screen-sharing permission on explicit capture.",
+  appShotHyprlandRevokeHint:
+    "To revoke, disable the Composer action, remove the binding from your Hyprland configuration and remove the helper. Revoke any screen-sharing permission separately in Hyprland; disabling the action does not change compositor permissions.",
+  appShotHyprlandEnable: "Enable Hyprland capture action for this Composer",
+  appShotHyprlandHint:
+    "Registering the action does not confirm a physical shortcut. Bind it manually below. Disable closes this Composer's portal session, without editing your binding. Captures are added directly to this draft. Click an attachment to inspect its context; Send remains separate.",
+  appShotHyprlandActionRegistered:
+    "Hyprland capture action is registered. Physical key binding is managed by your configuration.",
+  appShotHyprlandActionMissing:
+    "Hyprland capture action is not registered. App Shot is not armed.",
+  appShotHyprlandBinding: "Manual Hyprland shortcut setup",
+  appShotHyprlandManualSetup:
+    "Requires xdg-desktop-portal-hyprland. After checking conflicts, add one matching line to your own configuration and reload it. ZenX does not read or edit this file. To revoke the shortcut, remove the binding and disable the action here too.",
+  appShotHyprlandLegacy: "Legacy configuration",
+  appShotHyprlandLua: "Lua configuration",
+  appShotGnomeReady: "GNOME capture extension is available",
+  appShotGnomeSetup: "GNOME capture extension needs setup or an update",
+  appShotGnomeSetupHint:
+    "For GNOME 45–51 Wayland, review the bundled resources/app-shot-gnome/README.md. Install its five runtime files and LICENSE in your user extensions directory, sign out and back in, then explicitly enable ZenX App Shots in GNOME Extensions. This grants focused-window capture to a same-session process owning ZenX's bus name; the name does not authenticate an executable. ZenX does not perform these setup steps or enable other extensions.",
+  appShotGnomeRevokeHint:
+    "To revoke capture access, disable ZenX App Shots in GNOME Extensions. Stopping the Composer shortcut closes only that shortcut session. The desktop shortcut and capture extension are separate choices.",
+  appShotPortalEnable: "Ask the desktop to enable this Composer's shortcut",
+  appShotPortalHint:
+    "Your desktop may ask you to approve or choose a shortcut and may remember that choice. Disable closes this Composer's session. Captures are added directly to this draft. Click an attachment to inspect its context; Send remains separate. Unsupported capture opens the window chooser; denial does not fall back.",
+  appShotPortalAssigned: "Desktop shortcut: {{shortcut}}",
+  appShotPortalAssignedUnknown: "Assigned by the desktop",
+  appShotPortalNotAssigned:
+    "No desktop shortcut is assigned. App Shot is not armed.",
+  appShotPortalConfigure: "Configure desktop shortcut",
+  appShotPortalStop: "Stop shortcut setup",
+  appShotNiriEnable: "Enable Niri capture action for this composer",
+  appShotNiriHint:
+    "Registering this action does not reserve keys. Add the binding below to your own Niri configuration, then use it in an external app. Any same-session process can invoke the action while enabled. Disable to unregister. Captures are added directly to this draft. Click an attachment to inspect its context; Send remains separate.",
+  appShotNiriBinding: "Manual Niri shortcut setup",
+  appShotNiriManualSetup:
+    "Niri 25.11 or newer and gdbus are required. Place this line inside your existing binds block after checking conflicts. ZenX does not read or edit your configuration. If you remove the binding, disable the action here too.",
+  appShotQueueFull:
+    "Four captures are already being added. The latest capture was not added; wait for these imports before capturing again.",
+  appShot: "App Shot",
+  appShotShortcutTitle: "App Shot (⌘/Ctrl+Shift+2)",
+  appShotClose: "Close App Shot",
+  appShotPrivacy:
+    "Choose a window manually, or enable a shortcut to add captures directly to this draft. Click an attachment to inspect its captured context. Nothing is sent to the model until you send the message.",
+  appShotWorking: "Preparing capture…",
+  appShotContext: "Captured context",
+  appShotChooseAnother: "Choose another window",
+  appShotAttach: "Attach to draft",
+  appShotIncludeText: "Include application text (when available)",
+  appShotTextHint:
+    "Optional accessibility text can include content outside the visible screenshot. Availability depends on the platform, app and permissions. Unavailable text is reported explicitly.",
+  appShotWindows: "Available application windows",
+  appShotUntitled: "Untitled window",
+  appShotNoWindows:
+    "No windows available. Check Screen Recording permission and refresh.",
+  appShotRefresh: "Refresh windows",
+  appShotCancel: "Cancel",
+  appShotGlobalShortcut: "Enable global shortcut for this composer",
+  appShotShortcutPreference: "Shortcut preference",
+  appShotShortcutRemembered:
+    "Your shortcut choice is remembered on this device for new Composers. Enable capture separately in each Composer.",
+  appShotShortcutSaveFailed:
+    "Your shortcut choice could not be saved. It applies only to this Composer.",
+  appShotBothShift: "Both Shift keys",
+  appShotBothControl: "Both Control keys",
+  appShotBothOption: "Both Option keys",
+  appShotBothAlt: "Both Alt keys",
+  appShotBothCommand: "Both Command keys",
+  appShotBothWindows: "Both Windows keys",
+  appShotWindowsMenuWarning:
+    "Windows keys may also open the system menu. App Shot cannot reserve or suppress them.",
+  appShotAltMenuWarning:
+    "Alt keys may also activate app menu bars. App Shot cannot reserve or suppress them.",
+  appShotChord: "Default chord: ⌘/Ctrl+Shift+2",
+  appShotRecordChord: "Record a custom shortcut",
+  appShotStopRecording: "Release recording",
+  appShotRecordingReleaseFailed:
+    "Recording access was not released. Use Release recording to try again, or close this window. Capture cannot be enabled until release is confirmed.",
+  appShotUnsupportedChord: "This key is not supported. Choose another key.",
+  appShotPressChord: "Press a shortcut…",
+  appShotSelectedChord: "Selected: {{chord}}",
+  appShotRecordHint:
+    "Disable any active Composer shortcut before recording. Use a modifier and one key. Escape cancels; Tab leaves recording. Selection does not reserve keys. Enable to register; conflicts with other apps may fail then.",
+  appShotShortcutWorking: "Updating shortcut…",
+  appShotModifierPairHint:
+    "Hold the left and right keys of the chosen modifier together, not a double tap. Only modifier state is observed; the keys are not reserved and typing is not recorded. May capture immediately if both are already held. Disable to stop. Captures are added directly to this draft. Click an attachment to inspect its context; nothing is sent until Send.",
+  appShotGlobalHint:
+    "Captures the foreground app directly into this Composer’s draft, without opening a capture dialog. Click the attachment to inspect its context. Disable to release the shortcut. Enablement is not saved; Send remains separate.",
+  appShotLinuxShortcutHint:
+    "Opens the window chooser; it does not capture the foreground app automatically on Linux. Disable to release the shortcut. Availability depends on the desktop. Enablement is not saved.",
+
   historyLoading: "Loading earlier messages…",
   historyLoadEarlier: "Load earlier messages",
   historySearching: "Searching earlier history…",
@@ -998,6 +1105,108 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  appShotNativeDataHome:
+    "使用下方固定的用户自有路径。$XDG_DATA_HOME 默认为 ~/.local/share。请按 README 检查所有权和权限，不使用符号链接。",
+  appShotKdeReady: "KDE 原生捕获可用",
+  appShotKdeSetup: "KDE 原生捕获需要手动设置",
+  appShotKdeUnavailable: "当前会话不支持 KDE 原生捕获",
+  appShotKdeError: "KDE 捕获能力检查失败",
+  appShotKdeSetupHint:
+    "KDE Wayland 请查看安装包中的 resources/app-shot-linux/kde/README.md，手动安装辅助程序及桌面授权条目。ZenX 不会安装、更新或代为授权。该桌面条目会授予此辅助程序截图权限。",
+  appShotKdeRevokeHint:
+    "撤销原生捕获权限请移除桌面授权条目和辅助程序。输入框快捷键需单独取消启用，才能关闭该会话。",
+  appShotHyprlandReady: "Hyprland 原生捕获可用",
+  appShotHyprlandSetup: "Hyprland 原生捕获需要手动设置",
+  appShotHyprlandUpdate: "Hyprland 辅助程序需要手动更新或修复",
+  appShotHyprlandUnavailable: "当前会话不支持 Hyprland 原生捕获",
+  appShotHyprlandError: "Hyprland 捕获能力检查失败",
+  appShotHyprlandSetupHint:
+    "请查看安装包中的 resources/app-shot-linux/hyprland/README.md，手动安装或替换辅助程序。ZenX 不会安装、更新或代为授权。明确捕获时，Hyprland 可能请求屏幕共享权限。",
+  appShotHyprlandRevokeHint:
+    "撤销时请取消启用输入框动作，移除 Hyprland 配置中的绑定并删除辅助程序。已授予的屏幕共享权限需在 Hyprland 中单独撤销；停用动作不会改变 compositor 权限。",
+  appShotHyprlandEnable: "为当前输入框启用 Hyprland 捕获动作",
+  appShotHyprlandHint:
+    "注册动作不表示已绑定实体按键。请手动添加下方配置。取消启用会关闭当前输入框的 portal 会话，不会修改绑定。捕获后直接添加到这条草稿，点击附件查看上下文；发送仍需单独操作。",
+  appShotHyprlandActionRegistered:
+    "Hyprland 捕获动作已注册。实体按键绑定由你的配置管理。",
+  appShotHyprlandActionMissing: "Hyprland 捕获动作尚未注册，应用快照未启用。",
+  appShotHyprlandBinding: "手动设置 Hyprland 快捷键",
+  appShotHyprlandManualSetup:
+    "需要 xdg-desktop-portal-hyprland。检查冲突后，自行将一条对应格式的配置添加到文件并重新加载。ZenX 不读取或修改该文件。撤销快捷键请移除绑定，并在这里取消启用动作。",
+  appShotHyprlandLegacy: "传统配置",
+  appShotHyprlandLua: "Lua 配置",
+  appShotGnomeReady: "GNOME 捕获扩展可用",
+  appShotGnomeSetup: "GNOME 捕获扩展需要设置或更新",
+  appShotGnomeSetupHint:
+    "GNOME 45–51 Wayland 请先查看安装包中的 resources/app-shot-gnome/README.md。将列明的五个运行文件和 LICENSE 安装到用户扩展目录，退出桌面并重新登录，再在 GNOME Extensions 中明确启用 ZenX App Shots。这会允许同会话中持有 ZenX 总线名称的进程捕获前台窗口，该名称不验证可执行程序身份。ZenX 不会代为执行这些设置，也不会启用其他扩展。",
+  appShotGnomeRevokeHint:
+    "撤销捕获权限请在 GNOME Extensions 中禁用 ZenX App Shots。停止输入框快捷键只关闭该快捷键会话。桌面快捷键与捕获扩展是两项独立选择。",
+  appShotPortalEnable: "请求桌面为当前输入框启用快捷键",
+  appShotPortalHint:
+    "桌面可能要求你批准或选择快捷键，并可能记住这次选择。取消启用会关闭当前输入框的会话。捕获后直接添加到这条草稿，点击附件查看上下文；发送仍需单独操作；不支持前台捕获时打开选窗器，拒绝授权不会自动降级。",
+  appShotPortalAssigned: "桌面快捷键：{{shortcut}}",
+  appShotPortalAssignedUnknown: "由桌面分配",
+  appShotPortalNotAssigned: "桌面尚未分配快捷键，应用快照未启用。",
+  appShotPortalConfigure: "配置桌面快捷键",
+  appShotPortalStop: "停止快捷键设置",
+  appShotNiriEnable: "为当前输入框启用 Niri 捕获动作",
+  appShotNiriHint:
+    "注册动作不等于保留按键。请自行添加下方 Niri 配置后，在外部应用使用快捷键。启用期间，同一会话内的其他进程也可调用该动作。取消启用会撤销注册；捕获后直接添加到这条草稿，点击附件查看上下文；发送仍需单独操作。",
+  appShotNiriBinding: "手动设置 Niri 快捷键",
+  appShotNiriManualSetup:
+    "需要 Niri 25.11 或更新版本及 gdbus。请检查冲突后，将此行放入已有 binds 块。ZenX 不读取或修改配置。移除绑定后，也请在这里取消启用。",
+  appShotQueueFull:
+    "已有四张快照正在添加。最新这张尚未添加，请等待完成后再捕获。",
+  appShot: "应用快照",
+  appShotShortcutTitle: "应用快照（⌘/Ctrl+Shift+2）",
+  appShotClose: "关闭应用快照",
+  appShotPrivacy:
+    "手动选择窗口，或启用快捷键将快照直接添加到这条草稿。点击附件查看捕获的上下文；发送消息前，不会传给模型。",
+  appShotWorking: "正在准备快照…",
+  appShotContext: "捕获的上下文",
+  appShotChooseAnother: "选择其他窗口",
+  appShotAttach: "添加到草稿",
+  appShotIncludeText: "包含应用文字（可用时）",
+  appShotTextHint:
+    "可选辅助功能文字可能包含截图可见区域以外的内容。是否可用取决于平台、应用和权限；无法读取时会明确说明。",
+  appShotWindows: "可用应用窗口",
+  appShotUntitled: "无标题窗口",
+  appShotNoWindows: "没有可用窗口。请检查屏幕录制权限后刷新。",
+  appShotRefresh: "刷新窗口",
+  appShotCancel: "取消",
+  appShotGlobalShortcut: "为当前输入框启用全局快捷键",
+  appShotShortcutPreference: "快捷键偏好",
+  appShotShortcutRemembered:
+    "本机会为新输入框记住快捷键选择；每个输入框仍需单独启用捕获。",
+  appShotShortcutSaveFailed: "快捷键选择未能保存，仅对当前输入框生效。",
+  appShotBothShift: "左右 Shift 同时按住",
+  appShotBothControl: "左右 Control 同时按住",
+  appShotBothOption: "左右 Option 同时按住",
+  appShotBothAlt: "左右 Alt 同时按住",
+  appShotBothCommand: "左右 Command 同时按住",
+  appShotBothWindows: "左右 Windows 同时按住",
+  appShotWindowsMenuWarning:
+    "Windows 键也可能打开系统菜单；应用快照无法独占或拦截它们。",
+  appShotAltMenuWarning:
+    "Alt 键也可能激活应用菜单栏；应用快照无法独占或拦截它们。",
+  appShotChord: "默认组合键：⌘/Ctrl+Shift+2",
+  appShotRecordChord: "录制自定义快捷键",
+  appShotStopRecording: "结束录制占用",
+  appShotRecordingReleaseFailed:
+    "录制占用尚未解除。请点击结束录制占用重试，或关闭此窗口；确认解除前不能启用捕获。",
+  appShotUnsupportedChord: "不支持此按键，请选择其他按键。",
+  appShotPressChord: "请按快捷键…",
+  appShotSelectedChord: "已选择：{{chord}}",
+  appShotRecordHint:
+    "录制前请在所属输入框关闭已启用的快捷键。使用修饰键加一个按键。Escape 取消；Tab 离开录制。选择不会占用按键，明确启用后才注册，届时仍可能与其他应用冲突。",
+  appShotShortcutWorking: "正在更新快捷键…",
+  appShotModifierPairHint:
+    "同时按住所选修饰键的左右两枚按键，不是双击。只观察修饰键状态，不独占按键，也不记录输入内容；启用时若已同时按住，可能立即捕获。取消勾选即可停止。捕获后直接添加到这条草稿，点击附件查看上下文；只有发送才传给模型。",
+  appShotGlobalHint:
+    "当前输入框打开时，捕获前台应用并直接添加到草稿，不弹出截图检查页。点击附件查看上下文。取消勾选可释放快捷键；启用状态不会保存，发送仍需单独操作。",
+  appShotLinuxShortcutHint:
+    "打开窗口选择器，不会在 Linux 自动捕获前台应用。取消勾选可释放快捷键，是否可用取决于桌面环境。启用状态不会保存。",
+
   historyLoading: "正在加载更早的消息…",
   historyLoadEarlier: "加载更早的消息",
   historySearching: "正在查找更早的历史…",

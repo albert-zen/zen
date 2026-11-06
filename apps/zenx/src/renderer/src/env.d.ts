@@ -209,6 +209,7 @@ declare global {
           options?: ThreadSummaryListOptions,
         ): Promise<NativeThreadSummary[]>;
       };
+      appShot: import("../../app-shot.js").AppShotApi;
       imageAttachments: {
         abandon(ids: readonly string[]): Promise<void>;
         inventory(): Promise<

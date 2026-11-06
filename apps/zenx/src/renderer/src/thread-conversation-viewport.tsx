@@ -525,6 +525,9 @@ export function ThreadConversationViewport({
         onReadAttachment={(attachment) =>
           window.zenx.imageAttachments.read(attachment)
         }
+        onAddAppShot={(image) =>
+          updateComposer((value) => addComposerImages(value, [image]))
+        }
         onPickImages={async () => {
           const images = await window.zenx.imageAttachments.pick();
           updateComposer((value) => addComposerImages(value, images));

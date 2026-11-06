@@ -5,31 +5,15 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "vite";
+import { buildHistoryCounterfactual } from "./inactive-history-baseline.mjs";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const directory = path.resolve(process.argv[2] ?? ".inactive-history-preview");
 await mkdir(directory, { recursive: true });
 const appPath = path.join(root, "src/renderer/src/App.tsx");
 const candidate = await readFile(appPath, "utf8");
-const baseline = candidate
-  .replace(
-    /\/\*\* Drafts live separately; only reconstructable, inactive history is disposable\. \*\/[\s\S]*?(?=export function AppConversationProviders)/,
-    "",
-  )
-  .replace(
-    /  const trimThreadHistoryCache = \(\) =>[\s\S]*?\}, \[selectedThreadId, threadDetail, composerStates\]\);\n/,
-    "",
-  )
-  .replace("        trimThreadHistoryCache();\n", "");
-const gitBlob = (s) =>
-  createHash("sha1")
-    .update(`blob ${Buffer.byteLength(s)}\0`)
-    .update(s)
-    .digest("hex");
-assert.equal(
-  gitBlob(baseline),
-  "97bbf176c50becc43da1a55670abd33fa130ebad",
-  "Baseline App must match the exact pre-723 main blob, not a guessed simulation",
-);
+const { baseline, provenance: baselineComparison } =
+  buildHistoryCounterfactual(candidate);
+await writeFile(path.join(directory, "counterfactual-App.tsx"), baseline);
 for (const variant of ["before", "after"]) {
   const result = await build({
     configFile: false,
@@ -40,7 +24,7 @@ for (const variant of ["before", "after"]) {
       variant === "before"
         ? [
             {
-              name: "exact-pre-cache-App",
+              name: "same-revision-cache-only-App",
               enforce: "pre",
               load(id) {
                 return id === appPath ? baseline : undefined;
@@ -82,6 +66,8 @@ const files = [
   "test/fixtures/inactive-history-visual.tsx",
   "test/native-recovery-fixture.ts",
   "scripts/build-inactive-history-preview.mjs",
+  "scripts/inactive-history-baseline.mjs",
+  "scripts/inactive-history-baseline.json",
   "scripts/capture-inactive-history-preview.mjs",
   "scripts/preview-browser-lifecycle.mjs",
 ];
@@ -94,9 +80,10 @@ await writeFile(
         encoding: "utf8",
       }).trim(),
       scope:
-        "Production App with synthetic protocol and deterministic generated text. V8 retained used heap after explicit GC is not RSS, Electron WebContents, decoded image/GPU memory, macOS footprint, or original-machine acceptance.",
-      baselineAppBlob: gitBlob(baseline),
-      candidateAppBlob: gitBlob(candidate),
+        "Same-revision production App with only the reviewed #723 renderer cache delta reversed for the baseline; not a historical whole-App checkout. Synthetic protocol and deterministic generated text. V8 retained used heap after explicit GC is not RSS, Electron WebContents, decoded image/GPU memory, macOS footprint, or original-machine acceptance.",
+      baselineAppBlob: baselineComparison.baselineAppBlob,
+      candidateAppBlob: baselineComparison.candidateAppBlob,
+      baselineComparison,
       sources: Object.fromEntries(
         await Promise.all(
           files.map(async (f) => [

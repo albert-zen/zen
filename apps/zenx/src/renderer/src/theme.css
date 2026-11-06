@@ -38,6 +38,10 @@
   --color-context-plugins: #d8a255;
   --color-context-conversation: #55b5a7;
 
+  /* Image captions keep their contrast over arbitrary pixels in every theme. */
+  --color-overlay-image-caption: rgb(0 0 0 / 78%);
+  --color-text-on-image-caption: #ffffff;
+
   /* Find keeps a stable, readable match pair across appearances. */
   --color-surface-find-match: #e8b73c;
   --color-text-on-find-match: #161616;
