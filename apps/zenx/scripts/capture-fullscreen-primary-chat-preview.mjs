@@ -202,7 +202,7 @@ try {
           const destination = `${url}/fullscreen-primary-chat.html?theme=${scene.theme}&owner=${scene.owner}`;
           await send("Page.navigate", { url: destination });
           await until(
-            `location.href===${JSON.stringify(destination)} && document.body.dataset.previewReady==='true' && !!document.querySelector('#primary-conversation-content textarea, #primary-conversation-content .cm-content') && document.querySelector('.synthetic-native-page')?.hidden===false`,
+            `location.href===${JSON.stringify(destination)} && document.body?.dataset.previewReady==='true' && !!document.querySelector('#primary-conversation-content textarea, #primary-conversation-content .cm-content') && document.querySelector('.synthetic-native-page')?.hidden===false`,
             "fixture ready with synthetic browser page",
           );
           await evaluate("document.fonts.ready.then(() => true)");
