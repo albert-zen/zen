@@ -184,3 +184,34 @@ test("coordinate clicks reveal their target and settle layout before measuring",
   );
   assert.match(click, /Input\.dispatchMouseEvent/);
 });
+
+test("canonical transition preserves synthetic images in authoritative canonical content", () => {
+  assert.match(fixture, /const canonicalItem: CanonicalItem =/);
+  assert.match(
+    fixture,
+    /images\.map\(\(image\) => \(\{\s*type: "image" as const,\s*attachment: image\.attachment/,
+  );
+  assert.match(
+    fixture,
+    /thread\.canonicalItems = canonical \? \[canonicalItem\] : \[\]/,
+  );
+  assert.match(fixture, /reconcileCanonicalAdmission\(s, \[canonicalItem\]\)/);
+  assert.doesNotMatch(fixture, /threadAttachments=/);
+});
+
+test("capture waits for expected image counts and retains failed-transition diagnostics", () => {
+  const expectedWait = capture.indexOf("Empty image lists must not pass");
+  const decodeWait = capture.indexOf(
+    "every(e => e.complete && e.naturalWidth > 0)",
+  );
+  assert.ok(expectedWait >= 0 && expectedWait < decodeWait);
+  for (const count of ["draftImages", "pendingImages", "messageImages"])
+    assert.ok(capture.includes(`length === \${${count}}`));
+  assert.match(capture, /expectedState = \{/);
+  assert.match(capture, /path\.join\(directory, "failure\.json"\)/);
+  assert.match(capture, /await screenshot\("failure\.png"\)/);
+  assert.match(capture, /await reportFailure\(error\)/);
+  assert.ok(
+    capture.indexOf("cases.push({ lang") < capture.indexOf("const record ="),
+  );
+});

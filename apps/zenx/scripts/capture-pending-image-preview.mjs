@@ -78,6 +78,8 @@ const cases = [],
   pending = new Map();
 let socket,
   requestId = 0;
+let expectedState = null;
+let reportFailure;
 try {
   socket = await lifecycle.connect();
   socket.on("message", (data) => {
@@ -159,6 +161,28 @@ try {
     brokenImages: [...document.querySelectorAll('img')].filter(e => !e.complete || !e.naturalWidth).length,
     overflow: document.documentElement.scrollWidth > innerWidth
   }))()`);
+  reportFailure = async (error) => {
+    const observed = await snapshot();
+    const dom = await evaluate(`(() => ({
+      text: document.body.innerText,
+      images: [...document.querySelectorAll('img')].map(e => ({src: e.getAttribute('src'), complete: e.complete, naturalWidth: e.naturalWidth, outerHTML: e.outerHTML})),
+      threadHTML: document.querySelector('.thread-conversation-surface')?.outerHTML
+    }))()`);
+    await writeFile(
+      path.join(directory, "failure.json"),
+      JSON.stringify(
+        {
+          expected: expectedState,
+          observed,
+          error: { message: error.message, stack: error.stack },
+          dom,
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    await screenshot("failure.png");
+  };
   await send("Page.enable");
   await send("Runtime.enable");
   lifecycle.captureStarted();
@@ -182,6 +206,7 @@ try {
         `location.href===${JSON.stringify(sceneUrl)}&&!!document.querySelector('.composer')`,
       );
       const snapshots = [];
+      cases.push({ lang, theme, width, height, count, snapshots });
       const record = async (
         stage,
         pending,
@@ -189,9 +214,26 @@ try {
         pendingImages,
         messageImages,
       ) => {
+        expectedState = {
+          scene,
+          stage,
+          pending,
+          draftImages,
+          pendingImages,
+          messageImages,
+        };
         await wait(
           `document.querySelector('[data-stage]')?.getAttribute('data-stage') === ${JSON.stringify(stage)}`,
         );
+        // React and the virtual transcript can commit after fixture controls.
+        // Empty image lists must not pass the decoded-image wait vacuously.
+        await wait(`(() => {
+          const row = document.querySelector('.pending-send-row');
+          return (row?.getAttribute('data-send-state') ?? null) === ${JSON.stringify(pending)}
+            && document.querySelectorAll('.draft-image img').length === ${draftImages}
+            && document.querySelectorAll('.pending-send-row .message-images img').length === ${pendingImages}
+            && document.querySelectorAll('.message-images img').length === ${messageImages};
+        })()`);
         await wait(
           `[...document.querySelectorAll('img')].every(e => e.complete && e.naturalWidth > 0)`,
         );
@@ -294,12 +336,18 @@ try {
       await record("sending", "sending", 0, count, count);
       await action("notSent");
       await record("notSent", "notSent", count, count, count);
-      cases.push({ lang, theme, width, height, count, snapshots });
     }
   assert.deepEqual(errors, []);
   lifecycle.captureFinished("passed");
 } catch (error) {
   lifecycle.captureFinished("failed", error);
+  if (reportFailure) {
+    try {
+      await reportFailure(error);
+    } catch (diagnosticError) {
+      errors.push({ diagnosticFailure: String(diagnosticError) });
+    }
+  }
   throw error;
 } finally {
   for (const request of pending.values()) {

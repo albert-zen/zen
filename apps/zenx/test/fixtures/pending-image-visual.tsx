@@ -71,6 +71,25 @@ const initial = () =>
     images,
   );
 const clientId = "synthetic-pending-image-client";
+// Canonical items own image references. The optional attachment projection is
+// deliberately not used: an empty canonical list correctly overrides it.
+const canonicalItem: CanonicalItem = {
+  id: "synthetic-user",
+  type: "user_message",
+  turnId: "runtime-turn",
+  clientId,
+  content: [
+    ...(count === 2
+      ? [{ type: "text" as const, text: "Compare these synthetic images." }]
+      : []),
+    ...images.map((image) => ({
+      type: "image" as const,
+      attachment: image.attachment,
+    })),
+  ],
+  threadId: "synthetic-image-thread",
+  createdAt: "2026-11-06T12:00:00Z",
+};
 function Preview() {
   const [composer, setComposer] = useState(initial);
   const [stage, setStage] = useState("draft");
@@ -99,6 +118,7 @@ function Preview() {
     "synthetic-image-thread",
   );
   thread.name = "Synthetic pending images";
+  thread.canonicalItems = canonical ? [canonicalItem] : [];
   const change = (next: string) => {
     if (next === "reset") {
       setComposer(initial());
@@ -118,16 +138,7 @@ function Preview() {
         ),
       );
     if (next === "canonical") {
-      const item = {
-        id: "synthetic-user",
-        type: "user_message",
-        turnId: "runtime-turn",
-        clientId,
-        text: count === 2 ? "Compare these synthetic images." : "",
-        threadId: "synthetic-image-thread",
-        createdAt: "2026-11-06T12:00:00Z",
-      } as CanonicalItem;
-      setComposer((s) => reconcileCanonicalAdmission(s, [item]));
+      setComposer((s) => reconcileCanonicalAdmission(s, [canonicalItem]));
       setCanonical(true);
     }
     setStage(next);
@@ -171,11 +182,6 @@ function Preview() {
         thread={thread}
         approvals={[]}
         composer={composer}
-        threadAttachments={
-          canonical
-            ? { "synthetic-user": images.map((image) => image.attachment) }
-            : {}
-        }
         onReadAttachment={readAttachment}
         onDraftChange={(text) => setComposer((s) => editComposer(s, text))}
         onInterrupt={async () => {}}
