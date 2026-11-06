@@ -205,10 +205,10 @@ try {
             `location.href===${JSON.stringify(destination)} && document.body.dataset.previewReady==='true' && !!document.querySelector('#primary-conversation-content textarea, #primary-conversation-content .cm-content') && document.querySelector('.synthetic-native-page')?.hidden===false`,
             "fixture ready with synthetic browser page",
           );
-          await evaluate("document.fonts.ready");
+          await evaluate("document.fonts.ready.then(() => true)");
           await delay(300);
           await evaluate(
-            `window.__layoutIdentity={primary:document.querySelector('#primary-conversation-content'),editor:document.querySelector('#primary-conversation-content textarea, #primary-conversation-content .cm-content')}`,
+            `(() => { window.__layoutIdentity={primary:document.querySelector('#primary-conversation-content'),editor:document.querySelector('#primary-conversation-content textarea, #primary-conversation-content .cm-content')}; return true; })()`,
           );
           const split = await capture("split-browser");
           const browserTab = `[id="aux-tab-browser:page-${scene.owner}"]`;
