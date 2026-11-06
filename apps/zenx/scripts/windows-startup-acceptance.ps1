@@ -161,6 +161,10 @@ public static class StartupWindows {
       defaultModel = "fake"; models = @("fake"); workspace = $null; workspaces = @(); lastUsedWorkspace = $null; approvalPolicy = "never"
     }
     $env:ZENX_DATA_DIR = Join-Path $fixtureRoot "$mode-data"
+    if ($mode -eq "success") {
+      & node --import tsx (Join-Path $PSScriptRoot "seed-windows-startup-thread.ts") $env:ZENX_DATA_DIR (Join-Path $directory "seed.json")
+      if ($LASTEXITCODE -ne 0) { throw "Could not create fresh synthetic startup history" }
+    }
     $primary = $null
     $secondary = $null
     $sample = @{ mode = $mode; passed = $false; targetMilliseconds = 1000; firstVisibleMilliseconds = $null; withinOneSecond = $null; focus = "not-observed" }
@@ -232,6 +236,25 @@ public static class StartupWindows {
       if ($mode -eq "success" -and $result.hostStatus -ne "ready") { throw "Real Host startup was not ready: $($result.hostStatus)" }
       if ($mode -eq "success") { Assert-RendererPresentation $result }
       if ($mode -eq "failure" -and ($result.role -ne "alert" -or !$result.text.Contains("Synthetic startup acceptance failure <inert> & visible"))) { throw "Actual bootstrap failure is not visible as inert error text" }
+      if ($mode -eq "success") {
+        $bootstrap = Wait-Event $directory $primary "bootstrap-completed"
+        $sidebar = Wait-Event $directory $primary "sidebar-ready"
+        $conversation = Wait-Event $directory $primary "conversation-ready"
+        foreach ($stage in @($sidebar, $conversation)) {
+          Assert-SoleVisibleWindow $primary.Id $hwnd
+          if ($stage.hwnd -ne $sample.hwnd -or $stage.windowsCreated -ne 1 -or $stage.synthetic -ne $true -or $stage.visible -ne $true) { throw "Product readiness changed the sole synthetic window" }
+          if ($stage.presentation.source -ne "frame-subscription" -or @($stage.presentation.controls).Count -ne 2) { throw "Product readiness has no verified presentation" }
+        }
+        $sample.milestones = @{
+          hostReadyMilliseconds = ((Get-EventUtcTime $bootstrap) - $primary.StartTime.ToUniversalTime()).TotalMilliseconds
+          shellPresentedMilliseconds = ((Get-EventUtcTime $result) - $primary.StartTime.ToUniversalTime()).TotalMilliseconds
+          sidebarReadyMilliseconds = ((Get-EventUtcTime $sidebar) - $primary.StartTime.ToUniversalTime()).TotalMilliseconds
+          firstConversationMilliseconds = ((Get-EventUtcTime $conversation) - $primary.StartTime.ToUniversalTime()).TotalMilliseconds
+          includesSyntheticGateMilliseconds = $sample.gateHeldMilliseconds
+        }
+        $sample.sidebar = $sidebar
+        $sample.conversation = $conversation
+      }
       $sample.result = $result
       $sample.passed = $true
     } catch {

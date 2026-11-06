@@ -120,7 +120,7 @@ test("private staging preserves the original package and refuses reused destinat
   }
 });
 
-async function loadObserverFixture(windows = []) {
+async function loadObserverFixture(windows = [], seed) {
   const { readFile } = await import("node:fs/promises");
   const { EventEmitter } = await import("node:events");
   const { createRequire } = await import("node:module");
@@ -170,11 +170,15 @@ async function loadObserverFixture(windows = []) {
         ? { app, BrowserWindow: { getAllWindows: () => windows } }
         : name === "node:fs"
           ? {
-              readFileSync: () =>
-                JSON.stringify({
-                  evidenceDirectory: "/synthetic",
-                  mode: "failure",
-                }),
+              readFileSync: (file) =>
+                JSON.stringify(
+                  String(file).endsWith("seed.json")
+                    ? seed
+                    : {
+                        evidenceDirectory: "/synthetic",
+                        mode: "failure",
+                      },
+                ),
               appendFileSync: (_path, line) => records.push(JSON.parse(line)),
               writeFileSync: (path, bytes) => writes.push({ path, bytes }),
             }
@@ -339,9 +343,9 @@ function visibleRenderer() {
     ],
   };
 }
-async function rendererFixture() {
+async function rendererFixture(seed) {
   const windows = [];
-  const fixture = await loadObserverFixture(windows);
+  const fixture = await loadObserverFixture(windows, seed);
   const window = new fixture.EventEmitter();
   const contents = new fixture.EventEmitter();
   let callback;
@@ -905,3 +909,233 @@ test("one isolated dark or bright point fails at every text-crop location", asyn
       }
   }
 });
+
+const productSeed = {
+  synthetic: true,
+  threadId: "seed-thread",
+  userItemId: "seed-user",
+  agentItemId: "seed-agent",
+  title: "Startup acceptance thread",
+  userText: "Synthetic startup history is readable",
+  agentText: "Echo: Synthetic startup history is readable",
+};
+
+for (const stage of ["sidebar", "conversation"]) {
+  for (const invalid of [
+    null,
+    "wrong-text",
+    "disabled-row",
+    "missing-row",
+    "loading",
+    "error",
+    "unselected",
+    "hidden-text",
+    "occluded-text",
+  ]) {
+    test(`product ${stage} readiness rejects incomplete UI: ${invalid ?? "ready"}`, async () => {
+      const { JSDOM } = await import("jsdom");
+      const { exports } = await loadObserverFixture();
+      const observation = exports.productObservation(productSeed, stage);
+      const dom = new JSDOM(
+        `<div class="app-shell"><aside id="primary-sidebar">
+        <div data-thread-id="seed-thread"><button class="thread-row selected" aria-current="page"><span class="thread-title"><span>${productSeed.title}</span></span></button></div>
+        <button class="new-thread-action"><span>New thread</span></button>
+      </aside><div class="thread-view"><article data-sent-message-id="seed-user"><div class="user-bubble"><p>${productSeed.userText}</p></div></article>
+      <article data-read-message-id="seed-agent"><div data-message-quote-body><p>${productSeed.agentText}</p></div></article></div></div>`,
+        { runScripts: "outside-only", pretendToBeVisual: true },
+      );
+      try {
+        const { window } = dom;
+        const { document } = window;
+        window.visualViewport = null;
+        const rect = (y = 10) => ({
+          x: 10,
+          y,
+          left: 10,
+          top: y,
+          width: 70,
+          height: 15,
+          right: 80,
+          bottom: y + 15,
+        });
+        window.HTMLElement.prototype.getBoundingClientRect = () => rect();
+        window.HTMLElement.prototype.checkVisibility = function () {
+          return this.dataset.hidden !== "true";
+        };
+        window.getComputedStyle = () => ({
+          visibility: "visible",
+          opacity: "1",
+          fontSize: "12px",
+          color: "rgb(0,0,0)",
+          webkitTextFillColor: "rgb(0,0,0)",
+          font: "12px sans-serif",
+          letterSpacing: "normal",
+          transform: "none",
+        });
+        const labels = observation.selectors.map((selector, index) => {
+          const element = document.querySelector(selector);
+          const label = element.querySelector(
+            stage === "sidebar"
+              ? index === 0
+                ? ".thread-title > span"
+                : ":scope > span"
+              : "p",
+          );
+          element.getBoundingClientRect = label.getBoundingClientRect = () =>
+            rect(10 + index * 25);
+          return label;
+        });
+        document.createRange = () => {
+          let node;
+          return {
+            selectNodeContents(value) {
+              node = value;
+            },
+            getClientRects: () => [node.parentElement.getBoundingClientRect()],
+          };
+        };
+        document.elementFromPoint = (_x, y) =>
+          invalid === "occluded-text" ? document.body : labels[y < 30 ? 0 : 1];
+        const row = document.querySelector(observation.row);
+        if (invalid === "wrong-text")
+          labels[0].textContent = "Wrong fixture content";
+        if (invalid === "disabled-row") row.disabled = true;
+        if (invalid === "missing-row") row.remove();
+        if (invalid === "loading" || invalid === "error")
+          document
+            .querySelector("#primary-sidebar")
+            .insertAdjacentHTML(
+              "beforeend",
+              `<p class="sidebar-empty ${invalid === "error" ? "sidebar-error" : ""}"></p>`,
+            );
+        if (invalid === "unselected") row.removeAttribute("aria-current");
+        if (invalid === "hidden-text") labels[0].dataset.hidden = "true";
+        const result = window.eval(observation.script);
+        assert.equal(
+          result.ready,
+          invalid === null || (stage === "sidebar" && invalid === "unselected"),
+        );
+        assert.equal(
+          JSON.stringify(result).includes(productSeed.userText),
+          false,
+          "Receipts contain geometry, not message contents",
+        );
+      } finally {
+        dom.window.close();
+      }
+    });
+  }
+}
+
+test("product stages require their own text pixels, not the earlier shell receipt", async () => {
+  const { exports } = await loadObserverFixture();
+  const { selectors } = exports.productObservation(productSeed, "conversation");
+  assert.equal(
+    exports.rendererFrameEvidence(
+      presentedImage({ painted: true }),
+      visibleRenderer(),
+      selectors,
+    ),
+    null,
+  );
+  const valid = visibleRenderer();
+  valid.controls.forEach((control, index) => {
+    control.selector = selectors[index];
+  });
+  assert(
+    exports.rendererFrameEvidence(
+      presentedImage({ painted: true }),
+      valid,
+      selectors,
+    ),
+  );
+  assert.equal(
+    exports.rendererFrameEvidence(presentedImage(), valid, selectors),
+    null,
+  );
+  assert.throws(
+    () =>
+      exports.productObservation(
+        { ...productSeed, synthetic: false },
+        "sidebar",
+      ),
+    /synthetic/u,
+  );
+  assert.throws(
+    () =>
+      exports.productObservation(
+        { ...productSeed, threadId: 'bad"selector' },
+        "sidebar",
+      ),
+    /identity/u,
+  );
+  assert.throws(
+    () => exports.productObservation(productSeed, "shell"),
+    /stage/u,
+  );
+});
+
+for (const failConversation of [false, true]) {
+  test(`product follow-through retains exact frames and deadline, failure=${failConversation}`, async () => {
+    const f = await rendererFixture(productSeed);
+    let clicks = 0;
+    f.contents.executeJavaScript = async (code) => {
+      if (code.includes("row.click()")) {
+        clicks++;
+        return true;
+      }
+      const state = visibleRenderer();
+      const stage = code.includes("seed-user") ? "conversation" : "sidebar";
+      const { selectors } = f.exports.productObservation(productSeed, stage);
+      state.controls.forEach((control, index) => {
+        control.selector = selectors[index];
+      });
+      return state;
+    };
+    const pending = f.exports.verifyProductReady(
+      f.window,
+      Date.now() + (failConversation ? 200 : 1000),
+    );
+    const settled = failConversation
+      ? assert.rejects(pending, /deadline/u)
+      : pending;
+    await f.flush();
+    const sidebar = presentedImage({ painted: true });
+    f.present(sidebar);
+    await f.flush();
+    assert.equal(clicks, 1);
+    assert.equal(
+      f.records.some((event) => event.type === "sidebar-ready"),
+      true,
+    );
+    assert.equal(
+      f.records.some((event) => event.type === "conversation-ready"),
+      false,
+    );
+    const conversation = presentedImage({ painted: !failConversation });
+    f.present(conversation);
+    await settled;
+    assert.equal(
+      f.records.some((event) => event.type === "conversation-ready"),
+      !failConversation,
+    );
+    assert.deepEqual(
+      f.writes.find((write) => write.path.endsWith("sidebar-ready.png"))?.bytes,
+      sidebar.toPNG(),
+    );
+    if (!failConversation)
+      assert.deepEqual(
+        f.writes.find((write) => write.path.endsWith("conversation-ready.png"))
+          ?.bytes,
+        conversation.toPNG(),
+      );
+    else
+      assert.equal(
+        f.writes.some((write) => write.path.endsWith("conversation-ready.png")),
+        false,
+      );
+    assert.equal(f.state.cleanups, 2);
+    assert.equal(f.state.captures, 0);
+    assert.equal(f.timers.size, 0);
+  });
+}

@@ -173,3 +173,53 @@ Official guidance used for these distinctions:
   and [foreground restrictions](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow):
   record actual foreground ownership rather than equating a focus request with
   successful activation.
+
+## Product readiness follow-through (2026-11-05)
+
+The existing first-shell gate is deliberately retained. It can pass while the
+sidebar says "Waiting for the local App Server" and the main view says "Starting
+Zen App Server". This was observed again in the unmodified main `d8e83eca`
+[run 42055431818](https://github.com/albert-zen/zen/actions/runs/42055431818),
+[artifact 13429507378](https://github.com/albert-zen/zen/actions/runs/42055431818/artifacts/13429507378).
+Its matching ZIP digest is
+`ba008b64b09dc27b66d1f8f859ce3ce5285dcf843e3ce99a01ad6a3246ba2095`.
+That run observed 512.5ms/624.2ms initial success/failure visibility, successful
+same-window restoration, main Host readiness and explicit failure text. It did
+not measure usable history. These remain historical results, not results for the
+following enhancement.
+
+Success now seeds one completed, explicitly synthetic conversation before
+launch, using the ordinary Host, durable ItemList/Trace and local fake provider.
+A fresh data directory is mandatory; existing data is refused. No user profile,
+credential, external model or tool execution is used. The seed receipt contains
+only synthetic IDs/content and the fake response's generated timestamp context.
+The failure scenario remains unseeded and keeps the original outer-bootstrap
+failure checks.
+
+After `renderer-loaded.png`, the same original 30-second acceptance deadline
+must also cover:
+
+1. `sidebar-ready.png`: the seeded conversation title and enabled New thread
+   label are visible, unobscured and have text pixels in an actual presentation
+   frame. Waiting, loading and error sidebar states cannot pass.
+2. A scripted DOM click on the exact seeded row invokes the real React selection
+   handler. This is product interaction coverage, not native mouse/input proof.
+3. `conversation-ready.png`: that exact row is selected and the persisted user
+   and fake-assistant messages have matching text and visible text pixels in the
+   same accepted presentation frame. The earlier shell image cannot satisfy this
+   gate. The verified frame is saved directly, without recapture.
+
+`report.json` separates process-to-first-window, main Host ready, first shell,
+sidebar readiness and first conversation content. The latter timings include the
+intentional bootstrap hold, whose duration is reported alongside them. They are
+bounded synthetic portable measurements, not pristine startup benchmarks,
+percentiles, large-history performance measurements or installed-release results.
+Both later stages must retain the sole original HWND; any observation timeout or
+failure fails the scenario rather than reporting product readiness.
+
+There is no NSIS/MSI/MSIX installer build in the current checked workflow/scripts.
+This enhancement does not create or install one and cannot close the real
+installed-Windows scope of #167. That scope needs a separately identified release
+artifact in an isolated Windows VM. Retain #167's installation/performance scope
+until that evidence exists. Review the new native screenshots before claiming
+this enhancement passed; local unit tests are not Windows acceptance.

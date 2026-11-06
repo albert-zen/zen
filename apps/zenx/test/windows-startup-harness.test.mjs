@@ -176,3 +176,43 @@ test(
     assert.match(result, /Startup event reader sharing checks passed/u);
   },
 );
+
+test("startup success requires durable history and both product stages before passing", () => {
+  const harness = readFileSync(
+    new URL("../scripts/windows-startup-acceptance.ps1", import.meta.url),
+    "utf8",
+  );
+  assert(
+    harness.indexOf("seed-windows-startup-thread.ts") <
+      harness.indexOf("$primary = Start-Process"),
+  );
+  assert(
+    harness.indexOf('"sidebar-ready"') <
+      harness.indexOf("$sample.passed = $true"),
+  );
+  assert(
+    harness.indexOf('"conversation-ready"') <
+      harness.indexOf("$sample.passed = $true"),
+  );
+  assert.match(
+    harness,
+    /includesSyntheticGateMilliseconds = \$sample.gateHeldMilliseconds/u,
+  );
+  const fixture = readFileSync(
+    new URL("./fixtures/startup-acceptance/fixture.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    fixture,
+    /if \(config.mode === "success"\) await verifyProductReady\(window, deadline\)/u,
+  );
+  const product = fixture.slice(
+    fixture.indexOf("export async function verifyProductReady"),
+  );
+  assert.match(product, /captureRenderedApp\(\s*window,\s*deadline,/u);
+  assert.doesNotMatch(
+    product,
+    /Date\.now\(\)\s*\+/u,
+    "New stages must not reset the original deadline",
+  );
+});

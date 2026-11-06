@@ -156,7 +156,11 @@ const rendererObservation = `(() => {
 })()`;
 
 // Pure validation of the actual presented bitmap, not a DOM-only paint claim.
-export function rendererFrameEvidence(image, observation) {
+export function rendererFrameEvidence(
+  image,
+  observation,
+  selectors = rendererControls,
+) {
   if (!observation?.ready || image.isEmpty()) return null;
   const size = image.getSize(1);
   const bytes = image.toBitmap({ scaleFactor: 1 });
@@ -172,13 +176,13 @@ export function rendererFrameEvidence(image, observation) {
     )
   )
     return null;
-  if (observation.controls?.length !== rendererControls.length) return null;
+  if (observation.controls?.length !== selectors.length) return null;
   const controls = [];
-  for (let index = 0; index < rendererControls.length; index++) {
+  for (let index = 0; index < selectors.length; index++) {
     const control = observation.controls[index];
     if (
       !control ||
-      control.selector !== rendererControls[index] ||
+      control.selector !== selectors[index] ||
       control.textPresent !== true
     )
       return null;
@@ -293,7 +297,12 @@ export function rendererFrameEvidence(image, observation) {
   return { width: size.width, height: size.height, controls };
 }
 
-export function captureRenderedApp(window, deadline) {
+export function captureRenderedApp(
+  window,
+  deadline,
+  observationScript = rendererObservation,
+  selectors = rendererControls,
+) {
   const contents = window.webContents;
   return new Promise((resolve, reject) => {
     let done = false,
@@ -350,7 +359,7 @@ export function captureRenderedApp(window, deadline) {
           const frame = pending;
           pending = undefined;
           const observation =
-            await contents.executeJavaScript(rendererObservation);
+            await contents.executeJavaScript(observationScript);
           if (done) return;
           if (Date.now() >= deadline)
             throw new Error("Renderer presentation exceeded original deadline");
@@ -366,7 +375,7 @@ export function captureRenderedApp(window, deadline) {
             frame.sequence === sequence &&
             JSON.stringify(frame.before) === JSON.stringify(observation);
           const evidence = stable
-            ? rendererFrameEvidence(frame.image, observation)
+            ? rendererFrameEvidence(frame.image, observation, selectors)
             : null;
           if (evidence) {
             finish(undefined, {
@@ -413,7 +422,7 @@ export function captureRenderedApp(window, deadline) {
             throw new Error(
               "Renderer document changed before presentation acceptance",
             );
-          baseline = await contents.executeJavaScript(rendererObservation);
+          baseline = await contents.executeJavaScript(observationScript);
           if (done) return;
           if (contents.getURL() !== url || contents.isLoadingMainFrame())
             throw new Error("Renderer changed during baseline observation");
@@ -469,5 +478,109 @@ export function completed(hostStatus) {
       visible: window.isVisible(),
       presentation: evidence,
     });
+    if (config.mode === "success") await verifyProductReady(window, deadline);
   })().catch((error) => event("fixture-error", { message: String(error) }));
+}
+
+/** Fixed synthetic text only. Product readiness is separate from the first shell. */
+export function productObservation(seed, stage) {
+  if (
+    seed.synthetic !== true ||
+    ![seed.threadId, seed.userItemId, seed.agentItemId].every((id) =>
+      /^[A-Za-z0-9_-]+$/.test(id),
+    )
+  )
+    throw new Error("Invalid synthetic startup seed identity");
+  if (!["sidebar", "conversation"].includes(stage))
+    throw new Error("Invalid product stage");
+  const row = `#primary-sidebar [data-thread-id="${seed.threadId}"] > button.thread-row`;
+  const specs =
+    stage === "sidebar"
+      ? [
+          {
+            selector: row,
+            label: ".thread-title > span:first-child",
+            text: seed.title,
+          },
+          {
+            selector: "#primary-sidebar .new-thread-action",
+            label: ":scope > span",
+          },
+        ]
+      : [
+          {
+            selector: `.thread-view [data-sent-message-id="${seed.userItemId}"] .user-bubble`,
+            label: "p",
+            text: seed.userText,
+          },
+          {
+            selector: `.thread-view [data-read-message-id="${seed.agentItemId}"] [data-message-quote-body]`,
+            label: "p",
+            text: seed.agentText,
+          },
+        ];
+  const script = `(() => {
+    const rect = r => ({x:r.x,y:r.y,width:r.width,height:r.height});
+    const inside = r => r.width > 0 && r.height > 0 && r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight;
+    const visible = e => Boolean(e && e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}) && inside(e.getBoundingClientRect()));
+    const opaque = value => value && value !== 'transparent' && Number.parseFloat(value.includes('/') ? value.slice(value.lastIndexOf('/') + 1, -1) : value.startsWith('rgba(') ? value.slice(value.lastIndexOf(',') + 1, -1) : '1') > 0;
+    const row = document.querySelector(${JSON.stringify(row)});
+    const selected = row?.getAttribute('aria-current') === 'page' && row.classList.contains('selected');
+    const controls = ${JSON.stringify(specs)}.map(spec => {
+      const element = document.querySelector(spec.selector);
+      const label = element?.querySelector(spec.label);
+      if (!visible(element) || !visible(label) || element.disabled || element.getAttribute('aria-disabled') === 'true') return null;
+      const style = getComputedStyle(label);
+      if (style.visibility !== 'visible' || Number(style.opacity) <= 0 || Number.parseFloat(style.fontSize) <= 0 || !opaque(style.color) || !opaque(style.webkitTextFillColor)) return null;
+      if (label.childNodes.length !== 1 || label.firstChild.nodeType !== Node.TEXT_NODE || !label.firstChild.textContent.trim() || (spec.text !== undefined && label.textContent !== spec.text)) return null;
+      const range = document.createRange(); range.selectNodeContents(label.firstChild);
+      const rects = Array.from(range.getClientRects()); const box = label.getBoundingClientRect();
+      if (!rects.length || rects.some(r => !inside(r) || r.left < box.left || r.top < box.top || r.right > box.right || r.bottom > box.bottom)) return null;
+      if (rects.some(r => [0.1,0.5,0.9].some(f => !label.contains(document.elementFromPoint(r.x + r.width * f, r.y + r.height / 2))))) return null;
+      return {selector:spec.selector,textPresent:true,...rect(element.getBoundingClientRect()),textRects:rects.map(rect),style:{color:style.color,fill:style.webkitTextFillColor,font:style.font,opacity:style.opacity,spacing:style.letterSpacing,transform:style.transform}};
+    });
+    const shell = document.querySelector('.app-shell');
+    return {ready: document.visibilityState === 'visible' && visible(shell) && visible(row) && !row.disabled && !document.querySelector('#primary-sidebar .sidebar-error, #primary-sidebar .sidebar-empty') && (${JSON.stringify(stage)} !== 'conversation' || selected) && controls.every(Boolean),width:innerWidth,height:innerHeight,dpr:devicePixelRatio,viewport:visualViewport && {width:visualViewport.width,height:visualViewport.height,scale:visualViewport.scale,x:visualViewport.offsetLeft,y:visualViewport.offsetTop},shell:shell && rect(shell.getBoundingClientRect()),controls};
+  })()`;
+  return { script, selectors: specs.map((spec) => spec.selector), row };
+}
+
+export async function verifyProductReady(window, deadline) {
+  const seed = JSON.parse(
+    readFileSync(path.join(config.evidenceDirectory, "seed.json"), "utf8"),
+  );
+  for (const stage of ["sidebar", "conversation"]) {
+    const observation = productObservation(seed, stage);
+    if (stage === "conversation") {
+      // Invoke the real React selection handler only on this isolated synthetic row.
+      const clicked = await window.webContents.executeJavaScript(`(() => {
+        const row = document.querySelector(${JSON.stringify(observation.row)});
+        if (!row || row.disabled || !row.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) return false;
+        row.click(); return true;
+      })()`);
+      if (clicked !== true)
+        throw new Error("Synthetic sidebar row was not interactive");
+      event("conversation-selected", {
+        ...identity(window),
+        interaction: "scripted-dom-click",
+        synthetic: true,
+      });
+    }
+    const { image, evidence } = await captureRenderedApp(
+      window,
+      deadline,
+      observation.script,
+      observation.selectors,
+    );
+    writeFileSync(
+      path.join(config.evidenceDirectory, `${stage}-ready.png`),
+      image.toPNG({ scaleFactor: 1 }),
+    );
+    event(`${stage}-ready`, {
+      ...identity(window),
+      synthetic: true,
+      visible: window.isVisible(),
+      presentation: evidence,
+    });
+  }
 }
