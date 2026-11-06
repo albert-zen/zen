@@ -1,3 +1,26 @@
+import { AppShotButton } from "./AppShotButton.js";
+import {
+  ThreadHistoryContext,
+  useThreadHistoryPages,
+} from "./use-thread-history-pages.js";
+import { flushSync } from "react-dom";
+import { abandonDraftImage } from "./draft-image-lifecycle.js";
+import { AnsweredQuestionBubble } from "./AnsweredQuestionBubble.js";
+import {
+  indexAnsweredQuestions,
+  type AnsweredQuestionPresentation,
+} from "./answered-question-presentation.js";
+import { VirtualTranscriptFind } from "./VirtualTranscriptFind.js";
+import {
+  findMessageQuoteSource,
+  focusMessageQuoteSource,
+  quoteSourceTarget,
+} from "./quote-source-navigation.js";
+import { isNestedTranscriptScroll } from "./transcript-viewport-pins.js";
+import {
+  TranscriptViewport,
+  type VirtualTranscriptHandle,
+} from "./ExperimentalTranscriptViewport.js";
 import { useCommittedCallback } from "./use-committed-callback.js";
 import { PendingSendRows } from "./PendingSendRows.js";
 import { indexTurnOutcomeItems } from "./turn-outcome-index.js";
@@ -17,7 +40,10 @@ import {
   reportSendActivation,
 } from "./send-observation.js";
 import type { ClientSendObservation } from "../../../../../src/client-observation.js";
-import { triggerMessagePresentation } from "./trigger-message-presentation.js";
+import {
+  findInputWakeup,
+  triggerMessagePresentation,
+} from "./trigger-message-presentation.js";
 import { InlineComposerEditor } from "./InlineComposerEditor.js";
 import type { ComposerInput } from "./composer-input.js";
 import { normalizeInlineReferences } from "./reference-draft.js";
@@ -150,6 +176,7 @@ import { Markdown, MessageLinkContext } from "./Markdown.js";
 import {
   AttachmentImage,
   ImagePreview,
+  type ImagePreviewUnavailable,
   ThreadImagesContext,
   ToolImages,
 } from "./ImagePresentation.js";
@@ -170,7 +197,6 @@ import {
   type MessageTargetRequest,
 } from "./message-target-navigation.js";
 import {
-  groupReasoningWithoutDetailsRows,
   projectTurn,
   summarizeTraceActivity,
   traceSummary,
@@ -262,6 +288,10 @@ const CanonicalMessageForkContext = createContext<{
   isCurrent(itemId: string): boolean;
 } | null>(null);
 
+const MessageQuoteSourceContext = createContext<
+  ((quote: SentMessageQuote) => boolean) | null
+>(null);
+
 const CanonicalQuoteItemsContext = createContext<
   ReadonlyMap<string, readonly CanonicalItem[]>
 >(new Map());
@@ -280,31 +310,32 @@ function useQuoteAttributes(ids: string | string[]) {
     : {};
 }
 
-function findMessageQuoteSource(
-  viewport: Element | null,
-  quote: SentMessageQuote,
-): HTMLElement | null {
-  return (
-    Array.from(
-      viewport?.querySelectorAll<HTMLElement>(
-        "[data-quote-thread-id][data-quote-item-id]",
-      ) ?? [],
-    ).find(
-      (element) =>
-        element.dataset.quoteThreadId === quote.threadId &&
-        element.dataset.quoteItemId === quote.id,
-    ) ?? null
-  );
-}
 function goToMessageQuoteSource(
   viewport: Element | null,
   quote: SentMessageQuote,
 ): boolean {
   const source = findMessageQuoteSource(viewport, quote);
   if (!source) return false;
-  source.scrollIntoView({ block: "center", behavior: "auto" });
-  source.focus({ preventScroll: true });
+  focusMessageQuoteSource(source, quote.excerpt);
   return true;
+}
+
+function HistoryBackfillControl() {
+  const history = useContext(ThreadHistoryContext);
+  const { t } = useTranslation("shell");
+  if (!history || (!history.hasMore && !history.error)) return null;
+  return (
+    <div className="thread-history-backfill" role="status">
+      {history.error ? <p role="alert">{history.error}</p> : null}
+      <button
+        type="button"
+        disabled={history.loading}
+        onClick={() => void history.loadOlder().catch(() => {})}
+      >
+        {history.loading ? t("historyLoading") : t("historyLoadEarlier")}
+      </button>
+    </div>
+  );
 }
 
 interface ThreadViewProps {
@@ -373,6 +404,7 @@ interface ThreadViewProps {
   onOpenMessageLink?(target: { kind: "file" | "browser"; value: string }): void;
   onImportImages?(files: readonly File[]): Promise<void>;
   onPickImages?(): Promise<void>;
+  onAddAppShot?(image: ComposerDraftImage): void;
   onRemoveImage?(imageId: string): void;
   onReadAttachment?(attachment: AttachmentRef): Promise<Uint8Array>;
   onInterrupt(turnId: string): Promise<void>;
@@ -401,6 +433,15 @@ const unavailableImageReader = async (): Promise<Uint8Array> => {
 };
 
 export function ThreadView(props: ThreadViewProps) {
+  const history = useThreadHistoryPages(props.thread);
+  return (
+    <ThreadHistoryContext.Provider value={history.controller}>
+      <HistoryThreadView {...props} thread={history.thread} />
+    </ThreadHistoryContext.Provider>
+  );
+}
+
+function HistoryThreadView(props: ThreadViewProps) {
   const pendingSteer = useMemo(
     () => pendingSteerMessages(props.thread?.canonicalItems ?? []),
     [props.thread?.canonicalItems],
@@ -427,6 +468,10 @@ export function ThreadView(props: ThreadViewProps) {
   const canonicalAttachments = useMemo(
     () =>
       items === undefined ? undefined : projectThreadAttachmentItems(items),
+    [items],
+  );
+  const answeredQuestions = useMemo(
+    () => indexAnsweredQuestions(items ?? []),
     [items],
   );
   const canonicalInputs = useMemo(
@@ -509,6 +554,7 @@ export function ThreadView(props: ThreadViewProps) {
         toolTargets,
         committedPresentation.current,
         quoteItems,
+        answeredQuestions,
       ),
     [
       sourceThreadId,
@@ -520,6 +566,7 @@ export function ThreadView(props: ThreadViewProps) {
       attachments,
       toolTargets,
       quoteItems,
+      answeredQuestions,
     ],
   );
   useLayoutEffect(() => {
@@ -624,6 +671,7 @@ function ThreadViewContent({
   onDraftChange,
   onImportImages = async () => undefined,
   onPickImages = async () => undefined,
+  onAddAppShot,
   onRemoveImage = () => undefined,
   onReadAttachment = unavailableImageReader,
   onInterrupt,
@@ -709,6 +757,28 @@ function ThreadViewContent({
     () => pendingQueuedMessages(thread?.canonicalItems ?? []),
     [thread?.canonicalItems],
   );
+  // Queue is a pending projection, not proof of next-Turn delivery. Agent
+  // guidance and Host steer may be staged here until the current safe boundary.
+  const queueWaitsForTurnEnd = useMemo(() => {
+    const byId = new Map(nativeQueue.map((item) => [item.id, item]));
+    return (
+      thread?.queuedMessages?.every((message) => {
+        const item = byId.get(message.id);
+        if (
+          !item ||
+          item.threadId !== thread.id ||
+          item.clientId !== message.clientId ||
+          item.revision !== (message.revision ?? 0)
+        )
+          return false;
+        if (item.type === "user_message_queued")
+          return item.deliveryMode !== "steer";
+        if (item.type === "thread_message_queued")
+          return item.messageType === "follow_up";
+        return item.intent === "queue";
+      }) === true
+    );
+  }, [nativeQueue, thread?.id, thread?.queuedMessages]);
   const observedEdit = (session: QueueEditSession) =>
     session.confirmed !== undefined &&
     thread?.id === session.threadId &&
@@ -770,7 +840,29 @@ function ThreadViewContent({
     name: string;
     trigger: HTMLButtonElement;
     queueOwner?: { threadId: string; queuedItemId: string; clientId: string };
+    draftOwner?: {
+      composerId: string;
+      threadId: string | null;
+      imageId: string;
+    };
+    appShotContext?: string;
+    unavailable?: ImagePreviewUnavailable;
   } | null>(null);
+  const draftPreviewScope = useRef<{
+    composerId: string;
+    threadId: string | null;
+    images: readonly ComposerDraftImage[];
+  } | null>(null);
+  useLayoutEffect(() => {
+    draftPreviewScope.current = {
+      composerId,
+      threadId: thread?.id ?? null,
+      images: composer.draft.images,
+    };
+    return () => {
+      draftPreviewScope.current = null;
+    };
+  }, [composerId, thread?.id, composer.draft.images]);
   const onOpenImage = useCallback(
     (attachment: AttachmentRef, name: string, trigger: HTMLButtonElement) =>
       setPreview({ attachment, name, trigger }),
@@ -811,9 +903,21 @@ function ThreadViewContent({
       queuedImages[preview.queueOwner.queuedItemId]?.some((image) =>
         sameImageAttachment(image, preview.attachment),
       ) === true);
+  const draftPreviewCurrent =
+    preview?.draftOwner === undefined ||
+    (preview.draftOwner.composerId === composerId &&
+      preview.draftOwner.threadId === (thread?.id ?? null) &&
+      composer.draft.images.some(
+        (image) =>
+          image.id === preview.draftOwner!.imageId &&
+          image.name === preview.name &&
+          image.appShotContext === preview.appShotContext &&
+          sameImageAttachment(image.attachment, preview.attachment),
+      ));
   useEffect(() => {
-    if (!queuePreviewCurrent) setPreview(null);
-  }, [queuePreviewCurrent]);
+    if (!queuePreviewCurrent || !draftPreviewCurrent) setPreview(null);
+  }, [queuePreviewCurrent, draftPreviewCurrent]);
+  const history = useContext(ThreadHistoryContext);
   const [atLive, setAtLive] = useState(readingState.scroll?.following ?? true);
   const [skills, setSkills] = useState<SkillEntry[]>([]);
   const [skillError, setSkillError] = useState<string | null>(null);
@@ -847,6 +951,29 @@ function ThreadViewContent({
     };
   }, [thread?.id, composer.draft.text.startsWith("/")]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const virtualViewport = useRef<VirtualTranscriptHandle | null>(null);
+  const [virtualTranscript] = useState(() => {
+    try {
+      if (typeof window.ResizeObserver !== "function") return false;
+      return (
+        window.sessionStorage.getItem("zenx.experimental.virtualTranscript") !==
+        "0"
+      );
+    } catch {
+      return false;
+    }
+  });
+  const [virtualTranscriptFind] = useState(() => {
+    try {
+      return (
+        window.sessionStorage.getItem(
+          "zenx.experimental.virtualTranscriptFind",
+        ) !== "0"
+      );
+    } catch {
+      return false;
+    }
+  });
   const shouldFollowRef = useRef(readingState.scroll?.following ?? true);
   const observedScrollTop = useRef(0);
   const viewRef = useRef<HTMLDivElement>(null);
@@ -1073,6 +1200,7 @@ function ThreadViewContent({
     if (!scroll) return;
     const saved = readingState.scroll;
     shouldFollowRef.current = saved?.following ?? true;
+    if (virtualTranscript) return;
     scroll.scrollTop =
       saved?.following === false ? saved.top : scroll.scrollHeight;
     observedScrollTop.current = scroll.scrollTop;
@@ -1080,9 +1208,177 @@ function ThreadViewContent({
       scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 1,
     );
     saveReadingPosition();
-  }, [readingState, saveReadingPosition]);
+  }, [readingState, saveReadingPosition, virtualTranscript]);
 
-  useMessageTargetNavigation(thread, scrollRef, pauseFollowing);
+  const quoteSourceGuards = useRef(new WeakMap<HTMLElement, () => boolean>());
+  const resolveQuoteSource = useCommittedCallback(
+    (quote: SentMessageQuote): HTMLElement | null => {
+      const mounted = findMessageQuoteSource(scrollRef.current, quote);
+      // A queue dialog temporarily aria-hides the outer app; only transcript disclosures
+      // determine whether the source itself needs to be expanded before closing that dialog.
+      const visible = (element: HTMLElement | null): element is HTMLElement => {
+        const hidden = element?.closest(
+          "[hidden], [aria-hidden='true']:not([data-aria-hidden]), [inert]",
+        );
+        return (
+          element !== null && (!hidden || !scrollRef.current?.contains(hidden))
+        );
+      };
+      if (!displayedThread) return mounted;
+      if (!virtualTranscript && visible(mounted)) return mounted;
+      const target = quoteSourceTarget(
+        displayedThread.id,
+        turns,
+        canonicalPresentation,
+        quote,
+      );
+      if (!target) return mounted;
+      if (!virtualTranscript || !virtualViewport.current) {
+        if (
+          target.disclosures.some(
+            (key) => readingState.snapshot().get(key) !== true,
+          )
+        )
+          flushSync(() =>
+            target.disclosures.forEach((key) => readingState.set(key, true)),
+          );
+        const source = findMessageQuoteSource(scrollRef.current, quote);
+        return visible(source) ? source : null;
+      }
+      const owner = currentThreadRef.current;
+      pauseFollowing();
+      let source: HTMLElement | null = null;
+      const materialized = virtualViewport.current.materialize(
+        target.rowKey,
+        () => target.disclosures.forEach((key) => readingState.set(key, true)),
+        () => {
+          if (
+            source?.isConnected &&
+            currentThreadRef.current === owner &&
+            (document.activeElement === source ||
+              document.activeElement === document.body)
+          )
+            focusMessageQuoteSource(source, quote.excerpt, false);
+        },
+      );
+      if (!materialized) return null;
+      source = findMessageQuoteSource(materialized.element, quote);
+      if (!visible(source)) {
+        materialized.cancel();
+        return null;
+      }
+      const element = source;
+      quoteSourceGuards.current.set(
+        element,
+        () => currentThreadRef.current === owner && materialized.isCurrent(),
+      );
+      return element;
+    },
+  );
+  const sourceRequest = useRef(0);
+  useEffect(() => {
+    const cancel = () => {
+      sourceRequest.current++;
+    };
+    for (const type of ["pointerdown", "keydown", "wheel"])
+      document.addEventListener(type, cancel, true);
+    return () => {
+      for (const type of ["pointerdown", "keydown", "wheel"])
+        document.removeEventListener(type, cancel, true);
+    };
+  }, []);
+  useEffect(() => {
+    const anchor = readingState.virtualAnchor;
+    if (
+      !anchor ||
+      !history?.hasMore ||
+      readingState.scroll?.following !== false
+    )
+      return;
+    let parts: unknown;
+    try {
+      parts = JSON.parse(anchor.key);
+    } catch {
+      return;
+    }
+    if (
+      !Array.isArray(parts) ||
+      parts[0] !== displayedThread?.id ||
+      parts[1] !== "turn" ||
+      typeof parts[2] !== "string" ||
+      turns.some((turn) => turn.id === parts[2])
+    )
+      return;
+    const request = sourceRequest.current;
+    let active = true;
+    void history
+      .ensureTurn(parts[2])
+      .then((found) => {
+        if (found && active && sourceRequest.current === request)
+          return virtualViewport.current?.reveal(
+            anchor.key,
+            undefined,
+            anchor.offset,
+          );
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [
+    readingState,
+    displayedThread?.id,
+    displayedThread?.recoveryEpoch,
+    history?.ensureTurn,
+  ]);
+  const navigateQuoteSource = useCommittedCallback(
+    (quote: SentMessageQuote): boolean => {
+      pauseFollowing();
+      const request = ++sourceRequest.current;
+      const source = resolveQuoteSource(quote);
+      if (!source) {
+        if (!history?.hasMore || quote.threadId !== currentThreadRef.current)
+          return false;
+        const owner = currentThreadRef.current;
+        void history
+          .ensureItem(quote.id)
+          .then((found) => {
+            if (
+              currentThreadRef.current !== owner ||
+              sourceRequest.current !== request
+            )
+              return;
+            if (!found) {
+              setAttachmentError(i18n.t("shell:referenceSourceUnavailable"));
+              return;
+            }
+            const target = resolveQuoteSource(quote);
+            if (target) focusMessageQuoteSource(target, quote.excerpt);
+          })
+          .catch(() => {
+            /* The history header exposes the failure and retry. */
+          });
+        return true;
+      }
+      focusMessageQuoteSource(source, quote.excerpt);
+      return true;
+    },
+  );
+  const materializeTargetTurn = useCallback(
+    (turnId: string, onRevealed: () => void) =>
+      virtualViewport.current?.reveal(
+        JSON.stringify([displayedThread?.id, "turn", turnId]),
+        onRevealed,
+      ) ?? Promise.resolve(false),
+    [displayedThread?.id],
+  );
+  useMessageTargetNavigation(
+    thread,
+    scrollRef,
+    pauseFollowing,
+    virtualTranscript ? materializeTargetTurn : undefined,
+    navigateQuoteSource,
+  );
 
   // New transcript data may advance a live reader. Approvals, focus and Composer
   // layout are not new messages and must not independently pull an idle reader.
@@ -1113,6 +1409,7 @@ function ThreadViewContent({
   useLayoutEffect(() => {
     const scroll = scrollRef.current;
     const content = scroll?.firstElementChild;
+    if (virtualTranscript) return;
     if (!scroll || !content || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
       // Layout can settle after completion (Markdown, images, canonical fold).
@@ -1126,7 +1423,7 @@ function ThreadViewContent({
     observer.observe(scroll);
     if (bottomZoneRef.current) observer.observe(bottomZoneRef.current);
     return () => observer.disconnect();
-  }, [followBottom, pauseFollowing]);
+  }, [followBottom, pauseFollowing, virtualTranscript]);
 
   // Keep a newly failed request visible when approvals, queued messages and a
   // long draft overflow the bottom zone. User scrolling afterwards is left
@@ -1576,6 +1873,26 @@ function ThreadViewContent({
     ],
   );
 
+  const virtualTranscriptRows = useMemo(
+    () =>
+      virtualTranscript
+        ? transcriptRows.map((row, index) => ({
+            key: JSON.stringify([
+              displayedThread?.id,
+              row.type,
+              row.type === "turn" ? row.turn.id : row.compaction.item.id,
+            ]),
+            content: renderedTranscriptRows[index],
+          }))
+        : [],
+    [
+      virtualTranscript,
+      displayedThread?.id,
+      transcriptRows,
+      renderedTranscriptRows,
+    ],
+  );
+
   return (
     <div
       className={`thread-view${draggingImages ? " image-dragging" : ""}`}
@@ -1607,106 +1924,175 @@ function ThreadViewContent({
         );
       }}
     >
-      <div
-        className="messages"
-        style={{ overflowAnchor: atLive ? "none" : undefined }}
-        ref={scrollRef}
-        onWheel={(event) => {
-          if (isNestedTranscriptScroll(event.target, event.currentTarget))
-            return;
-          if (event.deltaY < 0) pauseFollowing();
-          else if (
-            event.deltaY > 0 &&
-            event.currentTarget.scrollHeight -
-              event.currentTarget.scrollTop -
-              event.currentTarget.clientHeight <=
-              1 &&
-            !transcriptHasSelection(event.currentTarget)
-          ) {
-            shouldFollowRef.current = true;
-            followBottom();
-          }
-        }}
-        onPointerDownCapture={(event) => {
-          if (!isNestedTranscriptScroll(event.target, event.currentTarget))
-            pauseFollowing();
-        }}
-        onFocusCapture={pauseFollowing}
-        onKeyDownCapture={(event) => {
-          if (isNestedTranscriptScroll(event.target, event.currentTarget))
-            return;
-          const downward =
-            ["ArrowDown", "PageDown", "End", " "].includes(event.key) &&
-            !(event.key === " " && event.shiftKey);
-          const upward =
-            ["ArrowUp", "PageUp", "Home"].includes(event.key) ||
-            (event.key === " " && event.shiftKey);
-          if (!downward && !upward) return;
-          const target = event.currentTarget;
-          if (
-            downward &&
-            target.scrollHeight - target.scrollTop - target.clientHeight <= 1 &&
-            !transcriptHasSelection(target)
-          ) {
-            shouldFollowRef.current = true;
-            followBottom();
-          } else pauseFollowing();
-        }}
-        onScroll={(event) => {
-          const target = event.currentTarget;
-          const top = target.scrollTop;
-          const atBottom = target.scrollHeight - top - target.clientHeight <= 1;
-          // Native/programmatic scroll delivery can lag behind content growth.
-          // A changed range alone is not reader movement. Explicitly reaching
-          // the bottom restores follow intent; upward reading releases it.
-          if (transcriptHasSelection(target)) pauseFollowing();
-          else if (Math.abs(top - observedScrollTop.current) > 0.5) {
-            // Content shrinking can clamp the native offset to the new floor.
-            // That is layout, not an upward gesture or a new follow request.
-            const clamped = atBottom && observedScrollTop.current > top;
-            if (!clamped)
-              shouldFollowRef.current =
-                top > observedScrollTop.current && atBottom;
-          }
-          observedScrollTop.current = top;
-          setAtLive(atBottom);
-          saveReadingPosition();
-        }}
-      >
-        <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
-          <ThreadImagesContext.Provider value={imageContext}>
-            <div className="messages-inner">
-              <ImportedThreadNotice
-                items={displayedThread?.canonicalItems ?? []}
-              />
-              {transcriptRows.length === 0 ? (
-                (emptyContent ?? (
-                  <div className="thread-empty">
-                    <h2>{i18n.t("shell:startANewThread")}</h2>
-                    <p>{i18n.t("shell:describeOutcome")}</p>
-                  </div>
-                ))
-              ) : (
-                <div className="transcript-history">
-                  {renderedTranscriptRows}
-                </div>
-              )}
-              {composer.pendingSends && (
-                <PendingSendRows
-                  key={thread?.id ?? composerId}
-                  messages={composer.pendingSends}
-                  onRecover={onRecoverPendingSend}
-                  onDismiss={onDismissPendingSend}
-                  onCheck={onCheckPendingSends}
+      {virtualTranscript &&
+      virtualTranscriptFind &&
+      displayedThread &&
+      transcriptRows.length > 0 ? (
+        <VirtualTranscriptFind
+          key={displayedThread.id}
+          threadId={displayedThread.id}
+          turns={turns}
+          canonical={canonicalPresentation.turns}
+          view={viewRef}
+          viewport={scrollRef}
+          controller={virtualViewport}
+          reading={readingState}
+          wakeups={wakeups}
+          pluginSnapshot={pluginSnapshot}
+          pluginUiRegistry={pluginUiRegistry}
+          pauseFollowing={pauseFollowing}
+        />
+      ) : null}
+      <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
+        <ThreadImagesContext.Provider value={imageContext}>
+          <MessageQuoteSourceContext.Provider value={navigateQuoteSource}>
+            <TranscriptViewport
+              key={virtualTranscript ? (thread?.id ?? composerId) : undefined}
+              experimental={virtualTranscript && transcriptRows.length > 0}
+              viewport={scrollRef}
+              controller={virtualViewport}
+              position={readingState}
+              rows={virtualTranscriptRows}
+              header={
+                <>
+                  <HistoryBackfillControl />
+                  <ImportedThreadNotice
+                    items={displayedThread?.canonicalItems ?? []}
+                  />
+                </>
+              }
+              footer={
+                <>
+                  {composer.pendingSends && (
+                    <PendingSendRows
+                      key={thread?.id ?? composerId}
+                      messages={composer.pendingSends}
+                      onRecover={onRecoverPendingSend}
+                      onDismiss={onDismissPendingSend}
+                      onCheck={onCheckPendingSends}
+                    />
+                  )}
+                  {composer.compaction?.status === "pending" ? (
+                    <ContextCompactionProgress state={composer.compaction} />
+                  ) : null}
+                </>
+              }
+              onContentSettled={followBottom}
+              className="messages"
+              style={{ overflowAnchor: atLive ? "none" : undefined }}
+              onWheel={(event) => {
+                if (isNestedTranscriptScroll(event.target, event.currentTarget))
+                  return;
+                if (event.deltaY < 0) pauseFollowing();
+                else if (
+                  event.deltaY > 0 &&
+                  event.currentTarget.scrollHeight -
+                    event.currentTarget.scrollTop -
+                    event.currentTarget.clientHeight <=
+                    1 &&
+                  !transcriptHasSelection(event.currentTarget)
+                ) {
+                  shouldFollowRef.current = true;
+                  followBottom();
+                }
+              }}
+              onPointerDownCapture={(event) => {
+                if (
+                  !isNestedTranscriptScroll(event.target, event.currentTarget)
+                )
+                  pauseFollowing();
+              }}
+              onFocusCapture={pauseFollowing}
+              onKeyDownCapture={(event) => {
+                if (isNestedTranscriptScroll(event.target, event.currentTarget))
+                  return;
+                const downward =
+                  ["ArrowDown", "PageDown", "End", " "].includes(event.key) &&
+                  !(event.key === " " && event.shiftKey);
+                const upward =
+                  ["ArrowUp", "PageUp", "Home"].includes(event.key) ||
+                  (event.key === " " && event.shiftKey);
+                if (!downward && !upward) return;
+                const target = event.currentTarget;
+                if (
+                  downward &&
+                  target.scrollHeight -
+                    target.scrollTop -
+                    target.clientHeight <=
+                    1 &&
+                  !transcriptHasSelection(target)
+                ) {
+                  shouldFollowRef.current = true;
+                  followBottom();
+                } else pauseFollowing();
+              }}
+              onViewportScroll={(target, layoutCorrection) => {
+                const top = target.scrollTop;
+                if (
+                  !layoutCorrection &&
+                  top < 120 &&
+                  !shouldFollowRef.current &&
+                  history?.hasMore &&
+                  !history.loading &&
+                  !history.error
+                )
+                  void history.loadOlder().catch(() => {});
+                const atBottom =
+                  target.scrollHeight - top - target.clientHeight <= 1;
+                // Native/programmatic scroll delivery can lag behind content growth.
+                // A changed range alone is not reader movement. Explicitly reaching
+                // the bottom restores follow intent; upward reading releases it.
+                if (transcriptHasSelection(target)) pauseFollowing();
+                else if (
+                  !layoutCorrection &&
+                  Math.abs(top - observedScrollTop.current) > 0.5
+                ) {
+                  // Content shrinking can clamp the native offset to the new floor.
+                  // That is layout, not an upward gesture or a new follow request.
+                  const clamped = atBottom && observedScrollTop.current > top;
+                  if (!clamped)
+                    shouldFollowRef.current =
+                      top > observedScrollTop.current && atBottom;
+                }
+                observedScrollTop.current = top;
+                setAtLive(atBottom);
+                saveReadingPosition();
+              }}
+            >
+              <div className="messages-inner">
+                <HistoryBackfillControl />
+                <ImportedThreadNotice
+                  items={displayedThread?.canonicalItems ?? []}
                 />
-              )}
-              {composer.compaction?.status === "pending" ? (
-                <ContextCompactionProgress state={composer.compaction} />
-              ) : null}
-            </div>
-          </ThreadImagesContext.Provider>
-        </MessageLinkContext.Provider>
-      </div>
+                {transcriptRows.length === 0 ? (
+                  (emptyContent ?? (
+                    <div className="thread-empty">
+                      <h2>{i18n.t("shell:startANewThread")}</h2>
+                      <p>{i18n.t("shell:describeOutcome")}</p>
+                    </div>
+                  ))
+                ) : (
+                  <div className="transcript-history">
+                    {renderedTranscriptRows}
+                  </div>
+                )}
+                {composer.pendingSends && (
+                  <PendingSendRows
+                    key={thread?.id ?? composerId}
+                    messages={composer.pendingSends}
+                    onRecover={onRecoverPendingSend}
+                    onDismiss={onDismissPendingSend}
+                    onCheck={onCheckPendingSends}
+                  />
+                )}
+                {composer.compaction?.status === "pending" ? (
+                  <ContextCompactionProgress state={composer.compaction} />
+                ) : null}
+              </div>
+            </TranscriptViewport>
+          </MessageQuoteSourceContext.Provider>
+        </ThreadImagesContext.Provider>
+      </MessageLinkContext.Provider>
 
       <MessageSelectionActions
         viewport={scrollRef}
@@ -1777,18 +2163,6 @@ function ThreadViewContent({
             onRespond={respondToApproval}
           />
         ))}
-        {thread?.canonicalItems ? (
-          <PendingSteerPanel
-            key={`steer-recall:${thread.id}`}
-            threadId={thread.id}
-            items={thread.canonicalItems}
-            pending={pendingSteer}
-            runningTurnId={runningTurn?.id ?? null}
-            store={steerRecallStore}
-            onRestore={onRestoreRecalled}
-            onReadAttachment={onReadAttachment}
-          />
-        ) : null}
         {thread ? (
           <QueuedMessages
             threadId={thread.id}
@@ -1820,6 +2194,7 @@ function ThreadViewContent({
               });
             }}
             running={runningTurn !== null}
+            waitsForTurnEnd={queueWaitsForTurnEnd}
             steeringIds={steerLocks.current.get(thread.id)}
             onSteer={
               onSteerQueued ? (message) => void steerQueued(message) : undefined
@@ -1938,6 +2313,18 @@ function ThreadViewContent({
             }
           />
         ) : null}
+        {thread?.canonicalItems ? (
+          <PendingSteerPanel
+            key={`steer-recall:${thread.id}`}
+            threadId={thread.id}
+            items={thread.canonicalItems}
+            pending={pendingSteer}
+            runningTurnId={runningTurn?.id ?? null}
+            store={steerRecallStore}
+            onRestore={onRestoreRecalled}
+            onReadAttachment={onReadAttachment}
+          />
+        ) : null}
         {composer.compaction?.status === "failed" ||
         (composer.compaction?.status === "succeeded" &&
           composer.compaction.detail) ? (
@@ -1961,13 +2348,28 @@ function ThreadViewContent({
                 <DraftImage
                   image={image}
                   key={image.id}
-                  onOpen={(trigger) =>
+                  onOpen={(trigger, unavailable) => {
+                    const scope = draftPreviewScope.current;
+                    if (
+                      !trigger.isConnected ||
+                      scope?.composerId !== composerId ||
+                      scope.threadId !== (thread?.id ?? null) ||
+                      !scope.images.includes(image)
+                    )
+                      return;
                     setPreview({
                       attachment: image.attachment,
                       name: image.name,
                       trigger,
-                    })
-                  }
+                      appShotContext: image.appShotContext,
+                      unavailable,
+                      draftOwner: {
+                        composerId,
+                        threadId: thread?.id ?? null,
+                        imageId: image.id,
+                      },
+                    });
+                  }}
                   onReadAttachment={onReadAttachment}
                   onRemove={() => onRemoveImage(image.id)}
                 />
@@ -2062,8 +2464,7 @@ function ThreadViewContent({
                 onBlur={() => selector.dismiss()}
                 onReferenceSource={(reference) => {
                   if (reference.kind !== "message") return false;
-                  pauseFollowing();
-                  return goToMessageQuoteSource(scrollRef.current, reference);
+                  return navigateQuoteSource(reference);
                 }}
                 onPaste={(event) => {
                   if (composerDisabled || submitting) return;
@@ -2226,6 +2627,26 @@ function ThreadViewContent({
               >
                 <Icon name="paperclip" />
               </button>
+              {onAddAppShot && window.zenx?.appShot && (
+                <AppShotButton
+                  key={thread?.id ?? composerId}
+                  disabled={composerDisabled || submitting}
+                  onAttach={(image) => {
+                    onAddAppShot(image);
+                    const scope = draftPreviewScope.current;
+                    if (
+                      scope?.composerId === composerId &&
+                      scope.threadId === (thread?.id ?? null) &&
+                      !document.querySelector(
+                        '[role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"]',
+                      )
+                    )
+                      composerTextareaRef.current?.focus({
+                        preventScroll: true,
+                      });
+                  }}
+                />
+              )}
               {selectedModel === undefined ? null : (
                 <ComposerModelMenu
                   disabled={composerDisabled || modelDisabled}
@@ -2415,19 +2836,39 @@ function ThreadViewContent({
                 current?.owner === editOwner.current &&
                 !current.pending &&
                 !current.confirmed
-              )
+              ) {
                 updateEditSession(key, { ...current, draft });
+                const retainedIds = new Set(
+                  draft.images.map((image) => image.id),
+                );
+                for (const image of current.draft.images)
+                  if (!retainedIds.has(image.id)) abandonDraftImage(image.id);
+              }
             }}
             onSave={(draft) => saveQueuedEdit(key, draft)}
             onReferenceSource={(reference) => {
               if (currentThreadRef.current !== session.threadId) return null;
-              const target = findMessageQuoteSource(
-                scrollRef.current,
-                reference,
-              );
-              if (target) pauseFollowing();
-              return target;
+              const target = resolveQuoteSource(reference);
+              if (target) {
+                pauseFollowing();
+                return target;
+              }
+              if (!history?.hasMore || reference.threadId !== session.threadId)
+                return null;
+              return history.ensureItem(reference.id).then((found) => {
+                if (!found || currentThreadRef.current !== session.threadId)
+                  return null;
+                const target = resolveQuoteSource(reference);
+                if (target) pauseFollowing();
+                return target;
+              });
             }}
+            referenceSourceGuard={
+              virtualTranscript
+                ? (target) =>
+                    quoteSourceGuards.current.get(target) ?? (() => true)
+                : undefined
+            }
             onClose={(reason) => {
               const current = editSessionsRef.current[key];
               if (current?.owner === editOwner.current) {
@@ -2436,9 +2877,15 @@ function ThreadViewContent({
                 else if (
                   !current.pending &&
                   (!current.confirmed || observedEdit(current))
-                )
+                ) {
+                  // Only this owner actually discarding an edit retires new
+                  // image leases. Source navigation and pending writes
+                  // retain their independent drafts.
+                  if (reason === "cancel")
+                    for (const image of current.draft.images)
+                      abandonDraftImage(image.id);
                   updateEditSession(key, null);
-                else updateEditSession(key, { ...current, owner: undefined });
+                } else updateEditSession(key, { ...current, owner: undefined });
               }
               setOpenEditKey((value) => (value === key ? null : value));
             }}
@@ -2458,9 +2905,13 @@ function ThreadViewContent({
           />
         ))}
       </MessageLinkContext.Provider>
-      {preview === null || !queuePreviewCurrent ? null : (
+      {preview === null ||
+      !queuePreviewCurrent ||
+      !draftPreviewCurrent ? null : (
         <ImagePreview
           attachment={preview.attachment}
+          appShotContext={preview.appShotContext}
+          unavailable={preview.unavailable}
           name={preview.name}
           onClose={() => setPreview(null)}
           onReadAttachment={
@@ -2485,7 +2936,26 @@ function ThreadViewContent({
                       preventScroll: true,
                     });
                 }
-              : undefined
+              : preview.draftOwner
+                ? () => {
+                    const scope = draftPreviewScope.current;
+                    if (
+                      scope?.composerId !== preview.draftOwner!.composerId ||
+                      scope.threadId !== preview.draftOwner!.threadId ||
+                      !document.getSelection()?.isCollapsed
+                    )
+                      return;
+                    if (
+                      preview.trigger.isConnected &&
+                      !preview.trigger.closest("[hidden]")
+                    )
+                      preview.trigger.focus({ preventScroll: true });
+                    else
+                      composerTextareaRef.current?.focus({
+                        preventScroll: true,
+                      });
+                  }
+                : undefined
           }
         />
       )}
@@ -2687,23 +3157,6 @@ function transcriptHasSelection(element: Element | null): boolean {
       (selection.focusNode !== null && element.contains(selection.focusNode)))
   );
 }
-function isNestedTranscriptScroll(
-  target: EventTarget | null,
-  transcript: HTMLElement,
-): boolean {
-  for (
-    let element = target instanceof Element ? target : null;
-    element && element !== transcript;
-    element = element.parentElement
-  ) {
-    if (
-      element.scrollHeight > element.clientHeight &&
-      /auto|scroll/.test(getComputedStyle(element).overflowY)
-    )
-      return true;
-  }
-  return false;
-}
 
 const TurnBlock = memo(function TurnBlock({
   turn,
@@ -2828,16 +3281,7 @@ const TurnBlock = memo(function TurnBlock({
       { type: "userMessage" | "threadMessage" | "hostMessage" }
     >,
   ) => {
-    const wakeup = wakeups.find(
-      (entry) =>
-        entry.clientUserMessageId === item.clientId &&
-        (item.type === "userMessage" ||
-          (item.type === "hostMessage" &&
-            (item.source === "trigger"
-              ? entry.triggerId === item.sourceId
-              : item.source === "room" &&
-                entry.sourceRoomId === item.sourceId))),
-    );
+    const wakeup = findInputWakeup(item, wakeups);
     if (item.type === "hostMessage")
       return (
         <WakeupCard key={item.id} item={item} entry={wakeup} turn={turn} />
@@ -2850,11 +3294,13 @@ const TurnBlock = memo(function TurnBlock({
         onOpenImage={onOpenImage}
         onReadAttachment={onReadAttachment}
         turn={turn}
+        answeredQuestion={canonicalPresentation.answeredQuestions?.get(item.id)}
       />
     ) : (
       <TriggerMessageBubble
         text={item.content.map((part) => part.text).join("\n")}
         sourceId={wakeup.triggerId}
+        findItemId={item.id}
         key={item.id}
         turn={turn}
       />
@@ -3672,114 +4118,78 @@ function TraceSequence({
               aria-label={i18n.t("shell:executionDetails")}
               tabIndex={0}
             >
-              {groupReasoningWithoutDetailsRows(traceDisplayRows(node.items))
-                // Models that do not expose reasoning should leave no
-                // completed "Think" heading behind in the transcript.
-                .filter((row) => {
-                  if ("kind" in row) {
-                    return node.items.some(
-                      (item) =>
-                        row.ids.includes(item.id) &&
-                        item.type === "reasoning" &&
-                        item.status === "inProgress",
-                    );
-                  }
-                  const item = row.item;
-                  return !(
-                    item.type === "reasoning" &&
-                    item.status !== "inProgress" &&
-                    item.status !== "interrupted" &&
-                    item.summary.every((part) => part.trim().length === 0) &&
-                    item.content.every((part) => part.trim().length === 0)
-                  );
-                })
-                .map((row) => {
-                  if ("kind" in row) {
-                    return (
-                      <div
-                        className="trace-item trace-reasoning-without-details"
-                        key={row.ids[0]}
+              {traceDisplayRows(node.items).map((row) => {
+                const { item, nested, parentToolName } = row;
+                const open =
+                  choices.get(disclosureKey("item", turn.id, item.id)) ?? false;
+                const expandable = traceItemExpandable(item);
+                return (
+                  <div
+                    className={`trace-item${nested ? " trace-item-nested" : ""}`}
+                    aria-label={
+                      nested
+                        ? i18n.t("shell:nestedToolInvokedBy", {
+                            tool: parentToolName ?? i18n.t("shell:parentCode"),
+                          })
+                        : undefined
+                    }
+                    key={item.id}
+                  >
+                    {expandable ? (
+                      <button
+                        className="trace-item-toggle"
+                        type="button"
+                        aria-expanded={open}
+                        onClick={() => {
+                          setVisitedItems((current) =>
+                            new Set(current).add(item.id),
+                          );
+                          setChoice(
+                            disclosureKey("item", turn.id, item.id),
+                            (current) => !current,
+                          );
+                        }}
                       >
-                        <div className="trace-item-static">
-                          <Icon name="reasoning" size={14} />
-                          <span>{i18n.t("shell:thinking")}</span>
-                        </div>
+                        <TraceItemHeader
+                          turnRunning={turn.status === "inProgress"}
+                          activeProcess={false}
+                          item={item}
+                          expandable
+                          turnStatus={turnStatus}
+                          approvalPending={approvals.some(
+                            (approval) => approval.params.itemId === item.id,
+                          )}
+                        />
+                      </button>
+                    ) : (
+                      <div className="trace-item-static">
+                        <TraceItemHeader
+                          turnRunning={turn.status === "inProgress"}
+                          activeProcess={false}
+                          item={item}
+                          expandable={false}
+                          turnStatus={turnStatus}
+                          approvalPending={approvals.some(
+                            (approval) => approval.params.itemId === item.id,
+                          )}
+                        />
                       </div>
-                    );
-                  }
-                  const { item, nested, parentToolName } = row;
-                  const open =
-                    choices.get(disclosureKey("item", turn.id, item.id)) ??
-                    false;
-                  const expandable = traceItemExpandable(item);
-                  return (
-                    <div
-                      className={`trace-item${nested ? " trace-item-nested" : ""}`}
-                      aria-label={
-                        nested
-                          ? i18n.t("shell:nestedToolInvokedBy", {
-                              tool:
-                                parentToolName ?? i18n.t("shell:parentCode"),
-                            })
-                          : undefined
-                      }
-                      key={item.id}
-                    >
-                      {expandable ? (
-                        <button
-                          className="trace-item-toggle"
-                          type="button"
-                          aria-expanded={open}
-                          onClick={() => {
-                            setVisitedItems((current) =>
-                              new Set(current).add(item.id),
-                            );
-                            setChoice(
-                              disclosureKey("item", turn.id, item.id),
-                              (current) => !current,
-                            );
-                          }}
-                        >
-                          <TraceItemHeader
-                            turnRunning={turn.status === "inProgress"}
-                            activeProcess={false}
+                    )}
+                    <ToolActionLink item={item} />
+                    {expandable ? (
+                      <TraceReveal open={open}>
+                        {visitedItems.has(item.id) || open ? (
+                          <TraceDetail
                             item={item}
-                            expandable
-                            turnStatus={turnStatus}
-                            approvalPending={approvals.some(
-                              (approval) => approval.params.itemId === item.id,
-                            )}
+                            pluginSnapshot={pluginSnapshot}
+                            pluginUiRegistry={pluginUiRegistry}
                           />
-                        </button>
-                      ) : (
-                        <div className="trace-item-static">
-                          <TraceItemHeader
-                            turnRunning={turn.status === "inProgress"}
-                            activeProcess={false}
-                            item={item}
-                            expandable={false}
-                            turnStatus={turnStatus}
-                            approvalPending={approvals.some(
-                              (approval) => approval.params.itemId === item.id,
-                            )}
-                          />
-                        </div>
-                      )}
-                      <ToolActionLink item={item} />
-                      {expandable ? (
-                        <TraceReveal open={open}>
-                          {visitedItems.has(item.id) || open ? (
-                            <TraceDetail
-                              item={item}
-                              pluginSnapshot={pluginSnapshot}
-                              pluginUiRegistry={pluginUiRegistry}
-                            />
-                          ) : null}
-                        </TraceReveal>
-                      ) : null}
-                    </div>
-                  );
-                })}
+                        ) : null}
+                      </TraceReveal>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
           ) : null}
         </TraceReveal>
@@ -3926,6 +4336,7 @@ function TraceDetail({
     return (
       <div
         className="trace-detail trace-detail-markdown"
+        data-thread-find-item-id={item.id}
         {...quoteAttributes}
         tabIndex={-1}
       >
@@ -3942,7 +4353,7 @@ function TraceDetail({
     >
       <ToolImages itemId={item.id} />
       <div className="trace-tool-card">
-        <ToolInput command={item.command} />
+        <ToolInput command={item.command} findItemId={item.id} />
         <div
           className="trace-output"
           role="region"
@@ -3965,7 +4376,13 @@ function TraceDetail({
   );
 }
 
-function ToolInput({ command }: { command: string }) {
+function ToolInput({
+  command,
+  findItemId,
+}: {
+  command: string;
+  findItemId: string;
+}) {
   const preview = useRef<HTMLSpanElement>(null);
   const [overflows, setOverflows] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -3999,12 +4416,22 @@ function ToolInput({ command }: { command: string }) {
           ref={preview}
           aria-hidden={expanded || undefined}
         >
-          <code>{command}</code>
+          <code
+            data-thread-find-item-id={findItemId}
+            data-thread-find-field="command"
+          >
+            {command}
+          </code>
         </span>
       </Heading>
       {overflows ? (
         <pre className="trace-command">
-          <code>{command}</code>
+          <code
+            data-thread-find-item-id={findItemId}
+            data-thread-find-field="command"
+          >
+            {command}
+          </code>
         </pre>
       ) : null}
     </>
@@ -4029,12 +4456,14 @@ function reasoningContentText(
 }
 
 function InputMessage({
+  answeredQuestion,
   item,
   attachments,
   turn,
   onOpenImage,
   onReadAttachment,
 }: {
+  answeredQuestion?: AnsweredQuestionPresentation;
   item: Extract<ThreadItem, { type: "userMessage" | "threadMessage" }>;
   attachments: readonly AttachmentRef[];
   turn: Turn;
@@ -4046,6 +4475,7 @@ function InputMessage({
   onReadAttachment(attachment: AttachmentRef): Promise<Uint8Array>;
 }) {
   const quoteAttributes = useQuoteAttributes(item.id);
+  const navigateQuoteSource = useContext(MessageQuoteSourceContext);
   const text = item.content.map((content) => content.text).join("\n");
   const article = useRef<HTMLElement>(null);
   const canonical = useContext(CanonicalInputContentContext).get(item.id);
@@ -4118,8 +4548,10 @@ function InputMessage({
         </div>
       )}
       {(presented.text.length > 0 || presented.references.length > 0) && (
-        <div className="user-bubble">
-          {presented.references.length > 0 ? (
+        <div className="user-bubble" data-thread-find-item-id={item.id}>
+          {answeredQuestion ? (
+            <AnsweredQuestionBubble key={item.id} answer={answeredQuestion} />
+          ) : presented.references.length > 0 ? (
             presentation.map((part, index) => (
               <InlineReferenceContent
                 key={index}
@@ -4127,10 +4559,12 @@ function InputMessage({
                 references={part.references}
                 onSource={(reference) =>
                   reference.kind === "message" &&
-                  goToMessageQuoteSource(
-                    article.current?.closest(".thread-view") ?? null,
-                    reference,
-                  )
+                  (navigateQuoteSource
+                    ? navigateQuoteSource(reference)
+                    : goToMessageQuoteSource(
+                        article.current?.closest(".thread-view") ?? null,
+                        reference,
+                      ))
                 }
               />
             ))
@@ -4165,7 +4599,10 @@ function DraftImage({
   onRemove,
 }: {
   image: ComposerDraftImage;
-  onOpen(trigger: HTMLButtonElement): void;
+  onOpen(
+    trigger: HTMLButtonElement,
+    unavailable?: ImagePreviewUnavailable,
+  ): void;
   onReadAttachment(attachment: AttachmentRef): Promise<Uint8Array>;
   onRemove(): void;
 }) {
@@ -4173,10 +4610,22 @@ function DraftImage({
     <div className="draft-image">
       <AttachmentImage
         attachment={image.attachment}
-        name={image.name}
-        onOpen={(_attachment, _name, trigger) => onOpen(trigger)}
+        name={
+          image.appShotContext === undefined
+            ? image.name
+            : `${i18n.t("shell:appShot")} · ${image.name}`
+        }
+        onOpen={(_attachment, _name, trigger, unavailable) =>
+          onOpen(trigger, unavailable)
+        }
+        previewWhenUnavailable={image.appShotContext !== undefined}
         onReadAttachment={onReadAttachment}
       />
+      {image.appShotContext === undefined ? null : (
+        <span className="draft-app-shot-label" aria-hidden="true">
+          {i18n.t("shell:appShot")}
+        </span>
+      )}
       <button
         className="remove-draft-image"
         type="button"
@@ -4225,7 +4674,7 @@ function AgentMessage({
       {...quoteAttributes}
       tabIndex={-1}
     >
-      <div data-message-quote-body>
+      <div data-message-quote-body data-thread-find-item-id={item.id}>
         <Markdown text={item.text} />
       </div>
       {item.text.length === 0 ? <span className="stream-cursor" /> : null}
@@ -4369,10 +4818,12 @@ function MessageForkButton({ target }: { target: MessageForkTarget }) {
 function TriggerMessageBubble({
   text,
   sourceId,
+  findItemId,
   turn,
 }: {
   text: string;
   sourceId?: string;
+  findItemId?: string;
   turn: Turn;
 }) {
   const presentation = triggerMessagePresentation(text, sourceId);
@@ -4383,7 +4834,7 @@ function TriggerMessageBubble({
         label={presentation.name || i18n.t("shell:hostMessageTrigger")}
         className="host-message-source"
       />
-      <div className="user-bubble">
+      <div className="user-bubble" data-thread-find-item-id={findItemId}>
         <Markdown text={presentation.text} />
       </div>
       <MessageActions
@@ -4413,12 +4864,14 @@ function WakeupCard(
         <TriggerMessageBubble
           text={item.text}
           sourceId={item.sourceId}
+          findItemId={item.id}
           turn={turn}
         />
       );
     return (
       <article className="wakeup-card host-message-row">
         <HostMessageContent
+          findItemId={item.id}
           sourceNavigation
           source={item.source}
           sourceId={item.sourceId}

@@ -109,6 +109,102 @@ test("selection includes cross-message ranges, controls, code headers and code",
   }
 });
 
+test("page selection keeps distinct source tuples in first occurrence order", () => {
+  const view = selectionFixture();
+  try {
+    const owners = [
+      { threadId: "thread-a", ids: ["shared", "first", "shared"] },
+      { threadId: "thread-b", ids: ["shared"] },
+      { threadId: "thread-a", ids: ["last", "first"] },
+      { threadId: "a:b", ids: ["c"] },
+      { threadId: "a", ids: ["b:c"] },
+      { threadId: "a\u0000b", ids: ["c"] },
+      { threadId: "a", ids: ["b\u0000c"] },
+      { threadId: "a/b", ids: ["c"] },
+      { threadId: "a", ids: ["b/c"] },
+      { threadId: "thread-b", ids: ["shared"] },
+    ];
+    view.viewport.replaceChildren(
+      ...owners.map(({ threadId, ids }, index) => {
+        const owner = view.document.createElement("article");
+        owner.dataset.quoteThreadId = threadId;
+        owner.dataset.quoteItemId = ids[0]!;
+        owner.dataset.quoteItemIds = JSON.stringify(ids);
+        owner.textContent = `  Message ${index}\n`;
+        return owner;
+      }),
+    );
+    view.select(view.viewport, 0, view.viewport, owners.length);
+    const range = view.selection.getRangeAt(0);
+    const excerpt = view.selection.toString();
+    assert.deepEqual(readMessageSelection(view.viewport, view.selection), {
+      excerpt,
+      sources: [
+        { threadId: "thread-a", id: "shared" },
+        { threadId: "thread-a", id: "first" },
+        { threadId: "thread-b", id: "shared" },
+        { threadId: "thread-a", id: "last" },
+        { threadId: "a:b", id: "c" },
+        { threadId: "a", id: "b:c" },
+        { threadId: "a\u0000b", id: "c" },
+        { threadId: "a", id: "b\u0000c" },
+        { threadId: "a/b", id: "c" },
+        { threadId: "a", id: "b/c" },
+      ],
+    });
+    assert.equal(view.selection.getRangeAt(0), range);
+    assert.equal(view.selection.toString(), excerpt);
+  } finally {
+    view.dom.window.close();
+  }
+});
+
+test("page selection does not rescan prior source tuples for every owner", (context) => {
+  const view = selectionFixture();
+  const count = 256;
+  let comparisons = 0;
+  try {
+    view.viewport.replaceChildren(
+      ...Array.from({ length: count }, (_, index) => {
+        const owner = view.document.createElement("article");
+        owner.dataset.quoteThreadId = "thread-count";
+        owner.dataset.quoteItemId = `item-${index}`;
+        owner.textContent = `Message ${index}\n`;
+        return owner;
+      }),
+    );
+    view.select(view.viewport, 0, view.viewport, count);
+    const findIndex = Array.prototype.findIndex;
+    let selected: MessageSelection | null;
+    try {
+      Array.prototype.findIndex = function (predicate, thisArg) {
+        return findIndex.call(this, (value, index, all) => {
+          if (
+            value &&
+            typeof value === "object" &&
+            "threadId" in value &&
+            value.threadId === "thread-count"
+          )
+            comparisons++;
+          return predicate.call(thisArg, value, index, all);
+        });
+      };
+      selected = readMessageSelection(view.viewport, view.selection);
+    } finally {
+      Array.prototype.findIndex = findIndex;
+    }
+    context.diagnostic(`${comparisons} source comparisons for ${count} owners`);
+    assert.equal(selected?.sources?.length, count);
+    // Count the known repeated-scan regression, not DOM work or wall-clock time.
+    assert.ok(
+      comparisons <= count,
+      `${comparisons} source comparisons for ${count} owners`,
+    );
+  } finally {
+    view.dom.window.close();
+  }
+});
+
 const reference: MessageQuoteReference = {
   kind: "message",
   name: "Source conversation",

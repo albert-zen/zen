@@ -1,3 +1,4 @@
+import { projectionFileRevision } from "./projection-source-revision.js";
 import type { ContextItem } from "./item-list.js";
 import { link, mkdir, open, readdir, readFile, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -17,9 +18,19 @@ export interface ThreadJournal {
     exactItemList?: readonly ContextItem[],
   ): Promise<void>;
   readItemList?(threadId: string): Promise<ContextItem[]>;
+  /** One operation-local source observation for canonical and semantic history. */
+  readSnapshot?(threadId: string): Promise<{
+    items: CanonicalItem[];
+    itemList?: ContextItem[];
+  }>;
   appendContext?(item: ContextItem): Promise<void>;
   /** Read-only history remains available; unsafe control recovery blocks new dispatch. */
   assertRecoverySafe?(threadId: string): Promise<void>;
+  /** Display cache token only. With an expected id, return only an exact successful publication token. */
+  summarySourceRevision?(
+    threadId: string,
+    expectedLastItemId?: string,
+  ): Promise<string | undefined>;
   close?(): Promise<void>;
   listThreadIds(): Promise<string[]>;
   read(threadId: string): Promise<CanonicalItem[]>;
@@ -156,6 +167,16 @@ export class JsonlThreadJournal implements ThreadJournal {
       }
     }
     return items;
+  }
+
+  async summarySourceRevision(
+    threadId: string,
+    expectedLastItemId?: string,
+  ): Promise<string | undefined> {
+    validateThreadId(threadId);
+    // Legacy stores have no exclusive writer receipt. Only stable cold reads can certify their cache.
+    if (expectedLastItemId !== undefined) return undefined;
+    return projectionFileRevision(this.#pathFor(threadId));
   }
 
   #pathFor(threadId: string): string {

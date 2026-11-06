@@ -2,6 +2,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useId,
   useRef,
   useState,
   useSyncExternalStore,
@@ -28,8 +29,11 @@ import {
 } from "./steer-recall-state.js";
 import { queuedInputDraft } from "./queue-edit-draft.js";
 import { parseSkillDraft } from "./skill-draft.js";
-import { inlineReferenceParts, referenceTitle } from "./reference-draft.js";
-import { ReferenceToken } from "./ReferenceToken.js";
+import { referenceTitle } from "./reference-draft.js";
+import { Markdown } from "./Markdown.js";
+import { steerPreviewColumn } from "./steer-preview-column.js";
+import { InlineReferenceContent } from "./InlineReferenceContent.js";
+import { Icon } from "./icons.js";
 import { localErrorDetail } from "../../local-error-detail.js";
 import type { AttachmentRef } from "../../../../../src/attachment.js";
 import { AttachmentImage, ImagePreview } from "./ImagePresentation.js";
@@ -66,7 +70,41 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
   });
   const [confirm, setConfirm] = useState<string | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(true);
+  const detailsId = useId();
+  const shelfRef = useRef<HTMLElement>(null);
+  // Match the real transcript column, including independent native scrollbars.
+  // Geometry changes never alter admission, recall, or scroll ownership.
+  useLayoutEffect(() => {
+    const shelf = shelfRef.current;
+    const details = shelf?.querySelector<HTMLElement>(".steer-shelf-details");
+    const view = shelf?.closest(".thread-view");
+    const column = view?.querySelector<HTMLElement>(
+      ".virtual-transcript-header, .messages-inner",
+    );
+    if (!shelf || !details || !column || !detailsOpen) return;
+    const measure = () => {
+      const rect = column.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      const geometry = steerPreviewColumn(
+        rect,
+        shelf.getBoundingClientRect().left,
+        details.offsetWidth - details.clientWidth,
+      );
+      for (const [name, value] of Object.entries(geometry)) {
+        const pixel = `${value}px`;
+        if (details.style.getPropertyValue(`--steer-column-${name}`) !== pixel)
+          details.style.setProperty(`--steer-column-${name}`, pixel);
+      }
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(column);
+    observer.observe(shelf);
+    observer.observe(details);
+    return () => observer.disconnect();
+  });
   const [preview, setPreview] = useState<{
     queuedItemId: string;
     clientId: string;
@@ -342,33 +380,68 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
     return null;
   return (
     <section
-      className="pending-steer-panel"
+      ref={shelfRef}
+      className={`pending-steer-panel queue-shelf steer-shelf${detailsOpen ? " is-open" : ""}`}
       aria-label={t("steerPendingLabel")}
     >
       {pending.length > 0 ? (
         <>
-          <div className="pending-steer-heading">
-            <strong>{t("steerPendingCount", { count: pending.length })}</strong>
+          <div className="pending-steer-heading queue-shelf-header">
             <button
               type="button"
+              className="queue-shelf-toggle"
+              aria-controls={detailsId}
+              aria-expanded={detailsOpen}
+              aria-label={t(
+                detailsOpen ? "queueHideMessages" : "queueShowMessages",
+              )}
+              onClick={() => setDetailsOpen(!detailsOpen)}
+            >
+              {held ? (
+                <Icon name="trigger" size={14} />
+              ) : (
+                <span className="mini-spinner" aria-hidden="true" />
+              )}
+              <span role="status" aria-live="polite" aria-atomic="true">
+                {t("steerPendingCount", { count: pending.length })}
+              </span>
+              <Icon
+                name="chevron-down"
+                size={12}
+                className="queue-shelf-chevron"
+              />
+            </button>
+            <button
+              type="button"
+              className="queue-header-action"
+              title={t(
+                pending.length === 1 ? "steerRecallOne" : "steerRecallAll",
+              )}
               onClick={() => void recall()}
               disabled={busy || !supported || props.onRestore === undefined}
             >
+              <Icon name="restore" size={14} />
               {session?.phase === "pending"
                 ? t("steerRecalling")
-                : t(pending.length === 1 ? "steerRecallOne" : "steerRecallAll")}
+                : t(
+                    pending.length === 1
+                      ? "steerRecallOneShort"
+                      : "steerRecallAllShort",
+                  )}
             </button>
           </div>
-          <p>{t(held ? "steerHeldNotice" : "steerWaitingNotice")}</p>
+          {held ? (
+            <p className="steer-shelf-notice">{t("steerHeldNotice")}</p>
+          ) : null}
           {!supported ? (
             <p role="status">{t("steerRecallUnsupported")}</p>
           ) : null}
-          <details
-            open={detailsOpen}
-            onToggle={(event) => setDetailsOpen(event.currentTarget.open)}
+          <div
+            id={detailsId}
+            className="queue-shelf-details steer-shelf-details"
+            hidden={!detailsOpen}
           >
-            <summary>{t("steerPendingDetails")}</summary>
-            <ol>
+            <ol className="queue-shelf-list">
               {pending.map((item) => {
                 const draft = queuedInputDraft(
                   item.input,
@@ -385,71 +458,83 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
                   parsed === null ? (
                     t("steerStructuredInput")
                   ) : (
-                    <span className="pending-steer-text">
-                      {inlineReferenceParts(parsed.text, parsed.references).map(
-                        (part, index) =>
-                          "text" in part ? (
-                            part.text
-                          ) : (
-                            <ReferenceToken
-                              key={index}
-                              reference={part.reference}
-                            />
-                          ),
+                    <div className="pending-steer-text">
+                      {parsed.references.length > 0 ? (
+                        <InlineReferenceContent
+                          text={parsed.text}
+                          references={parsed.references}
+                        />
+                      ) : (
+                        <Markdown text={parsed.text} />
                       )}
-                    </span>
+                    </div>
                   );
                 return (
-                  <li key={item.id}>
-                    {text.length > 240 ? (
-                      <details className="pending-steer-message">
-                        <summary>{text.slice(0, 240)}…</summary>
-                        {body}
-                      </details>
-                    ) : (
-                      body
-                    )}
-                    {draft?.images.length
-                      ? ` · ${t("steerImageCount", { count: draft.images.length })}`
-                      : ""}
-                    {detailsOpen &&
-                    draft?.images.length &&
-                    props.onReadAttachment ? (
-                      <div className="pending-steer-images">
-                        {draft.images.map((image) => (
-                          <AttachmentImage
-                            key={image.id}
-                            attachment={image.attachment}
-                            name={image.name}
-                            onReadAttachment={readPendingImage}
-                            onOpen={(attachment, name, trigger) => {
-                              if (
-                                isCurrentImage(
-                                  attachment,
-                                  item.id,
-                                  item.clientId,
+                  <li
+                    className="queue-row user-row steer-shelf-row"
+                    key={item.id}
+                  >
+                    {detailsOpen && draft?.images.length ? (
+                      <div
+                        className="message-images pending-steer-images"
+                        aria-label={t("steerImageCount", {
+                          count: draft.images.length,
+                        })}
+                      >
+                        {props.onReadAttachment ? (
+                          draft.images.map((image) => (
+                            <AttachmentImage
+                              key={image.id}
+                              attachment={image.attachment}
+                              name={image.name}
+                              onReadAttachment={readPendingImage}
+                              onOpen={(attachment, name, trigger) => {
+                                if (
+                                  isCurrentImage(
+                                    attachment,
+                                    item.id,
+                                    item.clientId,
+                                  )
                                 )
-                              )
-                                setPreview({
-                                  queuedItemId: item.id,
-                                  clientId: item.clientId,
-                                  attachment,
-                                  name,
-                                  trigger,
-                                });
-                            }}
-                            lazy
-                            retryOnError
-                            compact
-                          />
-                        ))}
+                                  setPreview({
+                                    queuedItemId: item.id,
+                                    clientId: item.clientId,
+                                    attachment,
+                                    name,
+                                    trigger,
+                                  });
+                              }}
+                              lazy
+                              retryOnError
+                              compact
+                            />
+                          ))
+                        ) : (
+                          <span className="image-placeholder">
+                            {t("steerImageCount", {
+                              count: draft.images.length,
+                            })}
+                          </span>
+                        )}
+                      </div>
+                    ) : null}
+                    {parsed === null || text.length > 0 ? (
+                      <div className="user-bubble">
+                        {text.length > 240 ? (
+                          <details className="pending-steer-message">
+                            <summary>{text.slice(0, 240)}…</summary>
+                            {body}
+                          </details>
+                        ) : (
+                          body
+                        )}
                       </div>
                     ) : null}
                   </li>
                 );
               })}
             </ol>
-          </details>
+          </div>
         </>
       ) : null}
       {session?.error ? (

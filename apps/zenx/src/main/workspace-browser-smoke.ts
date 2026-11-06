@@ -1,4 +1,3 @@
-import { BrowserInputUnsupportedError } from "./capabilities/browser-targeted-input.js";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
@@ -104,7 +103,7 @@ const fixture = createServer((request, response) => {
     response.end(`<!doctype html><title>Targeted input fixture</title><style>body{margin:0;min-height:2200px}canvas{position:absolute;left:10px;top:100px;background:#adc}form{position:absolute;left:10px;top:200px}#file{position:absolute;left:10px;top:300px}</style>
       <output id="result">No canvas click</output><p id="focus">Focus none</p>
       <canvas width="200" height="80" tabindex="0" onclick="this.focus();document.querySelector('#result').textContent='Canvas clicked '+event.isTrusted"></canvas>
-      <form onsubmit="event.preventDefault();document.querySelector('#result').textContent='Submitted '+document.querySelector('#text').value"><input id="text" aria-label="Targeted text"><button type="button" id="next">Next</button></form><input type="file" id="file"><label for="file" style="position:absolute;left:10px;top:350px"><span>Choose native file</span></label>
+      <form onsubmit="event.preventDefault();document.querySelector('#result').textContent='Submitted '+document.querySelector('#text').value"><input id="text" aria-label="Targeted text"><button type="button" id="next">Next</button></form><input type="file" id="file" onclick="event.preventDefault();document.querySelector('#result').textContent='File clicked '+event.isTrusted"><label for="file" style="position:absolute;left:10px;top:350px" onclick="event.preventDefault();document.querySelector('#result').textContent='File label clicked '+event.isTrusted"><span>Choose native file</span></label>
       <script>document.addEventListener('focusin',()=>document.querySelector('#focus').textContent='Focus '+(document.activeElement.id||document.activeElement.tagName));</script>`);
     return;
   }
@@ -1343,32 +1342,26 @@ async function assertTargetedBackgroundInput(port: number): Promise<void> {
       smokePhase = `targeted-${mode}-after-tab-key`;
       inspected = await browser.inspect("input-session", tab.tabId);
       assert.match(inspected.visibleText, /Focus next/u);
-      await assert.rejects(
-        browser.pointerClick(
-          "input-session",
-          tab.tabId,
-          inspected.observationId,
-          30,
-          310,
-        ),
-        (error: unknown) =>
-          error instanceof BrowserInputUnsupportedError &&
-          error.code === "BROWSER_INPUT_UNSUPPORTED" &&
-          error.reason === "native-surface",
+      // Fixture cancels only the picker default action: exercise real trusted
+      // browser input without opening an OS dialog or changing the sentinel.
+      await browser.pointerClick(
+        "input-session",
+        tab.tabId,
+        inspected.observationId,
+        30,
+        310,
       );
-      await assert.rejects(
-        browser.pointerClick(
-          "input-session",
-          tab.tabId,
-          inspected.observationId,
-          30,
-          360,
-        ),
-        (error: unknown) =>
-          error instanceof BrowserInputUnsupportedError &&
-          error.code === "BROWSER_INPUT_UNSUPPORTED" &&
-          error.reason === "native-surface",
+      inspected = await browser.inspect("input-session", tab.tabId);
+      assert.match(inspected.visibleText, /File clicked true/u);
+      await browser.pointerClick(
+        "input-session",
+        tab.tabId,
+        inspected.observationId,
+        30,
+        360,
       );
+      inspected = await browser.inspect("input-session", tab.tabId);
+      assert.match(inspected.visibleText, /File label clicked true/u);
       assert.equal(
         BrowserWindow.getFocusedWindow(),
         sentinel,
@@ -1653,12 +1646,14 @@ async function assertBlankThemePixels(port: number): Promise<void> {
       name: string,
       appearance: "light" | "dark",
       expected: number,
+      occluded = false,
     ) => {
       phase = name;
       const record: Record<string, unknown> = {
         name,
         appearance,
         expected,
+        occluded,
         nativeThemeSource: nativeTheme.themeSource,
         nativeShouldUseDarkColors: nativeTheme.shouldUseDarkColors,
         pagePrefersDark: await view!.webContents.executeJavaScript(
@@ -1675,8 +1670,10 @@ async function assertBlankThemePixels(port: number): Promise<void> {
         tabId: tab.tabId,
         lease,
         appearance,
+        occluded,
         bounds: { x: 0, y: 0, width: 600, height: 400 },
       });
+      assert.equal(view!.getVisible(), !occluded);
       assert.equal(view!.webContents.id, contentsId);
       assert.ok(owner.contentView.children.includes(view!));
       // Use the real product inspection path: it causally requests a fresh
@@ -1688,6 +1685,7 @@ async function assertBlankThemePixels(port: number): Promise<void> {
         tab.tabId,
       );
       assert.equal(inspection.tabId, tab.tabId);
+      assert.equal(view!.getVisible(), !occluded);
       assert.equal(view!.webContents.id, contentsId);
       assert.ok(owner.contentView.children.includes(view!));
       const png = readFileSync(inspection.screenshot.artifactPath);
@@ -1728,6 +1726,11 @@ async function assertBlankThemePixels(port: number): Promise<void> {
     );
     await sample("website-dark", "dark", 80);
     await sample("website-light", "light", 80);
+    // Real native hidden presentation still supports fresh Agent capture and
+    // restores the same hidden mount rather than leaking above a DOM overlay.
+    // These PNGs are page pixels, not a composed-window preview screenshot.
+    await sample("website-occluded", "light", 80, true);
+    await sample("website-restored", "light", 80);
     await browser.navigate("blank-theme-session", tab.tabId, "about:blank");
     await sample("blank-dark-return", "dark", 0);
     passed = true;

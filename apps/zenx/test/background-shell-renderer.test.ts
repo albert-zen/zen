@@ -53,13 +53,19 @@ async function mount(request: (input: any) => Promise<any>) {
       opened.push(target);
     },
   };
-  const render = async (threadId = "source") =>
+  const render = async (
+    threadId = "source",
+    presentation?: "compact" | "information",
+  ) =>
     act(async () =>
       root.render(
         React.createElement(
           ShellTargetNavigationContext.Provider,
           { value: navigation },
-          React.createElement(BackgroundShellStatus, { threadId }),
+          React.createElement(BackgroundShellStatus, {
+            threadId,
+            ...(presentation ? { presentation } : {}),
+          }),
         ),
       ),
     );
@@ -106,23 +112,24 @@ test("live count is independent of ended conversation; disclosure navigates exac
     await act(async () => {
       await new Promise((r) => setTimeout(r, 1100));
     });
-    assert.match(
-      view.dom.window.document.body.textContent!,
-      /No background commands running/,
-    );
-    assert.match(view.dom.window.document.body.textContent!, /Exit code: 0/);
-    assert(calls.length >= 2);
-    assert(calls.every((c) => c.operation === "list"));
-    await view.click(".background-shell-disclosure");
     assert.equal(
       view.dom.window.document.querySelector(".background-shell-status"),
       null,
+      "empty observations disappear automatically",
     );
+    assert.equal(
+      view.dom.window.document.querySelectorAll(".background-shell-list button")
+        .length,
+      0,
+      "an ended command never remains visible as background work",
+    );
+    assert(calls.length >= 2);
+    assert(calls.every((c) => c.operation === "list"));
   } finally {
     await view.close();
   }
 });
-test("read failure invalidates count and exposes original details; Refresh reads only and recovers", async () => {
+test("read failure retains observed work, exposes details and automatically recovers", async () => {
   let failure = false;
   const calls: any[] = [];
   const view = await mount(async (input) => {
@@ -134,7 +141,9 @@ test("read failure invalidates count and exposes original details; Refresh reads
   try {
     await view.render();
     failure = true;
-    await view.click(".background-shell-heading > button:last-child");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+    });
     assert.doesNotMatch(
       view.dom.window.document.body.textContent!,
       /1 background command running/,
@@ -150,7 +159,9 @@ test("read failure invalidates count and exposes original details; Refresh reads
     assert.equal(view.dom.window.document.querySelector("b"), null);
     assert.doesNotMatch(view.dom.window.document.body.textContent!, /Retry/);
     failure = false;
-    await view.click(".background-shell-heading > button:last-child");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+    });
     assert.match(
       view.dom.window.document.body.textContent!,
       /1 background command running/,
@@ -375,6 +386,54 @@ test("older list replies cannot regress a newer exact terminal observation", asy
       /Exit code: 0/,
     );
     assert.equal(view.dom.window.document.querySelector(".shell-stop"), null);
+  } finally {
+    await view.close();
+  }
+});
+
+test("information projection lists only pending commands, never ended history", async () => {
+  let sessions: ShellSessionSummary[] = [
+    session("live"),
+    {
+      ...session("done"),
+      status: "completed",
+      exitCode: 0,
+      lifecycle: {
+        foreground: "exited",
+        stdio: "eof",
+        foreground_exit_code: 0,
+        foreground_signal: null,
+      },
+    },
+  ];
+  const view = await mount(async () => list(sessions));
+  try {
+    await view.render("source", "information");
+    assert.equal(
+      view.dom.window.document.querySelectorAll(".background-shell-list button")
+        .length,
+      1,
+      "the ended command is not part of the live background projection",
+    );
+    sessions = sessions.map((entry) => ({
+      ...entry,
+      status: "completed",
+      exitCode: 0,
+    }));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 1100));
+    });
+    assert.equal(
+      view.dom.window.document.querySelector(".background-shell-status"),
+      null,
+      "empty observations disappear automatically",
+    );
+    assert.equal(
+      view.dom.window.document.querySelectorAll(".background-shell-list button")
+        .length,
+      0,
+      "no stale row survives beside the 'none running' heading",
+    );
   } finally {
     await view.close();
   }

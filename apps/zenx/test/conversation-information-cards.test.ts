@@ -24,9 +24,13 @@ test("information reads bounded current-owner facts and edits the exact trigger 
   Object.assign(dom.window, {
     zenx: {
       plugins: {
-        executeCommand: async (plugin: string, command: string) => {
-          calls.push([plugin, command]);
-          assert.equal(command, "sidebar-facts");
+        executeCommand: async (
+          plugin: string,
+          command: string,
+          input?: unknown,
+        ) => {
+          calls.push([plugin, command, input]);
+          if (command !== "sidebar-facts") return {};
           return {
             triggers: [
               {
@@ -42,6 +46,7 @@ test("information reads bounded current-owner facts and edits the exact trigger 
                 kind: "timer",
                 active: false,
                 label: "Paused check",
+                definitionRevision: 7,
               },
               {
                 id: "foreign",
@@ -102,7 +107,7 @@ test("information reads bounded current-owner facts and edits the exact trigger 
     assert.match(document.body.textContent!, /Daily reviewEnabled/);
     assert.match(document.body.textContent!, /Paused checkPaused/);
     assert.doesNotMatch(document.body.textContent!, /Other private trigger/);
-    assert.match(document.body.textContent!, /No background commands/);
+    assert.doesNotMatch(document.body.textContent!, /No background commands/);
     const edit = document.querySelector<HTMLButtonElement>(
       '[aria-label="Edit · Daily review"]',
     )!;
@@ -111,8 +116,24 @@ test("information reads bounded current-owner facts and edits the exact trigger 
       "/plugins/zenx-triggers/triggers?triggerId=exact%2Fid",
     ]);
     assert.deepEqual(calls.filter(Array.isArray), [
-      ["zenx-triggers", "sidebar-facts"],
+      ["zenx-triggers", "sidebar-facts", undefined],
     ]);
+    const resume = document.querySelector<HTMLButtonElement>(
+      '[aria-label="Enable trigger · Paused check"]',
+    )!;
+    assert.equal(resume.getAttribute("aria-checked"), "false");
+    await act(async () => resume.click());
+    assert.deepEqual(
+      calls.filter((call) => Array.isArray(call) && call[1] === "resume"),
+      [
+        [
+          "zenx-triggers",
+          "resume",
+          { triggerId: "paused", expectedRevision: 7 },
+        ],
+      ],
+      "resume carries the exact definition revision read with these facts",
+    );
   } finally {
     await act(async () => root.unmount());
     dom.window.close();
@@ -276,16 +297,35 @@ test("streaming a long conversation does not clone or redraw the information cat
       /Updated child active/,
     );
     active = false;
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>(
-          '.conversation-information-section > header button[aria-label="Refresh"]',
-        )!
-        .click(),
-    );
+    threads = [
+      ...threads,
+      {
+        ...threads[0]!,
+        threadId: "owner",
+        status: "idle",
+        lastTurnEnd: {
+          id: "completed-change",
+          turnId: "synthetic-turn",
+          position: 1,
+          createdAt: "2026-11-03T00:00:00Z",
+        },
+      } as (typeof threads)[number],
+    ];
+    await render(32);
     assert.match(
       document.querySelector(".information-trigger-list")!.textContent!,
       /Live triggerPaused/,
+      "completed owner Turn refreshes facts without waiting for focus",
+    );
+    active = true;
+    // Returning focus re-reads bounded trigger facts; there is no manual
+    // refresh control in the always-visible card header.
+    await act(async () => {
+      dom.window.dispatchEvent(new dom.window.Event("focus"));
+    });
+    assert.match(
+      document.querySelector(".information-trigger-list")!.textContent!,
+      /Live triggerEnabled/,
     );
     sessions = [
       {
@@ -303,13 +343,9 @@ test("streaming a long conversation does not clone or redraw the information cat
         retained: false,
       },
     ];
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>(
-          ".background-shell-heading > button:last-child",
-        )!
-        .click(),
-    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+    });
     assert.match(
       document.querySelector(".background-shell-list")!.textContent!,
       /synthetic live commandRunning/,
@@ -336,6 +372,324 @@ test("streaming a long conversation does not clone or redraw the information cat
   } finally {
     await act(async () => root.unmount());
     globalThis.structuredClone = clone;
+    dom.window.close();
+  }
+});
+
+test("trigger retry is failure-only and switches fence repeated, failed, and retired-owner intents", async () => {
+  await i18n.changeLanguage("en");
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "https://zenx.local/",
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  let readFails = true,
+    reads = 0;
+  const writes: unknown[] = [];
+  let failWrite!: (error: Error) => void;
+  Object.assign(dom.window, {
+    zenx: {
+      plugins: {
+        executeCommand: async (
+          _plugin: string,
+          command: string,
+          input?: unknown,
+        ) => {
+          if (command === "sidebar-facts") {
+            reads++;
+            if (readFails) throw new Error("Synthetic unavailable facts");
+            return {
+              triggers: [
+                {
+                  id: "active",
+                  threadId: "owner",
+                  kind: "timer",
+                  active: true,
+                  label: "Synthetic active",
+                  definitionRevision: 8,
+                },
+                {
+                  id: "legacy",
+                  threadId: "owner",
+                  kind: "timer",
+                  active: false,
+                  label: "Unknown revision",
+                },
+              ],
+            };
+          }
+          writes.push([command, input]);
+          return new Promise((_resolve, reject) => {
+            failWrite = reject;
+          });
+        },
+      },
+    },
+  });
+  const snapshot = {
+    ...workspaceLauncherSnapshot,
+    plugins: workspaceLauncherSnapshot.plugins.map((p) => ({
+      ...p,
+      admissionId: "current",
+    })),
+    commands: [
+      {
+        key: "zenx-triggers:sidebar-facts",
+        pluginId: "zenx-triggers",
+        id: "sidebar-facts",
+        title: "Facts",
+        tool: "zenx_triggers_sidebar_facts",
+      },
+    ],
+  };
+  const root = createRoot(document.getElementById("root")!);
+  const render = (threadId: string) =>
+    act(async () =>
+      root.render(
+        React.createElement(ConversationInformationCards, {
+          threadId,
+          threads: [],
+          snapshot,
+          registry: createPluginUiRegistry(),
+          theme: "light",
+          navigate: () => {},
+          types: ["triggers"],
+          manageMode: true,
+        }),
+      ),
+    );
+  try {
+    await render("owner");
+    const retry = document.querySelector<HTMLButtonElement>("header button")!;
+    assert.equal(retry.textContent, "Retry");
+    readFails = false;
+    await act(async () => retry.click());
+    assert.equal(document.querySelector("header button"), null);
+    assert.equal(
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="Enable trigger · Unknown revision"]',
+      )!.disabled,
+      true,
+    );
+    assert.equal(
+      document
+        .querySelector('[aria-label="Enable trigger · Unknown revision"]')!
+        .getAttribute("aria-disabled"),
+      "true",
+    );
+    const pause = document.querySelector<HTMLButtonElement>(
+      '[aria-label="Pause trigger · Synthetic active"]',
+    )!;
+    const propsKey = Object.keys(pause).find((key) =>
+      key.startsWith("__reactProps$"),
+    )!;
+    const retainedClick = (
+      pause as unknown as Record<string, { onClick(): void }>
+    )[propsKey]!.onClick;
+    await act(async () => {
+      retainedClick();
+      retainedClick();
+    });
+    assert.deepEqual(writes, [["cancel", { triggerId: "active" }]]);
+    assert.equal(pause.getAttribute("aria-disabled"), "true");
+    assert.equal(
+      pause.disabled,
+      false,
+      "busy controls retain native keyboard focus",
+    );
+    const beforeFailureReads = reads;
+    await act(async () => failWrite(new Error("Synthetic revision conflict")));
+    assert.ok(
+      reads > beforeFailureReads,
+      "failure reconciles authoritative facts",
+    );
+    assert.match(
+      document.querySelector('[role="alert"]')!.textContent!,
+      /Synthetic revision conflict/,
+    );
+    assert.equal(
+      pause.getAttribute("aria-checked"),
+      "true",
+      "failure cannot optimistically change Host state",
+    );
+    assert.equal(pause.disabled, false);
+    assert.equal(pause.getAttribute("aria-disabled"), "false");
+    await render("other");
+    assert.equal(
+      document.querySelector('[role="alert"]'),
+      null,
+      "errors belong to the previous owner",
+    );
+    await act(async () => retainedClick());
+    assert.equal(
+      writes.length,
+      1,
+      "retained old-owner callback cannot mutate a trigger",
+    );
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
+
+test("empty facts hide cards while mounted providers automatically reveal new content", async () => {
+  await i18n.changeLanguage("en");
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "https://zenx.local/",
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  let triggers: unknown[] = [];
+  const visibility: boolean[] = [];
+  Object.assign(dom.window, {
+    zenx: {
+      plugins: {
+        executeCommand: async () => ({ triggers }),
+        readHandle: async () => null,
+      },
+    },
+  });
+  const snapshot = {
+    ...workspaceLauncherSnapshot,
+    plugins: workspaceLauncherSnapshot.plugins.map((p) => ({
+      ...p,
+      admissionId: "live",
+    })),
+    commands: [
+      {
+        key: "zenx-triggers:sidebar-facts",
+        pluginId: "zenx-triggers",
+        id: "sidebar-facts",
+        title: "Facts",
+        tool: "zenx_triggers_sidebar_facts",
+      },
+    ],
+  };
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    await act(async () =>
+      root.render(
+        React.createElement(ConversationInformationCards, {
+          threadId: "owner",
+          threads: [],
+          snapshot,
+          registry: createPluginUiRegistry(),
+          theme: "light",
+          navigate() {},
+          types: ["triggers"],
+          onVisibilityChange: (value) => visibility.push(value),
+        }),
+      ),
+    );
+    assert.equal(visibility.at(-1), false);
+    assert.equal(
+      document.querySelector(".conversation-information-section"),
+      null,
+    );
+    triggers = [
+      {
+        id: "new",
+        threadId: "owner",
+        kind: "timer",
+        active: true,
+        label: "Automatically appeared",
+      },
+    ];
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5100));
+    });
+    assert.equal(visibility.at(-1), true);
+    assert.match(document.body.textContent!, /Automatically appeared/);
+    assert.equal(
+      document
+        .querySelector(".information-trigger-list strong")!
+        .getAttribute("title"),
+      "Automatically appeared",
+    );
+    assert.equal(
+      document.querySelector(".information-trigger-list small")!.className,
+      "sr-only",
+    );
+    triggers = [];
+    await act(async () => {
+      dom.window.dispatchEvent(new dom.window.Event("focus"));
+    });
+    assert.equal(visibility.at(-1), false);
+    assert.equal(
+      document.querySelector(".conversation-information-section"),
+      null,
+    );
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
+
+test("lineage visibility follows the provider's loaded descendants, not only global summaries", async () => {
+  await i18n.changeLanguage("en");
+  const { registerSubagentsUi } =
+    await import("../src/renderer/src/subagents-ui.js");
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "https://zenx.local/",
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  let loaded: unknown[] = [];
+  const visibility: boolean[] = [];
+  Object.assign(dom.window, {
+    zenx: {
+      plugins: {
+        executeCommand: async (_plugin: string, command: string) =>
+          command === "list" ? { threads: loaded } : {},
+        readHandle: async () => null,
+      },
+    },
+  });
+  const registry = createPluginUiRegistry();
+  registerSubagentsUi(registry);
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    await act(async () =>
+      root.render(
+        React.createElement(ConversationInformationCards, {
+          threadId: "owner",
+          threads: [],
+          snapshot: workspaceLauncherSnapshot,
+          registry,
+          theme: "light",
+          navigate() {},
+          types: ["lineage"],
+          onVisibilityChange: (value) => visibility.push(value),
+        }),
+      ),
+    );
+    assert.equal(visibility.at(-1), false);
+    assert.equal(document.querySelector(".subagents-panel"), null);
+    loaded = [
+      {
+        threadId: "provider-child",
+        parentThreadId: "owner",
+        name: "Provider-only child",
+        status: "idle",
+        archived: false,
+      },
+    ];
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5100));
+    });
+    assert.equal(visibility.at(-1), true);
+    assert.match(document.body.textContent!, /Provider-only child/);
+  } finally {
+    await act(async () => root.unmount());
     dom.window.close();
   }
 });

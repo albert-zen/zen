@@ -116,6 +116,7 @@ declare global {
           tabId?: string;
           lease: string;
           appearance?: "light" | "dark";
+          occluded?: boolean;
           bounds?: { x: number; y: number; width: number; height: number };
         }): Promise<void>;
         onChanged(
@@ -208,7 +209,12 @@ declare global {
           options?: ThreadSummaryListOptions,
         ): Promise<NativeThreadSummary[]>;
       };
+      appShot: import("../../app-shot.js").AppShotApi;
       imageAttachments: {
+        abandon(ids: readonly string[]): Promise<void>;
+        inventory(): Promise<
+          import("../../main/draft-attachments.js").DraftAttachmentInventory
+        >;
         readLocal(
           source: string,
           cwd?: string,

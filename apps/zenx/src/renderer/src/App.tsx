@@ -1,3 +1,4 @@
+import { withAppShotContext } from "./app-shot-draft.js";
 import { UserQuestionCards } from "./UserQuestionCards.js";
 import { createUserQuestionStore } from "./user-question-state.js";
 import { useCommittedCallback } from "./use-committed-callback.js";
@@ -110,6 +111,11 @@ import type {
   ApprovalDecision,
 } from "../../main/app-server-manager.js";
 import type { ZenXThreadAttachmentProjection } from "../../main/image-attachments.js";
+import {
+  abandonClosedComposerImages,
+  abandonUnusedComposerImage,
+  abandonDraftImage,
+} from "./draft-image-lifecycle.js";
 import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
 import type {
   ZenXProjectProjectionEntry,
@@ -490,6 +496,34 @@ export function updateThreadProjectionCache(
   return next;
 }
 
+/** Drafts live separately; only reconstructable, inactive history is disposable. */
+export function trimThreadProjectionCache(
+  cache: Map<string, ThreadProjectionCacheEntry>,
+  selectedThreadId: string | null,
+  composers: Readonly<Record<string, ComposerState>>,
+): void {
+  if (selectedThreadId !== null) {
+    const selected = cache.get(selectedThreadId);
+    if (selected !== undefined) {
+      cache.delete(selectedThreadId);
+      cache.set(selectedThreadId, selected);
+    }
+  }
+  const inactive = [...cache].filter(([threadId, entry]) => {
+    const composer = composers[threadId];
+    return (
+      threadId !== selectedThreadId &&
+      entry.thread.status.type !== "active" &&
+      !entry.thread.turns.some((turn) => turn.status === "inProgress") &&
+      !entry.thread.queuedMessages?.length &&
+      composer?.submission == null &&
+      !composer?.pendingSends?.length &&
+      composer?.compactionRequest === undefined
+    );
+  });
+  for (const [threadId] of inactive.slice(0, -4)) cache.delete(threadId);
+}
+
 export function AppConversationProviders({
   models,
   modelCatalogError,
@@ -629,6 +663,7 @@ function AppContent() {
       () => refreshSideChatDrafts((revision) => revision + 1),
       () => crypto.randomUUID(),
       () => i18n.t("panels:sideChatCreationUnconfirmed"),
+      abandonClosedComposerImages,
     ),
   ).current;
 
@@ -914,6 +949,15 @@ function AppContent() {
   const [composerStates, setComposerStates] = useState<
     Record<string, ComposerState>
   >({});
+  const trimThreadHistoryCache = () =>
+    trimThreadProjectionCache(
+      threadProjectionCacheRef.current,
+      selectedThreadIdRef.current,
+      composerStatesRef.current,
+    );
+  useEffect(() => {
+    trimThreadHistoryCache();
+  }, [selectedThreadId, threadDetail, composerStates]);
   const [threadAttachments, setThreadAttachments] =
     useState<ZenXThreadAttachmentProjection>({});
   const [threadUsage, setThreadUsage] = useState<
@@ -1341,9 +1385,14 @@ function AppContent() {
     setThreadError(null);
     void loadComposerCatalog();
     try {
-      const result = await window.zenx.protocol.request("zen/thread/resume", {
-        threadId,
-      });
+      const result = await window.zenx.protocol.request(
+        debugMode || (preserveNavigation && debugThreadId === threadId)
+          ? "zen/thread/resume"
+          : "zen/thread/resume-window",
+        {
+          threadId,
+        },
+      );
       if (selectionEpoch.current !== epoch) {
         if (propagateFailure)
           throw new Error(i18n.t("shell:importOpenSuperseded"));
@@ -1844,6 +1893,7 @@ function AppContent() {
               .threadId,
           );
         }
+        trimThreadHistoryCache();
       },
     );
     const disposeApprovals = window.zenx.protocol.onApprovalRequest((event) => {
@@ -2050,6 +2100,43 @@ function AppContent() {
   const selectedRoom = roomConversations.rooms.find(
     (room) => room.id === selectedRoomId,
   );
+  const informationOwnerKey = selectedRoomId
+    ? `room:${selectedRoomId}`
+    : selectedThreadId
+      ? `thread:${selectedThreadId}`
+      : "";
+  const [informationReveal, setInformationReveal] = useState<{
+    key: string;
+    token: number;
+  }>({ key: "", token: 0 });
+
+  // Keep foreground attention subscribed while its panel is hidden. The initial
+  // read establishes a baseline; navigation itself does not reopen old questions.
+  useEffect(() => {
+    if (!selectedThreadId || selectedRoomId || page !== "agent") return;
+    let latestPublishedQuestionId: string | undefined;
+    let loaded = false;
+    const unsubscribe = userQuestionStore.subscribe(() => {
+      const next = userQuestionStore.get(selectedThreadId);
+      if (!next.loaded || next.loading) return;
+      const added =
+        loaded &&
+        next.latestPublishedQuestionId !== undefined &&
+        next.latestPublishedQuestionId !== latestPublishedQuestionId;
+      latestPublishedQuestionId = next.latestPublishedQuestionId;
+      loaded = true;
+      if (added)
+        setInformationReveal((current) => ({
+          key: `thread:${selectedThreadId}`,
+          token: current.token + 1,
+        }));
+    });
+    const unmount = userQuestionStore.mount(selectedThreadId);
+    return () => {
+      unsubscribe();
+      unmount();
+    };
+  }, [selectedThreadId, selectedRoomId, page, userQuestionStore]);
   const [roomHeaderTarget, setRoomHeaderTarget] =
     useState<HTMLDivElement | null>(null);
   const roomPanel = roomQuery.get("panel");
@@ -2318,9 +2405,12 @@ function AppContent() {
     if (threadProjectionCacheRef.current.get(threadId)?.processEpoch === null) {
       // Promote the draft before this read: a failed bootstrap must retry the
       // same Thread, not create another one or send with unowned CAS history.
-      const recovery = await window.zenx.protocol.request("zen/thread/resume", {
-        threadId,
-      });
+      const recovery = await window.zenx.protocol.request(
+        "zen/thread/resume-window",
+        {
+          threadId,
+        },
+      );
       const current = threadProjectionCacheRef.current.get(threadId);
       if (
         current === undefined ||
@@ -2387,8 +2477,9 @@ function AppContent() {
         | import("../../../../../src/item.js").UserInputPart
         | import("../../../../../src/skill-input.js").SkillReference
       )[] = [];
-      if (messageText.trim().length > 0)
-        input.push({ type: "text", text: messageText });
+      const textWithShots = withAppShotContext(messageText, submission.images);
+      if (textWithShots.trim().length > 0)
+        input.push({ type: "text", text: textWithShots });
       for (const skill of skillDraft.skills)
         input.push({ type: "skill", id: skill.id });
       for (const image of submission.images)
@@ -3287,7 +3378,13 @@ function AppContent() {
     if (result.thread.archived)
       throw new Error(i18n.t("shell:sourceThreadArchived"));
     const message = target.itemId
-      ? resolveDeliveredMessage(result.thread.items, target.itemId)
+      ? target.excerpt !== undefined
+        ? result.thread.items.some(
+            (item) => item.id === target.itemId && item.threadId === target.id,
+          )
+          ? { itemId: target.itemId }
+          : "missing"
+        : resolveDeliveredMessage(result.thread.items, target.itemId)
       : undefined;
     if (message === "missing")
       throw new Error(i18n.t("shell:toolMessageMissing"));
@@ -3306,6 +3403,7 @@ function AppContent() {
         threadId: target.id,
         itemId: message.itemId,
         requestId: intent,
+        ...(target.excerpt !== undefined ? { excerpt: target.excerpt } : {}),
       });
   };
 
@@ -3892,31 +3990,34 @@ function AppContent() {
             editComposer(state, text),
           )
         }
-        onImportImages={async (files) => {
-          const images = await window.zenx.imageAttachments.import(
-            await Promise.all(
-              files.map(async (file) => ({
-                name: file.name,
-                mediaType: file.type,
-                bytes: new Uint8Array(await file.arrayBuffer()),
-              })),
+        onImportImages={(files) =>
+          sideChatDrafts.importImages(id, async () =>
+            window.zenx.imageAttachments.import(
+              await Promise.all(
+                files.map(async (file) => ({
+                  name: file.name,
+                  mediaType: file.type,
+                  bytes: new Uint8Array(await file.arrayBuffer()),
+                })),
+              ),
             ),
-          );
-          sideChatDrafts.updateComposer(id, (state) =>
-            addComposerImages(state, images),
-          );
-        }}
-        onPickImages={async () => {
-          const images = await window.zenx.imageAttachments.pick();
-          sideChatDrafts.updateComposer(id, (state) =>
-            addComposerImages(state, images),
-          );
-        }}
-        onRemoveImage={(image) =>
-          sideChatDrafts.updateComposer(id, (state) =>
-            removeComposerImage(state, image),
           )
         }
+        onAddAppShot={(image) => {
+          void sideChatDrafts.importImages(id, async () => [image]);
+        }}
+        onPickImages={() =>
+          sideChatDrafts.importImages(id, () =>
+            window.zenx.imageAttachments.pick(),
+          )
+        }
+        onRemoveImage={(image) => {
+          sideChatDrafts.updateComposer(id, (state) =>
+            removeComposerImage(state, image),
+          );
+          const state = sideChatDrafts.get(id)?.composer;
+          if (state !== undefined) abandonUnusedComposerImage(image, state);
+        }}
         onReadAttachment={async (attachment) =>
           await window.zenx.imageAttachments.read(attachment)
         }
@@ -3965,7 +4066,15 @@ function AppContent() {
             const nativeOwner = current.roomId
               ? { kind: "room" as const, id: current.roomId }
               : current.parentThreadId;
-            updateComposer(child, () => current.composer);
+            // Transfer before sidebar awaits can reveal the child. Later
+            // imports follow this owner, and never overwrite edits made in
+            // the child's Composer while those sidebar writes are pending.
+            if (
+              !sideChatDrafts.transfer(id, (change) =>
+                updateComposer(child, change),
+              )
+            )
+              return;
             const draftTab = `custom:side-chat-draft-${id}`;
             const order = (
               sideChatTabOrdersRef.current[owner] ??
@@ -4007,6 +4116,8 @@ function AppContent() {
                   [owner]: `thread:${child}`,
                 }));
             }
+            // The temporary tab presented the real child during sidebar writes;
+            // ownership was already transferred, so retiring it discards no input.
             sideChatDrafts.close(id);
             void loadThreadSummaries();
           }
@@ -4195,8 +4306,6 @@ function AppContent() {
             toggle: (threadId) => {
               if (page === "agent" && debugThreadId === threadId)
                 setDebugThreadId(null);
-              else if (page === "agent" && selectedThreadId === threadId)
-                setDebugThreadId(threadId);
               else void resumeThread(threadId, false, false, true);
             },
           }}
@@ -4544,6 +4653,19 @@ function AppContent() {
                     releaseNewThreadImageLease(draftId);
                   }
                 }}
+                onAddAppShot={(threadId, image) =>
+                  updateComposer(threadId, (state) =>
+                    addComposerImages(state, [image]),
+                  )
+                }
+                onAddNewThreadAppShot={(image) => {
+                  const id = newThreadDraftRef.current?.id;
+                  if (id)
+                    updateNewThreadComposer(id, (state) =>
+                      addComposerImages(state, [image]),
+                    );
+                  else abandonDraftImage(image.id);
+                }}
                 onPickImages={async (threadId) => {
                   const images = await window.zenx.imageAttachments.pick();
                   updateComposer(threadId, (state) =>
@@ -4563,17 +4685,20 @@ function AppContent() {
                     releaseNewThreadImageLease(draftId);
                   }
                 }}
-                onRemoveImage={(threadId, imageId) =>
-                  updateComposer(threadId, (state) =>
+                onRemoveImage={(threadId, imageId) => {
+                  const next = updateComposer(threadId, (state) =>
                     removeComposerImage(state, imageId),
-                  )
-                }
-                onRemoveNewThreadImage={(imageId) =>
-                  updateNewThreadDraft((current) => ({
+                  );
+                  abandonUnusedComposerImage(imageId, next);
+                }}
+                onRemoveNewThreadImage={(imageId) => {
+                  const next = updateNewThreadDraft((current) => ({
                     ...current,
                     composer: removeComposerImage(current.composer, imageId),
-                  }))
-                }
+                  }));
+                  if (next !== null)
+                    abandonUnusedComposerImage(imageId, next.composer);
+                }}
                 onReadAttachment={readAttachment}
                 onRetryTurn={async (turnId) => {
                   if (
@@ -4653,6 +4778,11 @@ function AppContent() {
                 registry={pluginUiRegistry}
                 resourcePanelWidth={workspacePanelWidth}
                 managedBoard
+                revealSignal={
+                  informationReveal.key === informationOwnerKey
+                    ? informationReveal.token
+                    : 0
+                }
                 contextContent={
                   selectedRoomId || selectedThreadId ? (
                     <EditableInformationPanel
@@ -4693,13 +4823,18 @@ function AppContent() {
                     title: selectedRoom.name,
                   }),
                   contentId: "primary-conversation-content",
+                  selected:
+                    sidebarState.controller.isPrimaryConversationSelected({
+                      kind: "room",
+                      id: selectedRoom.id,
+                    }),
                   onSelect: () => {
                     const owner = {
                       kind: "room" as const,
                       id: selectedRoom.id,
                     };
                     const intent =
-                      sidebarState.controller.beginPresentationIntent(owner);
+                      sidebarState.controller.selectPrimaryConversation(owner);
                     return () =>
                       sidebarState.controller.isPresentationIntentCurrent(
                         owner,
@@ -4835,10 +4970,14 @@ function AppContent() {
                       : i18n.t("shell:currentThread"),
                   }),
                   contentId: "primary-conversation-content",
+                  selected:
+                    sidebarState.controller.isPrimaryConversationSelected(
+                      threadDetail.id,
+                    ),
                   onSelect: () => {
                     const owner = threadDetail.id;
                     const intent =
-                      sidebarState.controller.beginPresentationIntent(owner);
+                      sidebarState.controller.selectPrimaryConversation(owner);
                     return () =>
                       sidebarState.controller.isPresentationIntentCurrent(
                         owner,
@@ -5307,6 +5446,8 @@ function AgentSurface({
   onImportNewThreadImages,
   onPickImages,
   onPickNewThreadImages,
+  onAddAppShot,
+  onAddNewThreadAppShot,
   onReadAttachment,
   onRemoveImage,
   onRemoveNewThreadImage,
@@ -5384,6 +5525,13 @@ function AgentSurface({
   onImportNewThreadImages(files: readonly File[]): Promise<void>;
   onPickImages(threadId: string): Promise<void>;
   onPickNewThreadImages(): Promise<void>;
+  onAddAppShot(
+    threadId: string,
+    image: import("../../main/image-attachments.js").ZenXImageDraft,
+  ): void;
+  onAddNewThreadAppShot(
+    image: import("../../main/image-attachments.js").ZenXImageDraft,
+  ): void;
   onReadAttachment(
     attachment: import("../../../../../src/attachment.js").AttachmentRef,
   ): Promise<Uint8Array>;
@@ -5591,6 +5739,7 @@ function AgentSurface({
               onDraftChange={onNewThreadDraftChange}
               onImportImages={onImportNewThreadImages}
               onPickImages={onPickNewThreadImages}
+              onAddAppShot={onAddNewThreadAppShot}
               onReadAttachment={onReadAttachment}
               onRemoveImage={onRemoveNewThreadImage}
               onInterrupt={async () => undefined}
@@ -5727,6 +5876,7 @@ function AgentSurface({
             onDraftChange={(draft) => onDraftChange(threadDetail.id, draft)}
             onImportImages={(files) => onImportImages(threadDetail.id, files)}
             onPickImages={() => onPickImages(threadDetail.id)}
+            onAddAppShot={(image) => onAddAppShot(threadDetail.id, image)}
             onReadAttachment={onReadAttachment}
             onRemoveImage={(imageId) => onRemoveImage(threadDetail.id, imageId)}
             onRetryTurn={onRetryTurn}
@@ -6344,8 +6494,9 @@ async function composerSubmissionInput(
   submission: ComposerSubmission,
 ): Promise<import("../../protocol-client/index.js").UserInputPart[]> {
   const input: import("../../protocol-client/index.js").UserInputPart[] = [];
-  if (submission.text.length > 0)
-    input.push({ type: "text", text: submission.text });
+  const textWithShots = withAppShotContext(submission.text, submission.images);
+  if (textWithShots.length > 0)
+    input.push({ type: "text", text: textWithShots });
   for (const image of submission.images) {
     input.push({ type: "attachment", attachment: image.attachment });
   }

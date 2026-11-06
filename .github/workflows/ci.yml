@@ -42,11 +42,60 @@ jobs:
       - run: npm ci
       - run: npm run check
 
-  zenx:
-    name: ZenX typecheck, tests, and build
+  zenx-check:
+    name: ZenX aggregate checks
     runs-on: ubuntu-24.04
-    # Complete previews, typechecks, tests and build reached the former 26-minute
-    # budget with zero test failures; keep all coverage and bounded cleanup headroom.
+    # Aggregate gets its own budget, independent of fonts and browser captures.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Record exact checkout provenance
+        timeout-minutes: 1
+        env:
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: node scripts/write-ci-provenance.mjs "${{ runner.temp }}/zenx-${{ github.job }}-provenance.json"
+      - name: Retain exact checkout provenance
+        if: ${{ always() }}
+        timeout-minutes: 2
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-${{ github.job }}-provenance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/zenx-${{ github.job }}-provenance.json
+          if-no-files-found: error
+          retention-days: 14
+      - run: npm ci
+        timeout-minutes: 5
+        id: zenx-dependencies
+      - name: Check ZenX with bounded execution-order evidence
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
+        env:
+          ZENX_TEST_EXECUTION_TRACE_FILE: ${{ runner.temp }}/zenx-test-execution.ndjson
+        timeout-minutes: 20
+        run: npm --workspace apps/zenx run check:observed
+      - name: Retain partial ZenX execution-order evidence
+        if: ${{ always() }}
+        timeout-minutes: 2
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-test-execution-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-test-execution.ndjson
+          if-no-files-found: warn
+          retention-days: 14
+
+  zenx-ui:
+    name: ZenX synthetic UI evidence (${{ matrix.shard }})
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        shard: [overflow, layout, conversation]
+    runs-on: ubuntu-24.04
+    # Preserve every capture; independent processes run on isolated runners.
     timeout-minutes: 32
     steps:
       - uses: actions/checkout@v4
@@ -54,7 +103,23 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Record exact checkout provenance
+        timeout-minutes: 1
+        env:
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: node scripts/write-ci-provenance.mjs "${{ runner.temp }}/zenx-${{ github.job }}-${{ matrix.shard }}-provenance.json"
+      - name: Retain exact checkout provenance
+        if: ${{ always() }}
+        timeout-minutes: 2
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-${{ github.job }}-${{ matrix.shard }}-provenance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/zenx-${{ github.job }}-${{ matrix.shard }}-provenance.json
+          if-no-files-found: error
+          retention-days: 14
       - run: npm ci
+        timeout-minutes: 5
         id: zenx-dependencies
       - name: Test fail-closed CJK prerequisite contracts (synthetic data)
         run: node --test apps/zenx/test/cjk-font-prerequisite.test.mjs
@@ -79,25 +144,42 @@ jobs:
           path: ${{ steps.cjk-package.outputs.deb-path }}
           key: ${{ steps.cjk-package.outputs.cache-key }}
       - name: Capture send preparation feedback (synthetic production components)
-        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
+        if: ${{ matrix.shard == 'conversation' && (!cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success') }}
         timeout-minutes: 3
         run: |
           node apps/zenx/scripts/build-send-preparation-preview.mjs "${{ runner.temp }}/zenx-send-preparation"
           node apps/zenx/scripts/capture-send-preparation-preview.mjs "${{ runner.temp }}/zenx-send-preparation"
       - name: Retain send preparation screenshots and elapsed-time evidence
-        if: ${{ always() }}
+        if: ${{ matrix.shard == 'conversation' && (always()) }}
         uses: actions/upload-artifact@v4
         with:
           name: zenx-send-preparation-${{ github.sha }}
           path: ${{ runner.temp }}/zenx-send-preparation
           if-no-files-found: warn
           retention-days: 14
+      - name: Verify no image preparation card (synthetic production ThreadView)
+        if: ${{ matrix.shard == 'conversation' && (!cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success') }}
+        timeout-minutes: 3
+        run: |
+          node --test apps/zenx/test/image-preparation-preview.test.mjs
+          node apps/zenx/scripts/build-image-preparation-preview.mjs "${{ runner.temp }}/zenx-image-preparation"
+          node apps/zenx/scripts/capture-image-preparation-preview.mjs "${{ runner.temp }}/zenx-image-preparation"
+      - name: Retain image preparation screenshots and provenance even on failure
+        if: ${{ matrix.shard == 'conversation' && (always()) }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-image-preparation-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-image-preparation
+          if-no-files-found: warn
+          retention-days: 14
       - name: Capture titlebar leading-safe-area matrix (synthetic production components)
+        if: ${{ matrix.shard == 'layout' && success() && steps.zenx-fonts.outcome == 'success' }}
+        timeout-minutes: 4
         run: |
           node apps/zenx/scripts/build-titlebar-safe-area-preview.mjs "${{ runner.temp }}/zenx-titlebar-safe-area"
           node apps/zenx/scripts/capture-titlebar-safe-area-preview.mjs "${{ runner.temp }}/zenx-titlebar-safe-area"
       - name: Retain titlebar safe-area matrix and screenshots
-        if: ${{ always() }}
+        if: ${{ matrix.shard == 'layout' && (always()) }}
         uses: actions/upload-artifact@v4
         with:
           name: zenx-titlebar-safe-area-${{ github.sha }}
@@ -105,13 +187,13 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Verify workspace tab overflow on production components
-        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
+        if: ${{ matrix.shard == 'overflow' && (!cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success') }}
         timeout-minutes: 6
         run: |
           node apps/zenx/scripts/build-titlebar-safe-area-preview.mjs "${{ runner.temp }}/zenx-tab-overflow"
           node apps/zenx/scripts/capture-workspace-tab-overflow.mjs "${{ runner.temp }}/zenx-tab-overflow"
       - name: Retain synthetic workspace tab overflow evidence
-        if: ${{ always() }}
+        if: ${{ matrix.shard == 'overflow' && (always()) }}
         uses: actions/upload-artifact@v4
         with:
           name: zenx-tab-overflow-${{ github.sha }}
@@ -119,14 +201,14 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Capture foreground activity renderer (synthetic, not native OS acceptance)
-        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
+        if: ${{ matrix.shard == 'overflow' && (!cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success') }}
         timeout-minutes: 3
         run: |
           mkdir -p "${{ runner.temp }}/zenx-foreground-activity"
           node apps/zenx/scripts/preview-foreground-activity.mjs "${{ runner.temp }}/zenx-foreground-activity/foreground-activity.html" > "${{ runner.temp }}/zenx-foreground-activity/source.json"
           node apps/zenx/scripts/capture-foreground-activity-preview.mjs "${{ runner.temp }}/zenx-foreground-activity"
       - name: Retain foreground activity synthetic evidence
-        if: ${{ always() }}
+        if: ${{ matrix.shard == 'overflow' && (always()) }}
         uses: actions/upload-artifact@v4
         with:
           name: zenx-foreground-activity-${{ github.sha }}
@@ -134,11 +216,13 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Capture compaction capsules (production components, synthetic records)
+        if: ${{ matrix.shard == 'conversation' && success() && steps.zenx-fonts.outcome == 'success' }}
+        timeout-minutes: 4
         run: |
           node apps/zenx/scripts/build-compaction-preview.mjs "${{ runner.temp }}/zenx-compaction"
           node apps/zenx/scripts/capture-compaction-preview.mjs "${{ runner.temp }}/zenx-compaction"
       - name: Retain compaction capsule synthetic evidence
-        if: ${{ always() }}
+        if: ${{ matrix.shard == 'conversation' && (always()) }}
         uses: actions/upload-artifact@v4
         with:
           name: zenx-compaction-${{ github.sha }}
@@ -146,30 +230,66 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Capture reference bubble width diagnostic (production components, synthetic identity)
+        if: ${{ matrix.shard == 'conversation' && success() && steps.zenx-fonts.outcome == 'success' }}
+        timeout-minutes: 4
         run: |
           node apps/zenx/scripts/build-reference-width-preview.mjs "${{ runner.temp }}/zenx-reference-width"
           node apps/zenx/scripts/capture-reference-width-preview.mjs "${{ runner.temp }}/zenx-reference-width"
       - name: Retain reference width measurements and screenshots
-        if: ${{ always() }}
+        if: ${{ matrix.shard == 'conversation' && (always()) }}
         uses: actions/upload-artifact@v4
         with:
           name: zenx-reference-width-${{ github.sha }}
           path: ${{ runner.temp }}/zenx-reference-width
           if-no-files-found: warn
           retention-days: 14
+      - name: Verify pending steer previews against canonical messages
+        if: ${{ matrix.shard == 'conversation' && !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
+        timeout-minutes: 5
+        run: |
+          npx tsc -p apps/zenx/tsconfig.steer-image-preview.json --noEmit
+          node --test apps/zenx/test/steer-image-geometry.test.mjs
+          node apps/zenx/scripts/build-steer-image-preview.mjs "${{ runner.temp }}/zenx-steer-image"
+          node apps/zenx/scripts/capture-steer-image-preview.mjs "${{ runner.temp }}/zenx-steer-image"
+      - name: Retain synthetic steer image evidence
+        if: ${{ matrix.shard == 'conversation' && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-steer-image-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-steer-image
+          if-no-files-found: warn
+          retention-days: 14
       - name: Build and capture approved UI previews
+        if: ${{ matrix.shard == 'conversation' && success() && steps.zenx-fonts.outcome == 'success' }}
+        timeout-minutes: 4
         run: |
           node apps/zenx/scripts/build-approved-ui-preview.mjs "${{ runner.temp }}/zenx-approved-ui-preview"
           ZENX_PREVIEW_DESKTOP_INPUT=1 node apps/zenx/scripts/capture-approved-ui-preview.mjs "${{ runner.temp }}/zenx-approved-ui-preview"
       - name: Retain approved synthetic UI evidence
-        if: ${{ always() }}
+        if: ${{ matrix.shard == 'conversation' && (always()) }}
         uses: actions/upload-artifact@v4
         with:
           name: zenx-approved-ui-${{ github.sha }}
           path: ${{ runner.temp }}/zenx-approved-ui-preview
           if-no-files-found: warn
           retention-days: 14
+      - name: Verify every reasoning item remains visible (synthetic production ThreadView)
+        if: ${{ matrix.shard == 'conversation' && (!cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success') }}
+        timeout-minutes: 3
+        run: |
+          node apps/zenx/scripts/build-thinking-presence-preview.mjs "${{ runner.temp }}/zenx-thinking-presence"
+          node apps/zenx/scripts/capture-thinking-presence-preview.mjs "${{ runner.temp }}/zenx-thinking-presence"
+      - name: Retain synthetic reasoning presence screenshots and provenance
+        if: ${{ matrix.shard == 'conversation' && (always()) }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-thinking-presence-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-thinking-presence
+          if-no-files-found: warn
+          retention-days: 14
       - name: Build and capture synthetic process-style preview
+        if: ${{ matrix.shard == 'layout' && success() && steps.zenx-fonts.outcome == 'success' }}
+        timeout-minutes: 4
         run: |
           node apps/zenx/scripts/build-process-style-preview.mjs "${{ runner.temp }}/zenx-process-style-preview"
           node apps/zenx/scripts/capture-process-style-preview.mjs "${{ runner.temp }}/zenx-process-style-preview"
@@ -177,7 +297,7 @@ jobs:
           cp "${{ runner.temp }}/zenx-process-style-preview/process-style-frame.html" "${{ runner.temp }}/zenx-process-style-preview/transcript/"
           node apps/zenx/scripts/capture-transcript-process-preview.mjs "${{ runner.temp }}/zenx-process-style-preview/transcript"
       - name: Retain synthetic process-style visual evidence
-        if: ${{ always() }}
+        if: ${{ matrix.shard == 'layout' && (always()) }}
         uses: actions/upload-artifact@v4
         with:
           name: zenx-process-style-${{ github.sha }}
@@ -185,13 +305,15 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Build and capture synthetic quote draft and sent states
+        if: ${{ matrix.shard == 'conversation' && success() && steps.zenx-fonts.outcome == 'success' }}
+        timeout-minutes: 4
         run: |
           node --import tsx apps/zenx/scripts/capture-inline-reference-context.mjs "${{ runner.temp }}/zenx-quote-preview/reference-context-v3"
           node apps/zenx/scripts/build-quote-preview.mjs "${{ runner.temp }}/zenx-quote-preview"
           node apps/zenx/scripts/capture-quote-preview.mjs "${{ runner.temp }}/zenx-quote-preview"
           ZENX_PREVIEW_DESKTOP_INPUT=1 node apps/zenx/scripts/capture-turn-selection-preview.mjs "${{ runner.temp }}/zenx-quote-preview"
       - name: Retain synthetic quote visual evidence
-        if: ${{ always() }}
+        if: ${{ matrix.shard == 'conversation' && (always()) }}
         uses: actions/upload-artifact@v4
         with:
           name: zenx-quote-preview-${{ github.sha }}
@@ -199,13 +321,13 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Build and capture What's New actual-component preview
-        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
+        if: ${{ matrix.shard == 'conversation' && (!cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success') }}
         timeout-minutes: 3
         run: |
           node apps/zenx/scripts/build-whats-new-preview.mjs "${{ runner.temp }}/zenx-whats-new-preview"
           node apps/zenx/scripts/capture-whats-new-preview.mjs "${{ runner.temp }}/zenx-whats-new-preview"
       - name: Retain What's New synthetic UI evidence
-        if: ${{ always() }}
+        if: ${{ matrix.shard == 'conversation' && (always()) }}
         uses: actions/upload-artifact@v4
         with:
           name: zenx-whats-new-ui-${{ github.sha }}
@@ -213,14 +335,14 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Build and capture trigger message bubble evidence
-        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
+        if: ${{ matrix.shard == 'conversation' && (!cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success') }}
         timeout-minutes: 3
         run: |
           npx tsc -p apps/zenx/tsconfig.trigger-message-preview.json --noEmit
           node apps/zenx/scripts/build-trigger-message-preview.mjs "${{ runner.temp }}/zenx-trigger-message-preview"
           node apps/zenx/scripts/capture-trigger-message-preview.mjs "${{ runner.temp }}/zenx-trigger-message-preview"
       - name: Retain trigger message synthetic evidence
-        if: ${{ always() }}
+        if: ${{ matrix.shard == 'conversation' && (always()) }}
         uses: actions/upload-artifact@v4
         with:
           name: zenx-trigger-message-ui-${{ github.sha }}
@@ -228,13 +350,13 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Build and capture file sidebar actual-component preview
-        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
+        if: ${{ matrix.shard == 'layout' && (!cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success') }}
         timeout-minutes: 3
         run: |
           node apps/zenx/scripts/build-file-sidebar-preview.mjs "${{ runner.temp }}/zenx-file-sidebar-preview"
           node apps/zenx/scripts/capture-file-sidebar-preview.mjs "${{ runner.temp }}/zenx-file-sidebar-preview"
       - name: Retain file sidebar synthetic UI evidence
-        if: ${{ always() }}
+        if: ${{ matrix.shard == 'layout' && (always()) }}
         uses: actions/upload-artifact@v4
         with:
           name: zenx-file-sidebar-ui-${{ github.sha }}
@@ -242,13 +364,13 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Build and capture thread and Room sidebar state preview
-        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
+        if: ${{ matrix.shard == 'overflow' && (!cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success') }}
         timeout-minutes: 3
         run: |
           node apps/zenx/scripts/build-sidebar-state-preview.mjs "${{ runner.temp }}/zenx-sidebar-state-preview"
           node apps/zenx/scripts/capture-sidebar-state-preview.mjs "${{ runner.temp }}/zenx-sidebar-state-preview"
       - name: Retain sidebar state synthetic UI evidence
-        if: ${{ always() }}
+        if: ${{ matrix.shard == 'overflow' && (always()) }}
         uses: actions/upload-artifact@v4
         with:
           name: zenx-sidebar-state-ui-${{ github.sha }}
@@ -256,13 +378,13 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Capture read-only Settings audit evidence
-        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
+        if: ${{ matrix.shard == 'overflow' && (!cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success') }}
         timeout-minutes: 3
         run: |
           node apps/zenx/scripts/build-settings-audit-preview.mjs "${{ runner.temp }}/zenx-settings-audit"
           node apps/zenx/scripts/capture-settings-audit-preview.mjs "${{ runner.temp }}/zenx-settings-audit"
       - name: Retain Settings audit evidence
-        if: ${{ always() }}
+        if: ${{ matrix.shard == 'overflow' && (always()) }}
         uses: actions/upload-artifact@v4
         with:
           name: zenx-settings-audit-${{ github.sha }}
@@ -270,7 +392,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Capture synthetic trigger management UI
-        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
+        if: ${{ matrix.shard == 'conversation' && (!cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success') }}
         timeout-minutes: 3
         run: |
           git fetch --no-tags origin 98caf2f44ec697bd705909eb970036ce615ca664
@@ -280,26 +402,29 @@ jobs:
           node apps/zenx/scripts/build-trigger-management-preview.mjs "${{ runner.temp }}/zenx-trigger-management/after"
           node apps/zenx/scripts/capture-trigger-management-preview.mjs "${{ runner.temp }}/zenx-trigger-management/after"
       - name: Retain synthetic trigger management UI
-        if: ${{ always() }}
+        if: ${{ matrix.shard == 'conversation' && (always()) }}
         uses: actions/upload-artifact@v4
         with:
           name: zenx-trigger-management-${{ github.sha }}
           path: ${{ runner.temp }}/zenx-trigger-management
           if-no-files-found: warn
           retention-days: 14
-      - name: Check ZenX with bounded execution-order evidence
-        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
+
+  # Preserve the existing check name while requiring BOTH independent lanes.
+  zenx:
+    name: ZenX typecheck, tests, and build
+    needs: [zenx-check, zenx-ui]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require all ZenX coverage
         env:
-          ZENX_TEST_EXECUTION_TRACE_FILE: ${{ runner.temp }}/zenx-test-execution.ndjson
-        run: npm --workspace apps/zenx run check:observed
-      - name: Retain partial ZenX execution-order evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: zenx-test-execution-${{ github.sha }}
-          path: ${{ runner.temp }}/zenx-test-execution.ndjson
-          if-no-files-found: warn
-          retention-days: 14
+          CHECK_RESULT: ${{ needs.zenx-check.result }}
+          UI_RESULT: ${{ needs.zenx-ui.result }}
+        run: |
+          test "$CHECK_RESULT" = success
+          test "$UI_RESULT" = success
 
   zenx-capability-smoke:
     name: ZenX packaged capability smoke
@@ -336,7 +461,7 @@ jobs:
       - name: Verify macOS input construction without desktop input
         env:
           ZENX_COMPUTER_CONSTRUCTION_EVIDENCE: ${{ runner.temp }}/computer-event-construction.json
-        run: node --import tsx --test apps/zenx/test/computer-native-dispatch.test.ts apps/zenx/test/computer-native-construction.test.ts apps/zenx/test/computer-bound-native.test.ts
+        run: node --import tsx --test apps/zenx/test/computer-native-dispatch.test.ts apps/zenx/test/computer-native-construction.test.ts apps/zenx/test/computer-bound-native.test.ts apps/zenx/test/computer-app-keyboard-native.test.ts apps/zenx/test/computer-background-pointer-native.test.ts
       - name: Retain construction-only CoreGraphics metadata
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
@@ -464,7 +589,7 @@ jobs:
         env:
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/zenx-dotnet-candidate
         with:
-          dotnet-version: 10.0.401
+          dotnet-version: 10.0.403
       - name: Validate downstream build and assembly contracts
         run: node --test apps/zenx/test/winapp-downstream-build.test.mjs apps/zenx/test/winapp-downstream-assembly.test.mjs apps/zenx/test/winapp-downstream-symbols.test.mjs
       - name: Build one native provider for this authorized app-build run
@@ -482,6 +607,13 @@ jobs:
           node --import tsx --test --test-name-pattern="publishes a complete|publishing retries|exhausted EPERM|non-EPERM publication|missing source|publish rejects|rollback failure|publish preserves backup|Windows publishes|concurrent packaging" apps/zenx/test/package-zenx-portable.test.mjs
       - name: Validate the same-build Windows smoke guard assembly
         run: node --import tsx --test --test-timeout=120000 apps/zenx/test/windows-smoke-guard-build.test.mjs
+      - name: Verify trusted packaged document boundaries on Windows
+        timeout-minutes: 2
+        run: >-
+          node --import tsx --test --test-timeout=30000
+          apps/zenx/test/imzenx-setup-ipc.test.ts
+          apps/zenx/test/model-request-debug-ipc.test.ts
+          apps/zenx/test/native-information-admission.test.ts
       - name: Validate native fixture readiness dispatch ordering
         run: node --test apps/zenx/test/windows-packaged-uia-readiness.test.mjs apps/zenx/test/windows-packaged-uia-diagnostics.test.mjs
       - name: Package and diagnose Windows smoke publication
@@ -713,6 +845,11 @@ jobs:
           icacls $browserDirectory /grant '*S-1-15-2-1:(OI)(CI)(RX)' '*S-1-15-2-2:(OI)(CI)(RX)' /T /Q
           if ($LASTEXITCODE -ne 0) { throw "Could not grant Chromium sandbox read-execute access" }
           "ZENX_USER_BROWSER_EXECUTABLE=$browserExecutable" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Exercise real extension routing and provider input with a synthetic native port
+        timeout-minutes: 5
+        env:
+          ZENX_CHROME_DEBUGGER_ARTIFACT_DIR: ${{ runner.temp }}/zenx-parallel-input-evidence
+        run: node --import tsx apps/zenx/scripts/smoke-chrome-debugger-children.mjs
       - run: npm --workspace apps/zenx run smoke:windows-user-browser
       - name: Exercise parallel native user typing and inactive Agent tab input
         env:
@@ -786,6 +923,17 @@ jobs:
           name: macos-browser-blank-appearance
           path: ${{ runner.temp }}/zenx-browser-blank-evidence
           if-no-files-found: ignore
+      - name: Verify native Workspace and Electron remote-frame input
+        timeout-minutes: 4
+        run: node apps/zenx/scripts/smoke-electron-frame-providers.mjs "${{ runner.temp }}/zenx-electron-frame-providers"
+      - name: Retain native Electron provider frame evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-electron-provider-frames-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-electron-frame-providers
+          if-no-files-found: warn
+          retention-days: 14
       - name: Prepare a pinned headed Chromium for parallel input
         run: |
           fixture="$RUNNER_TEMP/zenx-browser-fixture"

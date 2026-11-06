@@ -14,6 +14,11 @@ import {
 import { conversationKey, type BoardConversation } from "./board-ui-state.js";
 import { Icon } from "./icons.js";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/controls.js";
+import {
+  consumeInformationReveal,
+  readInformationOpen,
+  rememberInformationOpen,
+} from "./information-panel-memory.js";
 
 /** A separate contribution slot: no resource tab, navigation or execution ownership. */
 export function PluginInformationHost({
@@ -27,6 +32,7 @@ export function PluginInformationHost({
   resourcePanelWidth = 0,
   contextContent,
   managedBoard = false,
+  revealSignal = 0,
 }: {
   snapshot: ZenXPluginSnapshot;
   registry: PluginUiRegistry;
@@ -43,17 +49,44 @@ export function PluginInformationHost({
   contextContent?: React.ReactNode;
   /** The native editable layout already places every built-in Board document. */
   managedBoard?: boolean;
+  /** Foreground question arrival; does not move keyboard focus. */
+  revealSignal?: number;
 }) {
   const { t } = useTranslation("panels");
   const contributions = (snapshot.information ?? []).filter(
     (entry) => !managedBoard || entry.pluginId !== "zenx-board",
   );
   const ownerKey = conversationKey(owner);
-  const [open, setOpen] = useState(false);
+  const [visibility, setVisibility] = useState(() => ({
+    ownerKey,
+    open: readInformationOpen(ownerKey),
+  }));
+  const open =
+    visibility.ownerKey === ownerKey
+      ? visibility.open
+      : readInformationOpen(ownerKey);
+  const setOpen = React.useCallback(
+    (next: boolean | ((current: boolean) => boolean)) => {
+      const value =
+        typeof next === "function" ? next(readInformationOpen(ownerKey)) : next;
+      rememberInformationOpen(ownerKey, value);
+      setVisibility({ ownerKey, open: value });
+    },
+    [ownerKey],
+  );
+  const focusOnOpen = useRef(false);
+  useEffect(() => {
+    if (consumeInformationReveal(ownerKey, revealSignal)) {
+      focusOnOpen.current = false;
+      setOpen(true);
+    }
+  }, [ownerKey, revealSignal, setOpen]);
   const [selected, setSelected] = useState(contributions[0]?.key ?? "");
   const trigger = useRef<HTMLButtonElement>(null);
   const toolbar = useRef<HTMLDivElement>(null);
   const contentId = useId();
+  // Width changes rebuild observers; keep transition history across that rebind.
+  const hasMeasuredLayout = useRef(false);
   const previousResourceOpen = useRef(false);
   const previousPrimaryActive = useRef(false);
   const [layout, setLayout] = useState({
@@ -62,6 +95,7 @@ export function PluginInformationHost({
     top: 12,
     right: 12,
     dock: false,
+    available: true,
   });
   useLayoutEffect(() => {
     const workspace = toolbar.current?.closest(".workspace");
@@ -100,6 +134,8 @@ export function PluginInformationHost({
       );
       const next = {
         headerBottom,
+        available:
+          !resourceOpen || panel?.dataset.expanded !== "true" || primaryActive,
         // Render must not synchronously flush the transcript's dirty layout,
         // including when Radix keeps the information popover closed.
         triggerBottom: trigger.current?.getBoundingClientRect().bottom,
@@ -115,14 +151,21 @@ export function PluginInformationHost({
             !primaryActive
           ),
       };
-      if (resourceOpen && !previousResourceOpen.current) setOpen(false);
       if (
+        hasMeasuredLayout.current &&
+        resourceOpen &&
+        !previousResourceOpen.current
+      )
+        setOpen(false);
+      if (
+        hasMeasuredLayout.current &&
         previousPrimaryActive.current &&
         !primaryActive &&
         resourceOpen &&
         panel?.dataset.expanded === "true"
       )
         setOpen(false);
+      hasMeasuredLayout.current = true;
       previousResourceOpen.current = resourceOpen;
       previousPrimaryActive.current = primaryActive;
       setLayout((current) =>
@@ -159,7 +202,7 @@ export function PluginInformationHost({
       observer?.disconnect();
       presentation?.disconnect();
     };
-  }, [resourcePanelWidth, contributions.length]);
+  }, [resourcePanelWidth, contributions.length, setOpen]);
   useEffect(() => {
     if (!open || !layout.dock) return;
     const escape = (event: KeyboardEvent) => {
@@ -177,16 +220,33 @@ export function PluginInformationHost({
     };
     document.addEventListener("keydown", escape);
     return () => document.removeEventListener("keydown", escape);
-  }, [open, layout.dock, contentId]);
+  }, [open, layout.dock, contentId, setOpen]);
   useEffect(() => {
-    setOpen(false);
-  }, [ownerKey, contributions.length === 0]);
+    if (contributions.length === 0 && !contextContent) setOpen(false);
+  }, [contributions.length, !!contextContent, setOpen]);
   const active =
     contributions.find((item) => item.key === selected) ?? contributions[0];
+  const presentedOpen = open && layout.available;
   if (!active && !contextContent) return null;
   const admissionId = snapshot.plugins.find(
     (plugin) => plugin.id === active?.pluginId,
   )?.admissionId;
+  const closeControl = (
+    <div className="information-dismiss-toolbar">
+      <button
+        type="button"
+        className="quiet-button"
+        aria-label={t("informationClose")}
+        onClick={() => {
+          setOpen(false);
+          trigger.current?.focus({ preventScroll: true });
+        }}
+      >
+        <Icon name="x" size={14} />
+        {t("informationClose")}
+      </button>
+    </div>
+  );
   const surface = (
     <div className="information-content">
       {contextContent}
@@ -229,12 +289,17 @@ export function PluginInformationHost({
     ) : null;
   return (
     <>
-      <div ref={toolbar} className="information-toolbar">
+      <div
+        ref={toolbar}
+        className="information-toolbar"
+        hidden={!layout.available}
+      >
         <Popover
-          open={open && !layout.dock}
-          onOpenChange={(next) =>
-            setOpen((current) => (layout.dock ? !current : next))
-          }
+          open={presentedOpen && !layout.dock}
+          onOpenChange={(next) => {
+            focusOnOpen.current = next;
+            setOpen((current) => (layout.dock ? !current : next));
+          }}
         >
           <PopoverTrigger asChild>
             <button
@@ -243,8 +308,8 @@ export function PluginInformationHost({
               className="icon-button"
               aria-label={t("boardTitle")}
               title={t("boardTitle")}
-              aria-pressed={open}
-              aria-expanded={open}
+              aria-pressed={presentedOpen}
+              aria-expanded={presentedOpen}
               aria-controls={contentId}
             >
               <Icon name="list-detail" />
@@ -253,6 +318,10 @@ export function PluginInformationHost({
           {!layout.dock && (
             <PopoverContent
               id={contentId}
+              onOpenAutoFocus={(event) => {
+                if (!focusOnOpen.current) event.preventDefault();
+                focusOnOpen.current = false;
+              }}
               side="bottom"
               align="end"
               className="information-popover"
@@ -265,13 +334,14 @@ export function PluginInformationHost({
               )}
               aria-label={active?.title ?? t("boardTitle")}
             >
+              {closeControl}
               {tabs}
               {surface}
             </PopoverContent>
           )}
         </Popover>
       </div>
-      {open && layout.dock ? (
+      {presentedOpen && layout.dock ? (
         <aside
           id={contentId}
           className="information-dock"
@@ -282,6 +352,7 @@ export function PluginInformationHost({
             maxHeight: `calc(100% - ${layout.top + 12}px)`,
           }}
         >
+          {closeControl}
           {tabs}
           {surface}
         </aside>

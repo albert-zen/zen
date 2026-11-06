@@ -440,6 +440,7 @@ test("Playwright rejects unbounded or multiply-current page state before reconci
 class FakePlaywrightRunner implements ExternalProviderProcessRunner {
   onCommand?: (command: string, args: readonly string[]) => void;
   crowded = false;
+  extraPages = 0;
   readonly calls: string[][] = [];
   readonly environments: Array<NodeJS.ProcessEnv | undefined> = [];
   url = "https://example.com/";
@@ -561,6 +562,14 @@ class FakePlaywrightRunner implements ExternalProviderProcessRunner {
                   tabKey: this.tabKey,
                   documentKey: this.documentKey,
                 },
+                ...Array.from({ length: this.extraPages }, (_, i) => ({
+                  index: i + 1,
+                  title: `Extra ${i}`,
+                  url: this.url,
+                  current: false,
+                  tabKey: `extra-${i}`,
+                  documentKey: `extra-document-${i}`,
+                })),
                 ...(this.invalidPages
                   ? [
                       {
@@ -585,6 +594,14 @@ class FakePlaywrightRunner implements ExternalProviderProcessRunner {
                   tabKey: this.tabKey,
                   documentKey: this.documentKey,
                 },
+                ...Array.from({ length: this.extraPages }, (_, i) => ({
+                  index: i + 1,
+                  title: `Extra ${i}`,
+                  url: this.url,
+                  current: false,
+                  tabKey: `extra-${i}`,
+                  documentKey: `extra-document-${i}`,
+                })),
                 ...(this.invalidPages
                   ? [
                       {
@@ -1275,5 +1292,23 @@ test("Playwright scroll rejects navigation between document probe and mutation c
   } finally {
     await backend.close();
     runner.page.dom.window.close();
+  }
+});
+
+test("Playwright discovers and opens pages beyond the old eight/session and twenty-four/global quotas", async () => {
+  const runner = new FakePlaywrightRunner();
+  runner.extraPages = 30;
+  const backend = new PlaywrightCliBrowserBackend({
+    executable: "/opt/playwright-cli",
+    runner,
+    cwd: "/tmp/zenx-playwright",
+  });
+  try {
+    await backend.open("many-pages", "https://example.com/");
+    assert.equal((await backend.listTabs("many-pages")).length, 31);
+    await backend.open("many-pages", "https://example.com/next");
+    assert.ok(runner.calls.some((args) => args[2] === "tab-new"));
+  } finally {
+    await backend.close();
   }
 });

@@ -64,6 +64,7 @@ const sources = [
   "scripts/build-ui-polish-visual.mjs",
   "scripts/capture-ui-polish-visual.mjs",
   "scripts/capture-sidechat-visual.mjs",
+  "scripts/capture-tab-discovery-visual.mjs",
   "scripts/preview-browser.mjs",
   "scripts/preview-browser-lifecycle.mjs",
   "src/renderer/src/App.tsx",

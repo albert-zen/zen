@@ -54,8 +54,19 @@ export async function resolveCodeMedia(
     throw new Error("Unsupported media output kind");
   let ref: AttachmentRef;
   const object = record(value);
+  const detail = object?.detail;
+  if (
+    detail !== undefined &&
+    (kind !== "image" || (detail !== "high" && detail !== "original"))
+  )
+    throw new Error(
+      "Image detail must be high or original and is only valid for image output",
+    );
   const candidate =
-    object?.type === "attachment" ? object : record(object?.attachment);
+    object?.type === "attachment" ? { ...object } : record(object?.attachment);
+  // detail is a view request on the image part, not part of its immutable ref.
+  if (object?.type === "attachment" && candidate !== undefined)
+    delete candidate.detail;
   if (candidate !== undefined) {
     ref = candidate as unknown as AttachmentRef;
     validateAttachmentRef(ref);
@@ -87,7 +98,15 @@ export async function resolveCodeMedia(
     requireKind(decoded.mediaType, kind);
     ref = await attachments.importBytes(decoded.bytes, decoded.mediaType);
   }
-  return [{ type: kind, attachment: structuredClone(ref) }];
+  return kind === "image"
+    ? [
+        {
+          type: "image",
+          attachment: structuredClone(ref),
+          ...(detail === undefined ? {} : { detail }),
+        },
+      ]
+    : [{ type: "audio", attachment: structuredClone(ref) }];
 }
 
 /** Request-only projection. Unknown modalities conservatively send textual references. */

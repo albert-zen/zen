@@ -38,6 +38,8 @@ import {
   NATIVE_INITIALIZE_METHOD,
   NATIVE_THREAD_EVENT_METHOD,
   NATIVE_THREAD_RESUME_METHOD,
+  NATIVE_THREAD_RESUME_WINDOW_METHOD,
+  NATIVE_THREAD_HISTORY_METHOD,
   NATIVE_THREAD_READ_METHOD,
   NATIVE_THREAD_ORIGINAL_READ_METHOD,
   NATIVE_THREAD_CREATE_CHILD_METHOD,
@@ -1481,6 +1483,8 @@ export class NativeConnection {
     }
     if (
       message.method !== NATIVE_THREAD_RESUME_METHOD &&
+      message.method !== NATIVE_THREAD_RESUME_WINDOW_METHOD &&
+      message.method !== NATIVE_THREAD_HISTORY_METHOD &&
       message.method !== NATIVE_THREAD_READ_METHOD
     ) {
       send({
@@ -1500,9 +1504,26 @@ export class NativeConnection {
       return;
     }
     const threadId = message.params.threadId;
-    if (message.method === NATIVE_THREAD_READ_METHOD) {
+    if (
+      message.method === NATIVE_THREAD_READ_METHOD ||
+      message.method === NATIVE_THREAD_HISTORY_METHOD
+    ) {
       try {
-        const thread = await this.#projection.read(threadId);
+        const before = message.params.before;
+        const limit = message.params.limit;
+        if (
+          message.method === NATIVE_THREAD_HISTORY_METHOD &&
+          ((before !== undefined && typeof before !== "string") ||
+            (limit !== undefined && typeof limit !== "number"))
+        )
+          throw new Error("Invalid history cursor or limit");
+        const thread =
+          message.method === NATIVE_THREAD_HISTORY_METHOD
+            ? await this.#projection.history(threadId, {
+                ...(before === undefined ? {} : { before: before as string }),
+                ...(limit === undefined ? {} : { limit: limit as number }),
+              })
+            : await this.#projection.read(threadId);
         if (!this.#closed) send({ id: message.id, result: { thread } });
       } catch (error) {
         if (!this.#closed)
@@ -1534,7 +1555,10 @@ export class NativeConnection {
     this.#barriers.set(threadId, buffered);
     this.#subscriptions.add(threadId);
     try {
-      const snapshot = await this.#projection.resume(threadId);
+      const snapshot = await this.#projection.resume(
+        threadId,
+        message.method === NATIVE_THREAD_RESUME_WINDOW_METHOD,
+      );
       if (this.#closed) return;
       if (this.#barriers.get(threadId) !== buffered)
         throw new Error("Thread subscription changed during resume");

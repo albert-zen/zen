@@ -32,7 +32,7 @@ function invocation(overrides: Partial<ToolInvocation> = {}): ToolInvocation {
     ...overrides,
   };
 }
-function fixture() {
+function fixture(paint?: Promise<void>) {
   const snapshots: ForegroundActivitySnapshot[] = [];
   const errors: unknown[] = [];
   const owners: ToolInvocation[] = [];
@@ -41,6 +41,7 @@ function fixture() {
     presenter: {
       update: async (snapshot) => {
         snapshots.push(snapshot);
+        if (snapshot.activities.length > 0) await paint;
       },
       close: () => {
         closed = true;
@@ -258,8 +259,9 @@ test("foreground hook never runs for background, invalid args, or missing consen
   assert.deepEqual(calls, []);
 });
 
-test("indicator cancellation window fences consent revocation and never sends input", async () => {
-  const state = fixture();
+test("indicator painting fences consent revocation and never sends input", async () => {
+  const painted = deferred();
+  const state = fixture(painted.promise);
   let sent = false;
   const backend = {
     foregroundClick: async () => {
@@ -275,12 +277,13 @@ test("indicator cancellation window fences consent revocation and never sends in
   const running = computer.invoke("computer_foreground_click", invocation());
   await tick();
   computer.setForegroundControlAllowed(false);
+  painted.resolve();
   await assert.rejects(running, /foreground_required/);
   assert.equal(sent, false);
   assert.equal(state.activity.snapshot.activities.length, 0);
 });
 
-test("indicator comes before existing notice and actual backend invocation", async () => {
+test("painted indicator precedes backend invocation without an artificial delay", async () => {
   const state = fixture();
   const backend = {
     foregroundClick: async (
@@ -301,12 +304,12 @@ test("indicator comes before existing notice and actual backend invocation", asy
     true,
     state.activity,
   );
-  const started = Date.now();
-  const result = await computer.invoke(
-    "computer_foreground_click",
-    invocation(),
+  const pending = computer.invoke("computer_foreground_click", invocation());
+  assert.equal(
+    await Promise.race([pending.then(() => true), tick().then(() => false)]),
+    true,
   );
-  assert.ok(Date.now() - started >= 900);
+  const result = await pending;
   assert.equal((result as { impact: string }).impact, "foreground_takeover");
   assert.equal(state.activity.snapshot.activities.length, 0);
 });

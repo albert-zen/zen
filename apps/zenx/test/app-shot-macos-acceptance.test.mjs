@@ -1,0 +1,647 @@
+import assert from "node:assert/strict";
+import { readFile, mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { build } from "vite";
+import { test } from "node:test";
+import { runInNewContext } from "node:vm";
+import ts from "typescript";
+import {
+  AcceptanceError,
+  preflight,
+  fixtureIdentity,
+  fixtureSize,
+  labelFor,
+  contentLabelFor,
+  nonceColor,
+  verifyPixels,
+  verifyAccessibility,
+  failedOutcome,
+  initialReceipt,
+  acceptanceExitCode,
+  closeOwnedFixture,
+} from "./fixtures/app-shot-macos-contract.mjs";
+
+const nonce = "0123456789abcdef0123456789abcdef";
+const gate = {
+  platform: "darwin",
+  hosted: true,
+  enabled: true,
+  exact: true,
+  screen: "granted",
+};
+test("acceptance refuses unsupported backend and every ungranted permission before capture", () => {
+  let captures = 0;
+  for (const change of [
+    { platform: "win32" },
+    { hosted: false },
+    { enabled: false },
+    { exact: false },
+    ...["unknown", "denied", "not-determined", "restricted", undefined].map(
+      (screen) => ({ screen }),
+    ),
+  ]) {
+    assert.throws(() => {
+      preflight({ ...gate, ...change });
+      captures++;
+    }, AcceptanceError);
+  }
+  assert.equal(captures, 0);
+  assert.doesNotThrow(() => preflight(gate));
+});
+const owned = {
+  pid: 42,
+  nonce,
+  executable: "/private/owned.app/Contents/MacOS/fixture",
+  bundle: "/private/owned.app",
+};
+const snapshot = {
+  ...owned,
+  windowId: 12,
+  windowTitle: labelFor(nonce),
+  token: "fresh",
+  bounds: { x: 100, y: 100, ...fixtureSize },
+};
+test("fixture ownership requires fresh nonce, child PID, executable, bundle and complete geometry", () => {
+  assert.equal(fixtureIdentity(snapshot, owned, "fresh").windowId, 12);
+  for (const change of [
+    { token: "old" },
+    { nonce: "stale" },
+    { pid: 43 },
+    { executable: "/other" },
+    { bundle: "/other" },
+    { windowId: 0 },
+    { windowTitle: "other" },
+    { bounds: { ...snapshot.bounds, width: 1 } },
+  ]) {
+    assert.throws(
+      () => fixtureIdentity({ ...snapshot, ...change }, owned, "fresh"),
+      AcceptanceError,
+    );
+  }
+});
+function pattern() {
+  const { width, height } = fixtureSize;
+  const bitmap = Buffer.alloc(width * height * 4, 255);
+  for (let index = 0; index < nonce.length; index++) {
+    const [r, g, b] = nonceColor(nonce[index]);
+    for (
+      let y = 24 + Math.floor(index / 8) * 64;
+      y < 72 + Math.floor(index / 8) * 64;
+      y++
+    )
+      for (let x = 72 + (index % 8) * 64; x < 120 + (index % 8) * 64; x++) {
+        const offset = (y * width + x) * 4;
+        bitmap.set([b, g, r, 255], offset);
+      }
+  }
+  return { width, height, bitmap };
+}
+test("actual decoded pixel dimensions and every nonce cell are required", () => {
+  assert.equal(verifyPixels(pattern(), nonce).noncePattern, "verified");
+  assert.throws(
+    () => verifyPixels({ ...pattern(), width: 1 }, nonce),
+    /dimensions/,
+  );
+  const wrong = pattern();
+  wrong.bitmap.fill(255);
+  assert.throws(() => verifyPixels(wrong, nonce), /nonce-pattern/);
+  assert.throws(
+    () => verifyPixels(pattern(), nonce.replace(/^0/, "1")),
+    /nonce-pattern/,
+  );
+});
+test("AX acceptance requires actual nonce label and image-coordinate geometry", () => {
+  const payload = {
+    format: "element-tree",
+    coordinateSpace: "captured-image",
+    imageSize: fixtureSize,
+    root: {
+      name: labelFor(nonce),
+      bounds: { x: 0, y: 0, ...fixtureSize },
+      children: [
+        {
+          name: contentLabelFor(nonce),
+          bounds: { x: 12, y: 284, width: 616, height: 24 },
+          children: [],
+        },
+      ],
+    },
+  };
+  const context = () =>
+    `Accessibility semantic tree from this same window (read-only): ${JSON.stringify(payload)}`;
+  assert.doesNotThrow(() => verifyAccessibility(context(), nonce, fixtureSize));
+  payload.root.children[0].name = "other";
+  assert.throws(
+    () => verifyAccessibility(context(), nonce, fixtureSize),
+    /label/,
+  );
+  // A window title, even repeated in a child, is not body-content evidence.
+  payload.root.children[0].name = labelFor(nonce);
+  assert.throws(
+    () => verifyAccessibility(context(), nonce, fixtureSize),
+    /label/,
+  );
+  payload.root.children[0].name = contentLabelFor(nonce);
+  payload.root.children[0].bounds = null;
+  assert.throws(
+    () => verifyAccessibility(context(), nonce, fixtureSize),
+    /label/,
+  );
+  payload.root.children[0].bounds = { x: 12, y: 284, width: 616, height: 24 };
+  payload.root.bounds.width = 1;
+  assert.throws(
+    () => verifyAccessibility(context(), nonce, fixtureSize),
+    /bounds/,
+  );
+  assert.throws(
+    () => verifyAccessibility("Screenshot only.", nonce, fixtureSize),
+    /tree-missing/,
+  );
+});
+test("fixture stop is requested and cleanup requires successful ChildProcess close", async () => {
+  let requests = 0;
+  let close;
+  const closed = new Promise((resolve) => {
+    close = resolve;
+  });
+  const result = closeOwnedFixture(
+    async () => {
+      requests++;
+    },
+    closed,
+    100,
+  );
+  await Promise.resolve();
+  assert.equal(requests, 1);
+  close({ code: 0, signal: null });
+  assert.equal((await result).status, "passed");
+  await assert.rejects(
+    closeOwnedFixture(
+      async () => {},
+      Promise.resolve({ code: null, signal: "SIGKILL" }),
+    ),
+    /close-failed/,
+  );
+  await assert.rejects(
+    closeOwnedFixture(async () => {}, new Promise(() => {}), 1),
+    /timed-out/,
+  );
+});
+test("blocked, crashed, skipped and unconfirmed branches never mean acceptance", () => {
+  const receipt = initialReceipt();
+  assert.equal(acceptanceExitCode(receipt), 2);
+  assert.equal(receipt.fullNativeAcceptance, false);
+  for (const key of ["pixels", "accessibility", "foreground", "cleanup"])
+    receipt[key] = { status: "passed" };
+  assert.equal(acceptanceExitCode(receipt), 0);
+  receipt.foreground = { status: "blocked" };
+  assert.equal(acceptanceExitCode(receipt), 2);
+  receipt.cleanup = { status: "failed" };
+  assert.equal(acceptanceExitCode(receipt), 1);
+  assert.deepEqual(
+    failedOutcome(new Error("private title and arbitrary stderr")),
+    { status: "failed", reason: "native-operation-failed" },
+  );
+});
+test("real harness preserves production worker/service and never requests grants or input", async () => {
+  const main = await readFile(
+    new URL("./fixtures/app-shot-macos-main.mjs", import.meta.url),
+    "utf8",
+  );
+  const launcher = await readFile(
+    new URL("../scripts/verify-app-shot-macos.mjs", import.meta.url),
+    "utf8",
+  );
+  const swift = await readFile(
+    new URL("./fixtures/app-shot-macos-owned.swift", import.meta.url),
+    "utf8",
+  );
+  assert.notEqual(contentLabelFor(nonce), labelFor(nonce));
+  assert.match(swift, /let contentLabel = "App Shot content/);
+  assert.match(swift, /NSTextField\(labelWithString: contentLabel\)/);
+  assert.match(swift, /label\.setAccessibilityLabel\(contentLabel\)/);
+  assert.match(main, /createElectronAppShotService\(\)/);
+  assert.match(main, /isTrustedAccessibilityClient\(false\)/);
+  assert.match(main, /getMediaAccessStatus\("screen"\)/);
+  assert.match(main, /expectedIdentity: initial/g);
+  assert.match(main, /service\.hasExactWindowSurfaceCapture/);
+  assert.match(
+    launcher,
+    /stageAppShotRuntime\(root, appDirectory, "darwin", process\.arch\)/,
+  );
+  assert.match(launcher, /apps\/zenx\/out\/main\/app-shot-native-worker\.js/);
+  assert.match(launcher, /apps\/zenx\/out\/main\/chunks/);
+  assert.match(launcher, /require\("electron"\)/);
+  assert.match(launcher, /stdio: "ignore"/);
+  assert.match(launcher, /pid: fixture\.pid/);
+  assert.doesNotMatch(
+    main + launcher,
+    /capturePage|askForMediaAccess|tccutil|System Settings|process\.kill\(|fixture\.kill\(/,
+  );
+  assert.doesNotMatch(
+    swift,
+    /CGWindowListCreateImage|CGRequestScreenCaptureAccess|AXIsProcessTrustedWithOptions|NSRunningApplication|CGEvent/,
+  );
+  assert.equal((swift.match(/NSApp\.activate\(/g) ?? []).length, 1);
+  assert.match(swift, /if !foregroundRequested,[\s\S]*request == nonce/);
+  assert.match(swift, /foregroundRequested = true[^\n]*\n\s*NSApp\.activate/);
+  assert.match(launcher, /join\(scratch, "foreground-request"\)/);
+  assert.match(launcher, /"--foreground-request",\s*foregroundRequest/);
+  const foreground = main.slice(main.indexOf('await branch("foreground"'));
+  const gates = [
+    "await foregroundOwnedFixture()",
+    "requireAcceptance(fresh.active",
+    "await readMacActiveWindow()",
+    "sameObservedWindow(initial, active)",
+    "await service.captureActive",
+    "expectedIdentity: initial",
+  ].map((part) => foreground.indexOf(part));
+  assert.ok(
+    gates.every((index, i) => index >= 0 && (i === 0 || index > gates[i - 1])),
+  );
+});
+
+test("owned foreground setup requests once then only observes, without replay after failure", async () => {
+  const source = await readFile(
+    new URL("./fixtures/app-shot-macos-main.mjs", import.meta.url),
+    "utf8",
+  );
+  const parsed = ts.createSourceFile(
+    "acceptance.mjs",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.JS,
+  );
+  const operation = parsed.statements.find(
+    (node) =>
+      ts.isFunctionDeclaration(node) &&
+      node.name?.text === "foregroundOwnedFixture",
+  );
+  assert.ok(
+    Boolean(operation),
+    "Exercise the actual foreground setup operation",
+  );
+  function scenario({
+    failPermission = false,
+    failIdentity = false,
+    failWrite = false,
+    neverActive = false,
+    aborted = false,
+    identityLostAfterRequest = false,
+    abortAfterRequest = false,
+  } = {}) {
+    let clock = 0;
+    let observations = 0;
+    const writes = [];
+    const signal = { aborted };
+    const run = runInNewContext(
+      "let foregroundRequested = false;\n" +
+        operation.getText(parsed) +
+        "\nforegroundOwnedFixture",
+      {
+        checkPermissions: () => {
+          if (failPermission)
+            throw new AcceptanceError("screen-permission-unavailable", true);
+        },
+        observedFixture: async () => {
+          if (failIdentity || (identityLostAfterRequest && writes.length))
+            throw new AcceptanceError("fixture-identity-changed", true);
+          observations++;
+          return { active: !neverActive && observations >= 3 };
+        },
+        signal,
+        requireAcceptance: (condition, code, blocked) => {
+          if (!condition) throw new AcceptanceError(code, blocked);
+        },
+        config: {
+          foregroundRequest: "/owned/private/foreground-request",
+          owned: { nonce },
+        },
+        writeFile: async (path, content, options) => {
+          writes.push({
+            path,
+            content,
+            mode: options.mode,
+            flag: options.flag,
+          });
+          if (failWrite) throw new Error("uncertain request write");
+          if (abortAfterRequest) signal.aborted = true;
+        },
+        Date: { now: () => clock },
+        setTimeout: (callback, duration) => {
+          clock += duration;
+          callback();
+        },
+        AcceptanceError,
+      },
+    );
+    return { run, writes, observations: () => observations };
+  }
+  const ok = scenario();
+  await ok.run();
+  assert.equal(ok.observations(), 3);
+  assert.deepEqual(ok.writes, [
+    {
+      path: "/owned/private/foreground-request",
+      content: nonce,
+      mode: 0o600,
+      flag: "wx",
+    },
+  ]);
+  await assert.rejects(ok.run(), /already-requested/);
+  assert.equal(ok.writes.length, 1);
+  for (const options of [
+    { failPermission: true },
+    { failIdentity: true },
+    { aborted: true },
+  ]) {
+    const denied = scenario(options);
+    await assert.rejects(denied.run());
+    assert.equal(denied.writes.length, 0);
+  }
+  for (const options of [{ failWrite: true }, { neverActive: true }]) {
+    const failed = scenario(options);
+    await assert.rejects(failed.run());
+    await assert.rejects(failed.run(), /already-requested/);
+    assert.equal(failed.writes.length, 1);
+    assert.ok(
+      failed.observations() <= 82,
+      "Only bounded read-only settlement follows the request",
+    );
+  }
+  for (const options of [
+    { identityLostAfterRequest: true },
+    { abortAfterRequest: true },
+  ]) {
+    const retired = scenario(options);
+    await assert.rejects(retired.run());
+    assert.equal(retired.writes.length, 1);
+  }
+  const overlapping = scenario();
+  const outcomes = await Promise.allSettled([
+    overlapping.run(),
+    overlapping.run(),
+  ]);
+  assert.equal(overlapping.writes.length, 1);
+  assert.equal(
+    outcomes.filter((outcome) => outcome.status === "fulfilled").length,
+    1,
+  );
+});
+
+test("hosted acceptance admits same-repository PRs or explicit manual runs only", async () => {
+  const workflow = await readFile(
+    new URL("../../../.github/workflows/app-shot.yml", import.meta.url),
+    "utf8",
+  );
+  const job = workflow
+    .split("  macos-owned-acceptance:\n")[1]
+    ?.split("\n  formatting:")[0];
+  assert.ok(typeof job === "string", "Owned acceptance job must exist");
+  assert.match(
+    job,
+    /if: \$\{\{ \(github\.event_name == 'pull_request' && github\.event\.pull_request\.head\.repo\.full_name == github\.repository\) \|\| \(github\.event_name == 'workflow_dispatch' && inputs\.macos_owned_acceptance\) \}\}/,
+  );
+  assert.match(workflow, /permissions:\n  contents: read\n/);
+  assert.doesNotMatch(workflow, /pull_request_target|secrets\./);
+  assert.match(job, /runs-on: macos-latest/);
+  assert.match(job, /ZENX_APP_SHOT_MACOS_ACCEPTANCE: "1"/);
+  assert.match(job, /\/receipt\.json\n/);
+  assert.doesNotMatch(job, /continue-on-error|if:.*success\(\)/);
+});
+
+test(
+  "Electron ESM evaluation finishes before the acceptance task waits for ready",
+  { timeout: 1000 },
+  async () => {
+    const source = await readFile(
+      new URL("./fixtures/app-shot-macos-main.mjs", import.meta.url),
+      "utf8",
+    );
+    const parsed = ts.createSourceFile(
+      "acceptance.mjs",
+      source,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.JS,
+    );
+    const topLevelAwaits = [];
+    function visit(node) {
+      if (ts.isFunctionLike(node)) return;
+      if (
+        ts.isAwaitExpression(node) ||
+        (ts.isForOfStatement(node) && node.awaitModifier)
+      )
+        topLevelAwaits.push(node.pos);
+      ts.forEachChild(node, visit);
+    }
+    visit(parsed);
+    assert.deepEqual(
+      topLevelAwaits,
+      [],
+      "Main-module evaluation must not wait for Electron ready",
+    );
+    const run = parsed.statements.find(
+      (node) =>
+        ts.isFunctionDeclaration(node) && node.name?.text === "runAcceptance",
+    );
+    const launch = parsed.statements.find(
+      (node) =>
+        ts.isExpressionStatement(node) &&
+        node.getText(parsed).startsWith("void runAcceptance()"),
+    );
+    assert.ok(
+      Boolean(run && launch),
+      "Ready-dependent work must be launched without awaiting module evaluation",
+    );
+    let ready;
+    let exited;
+    const readiness = new Promise((resolve) => {
+      ready = resolve;
+    });
+    const completion = new Promise((resolve) => {
+      exited = resolve;
+    });
+    const calls = [];
+    const result = runInNewContext(
+      run.getText(parsed) + "\n" + launch.getText(parsed),
+      {
+        app: {
+          whenReady: () => {
+            calls.push("waiting");
+            return readiness;
+          },
+          getAppPath: () => "/owned",
+          exit: (code) => {
+            calls.push("exit");
+            exited(code);
+          },
+        },
+        process: { versions: { electron: "43.2.0" } },
+        config: {
+          appDirectory: "/owned",
+          userData: "/private",
+          result: "/private/result",
+        },
+        receipt: initialReceipt(),
+        requireAcceptance: () => {
+          throw new Error("synthetic preflight stop");
+        },
+        failedOutcome: () => ({
+          status: "blocked",
+          reason: "synthetic-preflight",
+        }),
+        mkdir: async () => {},
+        writeFile: async () => {
+          calls.push("receipt");
+        },
+      },
+    );
+    assert.equal(result, undefined);
+    assert.deepEqual(calls, ["waiting"]);
+    ready(); // Electron can emit ready only after module evaluation returned.
+    assert.equal(await completion, 0);
+    assert.deepEqual(calls, ["waiting", "receipt", "exit"]);
+  },
+);
+
+test("private session directory exists before Electron path overrides", async () => {
+  const source = await readFile(
+    new URL("./fixtures/app-shot-macos-main.mjs", import.meta.url),
+    "utf8",
+  );
+  const parsed = ts.createSourceFile(
+    "acceptance.mjs",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.JS,
+  );
+  const end = parsed.statements.findIndex(
+    (node) =>
+      ts.isVariableStatement(node) &&
+      node.declarationList.declarations.some(
+        (d) => ts.isIdentifier(d.name) && d.name.text === "receipt",
+      ),
+  );
+  assert.ok(
+    end > 0,
+    "Synchronous private-path setup must precede the acceptance task",
+  );
+  const setup = parsed.statements
+    .slice(0, end)
+    .filter((node) => !ts.isImportDeclaration(node))
+    .map((node) => node.getText(parsed))
+    .join("\n");
+  const directories = new Set(["/private/user"]);
+  const calls = [];
+  runInNewContext(setup, {
+    readFileSync: () => JSON.stringify({ userData: "/private/user" }),
+    process: { argv: ["electron", "package", "private-config"] },
+    join: (...parts) => parts.join("/"),
+    mkdirSync: (path, options) => {
+      assert.equal(options.recursive, true);
+      assert.equal(options.mode, 0o700);
+      directories.add(path);
+      calls.push("mkdir");
+    },
+    app: {
+      setPath: (name, path) => {
+        assert.ok(
+          directories.has(path),
+          "Electron setPath requires an existing directory",
+        );
+        calls.push(name);
+      },
+      disableHardwareAcceleration: () => {},
+    },
+  });
+  assert.deepEqual(calls, ["mkdir", "userData", "sessionData"]);
+});
+
+test(
+  "the actual acceptance bundle loads without eager Linux or native dependencies",
+  { timeout: 15000 },
+  async () => {
+    const root = fileURLToPath(new URL("../../../", import.meta.url));
+    const launcher = await readFile(
+      new URL("../scripts/verify-app-shot-macos.mjs", import.meta.url),
+      "utf8",
+    );
+    const parsed = ts.createSourceFile(
+      "launcher.mjs",
+      launcher,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.JS,
+    );
+    let buildArgument;
+    function visit(node) {
+      if (
+        ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === "build"
+      )
+        buildArgument = node.arguments[0];
+      ts.forEachChild(node, visit);
+    }
+    visit(parsed);
+    assert.ok(
+      Boolean(buildArgument),
+      "Use the launcher's real production-service build configuration",
+    );
+    const scratch = await mkdtemp(join(tmpdir(), "app-shot-module-test-"));
+    try {
+      const appDirectory = join(scratch, "app");
+      const options = JSON.parse(
+        JSON.stringify(
+          runInNewContext("(" + buildArgument.getText(parsed) + ")", {
+            root,
+            appDirectory,
+            join,
+          }),
+        ),
+      );
+      assert.notEqual(
+        options.build.rollupOptions.output.inlineDynamicImports,
+        true,
+      );
+      await build(options);
+      // This is only a module-loading test. Readiness never resolves, and there
+      // are no native dependencies or capture-capable Electron APIs in this package.
+      const stub = join(appDirectory, "node_modules/electron");
+      await mkdir(stub, { recursive: true });
+      await writeFile(
+        join(stub, "package.json"),
+        JSON.stringify({ type: "module", exports: "./index.mjs" }),
+      );
+      await writeFile(
+        join(stub, "index.mjs"),
+        "export const app = { setPath() {}, disableHardwareAcceleration() {}, whenReady() { return new Promise(() => {}); } }; export const nativeImage = {}; export const systemPreferences = {};",
+      );
+      const config = join(scratch, "config.json");
+      await writeFile(
+        config,
+        JSON.stringify({ userData: join(scratch, "private"), appDirectory }),
+      );
+      const driver = join(appDirectory, "load.mjs");
+      await writeFile(
+        driver,
+        'process.argv[2] = process.argv[3]; await import("./acceptance.mjs"); console.log("MODULE_LOADED_WITHOUT_CAPTURE");',
+      );
+      const result = await promisify(execFile)(
+        process.execPath,
+        [driver, "unused", config],
+        { timeout: 3000, maxBuffer: 4096 },
+      );
+      assert.match(result.stdout, /MODULE_LOADED_WITHOUT_CAPTURE/);
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  },
+);

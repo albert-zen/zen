@@ -1,3 +1,4 @@
+import { shouldRequestOpenAiReasoningSummary } from "./reasoning-summary.js";
 import {
   responsesToolPresentation,
   supportsHostedToolSearch,
@@ -252,7 +253,15 @@ export class OpenAiResponsesModel implements ModelAdapter {
       include: ["reasoning.encrypted_content"],
       ...(request.reasoningEffort === null
         ? {}
-        : { reasoning: { effort: request.reasoningEffort } }),
+        : {
+            reasoning: {
+              effort: request.reasoningEffort,
+              ...(request.reasoningEffort !== "none" &&
+              shouldRequestOpenAiReasoningSummary(this.#endpoint)
+                ? { summary: "auto" }
+                : {}),
+            },
+          }),
       ...(tools.length === 0
         ? {}
         : { tools, tool_choice: "auto", parallel_tool_calls: true }),
@@ -356,7 +365,7 @@ export class OpenAiResponsesModel implements ModelAdapter {
         return {
           type: "input_image",
           image_url: `data:${part.attachment.mediaType};base64,${Buffer.from(bytes).toString("base64")}`,
-          detail: "auto",
+          detail: part.detail ?? "auto",
         };
       }),
     );

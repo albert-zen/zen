@@ -255,14 +255,14 @@ async function typeOnce(selector, value, label) {
     throw error;
   }
 }
-async function selectThread(selector, label) {
+async function selectThread(selector, label, expectedInformationOpen = false) {
   await click(selector, label);
   await until(
     () =>
       evaluate(
-        `${query(selector)}?.getAttribute('aria-current')==='page' && document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded')==='false'`,
+        `${query(selector)}?.getAttribute('aria-current')==='page' && document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded')===${JSON.stringify(String(expectedInformationOpen))}`,
       ),
-    label + " navigation and owner panel reset settled",
+    label + " navigation and remembered owner panel settled",
   );
 }
 async function openInformation() {
@@ -458,7 +458,7 @@ async function runOrigin() {
     await until(
       () =>
         evaluate(
-          `document.querySelector('.pending-steer-heading strong')?.textContent.includes('2')`,
+          `document.querySelector('.pending-steer-heading [role="status"]')?.textContent.includes('2')`,
         ),
       "two real recallable steer inputs",
     );
@@ -473,7 +473,7 @@ async function runOrigin() {
         }),
       };
     await click(
-      ".pending-steer-heading button:not(:disabled)",
+      ".pending-steer-heading .queue-header-action:not(:disabled)",
       "Native one whole-batch Recall",
     );
     await until(
@@ -513,7 +513,7 @@ async function runOrigin() {
         (await composerSnapshot()).text,
         "Synthetic unrelated navigation draft.",
       );
-      await selectThread(row, "Return to recoverable original owner");
+      await selectThread(row, "Return to recoverable original owner", true);
       await until(
         () => evaluate(`Boolean(document.querySelector('.steer-recovery'))`),
         "whole receipt remains recoverable",
@@ -772,7 +772,7 @@ async function run() {
     await evaluate(`${query(card(unknown) + " textarea")}.value`),
     "",
   );
-  await selectThread(mainRow, "Return to original question drafts");
+  await selectThread(mainRow, "Return to original question drafts", true);
   await openInformation();
   await cardVisible(card(note));
   assert.equal(
@@ -877,7 +877,11 @@ async function run() {
     "Synthetic independent main Composer draft.",
   );
 
-  await selectThread(otherRow, "Select synthetic unknown-outcome conversation");
+  await selectThread(
+    otherRow,
+    "Select synthetic unknown-outcome conversation",
+    true,
+  );
   await openInformation();
   await cardVisible(card(unknown));
   await typeOnce(

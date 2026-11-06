@@ -658,6 +658,12 @@ function compileCanonicalModelMessages(
         break;
       case "reasoning": {
         if (item.incomplete === true) break;
+        if (
+          item.contentVisibility === "public" &&
+          item.reasoningContent === "" &&
+          (item.summary === undefined || item.summary === "")
+        )
+          break;
         const producingSelection = turnSelections.get(item.turnId);
         if (
           targetSelection !== undefined &&
@@ -826,7 +832,7 @@ function withoutNestedToolLifecycle(
     for (const part of item.modelContent ?? []) {
       if (part.type !== "text")
         explicitMedia.add(
-          `${item.turnId}\0${part.type}\0${part.attachment.sha256}`,
+          `${item.turnId}\0${part.type}\0${part.type === "image" ? (part.detail ?? "high") : ""}\0${part.attachment.sha256}`,
         );
     }
   }
@@ -869,7 +875,7 @@ function withoutNestedToolLifecycle(
         (part) =>
           part.type === "text" ||
           !explicitMedia.has(
-            `${item.turnId}\0${part.type}\0${part.attachment.sha256}`,
+            `${item.turnId}\0${part.type}\0${part.type === "image" ? (part.detail ?? "high") : ""}\0${part.attachment.sha256}`,
           ),
       ),
     ]);

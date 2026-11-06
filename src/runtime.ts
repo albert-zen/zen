@@ -116,6 +116,7 @@ export interface RuntimeConfiguration {
   approvalPolicy: ApprovalPolicy;
   /** null preserves the existing Unknown capability semantics. */
   inputModalities?: readonly string[] | null;
+  supportsImageDetailOriginal?: boolean | null;
   contextWindow?: number | null;
   /** Present only when Host admission enables agent-authored context resets. */
   agenticContextCompaction?: {
@@ -1320,7 +1321,8 @@ export class AgentRuntime {
       if (failure !== undefined) {
         for (const [reasoningId, partialId] of reasoningItems) {
           const partial = reasoningDeltas.get(reasoningId)!;
-          if (!partial.content && !partial.summary) continue;
+          // Even a text-free provider lifecycle is an observed interrupted
+          // item. The incomplete trace remains displayable but never replays.
           const snapshot: ReasoningItem = {
             id: partialId,
             threadId: options.thread.id,
@@ -1768,6 +1770,12 @@ export class AgentRuntime {
       if (traceOutput !== undefined)
         this.#toolTraces.set(toolCall.id, traceOutput);
       prepared = this.#tools.prepare({
+        ...(options.configuration.supportsImageDetailOriginal === undefined
+          ? {}
+          : {
+              supportsImageDetailOriginal:
+                options.configuration.supportsImageDetailOriginal,
+            }),
         modelReferences: modelReferenceHistory(options.thread),
         ...(traceOutput === undefined ? {} : { traceOutput }),
         callId: toolCall.callId,

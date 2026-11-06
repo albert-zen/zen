@@ -38,6 +38,15 @@
   --color-context-plugins: #d8a255;
   --color-context-conversation: #55b5a7;
 
+  /* Image captions keep their contrast over arbitrary pixels in every theme. */
+  --color-overlay-image-caption: rgb(0 0 0 / 78%);
+  --color-text-on-image-caption: #ffffff;
+
+  /* Find keeps a stable, readable match pair across appearances. */
+  --color-surface-find-match: #e8b73c;
+  --color-text-on-find-match: #161616;
+  --color-shadow-find: rgb(0 0 0 / 12%);
+
   /* Canonical semantic colors for the migrated v0 slice. */
   --color-canvas: #090a0c;
   --color-surface-sidebar: #111216;

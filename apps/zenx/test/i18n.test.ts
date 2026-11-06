@@ -68,6 +68,25 @@ test("background command counts preserve English plural forms and exact Chinese 
   }
 });
 
+test("Queue and Steer counts share exact localized units for zero, one, and multiple messages", () => {
+  for (const [key, english, chinese] of [
+    ["queueWaitForTurnCount", "After this turn", "等待当前轮次结束"],
+    ["queuePendingCount", "Pending send", "待发送"],
+    ["steerPendingCount", "Waiting for the model", "等待进入模型"],
+  ] as const) {
+    for (const count of [0, 1, 2]) {
+      assert.equal(
+        i18n.t(`shell:${key}`, { lng: "en", count }),
+        `${english} · ${count} ${count === 1 ? "message" : "messages"}`,
+      );
+      assert.equal(
+        i18n.t(`shell:${key}`, { lng: "zh-CN", count }),
+        `${chinese} · ${count} 条`,
+      );
+    }
+  }
+});
+
 test("native menu and unsaved-edit dialog follow the selected interface language", () => {
   setNativeLanguage("zh-CN");
   assert.equal(nativeText("edit"), "编辑");

@@ -357,7 +357,10 @@ export class NativeComputerTargetTransport implements TargetTransport {
 }
 
 function isBackgroundOperation(operation: unknown): boolean {
-  return ["backgroundClick", "backgroundType", "backgroundKeyPress"].includes(
-    String(operation),
-  );
+  return [
+    "backgroundClick",
+    "backgroundType",
+    "backgroundKeyPress",
+    "backgroundShortcut",
+  ].includes(String(operation));
 }

@@ -46,6 +46,23 @@ const decodeTestLiveImage: UserBrowserLiveImageDecoder = async (encoded) => ({
 
 const liveConnectionOptions = { liveFrameImageDecoder: decodeTestLiveImage };
 
+test("user browser lists all discoverable tabs beyond twenty-four without hiding ownership", async () => {
+  const client = new FakeUserBrowserClient();
+  const original = await client.listTargets();
+  client.listTargets = async () =>
+    Array.from({ length: 30 }, (_, index) => ({
+      ...original[0]!,
+      targetId: `target-${index + 1}`,
+    }));
+  const backend = new UserBrowserCdpBackend(client);
+  const tabs = await backend.listTabs("work");
+  assert.equal(tabs.length, 30);
+  assert.equal(tabs[29]!.tabId, "target-30");
+  await backend.closeTab("work", "target-30");
+  assert.ok(client.detachedTargets.includes("target-30"));
+  await backend.close();
+});
+
 test("user browser scroll consumes observations and guards document identity before dispatch", async () => {
   const client = new FakeUserBrowserClient();
   const backend = new UserBrowserCdpBackend(client);
@@ -1077,7 +1094,7 @@ test("closeTab detach uncertainty taints every later session operation before ow
   assert.equal(client.closeCount, 1);
 });
 
-test("outcome-unknown action survives closeSession cleanup and backend close", async () => {
+test("unknown page effect does not poison successful detach or backend close", async () => {
   const client = new FakeUserBrowserClient();
   const backend = new UserBrowserCdpBackend(client);
   await backend.listTabs("work");
@@ -1095,11 +1112,8 @@ test("outcome-unknown action survives closeSession cleanup and backend close", a
     /outcome is unknown/u,
   );
 
-  await assert.rejects(
-    backend.closeSession("work"),
-    /outcome is unknown|tainted/u,
-  );
-  await assert.rejects(backend.close(), /outcome is unknown|tainted/u);
+  await backend.closeSession("work");
+  await backend.close();
   assert.equal(client.closeCount, 1);
   assert.deepEqual(client.closedTargets, []);
 });
@@ -1128,11 +1142,11 @@ test("outcome-unknown action retains the tab and session lease until late settle
   assert.deepEqual(client.detachedTargets, []);
 
   settlement.resolve();
-  await assert.rejects(closing, /outcome is unknown|tainted/u);
+  await closing;
   assert.deepEqual(client.detachedTargets, ["target-1"]);
 });
 
-test("direct backend close reports action and navigation outcome-unknown taint", async () => {
+test("successful backend close does not repeat prior action or navigation uncertainty", async () => {
   for (const mutation of ["action", "navigate"] as const) {
     const client = new FakeUserBrowserClient();
     const backend = new UserBrowserCdpBackend(client);
@@ -1158,7 +1172,7 @@ test("direct backend close reports action and navigation outcome-unknown taint",
         /outcome is unknown/u,
       );
     }
-    await assert.rejects(backend.close(), /outcome is unknown|tainted/u);
+    await backend.close();
     assert.equal(client.closeCount, 1);
   }
 });
@@ -1523,6 +1537,112 @@ test("listing after external navigation invalidates the old observation before d
   assert.equal(client.actionCount, 0);
 });
 
+test("cancelled navigation retains its native settlement fence before fresh inspection", async () => {
+  const cdp = await createFakeCdpServer();
+  const gate = deferred<void>();
+  try {
+    const connection = await connectUserBrowserCdp(cdp.endpoint);
+    await connection.backend.listTabs("work");
+    cdp.interceptRequests(async (request) => {
+      if (request.method === "Page.navigate") await gate.promise;
+    });
+    const controller = new AbortController();
+    const navigating = connection.backend.navigate(
+      "work",
+      "target-1",
+      "https://example.test/next",
+      controller.signal,
+    );
+    await waitUntil(() => cdp.count("Page.navigate") === 1);
+    controller.abort();
+    await assert.rejects(navigating, /outcome is unknown/u);
+    let observed = false;
+    const inspecting = connection.backend
+      .inspect("work", "target-1")
+      .then((value) => {
+        observed = true;
+        return value;
+      });
+    await nextTurn();
+    assert.equal(observed, false);
+    assert.equal(cdp.count("Runtime.evaluate"), 0);
+    gate.resolve();
+    await inspecting;
+    assert.equal(cdp.count("Page.navigate"), 1);
+    await connection.backend.close();
+  } finally {
+    gate.resolve();
+    await cdp.close();
+  }
+});
+
+test("fresh inspection recovers an unknown action without replaying it", async () => {
+  const client = new FakeUserBrowserClient();
+  const backend = new UserBrowserCdpBackend(client);
+  await backend.listTabs("work");
+  const before = await backend.inspect("work", "target-1");
+  client.identityChangePhase = "during-evaluate";
+  await assert.rejects(
+    backend.click(
+      "work",
+      "target-1",
+      before.observationId,
+      before.targets[0]!.targetId,
+    ),
+    /outcome is unknown/u,
+  );
+  client.identityChangePhase = undefined;
+  const fresh = await backend.inspect("work", "target-1");
+  assert.equal(client.actionCount, 1);
+  await assert.rejects(
+    backend.click(
+      "work",
+      "target-1",
+      before.observationId,
+      before.targets[0]!.targetId,
+    ),
+    /stale or unknown/u,
+  );
+  await backend.click(
+    "work",
+    "target-1",
+    fresh.observationId,
+    fresh.targets[0]!.targetId,
+  );
+  assert.equal(client.actionCount, 2);
+  await backend.close();
+});
+
+test("a queued mutation rechecks uncertainty after the preceding action settles", async () => {
+  const client = new FakeUserBrowserClient();
+  const backend = new UserBrowserCdpBackend(client);
+  await backend.listTabs("work");
+  const observed = await backend.inspect("work", "target-1");
+  client.holdActions = true;
+  const controller = new AbortController();
+  const acting = backend.click(
+    "work",
+    "target-1",
+    observed.observationId,
+    observed.targets[0]!.targetId,
+    controller.signal,
+  );
+  await client.actionStarted;
+  const queued = assert.rejects(
+    backend.navigate("work", "target-1", "https://example.test/not-dispatched"),
+    /inspect again/u,
+  );
+  controller.abort();
+  await assert.rejects(acting, /outcome is unknown/u);
+  client.releaseAction();
+  await queued;
+  assert.equal(client.navigateCount, 0);
+  await backend.inspect("work", "target-1");
+  await backend.navigate("work", "target-1", "https://example.test/fresh");
+  assert.equal(client.navigateCount, 1);
+  await backend.close();
+});
+
 test("cancelled action is outcome-unknown and its observation cannot be retried", async () => {
   const client = new FakeUserBrowserClient();
   const backend = new UserBrowserCdpBackend(client);
@@ -1542,13 +1662,10 @@ test("cancelled action is outcome-unknown and its observation cannot be retried"
   await client.actionStarted;
   controller.abort(new DOMException("cancelled", "AbortError"));
   await assert.rejects(action, /outcome is unknown/u);
-  const queuedInspection = assert.rejects(
-    backend.inspect("work", "target-1"),
-    /tainted/u,
-  );
+  const queuedInspection = backend.inspect("work", "target-1");
   const queuedNavigation = assert.rejects(
     backend.navigate("work", "target-1", "https://example.test/retry"),
-    /tainted/u,
+    /inspect again/u,
   );
   await nextTurn();
   assert.equal(client.actionCount, 1);
@@ -1617,7 +1734,8 @@ test("document identity changes during evaluate or post-confirmation are outcome
       phase,
     );
     assert.equal(client.actionCount, 1, phase);
-    await assert.rejects(backend.inspect("work", "target-1"), /tainted/u);
+    client.identityChangePhase = undefined;
+    await backend.inspect("work", "target-1");
   }
 });
 
@@ -1674,13 +1792,10 @@ test("post-confirmation cancellation retains the tab fence until confirmation se
   await client.postConfirmationStarted;
   controller.abort();
   await assert.rejects(action, /outcome is unknown/u);
-  const queuedInspection = assert.rejects(
-    backend.inspect("work", "target-1"),
-    /tainted/u,
-  );
+  const queuedInspection = backend.inspect("work", "target-1");
   const queuedNavigation = assert.rejects(
     backend.navigate("work", "target-1", "https://example.test/retry"),
-    /tainted/u,
+    /inspect again/u,
   );
   await nextTurn();
   assert.equal(client.navigateCount, 0);
@@ -2023,17 +2138,14 @@ test("frameStartedNavigating during evaluate or confirmation makes action outcom
         /outcome is unknown/u,
         phase,
       );
-      await assert.rejects(
-        connection.backend.inspect("work", "target-1"),
-        /tainted/u,
-      );
+      await connection.backend.inspect("work", "target-1");
     } finally {
       await cdp.close();
     }
   }
 });
 
-test("matching execution-context invalidation after action dispatch remains outcome-unknown and tainted", async () => {
+test("matching execution-context invalidation after action dispatch permits fresh inspection", async () => {
   for (const event of [
     {
       method: "Runtime.executionContextDestroyed",
@@ -2071,10 +2183,7 @@ test("matching execution-context invalidation after action dispatch remains outc
         event.method,
       );
       assert.equal(cdp.count("Runtime.evaluate"), evaluationsBefore + 1);
-      await assert.rejects(
-        connection.backend.inspect("work", "target-1"),
-        /tainted/u,
-      );
+      await connection.backend.inspect("work", "target-1");
     } finally {
       await cdp.close();
     }
@@ -2103,7 +2212,7 @@ test("timed-out Runtime.evaluate retains detach until its late response settles"
     for (let turn = 0; turn < 16; turn += 1) await Promise.resolve();
     assert.equal(cdp.count("Target.detachFromTarget"), 0);
     cdp.releaseLateActionReply();
-    await assert.rejects(closing, /outcome is unknown|tainted/u);
+    await closing;
     assert.equal(cdp.actionResponseSent(), true);
     assert.equal(cdp.count("Target.detachFromTarget"), 1);
   } finally {
@@ -2133,7 +2242,7 @@ test("timed-out post-confirmation retains detach until its late response settles
     for (let turn = 0; turn < 16; turn += 1) await Promise.resolve();
     assert.equal(cdp.count("Target.detachFromTarget"), 0);
     cdp.releaseLateConfirmationReply();
-    await assert.rejects(closing, /outcome is unknown|tainted/u);
+    await closing;
     assert.equal(cdp.confirmationResponseSent(), true);
     assert.equal(cdp.count("Target.detachFromTarget"), 1);
   } finally {
@@ -2167,7 +2276,7 @@ test("cancelled and invalidated dispatched action retains detach until late sett
     for (let turn = 0; turn < 16; turn += 1) await Promise.resolve();
     assert.equal(cdp.count("Target.detachFromTarget"), 0);
     cdp.releaseLateActionReply();
-    await assert.rejects(closing, /outcome is unknown|tainted/u);
+    await closing;
     assert.equal(cdp.actionResponseSent(), true);
     assert.equal(cdp.count("Target.detachFromTarget"), 1);
   } finally {
@@ -2721,7 +2830,7 @@ test("Windows browser discovery covers machine and per-user Chrome Edge and Chro
   );
 });
 
-test("tainted mutation survives target disappearance and map cleanup", async () => {
+test("unknown page effect does not poison unrelated work after target cleanup", async () => {
   const client = new FakeUserBrowserClient();
   const backend = new UserBrowserCdpBackend(client);
   await backend.listTabs("work");
@@ -2731,13 +2840,10 @@ test("tainted mutation survives target disappearance and map cleanup", async () 
     /outcome is unknown/u,
   );
   client.primaryTargetPresent = false;
-  await assert.rejects(backend.listTabs("work"), /outcome is unknown|tainted/u);
+  assert.deepEqual(await backend.listTabs("work"), []);
   assert.deepEqual(client.detachedTargets, ["target-1"]);
-  await assert.rejects(
-    backend.closeSession("work"),
-    /outcome is unknown|tainted/u,
-  );
-  await assert.rejects(backend.close(), /outcome is unknown|tainted/u);
+  await backend.closeSession("work");
+  await backend.close();
 });
 
 test("logical user-browser session admission is explicitly bounded", async () => {

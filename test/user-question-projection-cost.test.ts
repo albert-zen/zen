@@ -389,6 +389,7 @@ test("late earlier-call publication invalidates non-atomic page traversal rather
   assert.equal(thread.userQuestionSummary.openCount, 34);
   const before = thread.userQuestionPage();
   assert.equal(before.questions[0]!.request.callItemId, "call-1");
+  assert.equal(before.latestPublishedQuestionId, "call-34");
   assert.equal(thread.takeUserQuestionAttentionInvalidation(), true);
   const latePublicationAt = "2026-11-02T00:00:20.000Z";
   complete(0, latePublicationAt);
@@ -405,6 +406,22 @@ test("late earlier-call publication invalidates non-atomic page traversal rather
   );
   const restarted = thread.userQuestionPage();
   assert.equal(restarted.questions[0]!.request.callItemId, "call-0");
+  assert.equal(
+    restarted.latestPublishedQuestionId,
+    "call-0",
+    "late earlier-call result advances publication independently of call order",
+  );
+  assert.equal(
+    thread.userQuestionPage(restarted.nextAfter!).latestPublishedQuestionId,
+    "call-0",
+    "page traversal has one canonical publication identity",
+  );
+  assert.equal(
+    new Thread(threadId, thread.items, thread.itemList).userQuestionPage()
+      .latestPublishedQuestionId,
+    "call-0",
+    "cold reconstruction preserves append-order publication identity",
+  );
   assert.equal(
     new Set(
       [
@@ -486,4 +503,102 @@ test("long-history summary does not rebuild for an Ask call before its result", 
     thread.userQuestionSummary,
     new Thread(threadId, thread.items, thread.itemList).userQuestionSummary,
   );
+});
+
+test("reply reconstruction visits long history a bounded number of times regardless of question count", (t) => {
+  const { facts, contexts } = history();
+  const thread = new Thread(threadId, facts, contexts);
+  for (let i = 0; i < 100; i++) {
+    thread.append({
+      ...base,
+      id: `cost-call-${i}`,
+      turnId: "turn",
+      type: "tool_call",
+      callId: `cost-provider-${i}`,
+      name: ASK_USER_QUESTION_NAME,
+      arguments: specification,
+    });
+    thread.append({
+      ...base,
+      id: `cost-result-${i}`,
+      turnId: "turn",
+      type: "tool_result",
+      callId: `cost-provider-${i}`,
+      exitCode: 0,
+      executionStatus: "completed",
+      output: JSON.stringify({
+        kind: USER_QUESTION_PUBLICATION_KIND,
+        version: 1,
+        request: { threadId, callItemId: `cost-call-${i}` },
+      }),
+    });
+  }
+  for (let i = 0; i < 99; i++) {
+    const reply: UserQuestionReply = {
+      version: 1,
+      request: { threadId, callItemId: `cost-call-${i}` },
+      outcome: "answer",
+      answers: [{ questionId: "scope", optionIds: [], text: "Small" }],
+    };
+    thread.append({
+      ...base,
+      id: `cost-answer-${i}`,
+      turnId: "turn",
+      type: "user_message",
+      clientId: `cost-client-${i}`,
+      questionReply: reply,
+      text: renderUserQuestionReply(specification, reply),
+    });
+  }
+  let visits = 0;
+  const counted = <T>(values: readonly T[]) =>
+    new Proxy(values, {
+      get(target, key, receiver) {
+        if (typeof key === "string" && /^\d+$/.test(key)) visits++;
+        return Reflect.get(target, key, receiver);
+      },
+    });
+  const start = performance.now();
+  const result = readUserQuestions(
+    threadId,
+    counted(thread.itemList),
+    counted(thread.items),
+  );
+  t.diagnostic(
+    JSON.stringify({
+      questions: result.length,
+      history: thread.items.length,
+      visits,
+      elapsedMs: performance.now() - start,
+    }),
+  );
+  assert.equal(result.length, 100);
+  assert.ok(
+    result.slice(0, 99).every((question) => question.state === "answered"),
+  );
+  assert.equal(result[99]!.state, "open");
+  assert.ok(
+    visits < 15 * (thread.items.length + thread.itemList.length),
+    `reconstruction visited history ${visits} times`,
+  );
+  const malformed = structuredClone(thread.itemList);
+  const response = malformed.find((item) => item.id === "cost-answer-0")!;
+  response.source.metadata!.questionReply = { invalid: true };
+  assert.ok(
+    readUserQuestions(threadId, malformed, thread.items).every(
+      (question) => question.state === "unavailable",
+    ),
+    "malformed local reply metadata retains fail-closed behavior for all questions",
+  );
+  const missingClaim = thread.itemList.filter(
+    (item) => item.id !== "cost-answer-0",
+  );
+  const missing = readUserQuestions(threadId, missingClaim, thread.items);
+  assert.equal(
+    missing[0]!.state,
+    "unavailable",
+    "a native claim missing its semantic reply cannot reopen",
+  );
+  assert.equal(missing[1]!.state, "answered");
+  assert.equal(missing[99]!.state, "open");
 });

@@ -293,9 +293,7 @@ test("workflow prepares fonts before every capture and never caches apt state", 
     new URL("../../../.github/workflows/ci.yml", import.meta.url),
     "utf8",
   );
-  const zenx = workflow
-    .split("  zenx:\n")[1]
-    .split("  zenx-capability-smoke:\n")[0];
+  const zenx = workflow.split("  zenx-ui:\n")[1].split("  zenx:\n")[0];
   // Keep the existing workload budget. Room screenshots are one-time evidence,
   // not an additional capture on every unrelated change.
   assert.ok(zenx.includes("timeout-minutes: 32"));

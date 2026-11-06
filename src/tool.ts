@@ -79,6 +79,8 @@ export type ShellLifecycleFacts = {
 );
 
 export interface ToolInvocation {
+  /** Frozen model/profile capability from the Runtime, never from tool JSON. */
+  supportsImageDetailOriginal?: boolean | null;
   /** Trusted host provenance; never accepted from tool argument JSON. */
   modelReferences?: readonly ModelReferenceBinding[];
   traceOutput?: ToolTraceCapture;

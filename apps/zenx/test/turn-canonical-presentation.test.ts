@@ -500,3 +500,57 @@ test("stable Turn identity still rechecks changed metadata and reordered or remo
   assert.equal(missing.turns.get("a")!.inputs.size, 0);
   assert.equal(first.turns.get("a")!.inputs.size, 1);
 });
+
+test("answered questions partition by Turn and unchanged history retains its context on streaming, backfill and removal", () => {
+  const a = turn("a", ["answer-a"]);
+  const b = turn("b", ["answer-b"]);
+  const inputs = new Map<string, User>();
+  const forks = new Map<string, string | undefined>();
+  const answers = new Map([
+    ["answer-a", { fallbackText: "Recorded answer A" }],
+  ]);
+  const first = indexTurnCanonicalPresentation(
+    "thread",
+    [a, b],
+    inputs,
+    forks,
+    {},
+    emptyTargets,
+    undefined,
+    new Map(),
+    answers,
+  );
+  const same = indexTurnCanonicalPresentation(
+    "thread",
+    [a, { ...b }],
+    inputs,
+    forks,
+    {},
+    emptyTargets,
+    first,
+    new Map(),
+    new Map([
+      ["answer-a", { fallbackText: "Recorded answer A" }],
+      ["answer-b", { fallbackText: "Recorded answer B" }],
+    ]),
+  );
+  assert.equal(same.turns.get("a"), first.turns.get("a"));
+  assert.notEqual(same.turns.get("b"), first.turns.get("b"));
+  const backfill = indexTurnCanonicalPresentation(
+    "thread",
+    [a, b],
+    inputs,
+    forks,
+    {},
+    emptyTargets,
+    same,
+    new Map(),
+    new Map([["answer-a", { fallbackText: "Updated original" }]]),
+  );
+  assert.notEqual(backfill.turns.get("a"), same.turns.get("a"));
+  assert.equal(backfill.turns.get("b")?.answeredQuestions?.size, 0);
+  assert.equal(
+    same.turns.get("a")?.answeredQuestions?.get("answer-a")?.fallbackText,
+    "Recorded answer A",
+  );
+});

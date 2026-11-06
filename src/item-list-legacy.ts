@@ -201,7 +201,9 @@ export function contextItemsFromLegacy(
         parts.flatMap((part) =>
           part.type === "text"
             ? []
-            : [`${part.type}:${part.attachment.sha256}`],
+            : [
+                `${part.type}:${part.type === "image" ? (part.detail ?? "high") : ""}:${part.attachment.sha256}`,
+              ],
         ),
       );
       for (const candidate of previous) {
@@ -246,7 +248,9 @@ export function contextItemsFromLegacy(
         for (const [index, part] of (candidate.modelContent ?? []).entries()) {
           if (
             part.type !== "text" &&
-            seen.has(`${part.type}:${part.attachment.sha256}`)
+            seen.has(
+              `${part.type}:${part.type === "image" ? (part.detail ?? "high") : ""}:${part.attachment.sha256}`,
+            )
           )
             continue;
           parts.push(part);
@@ -261,7 +265,9 @@ export function contextItemsFromLegacy(
                 },
           );
           if (part.type !== "text")
-            seen.add(`${part.type}:${part.attachment.sha256}`);
+            seen.add(
+              `${part.type}:${part.type === "image" ? (part.detail ?? "high") : ""}:${part.attachment.sha256}`,
+            );
         }
       }
       if (parts.length !== (item.modelContent?.length ?? 0)) {
@@ -293,6 +299,14 @@ export function contextItemsFromLegacy(
     }
     case "reasoning": {
       if (item.incomplete) return [];
+      // Presence without any public content or continuation belongs to Trace,
+      // not model-semantic context. Keep the original observation for the UI.
+      if (
+        item.contentVisibility === "public" &&
+        item.reasoningContent === "" &&
+        (item.summary === undefined || item.summary === "")
+      )
+        return [];
       const start = previous.findLast(
         (candidate) =>
           candidate.type === "turn_started" && candidate.turnId === item.turnId,
@@ -486,6 +500,7 @@ export function legacyItemFromContext(
     "summaryOffset",
     "summaryLength",
     "historicalSnapshot",
+    "questionOrigin",
   ])
     delete metadata[key];
   Object.assign(base, metadata, { type: kind });

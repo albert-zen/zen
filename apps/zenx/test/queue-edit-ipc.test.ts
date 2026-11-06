@@ -58,6 +58,7 @@ function runBundle(code: string, electron: unknown) {
  * at both Electron boundaries and structured-cloning fulfilled reply values. */
 function boundary(
   request: (method: string, params: unknown) => Promise<unknown>,
+  prepareRequest?: (method: string, params: unknown) => Promise<void>,
 ) {
   let handler!: (...args: unknown[]) => Promise<unknown>;
   let exposed!: Window["zenx"];
@@ -91,6 +92,7 @@ function boundary(
   main.registerProtocolRequestIpc(
     { request } as Parameters<typeof main.registerProtocolRequestIpc>[0],
     () => undefined,
+    prepareRequest,
   );
   runBundle(preloadBundle.outputFiles![0]!.text, electron);
   const bridgeRequest = async (method: string, params: unknown) => {
@@ -115,6 +117,45 @@ const params: NativeQueueEditParams = {
   editId: "edit",
   input: [{ type: "text", text: "changed" }],
 };
+
+test("the actual main/preload boundary finishes attachment publication before dispatch and never dispatches on publication failure", async () => {
+  const seen: string[] = [];
+  const bridge = boundary(
+    async (method) => {
+      seen.push(`dispatch:${method}`);
+      return { admitted: true };
+    },
+    async (method, input) => {
+      seen.push(`prepare:${method}`);
+      assert.deepEqual(input, params);
+      await Promise.resolve();
+      seen.push("published");
+    },
+  );
+  assert.deepEqual(await bridge.request("zen/thread/queue/edit", params), {
+    admitted: true,
+  });
+  assert.deepEqual(seen, [
+    "prepare:zen/thread/queue/edit",
+    "published",
+    "dispatch:zen/thread/queue/edit",
+  ]);
+  let dispatches = 0;
+  const failed = boundary(
+    async () => {
+      dispatches++;
+      return {};
+    },
+    async () => {
+      throw new Error("Attachment publication failed");
+    },
+  );
+  await assert.rejects(
+    failed.request("zen/turn/send", params),
+    /Attachment publication failed/u,
+  );
+  assert.equal(dispatches, 0);
+});
 const original = {
   type: "user_message_queued",
   id: "queue",

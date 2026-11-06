@@ -6,7 +6,11 @@ import {
   withReferenceDraft,
 } from "../src/renderer/src/reference-draft.js";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { FileAttachmentStore } from "../../../src/attachment.js";
+import { ZenXDraftAttachments } from "../src/main/draft-attachments.js";
 import test from "node:test";
 import type {
   NativeQueueEditParams,
@@ -48,12 +52,119 @@ const imageBytes = await readFile(
   new URL("./fixtures/assets/queue-images/queue-image-1.png", import.meta.url),
 );
 const readImage = async () => new Uint8Array(imageBytes);
+
+for (const action of ["remove", "cancel"] as const)
+  test(`real queue ${action} retires only its new draft lease without changing native input`, async () => {
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-queue-draft-image-"),
+    );
+    let now = 1;
+    const permanent = new FileAttachmentStore(path.join(root, "attachments"));
+    const staging = new ZenXDraftAttachments(
+      path.join(root, "drafts"),
+      permanent,
+      { now: () => now, graceMs: 10, autoCollect: false },
+    );
+    try {
+      const [image] = await staging.importImages(1, [
+        { name: "new-draft.png", mediaType: "image/png", bytes: imageBytes },
+      ]);
+      await withRuntimeDom(async (h) => {
+        Object.assign(window, {
+          zenx: {
+            imageAttachments: {
+              abandon: (ids: string[]) => staging.abandon(1, ids),
+            },
+          },
+        });
+        const thread = queueScenario(2);
+        const before = JSON.stringify(thread.canonicalItems);
+        await h.render(thread, {
+          onReadAttachment: readImage,
+          onEditQueued: async (p) => result(p),
+          onPickQueueImages: async () => [image!],
+        });
+        await h.click('[data-queue-id="queue-0"] .queue-row-edit');
+        await h.click(".queue-editor-image-tools > button");
+        assert.equal(
+          (await staging.inventory()).retainedBytes,
+          image!.attachment.byteLength,
+        );
+        const buttons = document.querySelectorAll<HTMLButtonElement>(
+          ".queue-editor-images .remove-draft-image",
+        );
+        if (action === "remove")
+          await act(async () => buttons[buttons.length - 1]!.click());
+        else await h.click(".queue-editor-close");
+        assert.equal(
+          (await staging.inventory()).abandonedBytes,
+          image!.attachment.byteLength,
+        );
+        assert.equal(JSON.stringify(thread.canonicalItems), before);
+        now += 20;
+        assert.deepEqual(await staging.collectAbandoned(), [
+          image!.attachment.sha256,
+        ]);
+        await assert.rejects(permanent.read(image!.attachment), {
+          code: "attachment_missing",
+        });
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 const result = (p: NativeQueueEditParams): NativeQueueEditResult => ({
   status: "edited",
   queuedItemId: p.queuedItemId,
   clientId: p.clientId,
   revision: p.expectedRevision + 1,
   editItemId: `edit-${p.editId}`,
+});
+
+test("Cancel while image import is pending retires the late lease instead of leaking it into a closed queue editor", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-late-queue-image-"));
+  try {
+    const staging = new ZenXDraftAttachments(
+      path.join(root, "drafts"),
+      new FileAttachmentStore(path.join(root, "attachments")),
+      { autoCollect: false },
+    );
+    const images = await staging.importImages(1, [
+      { name: "late.png", mediaType: "image/png", bytes: imageBytes },
+    ]);
+    let resolve!: (value: typeof images) => void;
+    const imported = new Promise<typeof images>((done) => {
+      resolve = done;
+    });
+    await withRuntimeDom(async (h) => {
+      Object.assign(window, {
+        zenx: {
+          imageAttachments: {
+            abandon: (ids: string[]) => staging.abandon(1, ids),
+          },
+        },
+      });
+      await h.render(queueScenario(2), {
+        onReadAttachment: readImage,
+        onEditQueued: async (p) => result(p),
+        onPickQueueImages: () => imported,
+      });
+      await h.click('[data-queue-id="queue-0"] .queue-row-edit');
+      await h.click(".queue-editor-image-tools > button");
+      await h.click(".queue-editor-close");
+      await act(async () => {
+        resolve(images);
+        await imported;
+      });
+      assert.equal(editor(), null);
+      assert.equal(
+        (await staging.inventory()).abandonedBytes,
+        images[0]!.attachment.byteLength,
+      );
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 async function changeText(value: string) {
   const target = text();
@@ -821,11 +932,13 @@ test("queue excerpt source opens the exact visible message and suspends unsaved 
     await h.click(
       '.inline-composer-editor [data-reference-kind="message"] .reference-token-details',
     );
-    await h.click(".reference-open-source");
     await flush();
-    assert.equal(editor(), null);
+    assert.ok(editor() === null, "queue editor should close");
     assert.equal(scrolled, 1);
-    assert.equal(document.activeElement, target);
+    assert.ok(
+      document.activeElement === target,
+      "focus should be on exact source",
+    );
     assert.equal(saves, 0);
     await h.click('[data-queue-id="queue-0"] .queue-row-edit');
     assert.equal(editor()!.dataset.queueEditorIdentity, identity);
@@ -854,7 +967,6 @@ test("missing queue excerpt source keeps the editor and unsaved reference draft 
     await h.click('[data-queue-id="queue-0"] .queue-row-edit');
     await changeText("尚未保存");
     await h.click(".inline-composer-editor .reference-token-details");
-    await h.click(".reference-open-source");
     await flush();
     assert.ok(editor());
     assert.equal(text().value, "尚未保存");

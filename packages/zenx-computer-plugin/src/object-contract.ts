@@ -43,6 +43,8 @@ export function computerObjectBinding(
       return bind(["background", "click"], "capture", "capture");
     case "computer_background_type":
       return bind(["type"], "appCurrentFocus", "binding");
+    case "computer_background_shortcut":
+      return bind(["shortcut"], "appCurrentFocus", "binding");
     case "computer_background_key_press":
       return bind(["keyPress"], "appCurrentFocus", "binding");
   }

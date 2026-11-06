@@ -42,6 +42,37 @@ test("trusted scope defaults only dedicated PAW; ordinary membership stays priva
     resolveSidebarScope("z", { kind: "room", id: "r" }, [room]),
   );
 });
+test("scope disclosure reports its authorized total and truncation without limiting admission", () => {
+  const memberRooms = Array.from({ length: 101 }, (_, index) => ({
+    id: `room-${index}`,
+    name: `Room ${index}`,
+    members: [{ threadId: "a" }],
+  }));
+  const unrelated = {
+    id: "unrelated",
+    name: "Unrelated",
+    members: [{ threadId: "b" }],
+  };
+  for (const count of [0, 100, 101]) {
+    const result = resolveSidebarScope("a", undefined, [
+      ...memberRooms.slice(0, count),
+      unrelated,
+    ]);
+    assert.equal(result.authorizedScopesTotal, count + 1);
+    assert.equal(result.authorizedScopes.length, Math.min(count + 1, 101));
+    assert.equal(result.authorizedScopesTruncated, count > 100);
+    assert.ok(
+      !result.authorizedScopes.some((scope) => scope.id === unrelated.id),
+    );
+  }
+  const last = { kind: "room" as const, id: memberRooms.at(-1)!.id };
+  const explicit = resolveSidebarScope("a", last, memberRooms);
+  assert.deepEqual(explicit.effectiveScope, last);
+  assert.ok(!explicit.authorizedScopes.some((scope) => scope.id === last.id));
+  assert.throws(() =>
+    resolveSidebarScope("a", { kind: "room", id: unrelated.id }, memberRooms),
+  );
+});
 test("binds caller and forbids inventing foreign resource while preserving existing", () => {
   const state = emptySidebarState({ kind: "room", id: "r" });
   const bound = bindSidebarResources([{ kind: "file", path: "x" }], state, "a");

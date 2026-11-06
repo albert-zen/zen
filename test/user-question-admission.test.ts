@@ -302,6 +302,9 @@ test("actual native summary counts only open requests and never re-dates publica
     return value;
   };
   const open = await summary();
+  const publishedId = (await f.server.listUserQuestions(f.thread.id))
+    .latestPublishedQuestionId;
+  assert.equal(publishedId, f.question.request.callItemId);
   assert.equal(open.status, "active");
   assert.deepEqual(open.userQuestionSummary, {
     openCount: 1,
@@ -318,6 +321,11 @@ test("actual native summary counts only open requests and never re-dates publica
     (item) => item.id === answer.turn.admission!.queuedItemId,
   )!;
   const received = await summary();
+  assert.equal(
+    (await f.server.listUserQuestions(f.thread.id)).latestPublishedQuestionId,
+    publishedId,
+    "answer admission is not a new publication",
+  );
   assert.deepEqual(received.userQuestionSummary, {
     openCount: 0,
     latestPublishedAt: f.question.createdAt,
@@ -347,6 +355,11 @@ test("actual native summary counts only open requests and never re-dates publica
     targets: [target],
   });
   const reopened = await summary();
+  assert.equal(
+    (await f.server.listUserQuestions(f.thread.id)).latestPublishedQuestionId,
+    publishedId,
+    "recall cannot mint a new publication identity",
+  );
   assert.deepEqual(reopened.userQuestionSummary, open.userQuestionSummary);
   assert.equal(reopened.recentActivityAt, received.recentActivityAt);
   await f.server.respondToUserQuestion(f.thread.id, {
@@ -741,5 +754,82 @@ test("real native question paging keeps every pending request reachable and exac
   await assert.rejects(
     f.server.listUserQuestions(f.thread.id, "foreign-cursor"),
     { code: "invalid_request" },
+  );
+});
+
+test("parallel Ask calls with duplicate local keys expose stable numbers and out-of-order native replies in actual model requests", async (t) => {
+  const f = await fixture(t, { pause: true, questionCount: 2 });
+  const questions = (await f.snapshot()).userQuestions!;
+  assert.equal(questions.length, 2);
+  assert.equal(questions[0]!.specification.questions[0]!.id, "scope");
+  assert.equal(questions[1]!.specification.questions[0]!.id, "scope");
+  const toolResults = f.requests[1]!.messages.filter(
+    (message) => message.role === "tool",
+  );
+  assert.deepEqual(
+    toolResults.map((message) =>
+      JSON.parse(message.text.slice(message.text.indexOf("{"))).questions.map(
+        (question: { id: string }) => question.id,
+      ),
+    ),
+    [["Q1"], ["Q2"]],
+  );
+  for (const message of toolResults) {
+    assert.ok(!message.text.includes(f.thread.id));
+    for (const question of questions)
+      assert.ok(!message.text.includes(question.request.callItemId));
+  }
+  await f.server.sendMessage(f.thread.id, "I chose not to answer Q2.", {
+    clientId: "ordinary-number-text",
+    recallableSteer: true,
+  });
+  assert.ok(
+    (await f.snapshot()).userQuestions!.every(
+      (question) => question.state === "open",
+    ),
+    "a display number in ordinary text cannot answer either request",
+  );
+  const second = await f.server.respondToUserQuestion(f.thread.id, {
+    questionCallItemId: questions[1]!.request.callItemId,
+    clientId: "second-cancel-first",
+    outcome: "cancel",
+  });
+  const first = await f.answer("first-answer-second");
+  assert.equal(second.question.state, "cancel-pending");
+  assert.equal(first.question.state, "answer-pending");
+  f.release.resolve();
+  await f.initial.done;
+  await Promise.all([first.turn.done, second.turn.done]);
+  const finalRequest = f.requests.at(-1)!;
+  const users = finalRequest.messages
+    .filter((message) => message.role === "user")
+    .map((message) => JSON.stringify(message));
+  assert.ok(
+    users.some((message) => message.includes("Reply to Q1:\\nScope: Small")),
+  );
+  assert.ok(
+    users.some((message) => message.includes("I chose not to answer Q2.")),
+  );
+  for (const question of questions) {
+    assert.ok(
+      !JSON.stringify(finalRequest.messages).includes(
+        question.request.callItemId,
+      ),
+      "internal request IDs must not enter model-visible question structures",
+    );
+  }
+  assert.equal(
+    (
+      await f.server.readUserQuestion(
+        f.thread.id,
+        questions[1]!.request.callItemId,
+        "second-cancel-first",
+      )
+    ).question!.state,
+    "cancelled",
+  );
+  assert.equal(
+    (await f.read("first-answer-second")).question!.state,
+    "answered",
   );
 });

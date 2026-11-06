@@ -40,6 +40,7 @@ function fixture() {
         return {
           bindingId: `b${++serial}`,
           windowLocalInputAvailable: true,
+          supportedBackgroundButtons: ["left", "right", "middle"],
           target: { pid: 7, applicationName: "Fixture", windowTitle: "Window" },
           windowId: 17,
           bounds: { x: -100, y: 20, width: 400, height: 200 },
@@ -653,6 +654,7 @@ test("background click consumes exact unexpired capture and maps Retina pixels i
   );
   assert.deepEqual(calls.at(-1), {
     operation: "backgroundClick",
+    button: "left",
     owner: "a",
     bindingId: image.bindingId,
     x: 0,
@@ -884,6 +886,7 @@ test("verified WindowServer capture uses the same owner/capture one-shot authori
   );
   assert.deepEqual(calls.at(-1), {
     operation: "backgroundClick",
+    button: "left",
     owner: "a",
     bindingId: image.bindingId,
     x: 0,
@@ -1041,4 +1044,190 @@ test("drag rejects expired captures and invalid endpoints before native input", 
       false,
     );
   }
+});
+
+for (const button of ["left", "right", "middle"] as const)
+  test(`background ${button} forwards exact button and consumes its capture once`, async () => {
+    const { session, calls } = fixture();
+    const target = { pid: 7, windowTitle: "Window" };
+    const image = await session.capture("a", target, signal, async () => ({
+      width: 800,
+      height: 400,
+      captureSource: "native_sck_exact_window" as const,
+      backgroundInputEligible: true,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    }));
+    await session.backgroundClick(
+      "a",
+      target,
+      image.bindingId,
+      image.captureId,
+      200,
+      100,
+      signal,
+      button,
+    );
+    assert.deepEqual(calls.at(-1), {
+      operation: "backgroundClick",
+      owner: "a",
+      bindingId: image.bindingId,
+      button,
+      x: 0,
+      y: 70,
+    });
+    await assert.rejects(
+      session.backgroundClick(
+        "a",
+        target,
+        image.bindingId,
+        image.captureId,
+        200,
+        100,
+        signal,
+        button,
+      ),
+      /current.*capture/,
+    );
+    assert.equal(
+      calls.filter((r) => r.operation === "backgroundClick").length,
+      1,
+    );
+  });
+
+for (const advertised of [undefined, ["left"], "left,right,middle"])
+  test(`background helper button handshake refuses unsupported right without consuming capture: ${JSON.stringify(advertised)}`, async () => {
+    const { session, transport, calls } = fixture();
+    const original = transport.request;
+    let selection: Record<string, unknown>;
+    transport.request = async (...args) => {
+      const value = await original(...args);
+      if (args[0].operation === "select") {
+        selection = value as Record<string, unknown>;
+        selection.supportedBackgroundButtons = advertised;
+      }
+      return value;
+    };
+    const target = { pid: 7, windowTitle: "Window" };
+    const image = await session.capture("a", target, signal, async () => ({
+      width: 800,
+      height: 400,
+      captureSource: "native_sck_exact_window" as const,
+      backgroundInputEligible: true,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    }));
+    await assert.rejects(
+      session.backgroundClick(
+        "a",
+        target,
+        image.bindingId,
+        image.captureId,
+        1,
+        1,
+        signal,
+        "right",
+      ),
+      /does not advertise/,
+    );
+    assert.equal(
+      calls.filter((r) => r.operation === "backgroundClick").length,
+      0,
+    );
+    // Test-only repair of the transport receipt: failed validation retained capture.
+    selection!.supportedBackgroundButtons = ["right"];
+    await session.backgroundClick(
+      "a",
+      target,
+      image.bindingId,
+      image.captureId,
+      1,
+      1,
+      signal,
+      "right",
+    );
+  });
+
+test("invalid background button cannot consume a valid capture", async () => {
+  const { session, calls } = fixture();
+  const target = { pid: 7, windowTitle: "Window" };
+  const image = await session.capture("a", target, signal, async () => ({
+    width: 800,
+    height: 400,
+    captureSource: "native_sck_exact_window" as const,
+    backgroundInputEligible: true,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  }));
+  for (const invalid of ["extra", "", 1, null])
+    await assert.rejects(
+      session.backgroundClick(
+        "a",
+        target,
+        image.bindingId,
+        image.captureId,
+        1,
+        1,
+        signal,
+        invalid as "left",
+      ),
+      /Unsupported background mouse button/,
+    );
+  assert.equal(
+    calls.filter((r) => r.operation === "backgroundClick").length,
+    0,
+  );
+  await session.backgroundClick(
+    "a",
+    target,
+    image.bindingId,
+    image.captureId,
+    1,
+    1,
+    signal,
+    "middle",
+  );
+});
+
+test("omitted background button preserves old helper left-click compatibility", async () => {
+  const { session, transport, calls } = fixture();
+  const original = transport.request;
+  transport.request = async (...args) => {
+    const value = await original(...args);
+    if (args[0].operation === "select")
+      delete (value as Record<string, unknown>).supportedBackgroundButtons;
+    return value;
+  };
+  const target = { pid: 7, windowTitle: "Window" };
+  const image = await session.capture("a", target, signal, async () => ({
+    width: 800,
+    height: 400,
+    captureSource: "native_sck_exact_window" as const,
+    backgroundInputEligible: true,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  }));
+  await assert.rejects(
+    session.backgroundClick(
+      "a",
+      target,
+      image.bindingId,
+      image.captureId,
+      1,
+      1,
+      signal,
+      "middle",
+    ),
+    /does not advertise/,
+  );
+  await session.backgroundClick(
+    "a",
+    target,
+    image.bindingId,
+    image.captureId,
+    1,
+    1,
+    signal,
+  );
+  assert.equal(calls.at(-1)?.button, "left");
+  assert.equal(
+    calls.filter((r) => r.operation === "backgroundClick").length,
+    1,
+  );
 });

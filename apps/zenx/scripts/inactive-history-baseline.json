@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "origin": {
+    "pullRequest": 723,
+    "candidateCommit": "7c752216746b062004b79089fd2914db9485d5e3",
+    "beforeAppBlob": "97bbf176c50becc43da1a55670abd33fa130ebad",
+    "afterAppBlob": "c590ac63c886b43799d80f76d0e03aec7c350a4b"
+  },
+  "edits": [
+    {
+      "id": "trim-definition",
+      "before": "export function AppConversationProviders({\n",
+      "after": "/** Drafts live separately; only reconstructable, inactive history is disposable. */\nexport function trimThreadProjectionCache(\n  cache: Map<string, ThreadProjectionCacheEntry>,\n  selectedThreadId: string | null,\n  composers: Readonly<Record<string, ComposerState>>,\n): void {\n  if (selectedThreadId !== null) {\n    const selected = cache.get(selectedThreadId);\n    if (selected !== undefined) {\n      cache.delete(selectedThreadId);\n      cache.set(selectedThreadId, selected);\n    }\n  }\n  const inactive = [...cache].filter(([threadId, entry]) => {\n    const composer = composers[threadId];\n    return (\n      threadId !== selectedThreadId &&\n      entry.thread.status.type !== \"active\" &&\n      !entry.thread.turns.some((turn) => turn.status === \"inProgress\") &&\n      !entry.thread.queuedMessages?.length &&\n      composer?.submission == null &&\n      !composer?.pendingSends?.length &&\n      composer?.compactionRequest === undefined\n    );\n  });\n  for (const [threadId] of inactive.slice(0, -4)) cache.delete(threadId);\n}\n\nexport function AppConversationProviders({\n"
+    },
+    {
+      "id": "trim-hook",
+      "before": "  const [threadAttachments, setThreadAttachments] =\n",
+      "after": "  const trimThreadHistoryCache = () =>\n    trimThreadProjectionCache(\n      threadProjectionCacheRef.current,\n      selectedThreadIdRef.current,\n      composerStatesRef.current,\n    );\n  useEffect(() => {\n    trimThreadHistoryCache();\n  }, [selectedThreadId, threadDetail, composerStates]);\n  const [threadAttachments, setThreadAttachments] =\n"
+    },
+    {
+      "id": "notification-trim",
+      "before": "      },\n    );\n    const disposeApprovals = window.zenx.protocol.onApprovalRequest((event) => {\n",
+      "after": "        trimThreadHistoryCache();\n      },\n    );\n    const disposeApprovals = window.zenx.protocol.onApprovalRequest((event) => {\n"
+    }
+  ]
+}

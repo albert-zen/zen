@@ -1,3 +1,4 @@
+import { projectionFileRevision } from "./projection-source-revision.js";
 import { createHash } from "node:crypto";
 import { link, lstat, mkdir, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
@@ -20,6 +21,7 @@ import type { ThreadMetadataStore } from "./thread-metadata.js";
 import type {
   RuntimeTrace,
   TraceReader,
+  TraceReadSnapshot,
   TraceReceipt,
   TraceEvent,
 } from "./trace.js";
@@ -61,6 +63,13 @@ export class DomainThreadJournal implements ThreadJournal {
   readonly #options: DomainThreadJournalOptions;
   readonly #owner: StorageWriterOwnership | undefined;
   readonly #live = new Map<string, CanonicalItem[]>();
+  readonly #publishedSummaryRevisions = new Map<
+    string,
+    { lastItemId: string; revision: string }
+  >();
+  // Failed optional observations may exist only in this process. Never discard
+  // those facts merely to satisfy a cache budget.
+  readonly #volatileHistory = new Set<string>();
   readonly #chains = new Map<string, Promise<unknown>>();
   readonly #operations = new Set<Promise<unknown>>();
   readonly #uncertain = new Set<string>();
@@ -96,15 +105,29 @@ export class DomainThreadJournal implements ThreadJournal {
       this.#owner!.assertHeld();
       return action();
     });
-    this.#chains.set(
-      threadId,
-      next.catch(() => undefined),
+    const chain = next.then(
+      () => undefined,
+      () => undefined,
     );
+    this.#chains.set(threadId, chain);
     this.#operations.add(next);
     void next
-      .finally(() => this.#operations.delete(next))
+      .finally(() => {
+        this.#operations.delete(next);
+        if (this.#chains.get(threadId) === chain) this.#chains.delete(threadId);
+      })
       .catch(() => undefined);
     return next;
+  }
+  #retainLive(threadId: string, items: CanonicalItem[]): void {
+    this.#live.delete(threadId);
+    this.#live.set(threadId, items);
+    // Completed, durable projections can be reconstructed. Keep the most
+    // recently written one warm, plus any unpersisted optional observations.
+    const reconstructable = [...this.#live.keys()].filter(
+      (id) => !this.#volatileHistory.has(id),
+    );
+    for (const id of reconstructable.slice(0, -1)) this.#live.delete(id);
   }
   async close(): Promise<void> {
     if (this.#closed) return;
@@ -115,6 +138,7 @@ export class DomainThreadJournal implements ThreadJournal {
   async #record(event: TraceEvent, strict = false): Promise<void> {
     const receipt = await this.trace.record(event);
     if (receipt.durability === "degraded") {
+      if (!strict) this.#volatileHistory.add(event.threadId);
       this.#options.onTraceDegraded?.(event.threadId, receipt);
       if (strict) {
         this.#uncertain.add(event.threadId);
@@ -219,7 +243,8 @@ export class DomainThreadJournal implements ThreadJournal {
         // without it must never be compiled into an apparently complete Thread.
         await this.#writeFence(first.threadId);
         await this.#items.create(first.threadId, semantic);
-        this.#live.set(first.threadId, structuredClone(previous));
+        this.#retainLive(first.threadId, structuredClone(previous));
+        await this.#rememberSummaryRevision(first.threadId);
       } catch (error) {
         this.#uncertain.add(first.threadId);
         this.#live.delete(first.threadId);
@@ -263,7 +288,7 @@ export class DomainThreadJournal implements ThreadJournal {
   }
 
   async append(raw: CanonicalItem): Promise<ContextItem[]> {
-    const item = decodeCanonicalItem(raw);
+    const item = decodeCanonicalItem(structuredClone(raw));
     return this.#operation(item.threadId, async () => {
       await this.#migrate(item.threadId);
       if (this.#uncertain.has(item.threadId))
@@ -284,7 +309,8 @@ export class DomainThreadJournal implements ThreadJournal {
         await this.#route(item, 0, semantic);
         await this.#writeFence(item.threadId);
         await this.#items.create(item.threadId, semantic);
-        this.#live.set(item.threadId, [item]);
+        this.#retainLive(item.threadId, [item]);
+        await this.#rememberSummaryRevision(item.threadId);
         return semantic;
       }
       return this.#items.withAppendSnapshot(item.threadId, async (snapshot) => {
@@ -292,7 +318,12 @@ export class DomainThreadJournal implements ThreadJournal {
           item.threadId,
           snapshot,
         );
-        const previous = await this.#read(item.threadId);
+        // Private live facts are read-only here. The new caller-owned fact was
+        // detached before enqueue, and public reads still return defensive copies.
+        const previous =
+          this.#live.get(item.threadId) ??
+          compiled?.originals ??
+          (await this.#read(item.threadId, compiled?.trace));
         if (previous.some((i) => i.id === item.id))
           throw new Error(
             "Duplicate canonical Item identity; reconcile instead of retrying",
@@ -325,7 +356,8 @@ export class DomainThreadJournal implements ThreadJournal {
             throw error;
           throw new ThreadJournalAppendOutcomeUnknownError(error); // fact may be committed; compile-only reconciliation, never effect replay.
         }
-        this.#live.set(item.threadId, [...previous, item]);
+        this.#retainLive(item.threadId, [...previous, item]);
+        await this.#rememberSummaryRevision(item.threadId);
         // These exact items were read/reconciled in this serialized append and
         // the new suffix is durable now. No follow-up full-log scan is needed.
         return [...contexts, ...semantic];
@@ -369,7 +401,8 @@ export class DomainThreadJournal implements ThreadJournal {
   ): Promise<
     | {
         contexts: readonly ContextItem[];
-        trace: Awaited<ReturnType<TraceReader["read"]>>;
+        originals: CanonicalItem[];
+        trace: TraceReadSnapshot;
       }
     | undefined
   > {
@@ -377,9 +410,9 @@ export class DomainThreadJournal implements ThreadJournal {
       throw new ThreadJournalAppendOutcomeUnknownError(
         "Source fact durability unknown",
       );
-    const observed = await this.trace.read(threadId, {
+    const observed = await (this.trace.readSnapshot?.(threadId, {
       verifyArtifacts: false,
-    });
+    }) ?? this.trace.read(threadId, { verifyArtifacts: false }));
     if (
       observed.issues.some((issue) =>
         ["read_failure", "partial_frame", "invalid_frame"].includes(issue.kind),
@@ -403,7 +436,10 @@ export class DomainThreadJournal implements ThreadJournal {
       : await this.#items.read(threadId);
     const present = new Set(contexts.map((item) => item.id));
     const previous: CanonicalItem[] = [];
-    const seenFacts = new Map<string, string>();
+    const originals = new Map<
+      string,
+      { sequence: number; item: CanonicalItem }
+    >();
     const missing: ContextItem[] = [];
     const frozen = new Map<string, ContextItem>();
     for (const record of observed.records)
@@ -435,13 +471,18 @@ export class DomainThreadJournal implements ThreadJournal {
       const item = decodeCanonicalItem(data.item);
       if (item.threadId !== threadId || !Number.isSafeInteger(data.sequence))
         throw new Error("Invalid accepted source fact");
-      const known = seenFacts.get(item.id);
+      const known = originals.get(item.id);
       if (known !== undefined) {
-        if (known !== JSON.stringify(item))
+        // Only a repeated identity needs the full body comparison. Unique facts
+        // were already decoded and need no second JSON serialization.
+        if (JSON.stringify(known.item) !== JSON.stringify(item))
           throw new Error("Conflicting accepted fact identity");
+        originals.set(item.id, { sequence: data.sequence, item });
         continue;
       }
-      seenFacts.set(item.id, JSON.stringify(item));
+      // Read projections use original fact sequence, not Trace occurrence order.
+      // Repeated identical facts keep their last recorded sequence, as #read does.
+      originals.set(item.id, { sequence: data.sequence, item });
       // Frozen fork sources are authoritative compiler inputs for their exact IDs.
       const encoded =
         present.has(item.id) || frozen.has(item.id)
@@ -479,6 +520,9 @@ export class DomainThreadJournal implements ThreadJournal {
     // Reuse only inside the caller's existing serialized operation, never across admissions.
     return {
       contexts: missing.length === 0 ? contexts : [...contexts, ...missing],
+      originals: [...originals.values()]
+        .sort((a, b) => a.sequence - b.sequence)
+        .map(({ item }) => item),
       trace: observed,
     };
   }
@@ -489,21 +533,53 @@ export class DomainThreadJournal implements ThreadJournal {
       await this.reconcileCompilation(threadId);
     return this.#items.read(threadId);
   }
+  async readSnapshot(threadId: string): Promise<{
+    items: CanonicalItem[];
+    itemList: ContextItem[];
+  }> {
+    if (this.#owner === undefined || this.#uncertain.has(threadId))
+      return {
+        items: await this.read(threadId),
+        itemList: await this.readItemList(threadId),
+      };
+    return this.#operation(threadId, async () => {
+      await this.#migrate(threadId);
+      // Preserve cold inspection of unpublished/absent Threads. No projection
+      // or recovery authority exists until the initial ItemList is published.
+      if (!(await this.#items.exists(threadId)))
+        return { items: await this.#read(threadId), itemList: [] };
+      const compiled = await this.#reconcileCompilation(threadId);
+      return {
+        items: structuredClone(
+          this.#live.get(threadId) ?? compiled?.originals ?? [],
+        ),
+        itemList:
+          compiled === undefined
+            ? await this.#items.read(threadId)
+            : structuredClone([...compiled.contexts]),
+      };
+    });
+  }
   async read(threadId: string): Promise<CanonicalItem[]> {
     if (!(await this.#items.exists(threadId)) && this.#owner !== undefined)
       await this.migrate(threadId);
     return this.#read(threadId);
   }
-  async #read(threadId: string): Promise<CanonicalItem[]> {
+  async #read(
+    threadId: string,
+    verifiedTrace?: TraceReadSnapshot,
+  ): Promise<CanonicalItem[]> {
     const live = this.#live.get(threadId);
     if (live !== undefined) return structuredClone(live);
     if (!(await this.#items.exists(threadId))) {
       const source = await this.#legacy(threadId);
       return source?.items ?? [];
     }
-    const observed = await this.trace.read(threadId, {
-      verifyArtifacts: false,
-    });
+    const observed =
+      verifiedTrace ??
+      (await this.trace.read(threadId, {
+        verifyArtifacts: false,
+      }));
     const combined = new Map<
       string,
       { sequence: number; item: CanonicalItem }
@@ -529,30 +605,86 @@ export class DomainThreadJournal implements ThreadJournal {
       .map((entry) => entry.item);
   }
   async assertRecoverySafe(threadId: string): Promise<void> {
-    if (this.#owner !== undefined && !this.#uncertain.has(threadId))
-      await this.reconcileCompilation(threadId);
-    if (this.#uncertain.has(threadId))
-      throw new ThreadJournalAppendOutcomeUnknownError(
-        "Control fact outcome unknown",
-      );
-    const trace = await this.trace.read(threadId, { verifyArtifacts: false });
-    if (
-      trace.issues.some((issue) =>
-        ["read_failure", "partial_frame", "invalid_frame"].includes(issue.kind),
+    const verify = async (snapshot?: ItemListAppendSnapshot) => {
+      const compiled =
+        this.#owner !== undefined && !this.#uncertain.has(threadId)
+          ? await this.#reconcileCompilation(threadId, snapshot)
+          : undefined;
+      if (this.#uncertain.has(threadId))
+        throw new ThreadJournalAppendOutcomeUnknownError(
+          "Control fact outcome unknown",
+        );
+      // Reuse only this serialized reconciliation's exact source observation.
+      // A later admission reads current bytes again, including damage or gaps.
+      const trace =
+        compiled?.trace ??
+        (await this.trace.read(threadId, { verifyArtifacts: false }));
+      if (
+        trace.issues.some((issue) =>
+          ["read_failure", "partial_frame", "invalid_frame"].includes(
+            issue.kind,
+          ),
+        )
       )
-    )
-      throw new Error(
-        "Runtime log integrity incomplete; dispatch requires explicit reconciliation",
-      );
-    const known = await this.#read(threadId);
-    if (
-      (await this.#items.exists(threadId)) &&
-      !known.some((i) => i.type === "thread_metadata")
-    )
-      throw new Error(
-        "Original runtime configuration unavailable; cannot dispatch",
-      );
+        throw new Error(
+          "Runtime log integrity incomplete; dispatch requires explicit reconciliation",
+        );
+      // Fresh source facts, never the warm projection, prove configuration.
+      const known = compiled?.originals ?? (await this.#read(threadId, trace));
+      if (
+        (await this.#items.exists(threadId)) &&
+        !known.some((i) => i.type === "thread_metadata")
+      )
+        throw new Error(
+          "Original runtime configuration unavailable; cannot dispatch",
+        );
+    };
+    if (this.#owner !== undefined)
+      await this.#operation(threadId, async () => {
+        if (await this.#items.exists(threadId))
+          await this.#items.withAppendSnapshot(threadId, verify);
+        else await verify();
+      });
+    else await verify();
   }
+  async summarySourceRevision(
+    threadId: string,
+    expectedLastItemId?: string,
+  ): Promise<string | undefined> {
+    if (expectedLastItemId !== undefined) {
+      const published = this.#publishedSummaryRevisions.get(threadId);
+      return published?.lastItemId === expectedLastItemId
+        ? published.revision
+        : undefined;
+    }
+    const trace = await this.trace.summarySourceRevision?.(threadId);
+    if (trace === undefined) return undefined;
+    return JSON.stringify(
+      await Promise.all([
+        projectionFileRevision(this.#path(threadId)),
+        projectionFileRevision(
+          path.join(this.#directory, "legacy", `${threadId}.jsonl`),
+        ),
+        projectionFileRevision(
+          path.join(this.#directory, "items", `${threadId}.jsonl`),
+        ),
+        trace,
+      ]),
+    );
+  }
+
+  async #rememberSummaryRevision(threadId: string): Promise<void> {
+    this.#publishedSummaryRevisions.delete(threadId);
+    try {
+      const lastItemId = this.#live.get(threadId)?.at(-1)?.id;
+      const revision = await this.summarySourceRevision(threadId);
+      if (lastItemId !== undefined && revision !== undefined)
+        this.#publishedSummaryRevisions.set(threadId, { lastItemId, revision });
+    } catch {
+      // Disposable cache receipts must not weaken or fail a durable publication.
+    }
+  }
+
   async listThreadIds(): Promise<string[]> {
     let legacy: string[] = [];
     try {
@@ -758,7 +890,9 @@ export class DomainThreadJournal implements ThreadJournal {
     await this.#options.onMigrationPhase?.("fenced");
     await this.#items.create(threadId, semantic);
     await this.#options.onMigrationPhase?.("published");
-    this.#live.set(threadId, source.items);
+    // Migration is also reached by read-only product queries. It must not
+    // retain every legacy history in the writer cache; a subsequent append
+    // already obtains its exact original prefix from serialized reconciliation.
   }
   async #writeFence(threadId: string, archiveSha256?: string): Promise<void> {
     const fence: Fence = {

@@ -27,6 +27,8 @@ export type Thread = Omit<
   canonicalItems?: readonly CanonicalItem[];
   /** Persisted semantic model context; absent on older Hosts, never reconstructed wire. */
   itemList?: readonly import("../../../../src/item-list.js").ContextItem[];
+  history?: ThreadSnapshot["history"];
+  recoveryEpoch?: string;
   userQuestions?: ThreadSnapshot["userQuestions"];
   userQuestionsPage?: ThreadSnapshot["userQuestionsPage"];
   turns: Turn[];
@@ -213,6 +215,8 @@ export interface ClientRequestParams {
   };
   "thread/resume": { threadId: string } & ThreadConfigurationParams;
   "zen/thread/resume": { threadId: string };
+  "zen/thread/resume-window": { threadId: string };
+  "zen/thread/history": { threadId: string; before?: string; limit?: number };
   "zen/thread/read": { threadId: string };
   "zen/thread/delete": { threadId: string; expectedLastItemId: string };
   "zen/thread/deleted/list": Record<string, never>;
@@ -319,6 +323,8 @@ export interface ClientRequestResults {
   "thread/fork": { thread: Thread } & ThreadSettingsSnapshot;
   "thread/resume": { thread: Thread } & ThreadSettingsSnapshot;
   "zen/thread/resume": NativeThreadRecoverySnapshot;
+  "zen/thread/resume-window": NativeThreadRecoverySnapshot;
+  "zen/thread/history": { thread: ThreadSnapshot };
   "zen/thread/read": { thread: ThreadSnapshot };
   "zen/thread/delete": { threadId: string; deletionItemId: string };
   "zen/thread/deleted/list": {

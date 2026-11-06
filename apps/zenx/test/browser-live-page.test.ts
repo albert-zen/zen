@@ -259,6 +259,12 @@ test("Browser page updates frames without moving focus or announcing every frame
   const clearingStatuses = [
     {
       type: "status",
+      status: "unavailable",
+      message:
+        "Live observation stopped because browser session cleanup was requested.",
+    },
+    {
+      type: "status",
       status: "connecting",
       message: "Connecting to the Agent's browser tab…",
     },
@@ -288,6 +294,11 @@ test("Browser page updates frames without moving focus or announcing every frame
       "false",
     );
     assert.ok(dom.window.document.querySelector(".browser-live-placeholder"));
+    if (index === 0)
+      assert.match(
+        dom.window.document.querySelector("[role='status']")?.textContent ?? "",
+        /Live observation stopped because browser session cleanup was requested\./u,
+      );
     assert.equal(dom.window.document.activeElement === before, true);
     await act(async () => {
       listener?.({

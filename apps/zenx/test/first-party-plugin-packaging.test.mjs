@@ -81,7 +81,7 @@ const providerVariants = new Map([
   ],
   [
     "zenx-computer-plugin-macos-1.5.0.tgz",
-    ["computer", "1.5.0", "macos-desktop", 17],
+    ["computer", "1.5.0", "macos-desktop", 18],
   ],
   [
     "zenx-computer-plugin-peekaboo-1.5.0.tgz",
@@ -349,6 +349,12 @@ test("all prepared first-party plugins are self-contained ordinary npm tarballs"
           "tarball must contain its exact runtime entry",
         );
         if (filename.includes("computer-plugin")) {
+          assert.equal(
+            manifest.tools.some(
+              ({ name }) => name === "computer_background_shortcut",
+            ),
+            filename.includes("-macos-"),
+          );
           assert.equal(
             manifest.tools.some(
               ({ name }) => name === "computer_background_type",

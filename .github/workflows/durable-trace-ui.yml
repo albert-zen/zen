@@ -14,6 +14,8 @@ on:
       - apps/zenx/src/main/model-request-debug-ipc.ts
       - apps/zenx/test/fixtures/durable-trace*.ts*
       - apps/zenx/scripts/*durable-trace*.mjs
+      - apps/zenx/scripts/*empty-reasoning*.mjs
+      - apps/zenx/test/fixtures/empty-reasoning*.ts*
       - apps/zenx/test/model-request-debug*.test.*
       - apps/zenx/test/thread-debugger*.test.ts
       - test/model-request-debug*.test.ts
@@ -55,5 +57,20 @@ jobs:
         with:
           name: durable-trace-${{ github.sha }}
           path: ${{ runner.temp }}/durable-trace
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Capture true-empty reasoning lifecycle (synthetic production ThreadView)
+        timeout-minutes: 3
+        run: |
+          node apps/zenx/scripts/build-empty-reasoning-preview.mjs "${{ runner.temp }}/empty-reasoning"
+          cp "${{ runner.temp }}/zenx-cjk-fonts/package.json" "${{ runner.temp }}/empty-reasoning/cjk-package.json"
+          fc-match ':lang=zh' > "${{ runner.temp }}/empty-reasoning/cjk-font.txt"
+          node apps/zenx/scripts/capture-empty-reasoning-preview.mjs "${{ runner.temp }}/empty-reasoning"
+      - name: Retain true-empty reasoning screenshots and provenance
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: empty-reasoning-${{ github.sha }}
+          path: ${{ runner.temp }}/empty-reasoning
           if-no-files-found: warn
           retention-days: 14

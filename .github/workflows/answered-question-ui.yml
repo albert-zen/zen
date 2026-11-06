@@ -1,0 +1,79 @@
+name: Answered question bubble acceptance
+on:
+  pull_request:
+    paths:
+      - .github/workflows/answered-question-ui.yml
+      - apps/zenx/src/renderer/src/AnsweredQuestionBubble.tsx
+      - apps/zenx/src/renderer/src/answered-question-presentation.ts
+      - apps/zenx/src/renderer/src/answered-question.css
+      - apps/zenx/src/renderer/src/ThreadView.tsx
+      - apps/zenx/src/renderer/src/i18n/shell.ts
+      - apps/zenx/test/answered-question*.test.ts
+      - apps/zenx/test/user-question-cards-interaction.test.ts
+      - apps/zenx/test/question-read-recovery.test.ts
+      - apps/zenx/test/fixtures/answered-question-data.ts
+      - apps/zenx/test/fixtures/answered-question-card-visual.tsx
+      - apps/zenx/src/renderer/src/use-question-read-recovery.ts
+      - apps/zenx/src/renderer/src/UserQuestionCards.tsx
+      - apps/zenx/src/renderer/src/RoomQuestionCards.tsx
+      - apps/zenx/test/fixtures/message-quote-visual.tsx
+      - apps/zenx/scripts/capture-answered-question-preview.mjs
+      - apps/zenx/scripts/capture-question-width-preview.mjs
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: answered-question-ui-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  answered-question:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Resolve CJK font from authenticated Ubuntu package indexes
+        id: cjk-package
+        timeout-minutes: 3
+        run: node apps/zenx/scripts/prepare-cjk-fonts.mjs resolve "${{ runner.temp }}/zenx-cjk-fonts"
+      - name: Restore exact verified CJK package archive
+        id: cjk-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.cjk-package.outputs.deb-path }}
+          key: ${{ steps.cjk-package.outputs.cache-key }}
+      - name: Install and verify CJK fonts before all synthetic UI capture
+        id: zenx-fonts
+        timeout-minutes: 5
+        run: node apps/zenx/scripts/prepare-cjk-fonts.mjs install "${{ runner.temp }}/zenx-cjk-fonts"
+      - name: Cache only the verified CJK package archive
+        if: ${{ steps.zenx-fonts.outcome == 'success' && steps.cjk-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.cjk-package.outputs.deb-path }}
+          key: ${{ steps.cjk-package.outputs.cache-key }}
+      - run: npm ci
+      - run: npm run build --workspace @zenx/plugin-sdk
+      - name: Native answer provenance and real renderer interactions
+        # Every PR runs these files in CI / ZenX; keep standalone manual coverage.
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: node --import tsx --test apps/zenx/test/answered-question-presentation.test.ts apps/zenx/test/answered-question-interaction.test.ts apps/zenx/test/turn-canonical-presentation.test.ts apps/zenx/test/user-question-cards-interaction.test.ts apps/zenx/test/question-read-recovery.test.ts
+      - name: Build production renderer with synthetic question history
+        run: node apps/zenx/scripts/build-quote-preview.mjs "${{ runner.temp }}/answered-question"
+      - name: Question width containment across desktop and narrow screens
+        run: node apps/zenx/scripts/capture-question-width-preview.mjs "${{ runner.temp }}/answered-question"
+      - name: Hover, click, keyboard, navigation and historical fallback
+        run: node apps/zenx/scripts/capture-answered-question-preview.mjs "${{ runner.temp }}/answered-question"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: answered-question-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/answered-question/*.png
+            ${{ runner.temp }}/answered-question/*evidence.json
+            ${{ runner.temp }}/answered-question/*lifecycle*.json
+          if-no-files-found: warn
+          retention-days: 14

@@ -174,6 +174,11 @@ test("automatic tab reveal preserves whole leading tabs, end slack, and keyboard
   };
   try {
     await act(async () => root.render(React.createElement(Harness)));
+    assert.equal(
+      document.querySelector(".workspace-tabs-previous, .workspace-tabs-next"),
+      null,
+      "overflow keeps the existing clipped strip without extra controls",
+    );
     document.getElementById("outside")!.focus();
     await act(async () => select(ids[3]!));
     assert.equal(

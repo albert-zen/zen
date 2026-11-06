@@ -16,6 +16,14 @@ export const informationCatalog = [
   },
 ] as const;
 export type InformationType = (typeof informationCatalog)[number]["type"];
+/** Legacy schema entries with no content implementation are not usable cards.
+ * This is not a live provider/content check: real providers retain their own
+ * loading, empty and failure states, and saved placements remain unchanged.
+ */
+export function isImplementedInformationType(type: InformationType): boolean {
+  return type !== "pull-requests" && type !== "artifacts";
+}
+
 type Configurations = {
   "pull-requests": Record<never, never>;
   lineage: Record<never, never>;
@@ -160,6 +168,7 @@ export function defaultInformationLayout(
   return {
     version: 1,
     widgets: informationCatalog
+      .filter((entry) => isImplementedInformationType(entry.type))
       .filter((entry) =>
         entry.source === "thread"
           ? !!resourceThreadId

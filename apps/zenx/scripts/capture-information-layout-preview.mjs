@@ -38,7 +38,7 @@ await withPreviewBrowser(
         ...point,
       });
       await wait(
-        "!document.querySelector('[aria-label=\"Refresh information\"]')?.disabled",
+        "!document.querySelector('.editable-information-panel[data-busy=\"true\"]')",
       );
     };
     const navigate = async (suffix = "") => {
@@ -57,7 +57,7 @@ await withPreviewBrowser(
     await screenshot("01-default-light.png");
     assert.equal(
       await evaluate("document.querySelectorAll('.information-widget').length"),
-      7,
+      5,
     );
     assert.equal(await evaluate("window.__informationFixture.updates()"), 0);
     await click('[aria-label="Customize information"]');
@@ -78,12 +78,12 @@ await withPreviewBrowser(
     cases.push(
       "Conflict retains edit and only explicit Reapply emits a new write",
     );
-    for (let i = 0; i < 6; i++)
+    for (let i = 0; i < 4; i++)
       await click(
         '.information-widget[data-visible="true"] .information-widget-actions button:nth-child(3)',
       );
     await wait(
-      "document.querySelectorAll('.information-widget-body').length===0",
+      "document.querySelectorAll('.information-widget[data-visible=\"true\"]').length===0",
     );
     assert.equal(
       await evaluate("!!document.querySelector('.information-attention')"),
@@ -97,7 +97,7 @@ await withPreviewBrowser(
     await click(
       '[data-widget-id="synthetic-second-board"] .information-widget-actions button:nth-child(3)',
     );
-    await click('[aria-label="Customize information"]');
+    await click('[aria-label="Done"]');
     await evaluate(
       "document.querySelector('[data-widget-id=\"synthetic-second-board\"]').scrollIntoView({block:'end'})",
     );

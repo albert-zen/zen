@@ -33,6 +33,7 @@ const script = ts.transpileModule(declaration.getText(parsed), {
 function fixture(inspectionGate: Promise<void> = Promise.resolve()) {
   let url = "about:blank";
   let appearance = "light";
+  let visible = true;
   let inspectCount = 0;
   let shutdowns = 0;
   let destroyed = 0;
@@ -41,6 +42,7 @@ function fixture(inspectionGate: Promise<void> = Promise.resolve()) {
   const writes = new Map<string, string | Buffer>();
   const images = new Map<string, number>();
   const view = {
+    getVisible: () => visible,
     webContents: {
       id: 7,
       executeJavaScript: async () => false,
@@ -70,6 +72,7 @@ function fixture(inspectionGate: Promise<void> = Promise.resolve()) {
     mount: (_sender: unknown, request: any) => {
       mounts.push(request);
       appearance = request.appearance;
+      visible = !request.occluded;
       owner.contentView.children = [view];
     },
     inspect: async (session: string, tabId: string) => {
@@ -137,7 +140,7 @@ function fixture(inspectionGate: Promise<void> = Promise.resolve()) {
   };
 }
 
-test("blank smoke waits for each production inspection, preserves target/lease, and writes eight native artifacts", async () => {
+test("blank smoke waits for each production inspection, preserves target/lease, and writes ten native artifacts", async () => {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -154,7 +157,7 @@ test("blank smoke waits for each production inspection, preserves target/lease, 
   release();
   await running;
   assert.deepEqual(f.counts(), {
-    inspectCount: 8,
+    inspectCount: 10,
     shutdowns: 1,
     destroyed: 1,
     directCaptures: 0,
@@ -167,14 +170,30 @@ test("blank smoke waits for each production inspection, preserves target/lease, 
   );
   assert.deepEqual(
     f.mounts.map((mount) => mount.appearance),
-    ["light", "dark", "light", "light", "dark", "dark", "light", "dark"],
+    [
+      "light",
+      "dark",
+      "light",
+      "light",
+      "dark",
+      "dark",
+      "light",
+      "light",
+      "light",
+      "dark",
+    ],
   );
   const receipt = f.receipt();
   assert.equal(receipt.passed, true);
   assert.equal(receipt.head, "exact-head");
   assert.deepEqual(
     receipt.records.map((record: any) => record.pixel),
-    [255, 0, 255, 255, 0, 80, 80, 0].map((value) => [value, value, value, 255]),
+    [255, 0, 255, 255, 0, 80, 80, 80, 80, 0].map((value) => [
+      value,
+      value,
+      value,
+      255,
+    ]),
   );
   assert.ok(
     receipt.records.every(
@@ -183,7 +202,7 @@ test("blank smoke waits for each production inspection, preserves target/lease, 
   );
   assert.equal(
     [...f.writes.keys()].filter((file) => file.endsWith(".png")).length,
-    8,
+    10,
   );
 });
 

@@ -1,3 +1,5 @@
+import { AnsweredQuestionCardVisual } from "./answered-question-card-visual.js";
+import { answeredQuestionFixture } from "./answered-question-data.js";
 import { QuoteClipboardVisual } from "./quote-clipboard-visual.js";
 import React, { useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -54,9 +56,19 @@ const unified =
   document.documentElement.dataset.previewMode === "references";
 const stress = params.has("stress");
 const long = params.has("long");
-const sourceText = unified
+let sourceText = unified
   ? "这是一组完整的合成引用。线程、子线程和文件仅包含位置；消息与选段包含精确原文。编辑下方问题并发送，即可查看实际生产组件的发送态。"
   : "建议把执行细节留在对话里，但不要让日志成为页面的主角。\n\n完成后保留结果，具体命令和输出按需展开。\n\n选中文字后，复制不会改变输入框；引用则作为上下文，问题仍写在原来的输入框。\n\n```ts\nconst source = { threadId, messageId };\nconst excerpt = selection.toString();\n// 保留换行、缩进与准确来源\n```";
+if (params.has("quote-bubble")) {
+  sourceText =
+    "合成上文：这些内容仅用于验证长消息中引用原句的准确定位，不包含真实对话。\n\n".repeat(
+      12,
+    ) +
+    sourceText +
+    "\n\n合成下文：保留足够的上下文高度，确保原句可以在视口中央呈现。".repeat(
+      12,
+    );
+}
 const base: Thread = {
   ...runtimeThread(
     [
@@ -212,40 +224,47 @@ export function appendSyntheticSent(
     status: "completed",
   });
 }
-const initial = params.has("legacy-quote")
-  ? appendSyntheticSent(
-      base,
-      `[Message quote; thread ID: "synthetic-thread-id"; message ID: "synthetic-message-id"; excerpt: ${JSON.stringify('第一行：这是合成选段。\n第二行：保留真实换行与 "引号"。\n\n最后一行。')}]请说明这段话。`,
-      "synthetic-legacy",
+const initial = params.has("questions")
+  ? answeredQuestionFixture(
+      params.has("missing-question"),
+      params.get("question-width"),
     )
-  : unified || params.has("empty")
-    ? base
-    : appendSyntheticSent(
+  : params.has("legacy-quote")
+    ? appendSyntheticSent(
         base,
-        referenceMessage(
-          ...(() => {
-            const inserted = insertInlineReference(
-              "这部分可以举个例子吗？",
-              [],
-              {
-                kind: "message",
-                name: "ZenX",
-                cwd: base.cwd,
-                threadId: base.id,
-                id: "synthetic-answer",
-                excerpt: "按需展开",
-              },
-              3,
-            );
-            return [
-              inserted.text,
-              inserted.references,
-              "synthetic-example",
-            ] as const;
-          })(),
-        ),
-        "synthetic-example",
-      );
+        `[Message quote; thread ID: "synthetic-thread-id"; message ID: "synthetic-message-id"; excerpt: ${JSON.stringify('第一行：这是合成选段。\n第二行：保留真实换行与 "引号"。\n\n最后一行。')}]请说明这段话。`,
+        "synthetic-legacy",
+      )
+    : unified || params.has("empty")
+      ? base
+      : appendSyntheticSent(
+          base,
+          referenceMessage(
+            ...(() => {
+              const inserted = insertInlineReference(
+                "这部分可以举个例子吗？",
+                [],
+                {
+                  kind: "message",
+                  name: "ZenX",
+                  cwd: base.cwd,
+                  threadId: base.id,
+                  id: "synthetic-answer",
+                  excerpt: params.has("quote-bubble")
+                    ? "选中文字后，复制不会改变输入框；引用则作为上下文，问题仍写在原来的输入框。"
+                    : "按需展开",
+                },
+                3,
+              );
+              return [
+                inserted.text,
+                inserted.references,
+                "synthetic-example",
+              ] as const;
+            })(),
+          ),
+          "synthetic-example",
+        );
 const summaries: NativeThreadSummary[] = [
   "选段引用体验",
   "消息投递与队列",
@@ -440,11 +459,13 @@ function Fixture() {
           }}
         >
           <span style={{ flexShrink: 0, whiteSpace: "nowrap" }}>
-            {unified
-              ? "ZenX · 统一引用体系"
-              : narrow
-                ? "ZenX · 选段引用"
-                : "zenx › 选段引用"}
+            {params.has("questions")
+              ? "ZenX · 问答回顾"
+              : unified
+                ? "ZenX · 统一引用体系"
+                : narrow
+                  ? "ZenX · 选段引用"
+                  : "zenx › 选段引用"}
           </span>
           <span
             style={{
@@ -612,5 +633,11 @@ function Fixture() {
   );
 }
 createRoot(document.getElementById("root")!).render(
-  params.has("clipboard") ? <QuoteClipboardVisual /> : <Fixture />,
+  params.has("question-card") ? (
+    <AnsweredQuestionCardVisual />
+  ) : params.has("clipboard") ? (
+    <QuoteClipboardVisual />
+  ) : (
+    <Fixture />
+  ),
 );

@@ -214,3 +214,115 @@ for (const boundary of ["disabled", "thread", "room", "unmount"] as const) {
     }
   });
 }
+
+test("question cards avoid repeated open headings and distinguish optional details from a free answer", async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: "http://localhost" });
+  const previous = { window: globalThis.window, document: globalThis.document };
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    React,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const question: UserQuestionState = {
+    request: { threadId: "synthetic", callItemId: "question" },
+    resultItemId: "result",
+    createdAt: "2026-11-05T00:00:00Z",
+    state: "open",
+    specification: {
+      questions: [
+        {
+          id: "choice",
+          prompt: "Which format?",
+          options: [{ id: "brief", label: "Brief" }],
+        },
+        { id: "free", prompt: "When should it arrive?" },
+      ],
+      answerTemplate: "{{choice}}\n{{free}}",
+    },
+  };
+  const store = createUserQuestionStore({
+    list: async () => ({ questions: [question], totalPending: 1 }),
+    read: async () => {
+      throw new Error("No synthetic readback");
+    },
+    respond: async () => {
+      throw new Error("No synthetic submission");
+    },
+  });
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    await act(async () => {
+      root.render(
+        React.createElement(UserQuestionCards, {
+          threadId: "synthetic",
+          store,
+        }),
+      );
+      await store.refresh("synthetic");
+    });
+    assert.equal(
+      document.querySelectorAll(".user-question-attention h3").length,
+      1,
+    );
+    assert.equal(document.querySelectorAll(".user-question-status").length, 0);
+    assert.equal(
+      document.querySelectorAll(".user-question-text > span").length,
+      1,
+    );
+    assert.equal(
+      document.querySelector("details.user-question-draft-note"),
+      null,
+    );
+    const fields = [...document.querySelectorAll("textarea")];
+    assert.equal(fields.length, 2);
+    assert.match(fields[0]!.getAttribute("aria-label")!, /^Which format\? · /);
+    assert.equal(
+      fields[1]!.getAttribute("aria-label"),
+      "When should it arrive?",
+    );
+    await act(async () => {
+      props(fields[0]!).onChange({ target: { value: "Custom format" } });
+    });
+    await act(async () => {
+      props(fields[1]!).onChange({ target: { value: "Friday" } });
+    });
+    assert.deepEqual(store.get("synthetic").cards.question!.draft.answers, [
+      { questionId: "choice", optionIds: [], text: "Custom format" },
+      { questionId: "free", optionIds: [], text: "Friday" },
+    ]);
+    assert.equal(
+      document.querySelector<HTMLButtonElement>(".primary-button")!.disabled,
+      false,
+    );
+    assert.equal(
+      document.querySelector<HTMLDetailsElement>(
+        "details.user-question-draft-note",
+      )?.open,
+      false,
+    );
+    question.state = "answer-pending";
+    await act(async () => {
+      await store.refresh("synthetic");
+    });
+    assert.equal(
+      document.querySelector("details.user-question-draft-note"),
+      null,
+      "submitted answers are not labelled unsent drafts",
+    );
+    question.state = "unavailable";
+    await act(async () => {
+      await store.refresh("synthetic");
+    });
+    assert.equal(
+      document.querySelectorAll('.user-question-status[role="status"]').length,
+      1,
+    );
+  } finally {
+    await act(async () => root.unmount());
+    Object.assign(globalThis, previous, {
+      IS_REACT_ACT_ENVIRONMENT: undefined,
+    });
+    dom.window.close();
+  }
+});

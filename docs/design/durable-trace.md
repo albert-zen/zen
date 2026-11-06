@@ -28,6 +28,24 @@ Each thread/auxiliary partition has append-only writer segments. Frames carry a 
 
 Artifact creation, deduplication, import and reading require owned regular files. Symbolic links, multiply-linked files and aliased owned directories are rejected rather than acknowledged as independent copies. Import copies bytes and preserves origin/clock attribution; source deletion cannot remove an acknowledged independently owned destination artifact.
 
+New JSON model request bodies can store literal byte spans and a versioned recipe for
+canonical, unescaped Base64 image data URLs of at least 1 KiB of encoded text. Decoded
+images are content-addressed and shared across requests. The capture keeps the same
+original request SHA-256, length, media type and artifact reference. Raw files retain
+precedence when present, so ordinary tool artifact paths still expose owned original
+files, including when a tool later records bytes identical to a compact request.
+Unsupported encodings stay literal. Imports verify the source bytes before selecting a
+local representation and own their image blocks independently. Existing artifacts are
+not rewritten.
+
+Each compact image block and recipe is published as an owned file inside an atomically
+renamed, nonempty private directory. Image blocks are synced before the recipe, and
+the recipe before its Trace frame. Failures can leave unreferenced files; no live
+migration or reclamation is performed here. Readers hash every reconstructed byte
+and every referenced image block, including when the requested range is empty.
+A missing, aliased, or corrupt recipe or block is reported as unavailable evidence.
+Older builds that predate recipes cannot read a compact-only artifact.
+
 Durability receipts describe synchronization scope: POSIX file and directory synchronization, or file synchronization where directory synchronization is not available. Synthetic tests cover process exit/restart, partial frames and interrupted/corrupt artifacts; they do not promise untested hardware, filesystem or power-loss guarantees.
 
 Durations within one process use monotonic nanoseconds. Every writer has an explicit clock domain and wall time for display. Cross-process ordering must not subtract unrelated monotonic clocks or pretend wall clocks provide exact elapsed time.

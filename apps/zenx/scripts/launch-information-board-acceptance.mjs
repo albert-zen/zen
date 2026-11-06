@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import electron from "electron";
+import { build } from "esbuild";
 import { seedInformationLayoutQuestion } from "./seed-information-layout-acceptance.mjs";
 import { DomainThreadJournal } from "../../../dist/src/domain-journal.js";
 import { FileTraceStore } from "../../../dist/src/trace.js";
@@ -178,6 +179,15 @@ for (const file of [
   "src/renderer/src/App.tsx",
   "src/renderer/src/plugin-information-host.tsx",
   "src/renderer/src/ConversationInformationCards.tsx",
+  "src/renderer/src/information-panel-memory.ts",
+  "src/renderer/src/UserQuestionCards.tsx",
+  "src/renderer/src/BackgroundShellStatus.tsx",
+  "src/renderer/src/styles.css",
+  "src/renderer/src/shell-thread-panel.css",
+  "src/renderer/src/i18n/panels.ts",
+  "src/renderer/src/sidebar-thread-information.ts",
+  "src/main/trigger-service.ts",
+  "src/main/trigger-types.ts",
   "src/renderer/src/EditableInformationPanel.tsx",
   "src/renderer/src/RoomQuestionCards.tsx",
   "src/renderer/src/room-question-state.ts",
@@ -195,11 +205,15 @@ for (const file of [
   "src/renderer/src/board-ui-state.ts",
   "scripts/seed-information-layout-acceptance.mjs",
   "scripts/capture-information-board.cjs",
+  "scripts/owned-sidebar-native-input.ts",
   "scripts/launch-information-board-acceptance.mjs",
   "../../src/app-server.ts",
   "../../src/user-question-tool.ts",
+  "../../src/user-question-state.ts",
+  "src/renderer/src/user-question-state.ts",
   "../../dist/src/app-server.js",
   "../../dist/src/user-question-tool.js",
+  "../../dist/src/user-question-state.js",
   "../../dist/apps/cli/src/host.js",
 ])
   hashes[file] = createHash("sha256")
@@ -249,6 +263,16 @@ if (process.platform === "win32") {
   });
   await mkdir(environment.APPDATA, { recursive: true });
   await mkdir(environment.LOCALAPPDATA, { recursive: true });
+}
+if (process.platform === "darwin") {
+  await build({
+    entryPoints: [path.join(root, "scripts/owned-sidebar-native-input.ts")],
+    outfile: path.join(temporary, "owned-sidebar-native-input.cjs"),
+    bundle: true,
+    platform: "node",
+    format: "cjs",
+    external: ["electron"],
+  });
 }
 const child = spawn(
   electron,

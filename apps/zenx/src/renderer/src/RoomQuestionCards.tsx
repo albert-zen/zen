@@ -1,3 +1,4 @@
+import { useQuestionReadRecovery } from "./use-question-read-recovery.js";
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
@@ -63,12 +64,23 @@ export function RoomQuestionCards({
     const end = window.zenx.roomQuestions?.onChanged((id) => {
       if (active && id === roomId) void store.refresh();
     });
+    const endStatus = window.zenx.protocol?.onStatus?.((status) => {
+      if (active && status.type === "ready") void store.refresh();
+    });
     return () => {
       active = false;
       end?.();
+      endStatus?.();
       store.disconnect();
     };
   }, [roomId, store]);
+  useQuestionReadRecovery({
+    owner: roomId,
+    loading: state.loading,
+    error: state.error,
+    disabled: false,
+    refresh: () => store.refresh(),
+  });
   if (state.loaded && !state.ids.length && !state.error) return null;
   return (
     <section
@@ -79,26 +91,28 @@ export function RoomQuestionCards({
       aria-label={t("roomQuestionTitle")}
     >
       <header>
-        <h3>{t("roomQuestionTitle")}</h3>
-        <button
-          type="button"
-          className="icon-button"
-          aria-label={t("refresh")}
-          title={t("refresh")}
-          disabled={state.loading}
-          onClick={() => void store.refresh()}
-        >
-          <Icon name="reload" size={14} />
-        </button>
+        <h3 className="user-question-heading">
+          <Icon name="question" size={15} />
+          {t("roomQuestionTitle")}
+        </h3>
       </header>
       {!state.loaded && !state.error ? (
         <p role="status">{t("boardLoading")}</p>
       ) : null}
       {state.error ? (
-        <details className="user-question-error">
-          <summary>{t("questionReadFailed")}</summary>
-          <pre>{state.error}</pre>
-        </details>
+        <div className="user-question-read-error" role="status">
+          <span>{t("questionLoadFailed")}</span>
+          <button
+            type="button"
+            className="quiet-button question-read-retry"
+            aria-label={t("questionRetryRead")}
+            disabled={state.loading || false}
+            onClick={() => void store.refresh()}
+          >
+            <Icon name="reload" size={14} />
+            {t("questionRetry")}
+          </button>
+        </div>
       ) : null}
       {state.ids.map((id) => {
         const view = state.cards[id];
@@ -223,37 +237,66 @@ function RoomQuestionCard({
         return (
           <fieldset key={q.id} disabled={disabled || changed}>
             <legend>{q.prompt}</legend>
-            {q.options?.map((option) => {
-              const selected = answer?.optionIds.includes(option.id) ?? false;
-              return (
-                <label className="user-question-option" key={option.id}>
-                  <input
-                    type={q.multiSelect ? "checkbox" : "radio"}
-                    name={JSON.stringify([question.roomId, question.id, q.id])}
-                    checked={selected}
-                    onChange={() =>
-                      edit(q.id, {
-                        optionIds: q.multiSelect
-                          ? selected
-                            ? answer!.optionIds.filter((id) => id !== option.id)
-                            : [...(answer?.optionIds ?? []), option.id]
-                          : [option.id],
-                      })
-                    }
-                  />
-                  <span>
-                    <strong>{option.label}</strong>
-                    {option.description ? (
-                      <small>{option.description}</small>
-                    ) : null}
-                  </span>
-                </label>
-              );
-            })}
+            {q.options?.length ? (
+              <ul className="user-question-options">
+                {q.options?.map((option) => {
+                  const selected =
+                    answer?.optionIds.includes(option.id) ?? false;
+                  return (
+                    <li key={option.id}>
+                      <label
+                        className="user-question-option"
+                        data-selected={selected ? "true" : undefined}
+                      >
+                        <input
+                          type={q.multiSelect ? "checkbox" : "radio"}
+                          name={JSON.stringify([
+                            question.roomId,
+                            question.id,
+                            q.id,
+                          ])}
+                          checked={selected}
+                          onChange={() =>
+                            edit(q.id, {
+                              optionIds: q.multiSelect
+                                ? selected
+                                  ? answer!.optionIds.filter(
+                                      (id) => id !== option.id,
+                                    )
+                                  : [...(answer?.optionIds ?? []), option.id]
+                                : [option.id],
+                            })
+                          }
+                        />
+                        <span
+                          className="user-question-option-mark"
+                          aria-hidden="true"
+                        >
+                          {selected ? <Icon name="check" size={12} /> : null}
+                        </span>
+                        <span className="user-question-option-copy">
+                          <strong>{option.label}</strong>
+                          {option.description ? (
+                            <small>{option.description}</small>
+                          ) : null}
+                        </span>
+                      </label>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : null}
             <label className="user-question-text">
-              <span>{t("questionFreeText")}</span>
+              {q.options?.length ? (
+                <span>{t("questionOptionalDetails")}</span>
+              ) : null}
               <textarea
-                rows={2}
+                aria-label={
+                  q.options?.length
+                    ? `${q.prompt} · ${t("questionOptionalDetails")}`
+                    : q.prompt
+                }
+                rows={1}
                 maxLength={8192}
                 value={answer?.text ?? ""}
                 onChange={(event) =>
@@ -338,8 +381,18 @@ function RoomQuestionCard({
         ) : null}
       </div>
       <small className="user-question-draft-note">
-        {t("roomQuestionReceiptNote")} {t("questionDraftNote")}
+        {t("roomQuestionReceiptNote")}
       </small>
+      {!disabled &&
+      !changed &&
+      draft.answers.some(
+        (answer) => answer.optionIds.length > 0 || Boolean(answer.text?.trim()),
+      ) ? (
+        <details className="user-question-draft-note">
+          <summary>{t("questionDraftStorage")}</summary>
+          <small>{t("questionDraftNote")}</small>
+        </details>
+      ) : null}
     </article>
   );
 }

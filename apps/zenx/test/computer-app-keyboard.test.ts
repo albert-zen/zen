@@ -19,7 +19,7 @@ import {
   ComputerThreadObservation,
   type ComputerThreadEvent,
 } from "../src/main/capabilities/computer-thread-observation.js";
-function fixture(cap = true) {
+function fixture(cap = true, shortcutCap = true) {
   const calls: Record<string, unknown>[] = [];
   const transport: TargetTransport = {
     async request(request) {
@@ -28,6 +28,7 @@ function fixture(cap = true) {
         ? {
             bindingId: "owned",
             ...(cap ? { appKeyboardInputAvailable: true } : {}),
+            ...(shortcutCap ? { appShortcutInputAvailable: true } : {}),
             target: {
               pid: 7,
               bundleId: "owned.test",
@@ -54,9 +55,15 @@ test("app keyboard derives one owner binding without capture or window verificat
   await session.select("owner", { pid: 7 }, signal);
   await session.backgroundType("owner", "owned", "中文🌙🦆", signal);
   await session.backgroundKeyPress("owner", "owned", "enter", signal);
+  await session.backgroundShortcut(
+    "owner",
+    "owned",
+    { key: "a", modifiers: ["command"] },
+    signal,
+  );
   assert.deepEqual(
     calls.map((c) => c.operation),
-    ["select", "backgroundType", "backgroundKeyPress"],
+    ["select", "backgroundType", "backgroundKeyPress", "backgroundShortcut"],
   );
   assert.equal(calls[1]?.bindingId, "owned");
   assert.equal(calls[1]?.target, undefined);
@@ -228,14 +235,24 @@ test("locked Host package uses app lease and independent permission without fore
     cwd: "/synthetic",
   } as never)) as Record<string, unknown>;
   assert.equal(result.targetScope, "application_current_focus");
+  const shortcut = (await invoke("computer_background_shortcut", {
+    bindingId: "owned",
+    key: "a",
+    modifiers: ["command"],
+  })) as Record<string, unknown>;
+  assert.equal(shortcut.action, "background_shortcut");
+  assert.equal(shortcut.targetScope, "application_current_focus");
+  assert.equal(shortcut.applicationEffect, "unverified");
   assert.deepEqual(accesses, [
     "native-targeted-accessibility",
     "native-targeted-accessibility",
+    "native-targeted-app",
     "native-targeted-app",
   ]);
   for (const name of [
     "computer_background_type",
     "computer_background_key_press",
+    "computer_background_shortcut",
   ]) {
     const tool = boundComputerCapabilityManifest.tools.find(
       (t) => t.name === name,
@@ -314,4 +331,66 @@ test("application activity has no old-window pointer, live capture or fresh-fram
     "explicit human window choice starts its fresh read-only capture",
   );
   projection.close();
+});
+
+test("background shortcuts require new helper capability and validate modifiers before dispatch", async () => {
+  const old = fixture(true, false);
+  await old.session.select("owner", { pid: 7 }, signal);
+  await assert.rejects(
+    old.session.backgroundShortcut(
+      "owner",
+      "owned",
+      { key: "a", modifiers: ["command"] },
+      signal,
+    ),
+    /helper|keyboard/,
+  );
+  assert.equal(old.calls.length, 1);
+  const f = fixture();
+  await f.session.select("owner", { pid: 7 }, signal);
+  for (const modifiers of [[], ["command", "command"], ["unknown"]]) {
+    await assert.rejects(
+      f.session.backgroundShortcut(
+        "owner",
+        "owned",
+        { key: "a", modifiers },
+        signal,
+      ),
+      /shortcut/,
+    );
+  }
+  assert.equal(f.calls.length, 1);
+});
+test("model app shortcuts accept modifiers only through the existing application binding", () => {
+  const refs = new ModelReferenceRegistry().scope("owner");
+  const projected = projectComputerResult(
+    { bindingId: "owned" },
+    {},
+    refs,
+    "epoch",
+  );
+  assert.deepEqual(
+    decodeComputerArguments(
+      "computer_background_shortcut",
+      { binding: projected.binding, key: "a", modifiers: ["command"] },
+      refs,
+      "epoch",
+    ),
+    { bindingId: "owned", key: "a", modifiers: ["command"] },
+  );
+  assert.throws(
+    () =>
+      decodeComputerArguments(
+        "computer_background_shortcut",
+        {
+          binding: projected.binding,
+          key: "a",
+          modifiers: ["command"],
+          pid: 7,
+        },
+        refs,
+        "epoch",
+      ),
+    /only|accept/,
+  );
 });

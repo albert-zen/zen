@@ -137,17 +137,32 @@ async function actualHelpers(names, globals) {
   );
 }
 
-async function clickFixture({ trusted = true, disabled = false } = {}) {
+async function clickFixture({
+  trusted = true,
+  disabled = false,
+  obscured = false,
+  hidden = false,
+  missingOnce = false,
+  missingAlways = false,
+  removedAfterPreparation = false,
+} = {}) {
   const events = [];
   const browser = {};
   let listener;
   let delivery;
   let finishWrite;
   let busy = false;
+  let targetQueries = 0;
+  let focused = false;
   const target = {
     disabled,
     scrollIntoView() {},
-    getBoundingClientRect: () => ({ left: 0, top: 0, width: 20, height: 20 }),
+    getBoundingClientRect: () => ({
+      left: 0,
+      top: 0,
+      width: hidden ? 0 : 20,
+      height: 20,
+    }),
     contains: (element) => element === target,
     addEventListener(type, callback, options) {
       assert.equal(type, "click");
@@ -156,15 +171,27 @@ async function clickFixture({ trusted = true, disabled = false } = {}) {
       listener = callback;
     },
   };
-  const refresh = {
-    get disabled() {
-      return busy;
+  const panel = {
+    dataset: {
+      get busy() {
+        return String(busy);
+      },
     },
   };
   const document = {
-    querySelector: (selector) =>
-      selector.includes("Refresh information") ? refresh : target,
-    elementFromPoint: () => target,
+    querySelector: (selector) => {
+      if (selector === ".editable-information-panel") return panel;
+      assert.equal(
+        focused,
+        true,
+        "focus must settle before preparing the target",
+      );
+      targetQueries++;
+      return missingAlways || (missingOnce && targetQueries === 1)
+        ? null
+        : target;
+    },
+    elementFromPoint: () => (obscured ? {} : target),
     elementsFromPoint: () => [target],
   };
   const result = { steps: [] };
@@ -187,7 +214,9 @@ async function clickFixture({ trusted = true, disabled = false } = {}) {
     },
     window: {
       show() {},
-      focus() {},
+      focus() {
+        focused = true;
+      },
       isFocused: () => true,
       webContents: {
         focus() {},
@@ -197,7 +226,7 @@ async function clickFixture({ trusted = true, disabled = false } = {}) {
           if (event.type === "mouseUp")
             delivery = () => {
               events.push("DOM click delivered");
-              listener({ isTrusted: trusted });
+              if (!removedAfterPreparation) listener({ isTrusted: trusted });
               busy = true;
               finishWrite = () => {
                 busy = false;
@@ -209,7 +238,7 @@ async function clickFixture({ trusted = true, disabled = false } = {}) {
     },
     result,
   });
-  return { ...helpers, events, result };
+  return { ...helpers, events, result, targetQueries: () => targetQueries };
 }
 
 test("native click waits for actual trusted delivery before layout idle can be observed", async () => {
@@ -219,13 +248,87 @@ test("native click waits for actual trusted delivery before layout idle can be o
   await f.settledLayout();
   assert.equal(f.events.at(-1), "layout write settled");
   assert.deepEqual(f.result.steps, ["Hide one widget"]);
+  assert.equal(
+    f.targetQueries(),
+    1,
+    "one element is located, checked and armed",
+  );
+});
+
+test("layout readiness requires the mounted panel's explicit idle state", async () => {
+  let panel = null;
+  const helpers = await actualHelpers(["settledLayout"], {
+    evaluate: async (expression) =>
+      runInNewContext(expression, {
+        document: {
+          querySelector(selector) {
+            assert.equal(selector, ".editable-information-panel");
+            return panel;
+          },
+        },
+      }),
+    until: async (check) => {
+      assert.equal(await check(), false, "an absent panel is not idle");
+      panel = { dataset: {} };
+      assert.equal(
+        await check(),
+        false,
+        "missing busy observation is not idle",
+      );
+      panel.dataset.busy = "true";
+      assert.equal(await check(), false, "an in-flight write must settle");
+      panel.dataset.busy = "false";
+      assert.equal(
+        await check(),
+        true,
+        "mounted panel explicitly reports idle",
+      );
+    },
+  });
+  await helpers.settledLayout();
+});
+
+test("a temporarily missing control waits only before the single native dispatch", async () => {
+  const f = await clickFixture({ missingOnce: true });
+  await f.click("button", "Resume exact trigger");
+  assert.equal(f.targetQueries(), 2);
+  assert.deepEqual(f.events, ["mouseDown", "mouseUp", "DOM click delivered"]);
+  assert.deepEqual(f.result.steps, ["Resume exact trigger"]);
+});
+
+test("an absent control never dispatches input or records a successful step", async () => {
+  const f = await clickFixture({ missingAlways: true });
+  await assert.rejects(f.click("button"), /target prepared before input/);
+  assert.deepEqual(f.events, []);
+  assert.deepEqual(f.result.steps, []);
+});
+
+test("removal after preparation keeps unacknowledged input unknown without replay", async () => {
+  const f = await clickFixture({ removedAfterPreparation: true });
+  await assert.rejects(f.click("button"), /trusted Chromium click delivered/);
+  assert.deepEqual(f.events, ["mouseDown", "mouseUp", "DOM click delivered"]);
+  assert.deepEqual(f.result.steps, []);
+});
+
+test("an obscured control still refuses native input without forced dispatch", async () => {
+  const f = await clickFixture({ obscured: true });
+  await assert.rejects(f.click("button"), /Obscured\/disabled/);
+  assert.deepEqual(f.events, []);
+  assert.deepEqual(f.result.steps, []);
+});
+
+test("a control without a visible layout box cannot receive native input", async () => {
+  const f = await clickFixture({ hidden: true });
+  await assert.rejects(f.click("button"), /Obscured\/disabled/);
+  assert.deepEqual(f.events, []);
+  assert.deepEqual(f.result.steps, []);
 });
 
 test("synthetic click cannot acknowledge native delivery or trigger an input retry", async () => {
   const f = await clickFixture({ trusted: false });
   await assert.rejects(
     f.click("button", "Hide one widget"),
-    /trusted native click delivered/,
+    /trusted Chromium click delivered/,
   );
   assert.deepEqual(f.events, ["mouseDown", "mouseUp", "DOM click delivered"]);
   assert.deepEqual(f.result.steps, []);
@@ -321,4 +424,69 @@ test("rejected controlled selection fails readback without retrying or bypassing
   );
   assert.deepEqual(f.events, ["focus", "input", "change"]);
   assert.deepEqual(f.result.steps, []);
+});
+
+test("native resize waits for width while allowing OS-constrained height", async () => {
+  let native = [1600, 1000];
+  const browser = { innerWidth: 1600, innerHeight: 970 };
+  let requests = 0;
+  const helpers = await actualHelpers(["resizeWindow"], {
+    window: {
+      setSize(width, height) {
+        requests++;
+        assert.deepEqual([width, height], [1000, 820]);
+      },
+      getSize: () => native,
+      getContentSize: () => [1000, 790],
+    },
+    evaluate: async (expression) =>
+      runInNewContext(expression, { window: browser }),
+    until: async (check) => {
+      assert.equal(await check(), false, "old native size is not ready");
+      native = [1000, 790];
+      assert.equal(await check(), false, "old renderer size is not ready");
+      browser.innerWidth = 1000;
+      assert.equal(
+        await check(),
+        true,
+        "native titlebar height is not the renderer viewport height",
+      );
+    },
+  });
+  await helpers.resizeWindow(1000, 820);
+  assert.equal(requests, 1, "resize is not replayed");
+});
+
+test("information regression traverses OS hit testing in split and maximized main modes", async () => {
+  const calls = [];
+  const result = {};
+  const helpers = await actualHelpers(["verifyInformationOsInput"], {
+    result,
+    resizeWindow: async (width, height) => calls.push({ width, height }),
+    click: async (selector, label, systemPointer) => {
+      assert.equal(systemPointer, true, label);
+      calls.push({ selector });
+    },
+    capture: async (name, mode) => calls.push({ name, mode }),
+  });
+  await helpers.verifyInformationOsInput();
+  assert.equal(result.informationOsInput.status, "passed");
+  assert.equal(
+    calls.filter((call) => call.selector === ".information-toolbar button")
+      .length,
+    8,
+  );
+  assert.deepEqual(
+    calls.filter((call) => call.mode).map((call) => call.mode),
+    [
+      "dock",
+      "closed",
+      "dock",
+      "closed",
+      "overlay",
+      "closed",
+      "overlay",
+      "closed",
+    ],
+  );
 });

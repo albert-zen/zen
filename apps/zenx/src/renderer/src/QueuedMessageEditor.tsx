@@ -1,3 +1,4 @@
+import { focusMessageQuoteSource } from "./quote-source-navigation.js";
 import { InlineComposerEditor } from "./InlineComposerEditor.js";
 import type { ComposerInput } from "./composer-input.js";
 import { useEffect, useId, useRef, useState } from "react";
@@ -5,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import type { AttachmentRef } from "../../../../../src/attachment.js";
 import type { ComposerDraft, ComposerDraftImage } from "./composer-state.js";
 import { composerDraftHasContent } from "./composer-state.js";
+import { abandonDraftImage } from "./draft-image-lifecycle.js";
 import { ComposerEditor, ComposerShell } from "./Composer.js";
 import { AttachmentImage, ImagePreview } from "./ImagePresentation.js";
 import { Icon } from "./icons.js";
@@ -33,7 +35,9 @@ export interface QueuedMessageEditorProps {
   /** Exact current-viewport target, not a label search; source navigation suspends this draft. */
   onReferenceSource?(
     reference: Extract<Reference, { kind: "message" }>,
-  ): HTMLElement | null;
+  ): HTMLElement | null | Promise<HTMLElement | null>;
+  /** Capture the exact source request before closing; newer navigation may supersede it. */
+  referenceSourceGuard?(target: HTMLElement): () => boolean;
   trigger: HTMLElement | null;
   /** Exact parent-owned thread/selection guard, including a connected trigger. */
   canRestoreFocus?(): boolean;
@@ -78,6 +82,7 @@ function EditorSession(props: QueuedMessageEditorProps) {
   const mounted = useRef(true);
   const saveLock = useRef(false);
   const importLock = useRef(false);
+  const explicitlyDiscarded = useRef(false);
   const restoreRequested = useRef(false);
   const [saving, setSaving] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -116,6 +121,7 @@ function EditorSession(props: QueuedMessageEditorProps) {
     setDraft(nextDraft);
     setLocalError(null);
     restoreRequested.current = false;
+    explicitlyDiscarded.current = false;
     const frame = requestAnimationFrame(() => {
       if (mounted.current && latest.current.open) textarea.current?.focus();
     });
@@ -137,6 +143,7 @@ function EditorSession(props: QueuedMessageEditorProps) {
     !latest.current.disabledReason;
   const dismiss = (reason: "cancel" | "saved") => {
     if (!mounted.current || !latest.current.open) return;
+    if (reason === "cancel") explicitlyDiscarded.current = true;
     restoreRequested.current = true;
     setPreview(null);
     latest.current.onClose(reason);
@@ -189,6 +196,10 @@ function EditorSession(props: QueuedMessageEditorProps) {
     setLocalError(null);
     try {
       const images = await operation();
+      if (explicitlyDiscarded.current) {
+        for (const image of images) abandonDraftImage(image.id);
+        return;
+      }
       if (!mounted.current || images.length === 0) return;
       updateDraft({
         ...draftRef.current,
@@ -217,16 +228,39 @@ function EditorSession(props: QueuedMessageEditorProps) {
 
   const openReferenceSource = (reference: Reference): boolean => {
     if (reference.kind !== "message" || !canEdit()) return false;
-    const target = latest.current.onReferenceSource?.(reference);
-    if (!target) return false;
-    restoreRequested.current = false;
-    latest.current.onClose("source");
-    requestAnimationFrame(() => {
-      if (target.isConnected && (latest.current.canRestoreFocus?.() ?? true)) {
-        target.scrollIntoView({ block: "center", behavior: "auto" });
-        target.focus({ preventScroll: true });
+    const owner = latest.current.identity;
+    const finish = (target: HTMLElement | null | undefined) => {
+      if (
+        !mounted.current ||
+        !latest.current.open ||
+        latest.current.identity !== owner
+      )
+        return;
+      if (!target) {
+        setLocalError(t("referenceSourceUnavailable"));
+        return;
       }
-    });
+      const isCurrent =
+        latest.current.referenceSourceGuard?.(target) ?? (() => true);
+      restoreRequested.current = false;
+      latest.current.onClose("source");
+      requestAnimationFrame(() => {
+        if (
+          target.isConnected &&
+          isCurrent() &&
+          (latest.current.canRestoreFocus?.() ?? true)
+        )
+          focusMessageQuoteSource(target, reference.excerpt);
+      });
+    };
+    const result = latest.current.onReferenceSource?.(reference);
+    if (!result) return false;
+    if (result instanceof Promise)
+      void result.then(finish).catch((cause: unknown) => {
+        if (mounted.current)
+          setLocalError(cause instanceof Error ? cause.message : String(cause));
+      });
+    else finish(result);
     return true;
   };
   return (

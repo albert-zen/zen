@@ -260,10 +260,44 @@ for (const interruption of [
         3,
         "no release or replay after the interrupted press",
       );
-      await assert.rejects(
-        chrome.provider.backend.inspect("same-session", "chrome-tab-7"),
-        /tainted|outcome is unknown/,
-      );
+      if (interruption === "disconnect") {
+        await assert.rejects(
+          chrome.provider.backend.inspect("same-session", "chrome-tab-7"),
+          /CDP connection is unavailable/,
+        );
+      } else {
+        if (interruption === "dialog") {
+          chrome.socket.send(
+            JSON.stringify({
+              type: "cdp-event",
+              tabId: 7,
+              method: "Page.javascriptDialogClosed",
+              params: { result: false },
+            }),
+          );
+        }
+        const refreshed = await chrome.provider.backend.inspect(
+          "same-session",
+          "chrome-tab-7",
+        );
+        assert.notEqual(refreshed.observationId, observed.observationId);
+        await assert.rejects(
+          chrome.provider.backend.pointerClick!(
+            "same-session",
+            "chrome-tab-7",
+            refreshed.observationId,
+            21,
+            23,
+          ),
+          /input is blocked|held input/,
+        );
+        assert.equal(
+          chrome.commands.filter((c) => c.method === "Input.dispatchMouseEvent")
+            .length,
+          3,
+          "fresh inspection does not clear the physical target's held-input quarantine",
+        );
+      }
       const nextEdge = await edge.provider.backend.inspect(
         "same-session",
         "chrome-tab-7",

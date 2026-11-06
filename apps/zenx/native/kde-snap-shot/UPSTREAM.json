@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "sourceRepository": "https://github.com/pingdotgg/t3code",
+  "sourceCommit": "337c5858c33bc7f8f6dfd391a2c279fa0f7e4d17",
+  "verifiedVia": "Connected GitHub fetch_file, pinned ref",
+  "verifiedAt": "2026-11-05",
+  "license": "MIT",
+  "runtimeProtocolVersion": 1,
+  "runtimeCommands": ["check", "capture"],
+  "setup": "manual-only; no runtime install, copy, update, registration, cache refresh, or permission changes",
+  "changes": [
+    "Rename dedicated executable and callback namespace to ZenX; format the inert feedback geometry JavaScript to repository style.",
+    "Add protocolVersion:1; remove activation and feedback command dispatch. Retain inert upstream activation/feedback sources, not linked.",
+    "Require private capture directory and create_new PNG mode0600.",
+    "Host validates fixed installation paths, identity and desktop authorization entry; bounded no-follow PNG reads, output limits, cancellation cleanup and rejection of known self-window identities.",
+    "Keep upstream same-window match, KWin owner authentication, screenshot bounds, denial and transient-script cleanup."
+  ],
+  "files": [
+    {
+      "upstreamPath": "native/kde-snap-shot/Cargo.toml",
+      "upstreamBlobSha": "3acfa7cb3016464fa2e354460553f7f1d70597f1",
+      "url": "https://github.com/pingdotgg/t3code/blob/337c5858c33bc7f8f6dfd391a2c279fa0f7e4d17/native/kde-snap-shot/Cargo.toml",
+      "localPath": "Cargo.toml"
+    },
+    {
+      "upstreamPath": "native/kde-snap-shot/Cargo.lock",
+      "upstreamBlobSha": "c11af6365e542133a507e7dc04bdec7c83315e9e",
+      "url": "https://github.com/pingdotgg/t3code/blob/337c5858c33bc7f8f6dfd391a2c279fa0f7e4d17/native/kde-snap-shot/Cargo.lock",
+      "localPath": "Cargo.lock"
+    },
+    {
+      "upstreamPath": "native/kde-snap-shot/src/main.rs",
+      "upstreamBlobSha": "ec1256779397220fe6a6d2cf6c750409154494ac",
+      "url": "https://github.com/pingdotgg/t3code/blob/337c5858c33bc7f8f6dfd391a2c279fa0f7e4d17/native/kde-snap-shot/src/main.rs",
+      "localPath": "src/main.rs"
+    },
+    {
+      "upstreamPath": "native/kde-snap-shot/src/feedback.rs",
+      "upstreamBlobSha": "d7c5ec0d9b2c978171361d1fa5ab7153d2a67715",
+      "url": "https://github.com/pingdotgg/t3code/blob/337c5858c33bc7f8f6dfd391a2c279fa0f7e4d17/native/kde-snap-shot/src/feedback.rs",
+      "localPath": "src/feedback.rs"
+    },
+    {
+      "upstreamPath": "native/kde-snap-shot/src/activate.js",
+      "upstreamBlobSha": "19cedde148b958313b5047d99841ed6eb048a596",
+      "url": "https://github.com/pingdotgg/t3code/blob/337c5858c33bc7f8f6dfd391a2c279fa0f7e4d17/native/kde-snap-shot/src/activate.js",
+      "localPath": "src/activate.js"
+    },
+    {
+      "upstreamPath": "native/kde-snap-shot/src/feedback.qml",
+      "upstreamBlobSha": "8b96d99d563ce4c1063f67407d35ef4ff87c24eb",
+      "url": "https://github.com/pingdotgg/t3code/blob/337c5858c33bc7f8f6dfd391a2c279fa0f7e4d17/native/kde-snap-shot/src/feedback.qml",
+      "localPath": "src/feedback.qml"
+    },
+    {
+      "upstreamPath": "native/kde-snap-shot/src/feedbackGeometry.js",
+      "upstreamBlobSha": "73f209c2a69abc24ee85cec186bbff5a9f063ebe",
+      "url": "https://github.com/pingdotgg/t3code/blob/337c5858c33bc7f8f6dfd391a2c279fa0f7e4d17/native/kde-snap-shot/src/feedbackGeometry.js",
+      "localPath": "src/feedbackGeometry.js"
+    },
+    {
+      "upstreamPath": "native/kde-snap-shot/src/transport_tests.rs",
+      "upstreamBlobSha": "83e72556c0d18acb3c61ffccde293bac79e5c426",
+      "url": "https://github.com/pingdotgg/t3code/blob/337c5858c33bc7f8f6dfd391a2c279fa0f7e4d17/native/kde-snap-shot/src/transport_tests.rs",
+      "localPath": "src/transport_tests.rs"
+    },
+    {
+      "upstreamPath": "apps/desktop/src/snapShot/KdeSnapShot.ts",
+      "upstreamBlobSha": "f141bd485d027fd3dcca9b5e0a7c0ed17db70dc6",
+      "url": "https://github.com/pingdotgg/t3code/blob/337c5858c33bc7f8f6dfd391a2c279fa0f7e4d17/apps/desktop/src/snapShot/KdeSnapShot.ts",
+      "localPath": "../../src/main/app-shot-kde.ts"
+    },
+    {
+      "upstreamPath": "LICENSE",
+      "upstreamBlobSha": "55ee675bb1de9e580b69f3dd68684df2a4dffba7",
+      "url": "https://github.com/pingdotgg/t3code/blob/337c5858c33bc7f8f6dfd391a2c279fa0f7e4d17/LICENSE",
+      "localPath": "LICENSE.upstream"
+    },
+    {
+      "upstreamPath": "apps/desktop/src/snapShot/linuxCaptureSession.ts",
+      "upstreamBlobSha": "e1f7c3601efc0b92550ae99dc510279cbf34861e",
+      "url": "https://github.com/pingdotgg/t3code/blob/337c5858c33bc7f8f6dfd391a2c279fa0f7e4d17/apps/desktop/src/snapShot/linuxCaptureSession.ts",
+      "localPath": "../../src/main/app-shot-kde.ts"
+    },
+    {
+      "upstreamPath": "apps/desktop/src/app/DesktopLinuxUrlHandler.ts",
+      "upstreamBlobSha": "cfa8498ae6238337c3cfaac3a58785e68fe85398",
+      "url": "https://github.com/pingdotgg/t3code/blob/337c5858c33bc7f8f6dfd391a2c279fa0f7e4d17/apps/desktop/src/app/DesktopLinuxUrlHandler.ts",
+      "localPath": "../../src/main/app-shot-kde.ts"
+    }
+  ]
+}

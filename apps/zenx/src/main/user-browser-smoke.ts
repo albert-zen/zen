@@ -4,7 +4,6 @@ import {
   verifyBrowserExtensions,
 } from "./browser-extensions-smoke.js";
 import { smokeConnectedActivity } from "./browser-connected-activity-smoke.js";
-import { BrowserInputUnsupportedError } from "./capabilities/browser-targeted-input.js";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
@@ -43,6 +42,7 @@ const inputCaptureDiagnostics: Array<
   UserBrowserInputCaptureDiagnostic & { phase: string }
 > = [];
 let inputPhase = "initial-inspection";
+let remoteFrameFailure: Record<string, unknown> | undefined;
 const decodeNodeSmokeLiveImage: UserBrowserLiveImageDecoder = async (
   encoded,
 ) => ({
@@ -54,6 +54,8 @@ const decodeNodeSmokeLiveImage: UserBrowserLiveImageDecoder = async (
   toJPEG: () => encoded,
 });
 const server = createServer((request, response) => {
+  // Keep this disposable origin consistently site-keyed from its first document.
+  response.setHeader("Origin-Agent-Cluster", "?0");
   if (request.url?.startsWith(browserExtensionsFixturePath)) {
     response.setHeader("content-type", "application/json");
     response.setHeader("cache-control", "no-store");
@@ -61,7 +63,10 @@ const server = createServer((request, response) => {
     return;
   }
   if (fixtureRequests.length < 32) fixtureRequests.push(request.url ?? "");
-  if (request.url?.startsWith("/input-contract")) {
+  if (
+    request.url?.startsWith("/input-contract") ||
+    request.url?.startsWith("/remote-frame-child")
+  ) {
     response.setHeader("content-type", "text/html; charset=utf-8");
     response.setHeader("cache-control", "no-store");
     response.end(targetedInputContractPage(request.url));
@@ -89,7 +94,7 @@ const server = createServer((request, response) => {
       <p id="visibility"></p><output id="result">No canvas click</output><p id="focus">Focus none</p>
       <canvas width="200" height="80" tabindex="0" onclick="this.focus();document.querySelector('#result').textContent='Canvas clicked '+event.isTrusted"></canvas>
       <form onsubmit="event.preventDefault();document.querySelector('#result').textContent='Submitted '+document.querySelector('#text').value"><input id="text" aria-label="Targeted text"><button type="button" id="next">Next focus</button></form>
-      <input type="file" id="native-file"><label for="native-file" style="position:absolute;left:10px;top:350px"><span>Choose native file</span></label>
+      <input type="file" id="native-file" onclick="event.preventDefault();document.querySelector('#result').textContent='File clicked '+event.isTrusted"><label onclick="event.preventDefault();document.querySelector('#result').textContent='File label clicked '+event.isTrusted" for="native-file" style="position:absolute;left:10px;top:350px"><span>Choose native file</span></label>
       <script>window.__zenProgrammableSmoke=42;const updateVisibility=()=>document.querySelector('#visibility').textContent='Visibility '+document.visibilityState;updateVisibility();document.addEventListener('visibilitychange',updateVisibility);document.addEventListener('focusin',()=>document.querySelector('#focus').textContent='Focus '+(document.activeElement.id||document.activeElement.tagName));</script>`);
     return;
   }
@@ -112,6 +117,8 @@ try {
     [
       `--user-data-dir=${directory}`,
       "--remote-debugging-port=0",
+      "--site-per-process",
+      "--host-resolver-rules=MAP localhost 127.0.0.1, MAP nested.localhost 127.0.0.1",
       "--no-first-run",
       "--no-default-browser-check",
       "--enable-logging=stderr",
@@ -389,32 +396,21 @@ try {
     /Focus next/u,
     "Tab must move page-local focus",
   );
-  await assert.rejects(
-    backend.pointerClick(
+  // Cancel only the fixture's picker default action, not trusted CDP input.
+  for (const [y, expected] of [
+    [310, /File clicked true/u],
+    [360, /File label clicked true/u],
+  ] as const) {
+    await backend.pointerClick(
       "windows-smoke",
       opened.tabId,
       inputInspection.observationId,
       30,
-      310,
-    ),
-    (error: unknown) =>
-      error instanceof BrowserInputUnsupportedError &&
-      error.code === "BROWSER_INPUT_UNSUPPORTED" &&
-      error.reason === "native-surface",
-  );
-  await assert.rejects(
-    backend.pointerClick(
-      "windows-smoke",
-      opened.tabId,
-      inputInspection.observationId,
-      30,
-      360,
-    ),
-    (error: unknown) =>
-      error instanceof BrowserInputUnsupportedError &&
-      error.code === "BROWSER_INPUT_UNSUPPORTED" &&
-      error.reason === "native-surface",
-  );
+      y,
+    );
+    inputInspection = await backend.inspect("windows-smoke", opened.tabId);
+    assert.match(inputInspection.visibleText, expected);
+  }
   const afterTargetedInput = await browserTargetSnapshot(
     endpoint,
     fixtureBrowserHwnd,
@@ -449,6 +445,13 @@ try {
     tabId: opened.tabId,
     endpoint,
     origin: `http://127.0.0.1:${String(port)}`,
+    remoteFrameInput: "supported",
+    onFailure: (diagnostic) => {
+      remoteFrameFailure = diagnostic;
+    },
+    onPhase: (phase) => {
+      inputPhase = phase;
+    },
     guard: async () => {
       assert.equal(foregroundWindowHandle(), foregroundBeforeOpen);
       const snapshot = await browserTargetSnapshot(
@@ -478,16 +481,20 @@ try {
     targetsBeforeOpen.activeTargetId,
     "Registry background open/inspect must preserve the actual Chrome active tab",
   );
-  const detached = await backend.closeSession("windows-smoke");
-  await retry(async () =>
-    liveEvents.some(
-      (event) =>
-        event.type === "status" &&
-        event.status === "unavailable" &&
-        event.message === "The observed browser tab is no longer attached.",
-    )
-      ? true
-      : undefined,
+  const closing = backend.closeSession("windows-smoke");
+  assert.deepEqual(liveEvents.at(-1), {
+    type: "status",
+    status: "unavailable",
+    message:
+      "Live observation stopped because browser session cleanup was requested.",
+  });
+  const eventsAfterStop = liveEvents.length;
+  const detached = await closing;
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(
+    liveEvents.length,
+    eventsAfterStop,
+    "Cleanup must stop live metadata and frames, even before detach settles",
   );
   stopLive();
   await backend.close();
@@ -578,6 +585,7 @@ try {
       targets,
       inputPhase,
       inputCaptureDiagnostics,
+      remoteFrameFailure,
     }),
   );
   console.error(browserObservation?.diagnostics("smoke failed", String(error)));

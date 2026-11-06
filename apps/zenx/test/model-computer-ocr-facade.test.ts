@@ -174,12 +174,18 @@ test("background click accepts only one capture ref and restores its sole exact 
       y: 40,
     },
   );
-  for (const extra of [
-    { target },
-    { binding: "r1" },
-    { button: "right" },
-    { windowId: 7 },
-  ])
+  for (const button of ["left", "right", "middle"]) {
+    const args = decodeComputerArguments(
+      "computer_background_click",
+      { capture: image.capture, x: 20, y: 40, button },
+      refs,
+      epoch,
+    );
+    assert.equal(args.button, button);
+    assert.deepEqual(args.target, target);
+    assert.equal(args.captureId, screenshot.captureId);
+  }
+  for (const extra of [{ target }, { binding: "r1" }, { windowId: 7 }])
     assert.throws(
       () =>
         decodeComputerArguments(
@@ -272,4 +278,22 @@ test("OCR model projection keeps downsample diagnostics without changing capture
     epoch,
   );
   assert.deepEqual(decoded, { target, captureId: screenshot.captureId });
+});
+
+test("background click model schema keeps optional left/right/middle button without exposing raw identity", async () => {
+  const { boundComputerCapabilityManifest } =
+    await import("../src/main/capabilities/computer-provider.js");
+  const tool = boundComputerCapabilityManifest.tools.find(
+    (tool) => tool.name === "computer_background_click",
+  )!;
+  const definition = computerModelDefinition(tool);
+  assert.deepEqual(
+    Object.keys(definition.inputSchema.properties as object).sort(),
+    ["button", "capture", "x", "y"],
+  );
+  assert.deepEqual(definition.inputSchema.required, ["capture", "x", "y"]);
+  assert.deepEqual(
+    (definition.inputSchema.properties as Record<string, unknown>).button,
+    { type: "string", enum: ["left", "right", "middle"], default: "left" },
+  );
 });

@@ -439,7 +439,9 @@ test("fresh Thread establishes native provenance before sending and only durable
       requests.some(({ method }) => method === "zen/turn/send"),
     );
     assert.deepEqual(
-      requests.map(({ method }) => method),
+      requests
+        .filter(({ method }) => method !== "zen/thread/questions/list")
+        .map(({ method }) => method),
       ["zen/thread/resume", "zen/turn/send"],
     );
     await emit(1, {
@@ -4728,6 +4730,9 @@ async function mountApp(
           : await options.getStatus(),
       getPendingApprovals: async () => [],
       request: async (method: string, params?: unknown) => {
+        // These interaction scenarios share complete recovery fixtures. Actual
+        // full/window wire routing is asserted in app-live-projection.test.ts.
+        if (method === "zen/thread/resume-window") method = "zen/thread/resume";
         if (method === "zen/initialize") return { processEpoch: "test-host" };
         // Passive evidence is not an input-admission call. Scenarios can fail or
         // hold its reply independently without changing the native send mock.
@@ -6233,7 +6238,11 @@ test("message source reads and opens its exact canonical thread without sending,
     );
     assert.ok(
       calls.every((call) =>
-        ["zen/thread/read", "zen/thread/resume"].includes(call.method),
+        [
+          "zen/thread/read",
+          "zen/thread/resume",
+          "zen/thread/questions/list",
+        ].includes(call.method),
       ),
     );
   } finally {
@@ -6710,7 +6719,11 @@ for (const visibility of ["keep", "hide", "reopen"] as const) {
       }
       assert.ok(
         calls.every((method) =>
-          ["zen/thread/read", "zen/thread/resume"].includes(method),
+          [
+            "zen/thread/read",
+            "zen/thread/resume",
+            "zen/thread/questions/list",
+          ].includes(method),
         ),
       );
     } finally {
@@ -7962,7 +7975,11 @@ test("tool destination opens and focuses the exact delivered message, not just i
     );
     assert.ok(
       calls.every((method) =>
-        ["zen/thread/read", "zen/thread/resume"].includes(method),
+        [
+          "zen/thread/read",
+          "zen/thread/resume",
+          "zen/thread/questions/list",
+        ].includes(method),
       ),
     );
   } finally {
@@ -9063,7 +9080,7 @@ for (const claimWins of [false, true]) {
         await setTextareaValue(composer, "Latest independent draft");
         const recall = await waitFor(() =>
           document.querySelector<HTMLButtonElement>(
-            ".pending-steer-heading button",
+            ".pending-steer-heading .queue-header-action",
           ),
         );
         await act(async () => {
@@ -9220,7 +9237,7 @@ test("complete App late recall acknowledgement never navigates or refreshes the 
     await setTextareaValue(composer, "Thread one draft");
     const recall = await waitFor(() =>
       document.querySelector<HTMLButtonElement>(
-        ".pending-steer-heading button",
+        ".pending-steer-heading .queue-header-action",
       ),
     );
     await act(async () => recall.click());
@@ -10514,7 +10531,7 @@ test("App usage preserves errors and unknown values without automatic retry or m
     assert.doesNotMatch(contextUsageLabel(), /0%/);
     assert.deepEqual(
       app.methods,
-      ["zen/thread/resume"],
+      ["zen/thread/resume", "zen/thread/questions/list"],
       "usage refresh never retries model, tool, or send mutations",
     );
   } finally {
@@ -10747,7 +10764,10 @@ for (const readySource of ["snapshot", "notification"] as const) {
         1,
         "native resume completed before readiness publication",
       );
-      assert.deepEqual(app.methods, ["zen/thread/resume"]);
+      assert.deepEqual(app.methods, [
+        "zen/thread/resume",
+        "zen/thread/questions/list",
+      ]);
       assert.equal(
         app.requests.length,
         0,
@@ -10768,7 +10788,7 @@ for (const readySource of ["snapshot", "notification"] as const) {
       assert.match(contextUsageLabel(), /9 \/ 100 tokens/);
       assert.deepEqual(
         app.methods,
-        ["zen/thread/resume"],
+        ["zen/thread/resume", "zen/thread/questions/list"],
         "readiness does not repeat native hydration",
       );
     } finally {
@@ -11092,28 +11112,44 @@ test("real Host questions render in full App information panel with independent 
         '[aria-label="Customize information"]',
       )!,
     );
+    const widgetIds = [
+      "default:lineage",
+      "default:triggers",
+      "default:shell",
+      "default:board",
+    ];
     await waitFor(
       () =>
         document.querySelectorAll('.information-widget[data-visible="true"]')
-          .length === 6,
+          .length === widgetIds.length,
     );
-    for (let index = 0; index < 6; index++) {
-      await invokeButtonClick(
-        document.querySelector<HTMLButtonElement>(
-          '.information-widget[data-visible="true"] .information-widget-actions button:nth-child(3)',
-        )!,
-      );
+    assert.deepEqual(
+      [...document.querySelectorAll<HTMLElement>(".information-widget")].map(
+        (widget) => widget.dataset.widgetId,
+      ),
+      widgetIds,
+      "Manage exposes every implemented default without unavailable PR/artifact placeholders",
+    );
+    for (const id of widgetIds) {
+      const widget = document.querySelector<HTMLElement>(
+        `[data-widget-id="${id}"]`,
+      )!;
+      const hide = [
+        ...widget.querySelectorAll<HTMLButtonElement>(
+          ".information-widget-actions button",
+        ),
+      ].find((button) => button.textContent?.trim() === "Hide");
+      assert.ok(hide && !hide.disabled, `Hide is available for ${id}`);
+      await invokeButtonClick(hide);
       await waitFor(
         () =>
-          document.querySelectorAll('.information-widget[data-visible="true"]')
-            .length ===
-          5 - index,
+          widget.dataset.visible === "false" &&
+          document.querySelector<HTMLElement>(".editable-information-panel")
+            ?.dataset.busy === "false",
       );
     }
     await invokeButtonClick(
-      document.querySelector<HTMLButtonElement>(
-        '[aria-label="Customize information"]',
-      )!,
+      document.querySelector<HTMLButtonElement>('[aria-label="Done"]')!,
     );
     assert.equal(
       document.querySelectorAll(".information-widget-body").length,
@@ -11124,11 +11160,13 @@ test("real Host questions render in full App information panel with independent 
       2,
       "real Host question cards remain outside every hidden native widget",
     );
-    assert.ok(
-      (
-        await sidebar.read({ kind: "thread", id: thread.id })
-      ).informationLayout!.widgets.every((widget) => !widget.visible),
+    const savedLayout = (await sidebar.read({ kind: "thread", id: thread.id }))
+      .informationLayout!;
+    assert.deepEqual(
+      savedLayout.widgets.map((widget) => widget.id),
+      widgetIds,
     );
+    assert.ok(savedLayout.widgets.every((widget) => !widget.visible));
     assert.equal(firstCard.querySelectorAll("input:checked").length, 0);
     const answerButton =
       firstCard.querySelector<HTMLButtonElement>(".primary-button")!;
@@ -11425,7 +11463,7 @@ for (const outcome of [
       deferRestoreRead = outcome !== "restored";
       const recall = await waitFor(() =>
         document.querySelector<HTMLButtonElement>(
-          ".pending-steer-heading button",
+          ".pending-steer-heading .queue-header-action",
         ),
       );
       await invokeButtonClick(recall, 2);
@@ -12007,4 +12045,246 @@ test("historical grid inherits the transcript's responsive 24px and narrow 20px 
   );
   const historyRule = css.match(/\.transcript-history\s*\{[^}]*\}/)?.[0] ?? "";
   assert.match(historyRule, /gap:\s*inherit;/);
+});
+
+for (const initialQuestionCount of [0, 32]) {
+  test(`foreground native question reveals the actual hidden App panel once without taking Composer focus (${initialQuestionCount} initial questions)`, async () => {
+    const { questionNativeFixture } =
+      await import("./user-question-native-fixture.js");
+    const f = await questionNativeFixture();
+    const selected = await f.host.startThread();
+    const background = await f.host.startThread();
+    await f.host.setThreadName(selected.id, "Foreground reveal fixture");
+    await f.host.setThreadName(background.id, "Background reveal fixture");
+    for (let index = 0; index < initialQuestionCount; index++)
+      await f.publish(selected.id);
+    let reads = 0;
+    let harness: AppHarness | undefined;
+    try {
+      harness = await mountApp(
+        {
+          projects: [
+            {
+              key: f.directory,
+              workspace: f.directory,
+              configured: true,
+              isDefault: true,
+              threadIds: [selected.id, background.id],
+            },
+          ],
+          unavailableThreadIds: [],
+          lastUsedWorkspace: f.directory,
+        },
+        {
+          plugins: {
+            get: async () => ({
+              ...workspaceLauncherSnapshot,
+              plugins: [],
+              panels: [],
+              information: [],
+              commands: [],
+            }),
+          },
+          threads: (archived) => f.host.listThreadSummaries({ archived }),
+          request: async (method, params) => {
+            const result = await f.request(method, params);
+            if (
+              method === "zen/thread/questions/list" &&
+              (params as { threadId: string }).threadId === selected.id
+            )
+              reads++;
+            return result;
+          },
+          onNotification: (listener) =>
+            f.onNotification((method, params) =>
+              listener(method as never, params as never),
+            ),
+        },
+      );
+      const row = (title: string) =>
+        [...document.querySelectorAll<HTMLButtonElement>(".thread-row")].find(
+          (value) => value.textContent?.includes(title),
+        );
+      await act(async () =>
+        (await waitFor(() => row("Foreground reveal fixture"))).click(),
+      );
+      const composer = await waitFor(() =>
+        document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+      );
+      await waitFor(() => reads > 0);
+      const toggle = () =>
+        document.querySelector<HTMLButtonElement>(
+          ".information-toolbar button",
+        )!;
+      assert.equal(toggle().getAttribute("aria-expanded"), "false");
+      await setTextareaValue(composer, "Keep the unsent foreground draft");
+      await act(async () => composer.focus());
+      let question!: Awaited<ReturnType<typeof f.publish>>;
+      await act(async () => {
+        question = await f.publish(selected.id);
+      });
+      await waitFor(() =>
+        document.querySelector(
+          `[data-question-call-id="${question.request.callItemId}"]`,
+        ),
+      );
+      assert.equal(toggle().getAttribute("aria-expanded"), "true");
+      assert.ok(
+        document.activeElement === composer,
+        "native question discovery reveals without moving focus",
+      );
+      assert.equal(composer.value, "Keep the unsent foreground draft");
+      const card = document.querySelector(
+        `[data-question-call-id="${question.request.callItemId}"]`,
+      )!;
+      await act(async () =>
+        card.querySelector<HTMLLabelElement>(".user-question-option")!.click(),
+      );
+      assert.equal(
+        card.querySelectorAll("input:checked").length,
+        1,
+        "a full option label selects its native radio without submitting",
+      );
+      assert.equal(
+        card.querySelectorAll(
+          '[data-selected="true"] .user-question-option-mark svg',
+        ).length,
+        1,
+      );
+      await act(async () => toggle().click());
+      await act(async () => row("Background reveal fixture")!.click());
+      await waitFor(() => document.querySelector("#thread-composer"));
+      await act(async () => {
+        await f.publish(selected.id);
+      });
+      await act(async () => row("Foreground reveal fixture")!.click());
+      await waitFor(
+        () =>
+          document.querySelector<HTMLTextAreaElement>("#thread-composer")
+            ?.value === "Keep the unsent foreground draft",
+      );
+      assert.equal(
+        toggle().getAttribute("aria-expanded"),
+        "false",
+        "old attention cannot reopen an explicitly closed owner on return",
+      );
+      await act(async () => {
+        await f.publish(background.id);
+      });
+      assert.equal(
+        toggle().getAttribute("aria-expanded"),
+        "false",
+        "background publication cannot reveal foreground information",
+      );
+      await act(async () => {
+        question = await f.publish(selected.id);
+      });
+      await waitFor(() =>
+        document.querySelector(
+          `[data-question-call-id="${question.request.callItemId}"]`,
+        ),
+      );
+      assert.equal(
+        toggle().getAttribute("aria-expanded"),
+        "true",
+        "a later new foreground question can reveal again",
+      );
+    } finally {
+      if (harness) await unmountApp(harness);
+      await f.close();
+    }
+  });
+}
+
+test("a page shift caused by cancelling old questions must not reveal hidden information", async () => {
+  const { questionNativeFixture } =
+    await import("./user-question-native-fixture.js");
+  const f = await questionNativeFixture();
+  const selected = await f.host.startThread();
+  const background = await f.host.startThread();
+  await f.host.setThreadName(selected.id, "Foreground reveal fixture");
+  await f.host.setThreadName(background.id, "Background reveal fixture");
+  for (let index = 0; index < 33; index++) await f.publish(selected.id);
+  let reads = 0;
+  let harness: AppHarness | undefined;
+  try {
+    harness = await mountApp(
+      {
+        projects: [
+          {
+            key: f.directory,
+            workspace: f.directory,
+            configured: true,
+            isDefault: true,
+            threadIds: [selected.id, background.id],
+          },
+        ],
+        unavailableThreadIds: [],
+        lastUsedWorkspace: f.directory,
+      },
+      {
+        plugins: {
+          get: async () => ({
+            ...workspaceLauncherSnapshot,
+            plugins: [],
+            panels: [],
+            information: [],
+            commands: [],
+          }),
+        },
+        threads: (archived) => f.host.listThreadSummaries({ archived }),
+        request: async (method, params) => {
+          const result = await f.request(method, params);
+          if (
+            method === "zen/thread/questions/list" &&
+            (params as { threadId: string }).threadId === selected.id
+          )
+            reads++;
+          return result;
+        },
+        onNotification: (listener) =>
+          f.onNotification((method, params) =>
+            listener(method as never, params as never),
+          ),
+      },
+    );
+    const row = (title: string) =>
+      [...document.querySelectorAll<HTMLButtonElement>(".thread-row")].find(
+        (value) => value.textContent?.includes(title),
+      );
+    await act(async () =>
+      (await waitFor(() => row("Foreground reveal fixture"))).click(),
+    );
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await waitFor(() => reads > 0);
+    const toggle = () =>
+      document.querySelector<HTMLButtonElement>(".information-toolbar button")!;
+    assert.equal(toggle().getAttribute("aria-expanded"), "false");
+    await setTextareaValue(composer, "Keep the unsent foreground draft");
+    await act(async () => composer.focus());
+    const first = (await f.host.listUserQuestions(selected.id)).questions[0]!;
+    const readsBefore = reads;
+    await act(async () => {
+      await f.transport.respond({
+        threadId: selected.id,
+        questionCallItemId: first.request.callItemId,
+        clientUserMessageId: "review-page-shift-cancel",
+        outcome: "cancel",
+      });
+    });
+    await waitFor(() => reads > readsBefore);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    });
+    assert.equal(
+      toggle().getAttribute("aria-expanded"),
+      "false",
+      "merely advancing an older question from page 2 must not auto-reveal",
+    );
+  } finally {
+    if (harness) await unmountApp(harness);
+    await f.close();
+  }
 });

@@ -1522,6 +1522,7 @@ interface MountOptions {
     commandId: string,
     input?: unknown,
   ): Promise<unknown>;
+  observeRequest?(method: string, params?: unknown): void;
   request(method: string, params?: unknown): Promise<unknown>;
   attachments?(threadId: string): Promise<ZenXThreadAttachmentProjection>;
   usage?(threadId: string): Promise<ModelUsageProjection>;
@@ -1582,6 +1583,10 @@ async function mountApp(options: MountOptions) {
           ? []
           : await options.getPendingApprovals(),
       request: async (method: string, params?: unknown) => {
+        options.observeRequest?.(method, params);
+        // Existing projection scenarios share full/window recovery fixtures.
+        // Observe the raw method above when testing the actual wire route.
+        if (method === "zen/thread/resume-window") method = "zen/thread/resume";
         if (method === "model/list")
           return { data: [model()], nextCursor: null };
         if (method === "zen/initialize") return { processEpoch: "live-epoch" };
@@ -1937,6 +1942,71 @@ async function waitFor<T>(read: () => T | null | undefined | false) {
   throw new Error("Timed out waiting for renderer projection");
 }
 
+test("App reloads evicted history while preserving an unsent Composer draft", async () => {
+  const ids = Array.from({ length: 8 }, (_, index) => `thread-${index + 1}`);
+  let firstReads = 0;
+  let release!: (value: ReturnType<typeof resumed>) => void;
+  const pending = new Promise<ReturnType<typeof resumed>>((resolve) => {
+    release = resolve;
+  });
+  const value = (id: string) => ({
+    ...threadWithMessage(`history-for-${id}`),
+    id,
+  });
+  const harness = await mountApp({
+    threads: async (archived) =>
+      archived ? [] : ids.map((id) => summary(id, id)),
+    request: async (method, params) => {
+      if (method !== "zen/thread/resume")
+        throw new Error(`Unexpected request: ${method}`);
+      const id = (params as { threadId: string }).threadId;
+      if (id === ids[0] && ++firstReads === 2) return pending;
+      return resumed(value(id));
+    },
+  });
+  const choose = async (id: string) => {
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          `[data-thread-id="${id}"] .thread-row`,
+        )!
+        .click(),
+    );
+  };
+  try {
+    await choose(ids[0]!);
+    const textarea =
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!;
+    const key = Object.getOwnPropertyNames(textarea).find((key) =>
+      key.startsWith("__reactProps$"),
+    )!;
+    await act(async () => {
+      (
+        textarea as unknown as Record<
+          string,
+          { onChange(event: { target: { value: string } }): void }
+        >
+      )[key]!.onChange({ target: { value: "keep my unsent draft" } });
+    });
+    for (const id of ids.slice(1)) await choose(id);
+    await choose(ids[0]!);
+    assert.equal(firstReads, 2);
+    assert.ok(
+      !document.body.textContent?.includes(`history-for-${ids[0]}`),
+      "evicted history is not a stale cached view",
+    );
+    await act(async () => release(resumed(value(ids[0]!))));
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+      "keep my unsent draft",
+    );
+    assert.ok(document.body.textContent?.includes(`history-for-${ids[0]}`));
+  } finally {
+    release(resumed(value(ids[0]!)));
+    await harness.unmount();
+  }
+});
+
 test("actual App cached navigation restores tall-Composer position", async () => {
   const a = {
     ...thread(),
@@ -2043,8 +2113,8 @@ test("actual App cached navigation restores tall-Composer position", async () =>
     const reused = scroll();
     await choose(0);
     assert.equal(
-      scroll(),
-      reused,
+      scroll() === reused,
+      true,
       "actual cached App navigation reuses ThreadView",
     );
     const textarea =
@@ -2420,8 +2490,10 @@ test("message action row appears only after the source Turn finishes, then Fork 
 });
 
 test("Sidebar debug mode targets its exact Thread, defaults off, exits, and never enables capture", async () => {
+  const wireRequests: Array<{ method: string; params: unknown }> = [];
   const requests: Array<{ method: string; params: unknown }> = [];
   const harness = await mountApp({
+    observeRequest: (method, params) => wireRequests.push({ method, params }),
     threads: async (archived) =>
       archived ? [] : [summary(), summary("thread-2", "Thread two")],
     request: async (method, params) => {
@@ -2442,6 +2514,15 @@ test("Sidebar debug mode targets its exact Thread, defaults off, exits, and neve
     await click('[data-thread-id="thread-1"] .thread-row');
     assert.equal(document.querySelector(".thread-view-switch"), null);
     assert.equal(document.querySelector(".thread-debugger"), null);
+    assert.deepEqual(
+      wireRequests.filter((r) => r.method.startsWith("zen/thread/resume")),
+      [
+        {
+          method: "zen/thread/resume-window",
+          params: { threadId: "thread-1" },
+        },
+      ],
+    );
     await click("#thread-menu-trigger-thread-2");
     const toggle = document.querySelector<HTMLButtonElement>(
       '[data-thread-action="debug"]',
@@ -2458,6 +2539,12 @@ test("Sidebar debug mode targets its exact Thread, defaults off, exits, and neve
       toggle.click();
     });
     await waitFor(() => document.querySelector(".thread-debugger"));
+    assert.deepEqual(
+      wireRequests
+        .filter((r) => r.method.startsWith("zen/thread/resume"))
+        .at(-1),
+      { method: "zen/thread/resume", params: { threadId: "thread-2" } },
+    );
     assert.deepEqual(
       requests.filter((r) => r.method === "zen/thread/resume").at(-1)?.params,
       { threadId: "thread-2" },

@@ -7,14 +7,13 @@ import test from "node:test";
 
 import type { ThreadItem, Turn } from "../src/protocol-client/index.js";
 import {
-  groupReasoningWithoutDetailsRows,
   projectTurn,
   traceDisplayRows,
   traceSummary,
   summarizeTraceActivity,
 } from "../src/renderer/src/turn-projection.js";
 
-test("adjacent reasoning without public details has one honest row, not one per item", () => {
+test("trace rows retain each reasoning item without public details in canonical order", () => {
   const privateItem = (id: string) => ({
     ...reasoning(id, ""),
     summary: [],
@@ -29,19 +28,16 @@ test("adjacent reasoning without public details has one honest row, not one per 
     privateItem("opaque-d"),
     privateItem("opaque-e"),
   ]);
-  const grouped = groupReasoningWithoutDetailsRows(rows);
   assert.deepEqual(
-    grouped.map((row) =>
-      "kind" in row
-        ? { kind: row.kind, ids: row.ids }
-        : { kind: row.item.type, id: row.item.id },
-    ),
+    rows.map((row) => ({ kind: row.item.type, id: row.item.id })),
     [
-      { kind: "reasoningWithoutDetailsRun", ids: ["opaque-a", "opaque-b"] },
+      { kind: "reasoning", id: "opaque-a" },
+      { kind: "reasoning", id: "opaque-b" },
       { kind: "commandExecution", id: "tool" },
       { kind: "reasoning", id: "opaque-c" },
       { kind: "reasoning", id: "public" },
-      { kind: "reasoningWithoutDetailsRun", ids: ["opaque-d", "opaque-e"] },
+      { kind: "reasoning", id: "opaque-d" },
+      { kind: "reasoning", id: "opaque-e" },
     ],
   );
 });

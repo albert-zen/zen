@@ -1,3 +1,9 @@
+import type { AppShotKeyChord } from "../app-shot-key-chord.js";
+import type {
+  AppShotApi,
+  AppShotEvent,
+  AppShotShortcutKind,
+} from "../app-shot.js";
 import type {
   NativeInformationApi,
   NativeInformationUpdate,
@@ -343,7 +349,64 @@ contextBridge.exposeInMainWorld("zenx", {
     ): Promise<NativeThreadSummary[]> =>
       await ipcRenderer.invoke(ipcChannels.threadSummariesList, options),
   },
+  appShot: {
+    configureShortcut: async (token: string) =>
+      await ipcRenderer.invoke(ipcChannels.appShotConfigureShortcut, token),
+    configuration: async () =>
+      await ipcRenderer.invoke(ipcChannels.appShotConfiguration),
+    read: async (id: string) =>
+      await ipcRenderer.invoke(ipcChannels.appShotRead, id),
+    attach: async (id: string) =>
+      await ipcRenderer.invoke(ipcChannels.appShotAttach, id),
+    discard: async (id: string) => {
+      await ipcRenderer.invoke(ipcChannels.appShotDiscard, id);
+    },
+    list: async () => await ipcRenderer.invoke(ipcChannels.appShotList),
+    capture: async (sourceId: string, includeAccessibility: boolean) =>
+      await ipcRenderer.invoke(
+        ipcChannels.appShotCapture,
+        sourceId,
+        includeAccessibility,
+      ),
+    beginRecording: async (token: string) => {
+      await ipcRenderer.invoke(ipcChannels.appShotBeginRecording, token);
+    },
+    endRecording: async (token: string) => {
+      await ipcRenderer.invoke(ipcChannels.appShotEndRecording, token);
+    },
+    arm: async (
+      token: string,
+      includeAccessibility: boolean,
+      kind?: AppShotShortcutKind,
+      chord?: AppShotKeyChord,
+    ) =>
+      await ipcRenderer.invoke(
+        ipcChannels.appShotArm,
+        token,
+        includeAccessibility,
+        kind,
+        chord,
+      ),
+    disarm: async (token: string) => {
+      await ipcRenderer.invoke(ipcChannels.appShotDisarm, token);
+    },
+    onCapture: (listener: (event: AppShotEvent) => void) => {
+      const callback = (
+        _event: Electron.IpcRendererEvent,
+        value: AppShotEvent,
+      ) => listener(value);
+      ipcRenderer.on(ipcChannels.appShotCaptured, callback);
+      return () => {
+        ipcRenderer.removeListener(ipcChannels.appShotCaptured, callback);
+      };
+    },
+  } satisfies AppShotApi,
   imageAttachments: {
+    abandon: async (ids: readonly string[]): Promise<void> =>
+      await ipcRenderer.invoke(ipcChannels.imageAttachmentsAbandon, ids),
+    inventory: async (): Promise<
+      import("../main/draft-attachments.js").DraftAttachmentInventory
+    > => await ipcRenderer.invoke(ipcChannels.imageAttachmentsInventory),
     readLocal: async (
       source: string,
       cwd?: string,

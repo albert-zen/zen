@@ -1,3 +1,4 @@
+import { shouldRequestOpenAiReasoningSummary } from "./reasoning-summary.js";
 import { retryableModelSampleError } from "../model.js";
 import {
   parseResponsesStream,
@@ -168,6 +169,10 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
           request.reasoningEffort ?? "",
           "reasoning effort",
         ),
+        ...(request.reasoningEffort !== "none" &&
+        shouldRequestOpenAiReasoningSummary(this.#endpoint)
+          ? { summary: "auto" }
+          : {}),
       },
       tool_choice: tools.length === 0 ? "none" : "auto",
       parallel_tool_calls: true,
@@ -465,6 +470,7 @@ async function toResponsesInput(
         const bytes = await attachments.read(part.attachment);
         content.push({
           type: "input_image",
+          ...(part.detail === undefined ? {} : { detail: part.detail }),
           image_url: `data:${part.attachment.mediaType};base64,${Buffer.from(bytes).toString("base64")}`,
         });
       }

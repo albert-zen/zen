@@ -16,6 +16,7 @@ export type MessageSourceTarget =
       id: string;
       deviceId?: string;
       itemId?: string;
+      excerpt?: string;
       returnBound?: boolean;
     }
   | { kind: "trigger"; id: string; threadId?: string };

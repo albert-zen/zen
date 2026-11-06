@@ -4,14 +4,12 @@ import {
 } from "./capabilities/browser-extensions.js";
 import {
   assertBrowserInputSnapshot,
-  browserInputBlock,
   browserInputSnapshotScript,
   browserInputReleaseParameters,
   browserTargetedInputPolicy,
   browserInputProbeScript,
   dispatchBrowserTargetedInput,
   requireBrowserInputSnapshot,
-  type BrowserInputBlock,
   type BrowserInputKey,
   type BrowserInputObservation,
 } from "./capabilities/browser-targeted-input.js";
@@ -26,9 +24,15 @@ import {
 import { ipcChannels } from "../preload/ipc.js";
 import { observeElectronPage } from "./capabilities/browser-electron-observation.js";
 import {
+  BrowserFrameInputObserver,
+  browserFrameCaptureFor,
+} from "./capabilities/browser-frame-input.js";
+import { BrowserFrameEvidence } from "./capabilities/browser-frame-evidence.js";
+import {
   assertBrowserObservation,
   browserActionScript,
   browserInspectScript,
+  browserInputLifecycleEventInvalidates,
   browserDocumentGuardScript,
   browserDomCapture,
   evaluateBrowserDocument,
@@ -52,11 +56,6 @@ import {
   OBSERVATION_CAPTURE,
   MAX_OBSERVATION_CAPTURE_ITEMS,
 } from "./capabilities/observation-capture.js";
-
-/** Site popups that nobody touched hold one of the 20 pages: reclaim them. */
-const POPUP_IDLE_RECLAIM_MS = 15_000;
-const POPUP_RECLAIM_AT_LIMIT_MS = 1_000;
-const POPUP_RECLAIM_CHECKS = 8;
 
 export interface WorkspaceBrowserTab {
   temporary?: boolean;
@@ -101,17 +100,17 @@ interface Tab {
   agentActionsInFlight: number;
   agentActionOutcomeUnknown: boolean;
   /** Set while new site input is withheld; reads and programmatic actions stay open. */
-  inputBlock?: BrowserInputBlock;
-  /** Any agent-facing read or action; a touched popup is never reclaimed automatically. */
-  agentTouched?: boolean;
-  /** Parent tab for a `window.open` page; only these are reclaimable popups. */
-  popupOf?: string;
-  /** When the popup last finished loading, for the idle window. */
-  popupIdleSince?: number;
-  /** Bounded rechecks; an untouched popup is never watched forever. */
-  popupReclaimChecks?: number;
-  popupIdleTimer?: NodeJS.Timeout;
+  inputQuarantine?: string;
+  /** Key whose release was never acknowledged, enabling one exact release. */
+  inputQuarantineKey?: BrowserInputKey;
+  /** Set once the single controlled release attempt has been spent. */
+  inputQuarantineReset?: "attempted";
+  /** When the withheld input started, for summaries and diagnostics. */
+  inputQuarantineSince?: number;
   inputInFlight?: boolean;
+  inputLifecycleRevision: number;
+  frameEvidence: BrowserFrameEvidence;
+  frameInputObserver?: BrowserFrameInputObserver;
   programmableInFlight?: boolean;
   mainExecutionContexts: Map<string, { id: number; uniqueId: string }>;
   nativeDialogOpen?: boolean;
@@ -123,7 +122,12 @@ interface Tab {
 }
 interface Owner {
   window: BrowserWindow;
-  active?: { tab: Tab; lease: string; bounds: Electron.Rectangle };
+  active?: {
+    tab: Tab;
+    lease: string;
+    bounds: Electron.Rectangle;
+    occluded: boolean;
+  };
 }
 interface WorkspaceBrowserDependencies {
   createView(): WebContentsView;
@@ -191,16 +195,11 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
   readonly #inspections = new Map<string, number>();
   readonly #artifacts: BrowserScreenshotArtifactStore;
   readonly #dependencies: WorkspaceBrowserDependencies;
-  #popupReclaimIdleMs = POPUP_IDLE_RECLAIM_MS;
 
   constructor(options: {
     artifactDirectory?: string;
     dependencies: WorkspaceBrowserDependencies;
-    /** Idle window before an untouched site popup is reclaimed; tests shorten it. */
-    popupReclaimIdleMs?: number;
   }) {
-    this.#popupReclaimIdleMs =
-      options.popupReclaimIdleMs ?? POPUP_IDLE_RECLAIM_MS;
     this.#artifacts = new BrowserScreenshotArtifactStore(
       options.artifactDirectory,
     );
@@ -441,14 +440,6 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
   }
 
   #new(threadId: string, owner?: Owner, id: string = randomUUID()): Tab {
-    if (this.#tabs.size >= 20)
-      this.#reclaimPopups(
-        Math.min(POPUP_RECLAIM_AT_LIMIT_MS, this.#popupReclaimIdleMs),
-      );
-    if (this.#tabs.size >= 20)
-      throw new Error(
-        `Close a browser tab before opening another (20 tab limit). ${this.#tabs.size} tabs are open, ${this.#popupCount()} of them are idle pages opened by sites themselves; list_tabs shows them and close releases their quota`,
-      );
     const view = this.#dependencies.createView();
     const tab: Tab = {
       id,
@@ -461,6 +452,8 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       agentActionsInFlight: 0,
       agentActionOutcomeUnknown: false,
       documentVersion: 0,
+      inputLifecycleRevision: 0,
+      frameEvidence: new BrowserFrameEvidence(""),
       navigationGeneration: 0,
       renderRevision: 0,
       mainExecutionContexts: new Map(),
@@ -469,6 +462,14 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     view.setVisible(false);
     const web = view.webContents;
     web.debugger.on("message", (_event, method, params, childSessionId) => {
+      const frameRevision = tab.frameEvidence.revision;
+      tab.frameEvidence.acceptEvent(childSessionId ?? "", method, params);
+      if (
+        browserInputLifecycleEventInvalidates(method, params) ||
+        (method.startsWith("Target.") &&
+          tab.frameEvidence.revision !== frameRevision)
+      )
+        tab.inputLifecycleRevision += 1;
       if (!childSessionId) {
         if (method === "Runtime.executionContextsCleared")
           tab.mainExecutionContexts.clear();
@@ -499,9 +500,13 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       if (method === "Page.javascriptDialogOpening")
         tab.nativeDialogOpen = true;
       if (method === "Page.javascriptDialogClosed")
-        tab.nativeDialogOpen = false;
+        tab.nativeDialogOpen = tab.frameEvidence.hasOpenDialog;
     });
-    web.debugger.on("detach", () => tab.mainExecutionContexts.clear());
+    web.debugger.on("detach", () => {
+      tab.inputLifecycleRevision += 1;
+      tab.frameEvidence.close();
+      tab.mainExecutionContexts.clear();
+    });
     web.session.setPermissionRequestHandler(
       (_contents, _permission, callback) => callback(false),
     );
@@ -513,6 +518,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     web.on("did-start-loading", publish);
     web.on("did-stop-loading", publish);
     web.on("did-start-navigation", (_event, _url, _isInPlace, isMainFrame) => {
+      tab.inputLifecycleRevision += 1;
       if (isMainFrame) {
         if (!_isInPlace) tab.mainExecutionContexts.clear();
         tab.documentVersion += 1;
@@ -534,11 +540,8 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       try {
         const safeUrl = workspaceBrowserUrl(url);
         const popup = this.#new(threadId, tab.owner);
-        popup.popupOf = tab.id;
         popup.temporarySession = tab.temporarySession;
-        void this.#load(popup, safeUrl)
-          .catch(() => undefined)
-          .finally(() => this.#schedulePopupReclaim(popup));
+        void this.#load(popup, safeUrl).catch(() => undefined);
         publish();
       } catch (error) {
         tab.error = error instanceof Error ? error.message : String(error);
@@ -698,10 +701,14 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       tabId?: unknown;
       lease?: unknown;
       appearance?: unknown;
+      occluded?: unknown;
       bounds?: { x: number; y: number; width: number; height: number };
     };
     if (typeof value.lease !== "string" || value.lease.length > 100)
       throw new Error("Invalid browser view lease");
+    if (value.occluded !== undefined && typeof value.occluded !== "boolean")
+      throw new Error("Invalid browser occlusion");
+    const occluded = value.occluded === true;
     const owner = this.#owner(sender);
     if (!value.bounds) {
       if (owner.active?.lease === value.lease) this.#hide(owner);
@@ -744,7 +751,15 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       previousBounds.y !== bounds.y ||
       previousBounds.width !== bounds.width ||
       previousBounds.height !== bounds.height;
-    if (!changedMount) return;
+    if (!changedMount) {
+      if (owner.active!.occluded !== occluded) {
+        // Restore any borrowed compositor surface before changing presentation.
+        this.#dependencies.releaseUnmountedView?.(tab.view);
+        owner.active!.occluded = occluded;
+        tab.view.setVisible(!occluded);
+      }
+      return;
+    }
     // Return the exact borrowed view before accepting newer UI ownership.
     this.#dependencies.releaseUnmountedView?.(tab.view);
     if (tab.owner !== undefined && tab.owner !== owner) this.#hide(tab.owner);
@@ -758,9 +773,9 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       tab.renderRevision += 1;
       tab.observation = undefined;
     }
-    owner.active = { tab, lease: value.lease, bounds };
+    owner.active = { tab, lease: value.lease, bounds, occluded };
     tab.view.setBounds(bounds);
-    tab.view.setVisible(true);
+    tab.view.setVisible(!occluded);
   }
 
   observeTab(
@@ -886,7 +901,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     signal?: AbortSignal,
     observationId?: string,
   ): Promise<BrowserTabSummary> {
-    const tab = this.#touch(this.#requireAgentTab(sessionId, tabId));
+    const tab = this.#requireAgentTab(sessionId, tabId);
     const safeUrl = workspaceBrowserUrl(url);
     await this.#mutate(
       sessionId,
@@ -911,7 +926,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     signal?: AbortSignal,
   ): Promise<BrowserInspection> {
     signal?.throwIfAborted();
-    const tab = this.#touch(this.#requireAgentTab(sessionId, tabId));
+    const tab = this.#requireAgentTab(sessionId, tabId);
     this.#inspections.set(tabId, (this.#inspections.get(tabId) ?? 0) + 1);
     this.#publish(tab.threadId);
     try {
@@ -948,6 +963,18 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
         const documentVersion = tab.documentVersion;
         const navigationGeneration = tab.navigationGeneration;
         const renderRevision = tab.renderRevision;
+        let inputLifecycleRevision = tab.inputLifecycleRevision;
+        let frameCapture: ReturnType<typeof browserFrameCaptureFor>;
+        const assertInputCapture = () => {
+          frameCapture?.assertCurrent();
+          if (
+            tab.inputLifecycleRevision !== inputLifecycleRevision ||
+            tab.frameEvidence.failure
+          )
+            throw new Error(
+              "Browser child lifecycle changed after screenshot capture; inspect again",
+            );
+        };
         const inspected = await this.#evaluate<BrowserDomInspection>(
           tab,
           browserInspectScript,
@@ -961,6 +988,10 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
           "inspection",
           renderRevision,
         );
+        frameCapture = inspected.inputSnapshot
+          ? browserFrameCaptureFor(inspected.inputSnapshot)
+          : undefined;
+        if (frameCapture) inputLifecycleRevision = tab.inputLifecycleRevision;
         const observationId = randomUUID();
         const image = await this.#capture(sessionId, tab, signal);
         assertAdmitted();
@@ -1009,7 +1040,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
         if (
           inspected.inputSnapshot !== undefined &&
           screenshot.status === "captured" &&
-          tab.inputBlock === undefined &&
+          tab.inputQuarantine === undefined &&
           !tab.inputInFlight
         ) {
           try {
@@ -1017,9 +1048,12 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
               inspected.inputSnapshot,
             );
             const after = requireBrowserInputSnapshot(
-              await this.#evaluate(tab, browserInputSnapshotScript),
+              frameCapture
+                ? await frameCapture.probe()
+                : await this.#evaluate(tab, browserInputSnapshotScript),
             );
             assertBrowserInputSnapshot(snapshot, after);
+            assertInputCapture();
             input = { snapshot, screenshotId: observationId };
           } catch {
             // Targeted input is optional. Unsupported zoom or changing layout must
@@ -1066,7 +1100,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
             ? undefined
             : {
                 id: observationId,
-                ...(input === undefined ? {} : { input }),
+                ...(input === undefined ? {} : { input, assertInputCapture }),
                 documentVersion,
                 targets,
                 ...(inspected.documentIdentity === undefined
@@ -1076,7 +1110,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
         if (
           tab.control === "agent" &&
           tab.agentActionsInFlight === 0 &&
-          tab.inputBlock === undefined
+          tab.inputQuarantine === undefined
         ) {
           tab.agentActionOutcomeUnknown = false;
         }
@@ -1167,7 +1201,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       | { kind: "key"; key: BrowserInputKey },
     signal?: AbortSignal,
   ): Promise<BrowserTabSummary> {
-    const tab = this.#touch(this.#requireAgentTab(sessionId, tabId));
+    const tab = this.#requireAgentTab(sessionId, tabId);
     this.#assertSiteInputAllowed(tab);
     if (tab.inputInFlight)
       throw new Error(
@@ -1186,48 +1220,83 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
             observationId,
           );
           const observation = tab.observation;
+          observation.assertInputCapture?.();
           const input = observation.input;
           if (input === undefined || input.screenshotId !== observationId)
             throw new Error(
               "A real, coherent screenshot is required for browser targeted input; inspect again",
             );
+          const frameCapture = browserFrameCaptureFor(input.snapshot);
           const version = tab.documentVersion;
           const navigation = tab.navigationGeneration;
           const render = tab.renderRevision;
           const control = tab.controlRevision;
+          const inputLifecycleRevision = tab.inputLifecycleRevision;
+          const assertInputLifecycle = () => {
+            if (tab.inputLifecycleRevision !== inputLifecycleRevision)
+              throw new Error(
+                "Browser frame lifecycle changed during targeted input; inspect again",
+              );
+          };
           const incarnation = this.#sessionIncarnations.get(sessionId);
           let dispatched = false;
           tab.inputInFlight = true;
           try {
+            const assertActionCurrent = () => {
+              signal?.throwIfAborted();
+              assertInputLifecycle();
+              observation.assertInputCapture?.();
+              if (tab.nativeDialogOpen)
+                throw new Error(
+                  "Browser targeted input cannot operate this open native dialog; use an available dialog or Computer capability",
+                );
+              if (!dispatched && tab.observation !== observation)
+                throw new Error(
+                  "Browser observation changed before targeted input",
+                );
+              this.#assertAgentOperationCurrent(
+                sessionId,
+                tab,
+                navigation,
+                version,
+                "targeted input",
+                render,
+              );
+              this.#assertControlRevision(tab, control);
+              if (this.#sessionIncarnations.get(sessionId) !== incarnation)
+                throw new Error(
+                  "Browser session changed during targeted input",
+                );
+            };
             await dispatchBrowserTargetedInput(
               {
-                assertCurrent: () => {
-                  if (tab.nativeDialogOpen)
-                    throw new Error(
-                      "Browser native dialog requires human control; no automatic dialog acceptance or foreground fallback",
-                    );
-                  if (!dispatched && tab.observation !== observation)
-                    throw new Error(
-                      "Browser observation changed before targeted input",
-                    );
-                  this.#assertAgentOperationCurrent(
-                    sessionId,
-                    tab,
-                    navigation,
-                    version,
-                    "targeted input",
-                    render,
-                  );
-                  this.#assertControlRevision(tab, control);
-                  if (this.#sessionIncarnations.get(sessionId) !== incarnation)
-                    throw new Error(
-                      "Browser session changed during targeted input",
-                    );
-                },
+                assertCurrent: assertActionCurrent,
                 snapshot: async () =>
                   requireBrowserInputSnapshot(
-                    await this.#evaluate(tab, browserInputProbeScript(action)),
+                    frameCapture
+                      ? await frameCapture!.probe(action, assertActionCurrent)
+                      : await this.#evaluate(
+                          tab,
+                          browserInputProbeScript(action),
+                        ),
                   ),
+                prepareMouse: frameCapture
+                  ? (snapshot) =>
+                      frameCapture!.prepareMouse(
+                        snapshot,
+                        async (selectedSessionId, params, onDispatched) => {
+                          assertActionCurrent();
+                          const pending =
+                            tab.view.webContents.debugger.sendCommand(
+                              "Input.dispatchMouseEvent",
+                              params,
+                              selectedSessionId || undefined,
+                            );
+                          onDispatched();
+                          return await pending;
+                        },
+                      )
+                  : undefined,
                 beforeDispatch: () => {
                   if (tab.observation !== observation)
                     throw new Error(
@@ -1237,6 +1306,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
                   dispatch();
                 },
                 dispatch: async (method, params, onDispatched) => {
+                  assertInputLifecycle();
                   const pending = tab.view.webContents.debugger.sendCommand(
                     method,
                     params,
@@ -1247,7 +1317,10 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
                 quarantine: (error) => {
                   // Only new site input is withheld: the page stays readable and
                   // inspect/evaluate/content/screenshot keep working.
-                  tab.inputBlock = browserInputBlock(error, Date.now());
+                  tab.inputQuarantine = error.message;
+                  tab.inputQuarantineKey ??= error.key;
+                  tab.inputQuarantineReset = undefined;
+                  tab.inputQuarantineSince = Date.now();
                   tab.agentActionOutcomeUnknown = true;
                   tab.observation = undefined;
                 },
@@ -1334,7 +1407,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     signal?: AbortSignal,
   ): Promise<BrowserTabSummary> {
     signal?.throwIfAborted();
-    const tab = this.#touch(this.#requireAgentTab(sessionId, tabId));
+    const tab = this.#requireAgentTab(sessionId, tabId);
     await this.#mutate(
       sessionId,
       tab,
@@ -1394,7 +1467,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     signal?: AbortSignal,
   ): Promise<unknown> {
     signal?.throwIfAborted();
-    const tab = this.#touch(this.#requireAgentTab(sessionId, tabId));
+    const tab = this.#requireAgentTab(sessionId, tabId);
     const incarnation = this.#sessionIncarnations.get(sessionId);
     const revision = tab.controlRevision;
     const navigation = tab.navigationGeneration;
@@ -1603,7 +1676,11 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     if (operation === "network_start" || operation === "console_start") {
       if (collector === undefined) {
         const debuggerApi = tab.view.webContents.debugger;
-        if (!debuggerApi.isAttached()) debuggerApi.attach("1.3");
+        if (!debuggerApi.isAttached()) {
+          debuggerApi.attach("1.3");
+          tab.frameEvidence = new BrowserFrameEvidence("");
+          tab.frameInputObserver = undefined;
+        }
         const buffer = new BrowserEventBuffer();
         const state = {
           sessionId,
@@ -1763,36 +1840,37 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
   }> {
     signal?.throwIfAborted();
     const tab = this.#requireAgentTab(sessionId, tabId);
-    const block = tab.inputBlock;
-    if (block === undefined) return { blocked: false, released: false };
-    if (block.key === undefined)
-      return { blocked: true, released: false, reason: block.reason };
-    if (block.reset === "attempted")
+    const reason = tab.inputQuarantine;
+    if (reason === undefined) return { blocked: false, released: false };
+    const key = tab.inputQuarantineKey;
+    if (key === undefined) return { blocked: true, released: false, reason };
+    if (tab.inputQuarantineReset === "attempted")
       throw new Error(
-        `Browser input release for ${block.key} was already attempted once for this tab; do not repeat it. A human must close this tab to release input that is still held. Reads and programmatic actions remain available.`,
+        `Browser input release for ${key} was already attempted once for this tab; do not repeat it. A human must close this tab to release input that is still held. Reads and programmatic actions remain available.`,
       );
     // Record the attempt before dispatching: a second call must never send a
     // second release, even if this one is interrupted.
-    tab.inputBlock = { ...block, reset: "attempted" };
+    tab.inputQuarantineReset = "attempted";
     this.#publish(tab.threadId);
     try {
       const debuggerApi = tab.view.webContents.debugger;
       if (!debuggerApi.isAttached()) debuggerApi.attach("1.3");
       await debuggerApi.sendCommand(
         "Input.dispatchKeyEvent",
-        browserInputReleaseParameters(block.key),
+        browserInputReleaseParameters(key),
       );
     } catch (error) {
       throw new Error(
-        `Browser input release for ${block.key} was not acknowledged (${error instanceof Error ? error.message : String(error)}). This tab still withholds new site input; a human must close it. Reads and programmatic actions remain available.`,
+        `Browser input release for ${key} was not acknowledged (${error instanceof Error ? error.message : String(error)}). This tab still withholds new site input; a human must close it. Reads and programmatic actions remain available.`,
         { cause: error },
       );
     }
-    if (tab.inputBlock === undefined || tab.inputBlock.reset !== "attempted")
-      return { blocked: true, released: false, reason: block.reason };
-    tab.inputBlock = undefined;
+    tab.inputQuarantine = undefined;
+    tab.inputQuarantineKey = undefined;
+    tab.inputQuarantineReset = undefined;
+    tab.inputQuarantineSince = undefined;
     this.#publish(tab.threadId);
-    return { blocked: false, released: true, key: block.key };
+    return { blocked: false, released: true, key };
   }
 
   keepTab(sessionId: string, tabId: string): void {
@@ -1839,7 +1917,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     submit = false,
     signal?: AbortSignal,
   ): Promise<BrowserTabSummary> {
-    const tab = this.#touch(this.#requireAgentTab(sessionId, tabId));
+    const tab = this.#requireAgentTab(sessionId, tabId);
     await this.#mutate(
       sessionId,
       tab,
@@ -1940,16 +2018,16 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       control: tab.control,
       agentActionsInFlight: tab.agentActionsInFlight,
       agentActionOutcomeUnknown: tab.agentActionOutcomeUnknown,
-      ...(tab.inputBlock === undefined
+      ...(tab.inputQuarantine === undefined
         ? {}
         : {
             inputBlocked: {
-              reason: tab.inputBlock.reason,
-              ...(tab.inputBlock.key === undefined
+              reason: tab.inputQuarantine,
+              ...(tab.inputQuarantineKey === undefined
                 ? {}
-                : { key: tab.inputBlock.key }),
-              reset: tab.inputBlock.reset,
-              since: tab.inputBlock.since,
+                : { key: tab.inputQuarantineKey }),
+              reset: tab.inputQuarantineReset ?? ("available" as const),
+              since: tab.inputQuarantineSince ?? 0,
             },
           }),
       requiresFreshObservation:
@@ -1986,6 +2064,8 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       throw new Error(
         "Browser programmable evaluation is still in flight; mutations remain blocked until native settlement or tab closure",
       );
+    if (inputOptions.targetedInput && tab.inputQuarantine !== undefined)
+      throw new Error(tab.inputQuarantine);
     if (tab.inputInFlight)
       throw new Error(
         "Browser targeted input is already in flight; wait and inspect again",
@@ -2019,12 +2099,8 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
         throw new Error(
           "Browser targeted input is already in flight; inspect again",
         );
-      if (
-        tab.inputBlock !== undefined &&
-        inputOptions.targetedInput &&
-        !inputOptions.allowQuarantinedClose
-      )
-        this.#assertSiteInputAllowed(tab);
+      if (tab.inputQuarantine !== undefined && inputOptions.targetedInput)
+        throw new Error(tab.inputQuarantine);
       this.#requireAgentTab(sessionId, tab.id);
       this.#assertControlRevision(tab, revision);
       if (this.#sessionIncarnations.get(sessionId) !== sessionIncarnation)
@@ -2196,12 +2272,6 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     return tab;
   }
 
-  /** An unobserved popup may be reclaimed; one the Agent used never is. */
-  #touch(tab: Tab): Tab {
-    tab.agentTouched = true;
-    return tab;
-  }
-
   #agentSummary(sessionId: string, tab: Tab): BrowserTabSummary {
     const web = tab.view.webContents;
     return {
@@ -2216,10 +2286,6 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
 
   #closeTab(tab: Tab): void {
     this.#stopExtensionCollectors(undefined, tab.id);
-    if (tab.popupIdleTimer !== undefined) {
-      clearTimeout(tab.popupIdleTimer);
-      tab.popupIdleTimer = undefined;
-    }
     this.#dependencies.releaseUnmountedView?.(tab.view);
     if (tab.owner?.active?.tab === tab) this.#hide(tab.owner);
     if (this.#sidebarIntentUrls.has(tab.id))
@@ -2237,75 +2303,11 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
    * carries no input evidence, so a later check would send the Agent in circles.
    */
   #assertSiteInputAllowed(tab: Tab): void {
-    if (tab.inputBlock === undefined) return;
+    const reason = tab.inputQuarantine;
+    if (reason === undefined) return;
     throw new Error(
-      `${tab.inputBlock.reason}\nReads and programmatic actions still work on this tab; only new site input is withheld. The input_reset operation may attempt one controlled release, or close the tab.`,
+      `${reason}\nReads and programmatic actions still work on this tab; only new site input is withheld. The input_reset operation may attempt one controlled release, or close the tab.`,
     );
-  }
-
-  #popupCount(): number {
-    let count = 0;
-    for (const tab of this.#tabs.values())
-      if (tab.popupOf !== undefined) count++;
-    return count;
-  }
-
-  /**
-   * A `window.open` page cannot close itself once ZenX hosts it as a tab, so an
-   * abandoned login/OAuth popup would hold one of the 20 pages forever. Only
-   * pages that are pure popups, never inspected or acted on by the Agent, not
-   * under human control and not currently displayed are reclaimed.
-   */
-  #reclaimPopups(minIdleMs: number): number {
-    const now = Date.now();
-    let reclaimed = 0;
-    for (const tab of [...this.#tabs.values()]) {
-      if (!this.#popupReclaimable(tab, now, minIdleMs)) continue;
-      this.#closeTab(tab);
-      reclaimed += 1;
-    }
-    return reclaimed;
-  }
-
-  #popupReclaimable(tab: Tab, now: number, minIdleMs: number): boolean {
-    const web = tab.view.webContents;
-    return (
-      tab.popupOf !== undefined &&
-      !tab.agentTouched &&
-      tab.control === "agent" &&
-      tab.observation === undefined &&
-      tab.agentActionsInFlight === 0 &&
-      !tab.inputInFlight &&
-      !tab.programmableInFlight &&
-      tab.owner?.active?.tab !== tab &&
-      !web.isDestroyed() &&
-      !web.isLoading() &&
-      now - (tab.popupIdleSince ?? now) >= minIdleMs
-    );
-  }
-
-  /** Give a completed popup one bounded idle window, then reclaim it. */
-  #schedulePopupReclaim(tab: Tab): void {
-    if (this.#tabs.get(tab.id) !== tab || tab.popupOf === undefined) return;
-    tab.popupIdleSince = Date.now();
-    if (tab.popupIdleTimer !== undefined) clearTimeout(tab.popupIdleTimer);
-    const timer = setTimeout(() => {
-      tab.popupIdleTimer = undefined;
-      if (this.#tabs.get(tab.id) !== tab) return;
-      if (this.#popupReclaimable(tab, Date.now(), this.#popupReclaimIdleMs)) {
-        this.#closeTab(tab);
-      } else if (
-        tab.popupOf !== undefined &&
-        !tab.agentTouched &&
-        (tab.popupReclaimChecks ?? 0) < POPUP_RECLAIM_CHECKS
-      ) {
-        // Still busy (loading, displayed, or awaiting the human): check again.
-        tab.popupReclaimChecks = (tab.popupReclaimChecks ?? 0) + 1;
-        this.#schedulePopupReclaim(tab);
-      }
-    }, this.#popupReclaimIdleMs);
-    timer.unref?.();
-    tab.popupIdleTimer = timer;
   }
 
   async #evaluate<T>(
@@ -2314,12 +2316,32 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     beforeDispatch?: () => void,
   ): Promise<T> {
     const debuggerApi = tab.view.webContents.debugger;
-    if (!debuggerApi.isAttached()) debuggerApi.attach("1.3");
+    if (!debuggerApi.isAttached()) {
+      debuggerApi.attach("1.3");
+      tab.frameEvidence = new BrowserFrameEvidence("");
+      tab.frameInputObserver = undefined;
+    }
     await debuggerApi.sendCommand("Page.enable");
     return await evaluateBrowserDocument<T>(
       debuggerApi,
       expression,
       beforeDispatch,
+      () =>
+        (tab.frameInputObserver ??= new BrowserFrameInputObserver(
+          tab.frameEvidence,
+          {
+            assertCurrent: () => {
+              if (
+                tab.view.webContents.isDestroyed() ||
+                !debuggerApi.isAttached() ||
+                tab.control !== "agent"
+              )
+                throw new Error("Browser frame attachment or control changed");
+            },
+            send: (sessionId, method, params) =>
+              debuggerApi.sendCommand(method, params, sessionId || undefined),
+          },
+        )),
     );
   }
 

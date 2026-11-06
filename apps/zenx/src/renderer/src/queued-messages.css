@@ -39,7 +39,8 @@
   padding: 0 6px;
 }
 
-.queue-shelf button {
+.queue-shelf:where(:not(.steer-shelf)) button,
+.steer-shelf button:where(:not(.image-thumbnail)) {
   border: 0;
   background: transparent;
   color: inherit;
@@ -461,50 +462,70 @@
   }
 }
 
-.pending-steer-panel {
-  width: calc(100% - 16px);
-  max-width: calc(var(--conversation-width) - 16px);
-  margin: 6px auto;
-  background: var(--color-surface-inset);
-  color: var(--color-text-primary);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: 10px;
-  padding: 10px 12px;
-  margin-bottom: 8px;
+/* Reuse the reference outbox's visible, right-aligned message bubbles while
+   keeping the shared Queue shelf, theme tokens and 44px control targets. */
+.steer-shelf .queue-shelf-toggle {
   min-width: 0;
-  font-size: 12px;
-}
-.pending-steer-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.pending-steer-panel p {
-  margin: 6px 0;
-  color: var(--color-text-secondary);
-}
-.pending-steer-panel button {
   min-height: 44px;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-control);
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  padding: 4px 8px;
-  cursor: pointer;
-  max-width: 100%;
   white-space: normal;
+}
+.steer-shelf .mini-spinner {
+  flex: 0 0 13px;
+}
+.steer-shelf .queue-shelf-header {
+  flex-wrap: wrap;
+}
+.steer-shelf {
+  width: 100%;
+  max-width: var(--conversation-width);
+  border-inline: 0;
+}
+.steer-shelf-details {
+  --steer-column-left: 0px;
+  --steer-column-width: 100%;
+  position: relative;
+  left: var(--steer-column-left);
+  width: var(--steer-column-width);
+  scrollbar-gutter: auto;
+  scrollbar-width: thin;
+  max-height: min(196px, 32dvh);
+}
+.steer-shelf-details[hidden] {
+  display: none;
+}
+.steer-shelf-details > ol {
+  display: grid;
+  gap: 6px;
+  justify-items: end;
+  padding: 0 0 10px;
+}
+.steer-shelf-row {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  overflow-wrap: anywhere;
+}
+.steer-shelf-row + .steer-shelf-row {
+  border: 0;
+}
+.steer-shelf-notice,
+.steer-shelf > p,
+.steer-shelf > [role="status"] {
+  margin: 0;
+  padding: 0 14px 9px;
+}
+.steer-shelf > .steer-recovery {
+  padding: 8px 14px;
 }
 .pending-steer-panel summary {
   cursor: pointer;
 }
-.pending-steer-panel ol {
-  max-height: 160px;
-  overflow: auto;
-  padding-left: 20px;
-  overflow-wrap: anywhere;
+.queue-shelf + .steer-shelf {
+  border-radius: 0;
+  margin-top: 0;
 }
 .steer-recovery > div {
   margin-top: 8px;
@@ -528,7 +549,6 @@
 }
 
 .pending-steer-text {
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .pending-steer-message > .pending-steer-text {
@@ -537,9 +557,18 @@
 }
 
 .pending-steer-images {
-  display: flex;
-  flex-wrap: wrap;
   align-items: flex-start;
-  gap: 6px;
-  margin: 6px 0;
+}
+
+/* Unknown-outcome and recovery actions remain distinct, keyboard-visible controls. */
+.steer-shelf > button,
+.steer-recovery button {
+  min-height: 44px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-control);
+}
+.steer-shelf > button {
+  align-self: flex-start;
+  margin: 0 14px 8px;
 }

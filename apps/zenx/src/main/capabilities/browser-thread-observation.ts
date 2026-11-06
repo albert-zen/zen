@@ -168,14 +168,7 @@ export class BrowserThreadObservation {
   ): void {
     if (this.#closed || this.#sessions.get(session.key) !== session) return;
     if (tool === "browser_close_session") {
-      const throughSequence = Math.max(
-        0,
-        ...[...session.targets.values()].map(
-          (t) => t.summary.previewSequence ?? 0,
-        ),
-      );
-      this.#sessions.delete(session.key);
-      this.completeTurn(session.threadId, throughSequence);
+      this.retireSession(session);
       return;
     } else if (tool === "browser_close") {
       const target =
@@ -233,6 +226,19 @@ export class BrowserThreadObservation {
       }
     }
     this.#notify(session.threadId);
+  }
+
+  /** Retire only an exactly released lease; preserve any unknown-effect warning. */
+  retireSession(session: ThreadSession, error?: unknown): void {
+    if (this.#closed || this.#sessions.get(session.key) !== session) return;
+    const throughSequence = Math.max(
+      0,
+      ...[...session.targets.values()].map(
+        (target) => target.summary.previewSequence ?? 0,
+      ),
+    );
+    this.#sessions.delete(session.key);
+    this.completeTurn(session.threadId, throughSequence, error);
   }
 
   /** Passive Host operation projection; never authorizes dispatch or replay. */

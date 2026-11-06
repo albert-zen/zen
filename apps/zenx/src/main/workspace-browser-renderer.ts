@@ -53,7 +53,12 @@ export class WorkspaceBrowserRenderer {
         throw new Error(
           "Browser mount changed before rendering; inspect again",
         );
-      if (mount && mount.window.isVisible() && !mount.window.isMinimized())
+      if (
+        mount &&
+        view.getVisible() &&
+        mount.window.isVisible() &&
+        !mount.window.isMinimized()
+      )
         return await operation();
       if (mount && !mount.window.contentView.children.includes(view))
         throw new Error("Browser view is not attached to its mount owner");
@@ -185,6 +190,15 @@ export class WorkspaceBrowserRenderer {
       let subscribed = false;
       let activated = false;
       let scale = 0;
+      // Fixed-size metadata only: no pixels, page content, extra native reads,
+      // retry, or change to the frame acceptance/dispatch boundary.
+      let callbacks = 0,
+        beforeActivation = 0,
+        emptyFrames = 0,
+        mismatchedFrames = 0;
+      let lastFrameSize: { width: number; height: number } | undefined;
+      const count = (value: number) =>
+        Math.min(value + 1, Number.MAX_SAFE_INTEGER);
       const finish = (error?: unknown) => {
         if (settled) return;
         settled = true;
@@ -217,7 +231,25 @@ export class WorkspaceBrowserRenderer {
       const timer = setTimeout(
         () =>
           finish(
-            new Error("Browser compositor frame timed out; inspect again"),
+            new Error("Browser compositor frame timed out; inspect again", {
+              cause: {
+                kind: "workspace-compositor-frame-timeout",
+                callbacks,
+                beforeActivation,
+                emptyFrames,
+                mismatchedFrames,
+                lastFrameSize,
+                expectedFrameSize: {
+                  width: Math.round(
+                    Math.fround(Math.fround(width) * Math.fround(scale)),
+                  ),
+                  height: Math.round(
+                    Math.fround(Math.fround(height) * Math.fround(scale)),
+                  ),
+                },
+                displayScale: scale,
+              },
+            }),
           ),
         this.frameTimeoutMs,
       );
@@ -232,7 +264,12 @@ export class WorkspaceBrowserRenderer {
       try {
         subscribed = true;
         view.webContents.beginFrameSubscription(false, (image) => {
-          if (settled || !activated) return;
+          if (settled) return;
+          callbacks = count(callbacks);
+          if (!activated) {
+            beforeActivation = count(beforeActivation);
+            return;
+          }
           try {
             if (
               lease.released ||
@@ -252,8 +289,11 @@ export class WorkspaceBrowserRenderer {
             // then wraps the physical bitmap as a 1x NativeImage. CSS zoom and
             // innerWidth are not the source of these dimensions.
             const size = image.getSize();
+            lastFrameSize = { width: size.width, height: size.height };
+            const empty = image.isEmpty();
+            if (empty) emptyFrames = count(emptyFrames);
             if (
-              !image.isEmpty() &&
+              !empty &&
               size.width ===
                 Math.round(
                   Math.fround(Math.fround(width) * Math.fround(scale)),
@@ -264,6 +304,7 @@ export class WorkspaceBrowserRenderer {
                 )
             )
               finish();
+            else if (!empty) mismatchedFrames = count(mismatchedFrames);
           } catch (error) {
             finish(error);
           }

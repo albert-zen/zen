@@ -223,6 +223,7 @@ for (const operation of [
   "backgroundClick",
   "backgroundType",
   "backgroundKeyPress",
+  "backgroundShortcut",
 ])
   test(`background ${operation} abort waits for owned release and close without replay`, async (t) => {
     const directory = await mkdtemp(

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -76,9 +76,19 @@ export interface ThreadSummaryListOptions {
   archived?: boolean;
 }
 
+export interface ThreadSummaryCheckpoint {
+  summaries: NativeThreadSummary[];
+  /** Includes deleted Threads, whose valid summary is intentionally absent. */
+  sourceRevisions: Record<string, string>;
+}
+
 export interface ThreadSummaryProjection {
+  loadCheckpoint?(): Promise<ThreadSummaryCheckpoint | undefined>;
   load(): Promise<NativeThreadSummary[] | undefined>;
-  replace(summaries: readonly NativeThreadSummary[]): Promise<void>;
+  replace(
+    summaries: readonly NativeThreadSummary[],
+    sourceRevisions?: Readonly<Record<string, string>>,
+  ): Promise<void>;
 }
 
 export class InMemoryThreadSummaryProjection implements ThreadSummaryProjection {
@@ -104,6 +114,15 @@ export class JsonThreadSummaryProjection implements ThreadSummaryProjection {
   }
 
   async load(): Promise<NativeThreadSummary[] | undefined> {
+    return (await this.#read())?.summaries;
+  }
+
+  async loadCheckpoint(): Promise<ThreadSummaryCheckpoint | undefined> {
+    const value = await this.#read();
+    return value?.version === 2 ? value : undefined;
+  }
+
+  async #read(): Promise<ProjectionFile | undefined> {
     let contents: string;
     try {
       contents = await readFile(this.#filename, "utf8");
@@ -114,7 +133,7 @@ export class JsonThreadSummaryProjection implements ThreadSummaryProjection {
     try {
       const value: unknown = JSON.parse(contents);
       if (!isProjectionFile(value)) throw new Error("invalid shape");
-      return structuredClone(value.summaries);
+      return structuredClone(value);
     } catch (error) {
       console.warn(
         `Ignoring invalid native Thread summary projection ${this.#filename}`,
@@ -124,13 +143,22 @@ export class JsonThreadSummaryProjection implements ThreadSummaryProjection {
     }
   }
 
-  async replace(summaries: readonly NativeThreadSummary[]): Promise<void> {
+  async replace(
+    summaries: readonly NativeThreadSummary[],
+    sourceRevisions: Readonly<Record<string, string>> = {},
+  ): Promise<void> {
+    // Detach before queueing so the checksum and payload describe the same observation.
+    const payload = structuredClone({
+      summaries: [...summaries],
+      sourceRevisions: { ...sourceRevisions },
+    });
+    const checksum = checkpointChecksum(payload);
     const write = this.#writeChain.then(async () => {
       await mkdir(path.dirname(this.#filename), { recursive: true });
       const temporary = `${this.#filename}.${randomUUID()}.tmp`;
       await writeFile(
         temporary,
-        `${JSON.stringify({ version: 1, summaries })}\n`,
+        `${JSON.stringify({ version: 2, ...payload, checksum })}\n`,
         { encoding: "utf8", mode: 0o600 },
       );
       await rename(temporary, this.#filename);
@@ -140,17 +168,35 @@ export class JsonThreadSummaryProjection implements ThreadSummaryProjection {
   }
 }
 
-interface ProjectionFile {
-  version: 1;
-  summaries: NativeThreadSummary[];
+type ProjectionFile =
+  | { version: 1; summaries: NativeThreadSummary[] }
+  | (ThreadSummaryCheckpoint & { version: 2; checksum: string });
+
+function checkpointChecksum(value: ThreadSummaryCheckpoint): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        summaries: value.summaries,
+        sourceRevisions: value.sourceRevisions,
+      }),
+    )
+    .digest("hex");
 }
 
 function isProjectionFile(value: unknown): value is ProjectionFile {
   return (
     isRecord(value) &&
-    value.version === 1 &&
+    (value.version === 1 || value.version === 2) &&
     Array.isArray(value.summaries) &&
-    value.summaries.every(isNativeThreadSummary)
+    value.summaries.every(isNativeThreadSummary) &&
+    (value.version === 1 ||
+      (isRecord(value.sourceRevisions) &&
+        Object.values(value.sourceRevisions).every(
+          (revision) => typeof revision === "string",
+        ) &&
+        typeof value.checksum === "string" &&
+        checkpointChecksum(value as unknown as ThreadSummaryCheckpoint) ===
+          value.checksum))
   );
 }
 

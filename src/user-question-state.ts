@@ -8,7 +8,8 @@ import {
   parseUserQuestionSpecification,
   parseUserQuestionReply,
   normalizeUserQuestionReply,
-  renderUserQuestionReply,
+  matchesUserQuestionReplyBody,
+  parseUserQuestionPublication,
   type QuestionIdentity,
   type UserQuestionReply,
   type UserQuestionSpecification,
@@ -17,6 +18,8 @@ import {
 export interface UserQuestionState {
   request: QuestionIdentity;
   resultItemId: string;
+  /** Legacy v2 display identity, never native addressing authority. */
+  requestRef?: string;
   createdAt: string;
   specification: UserQuestionSpecification;
   state:
@@ -39,6 +42,8 @@ export interface UserQuestionSummary {
 export interface UserQuestionPage {
   questions: readonly UserQuestionState[];
   totalPending: number;
+  /** Last accepted local publication by append order, independent of pagination or replies. */
+  latestPublishedQuestionId?: string;
   /** A local request identity, not a persistent cursor or permission token. */
   nextAfter?: string;
 }
@@ -76,6 +81,7 @@ export class ThreadUserQuestionProjection {
   readonly #attentionCandidates = new Set<string>();
   #value: readonly UserQuestionState[] = emptyQuestions;
   #summary: UserQuestionSummary = { openCount: 0 };
+  #latestPublishedQuestionId: string | undefined;
   readonly #byRequest = new Map<
     string,
     { question: UserQuestionState; position: number }
@@ -95,6 +101,7 @@ export class ThreadUserQuestionProjection {
       this.#queuedIds.clear();
       this.#value = emptyQuestions;
       this.#summary = { openCount: 0 };
+      this.#latestPublishedQuestionId = undefined;
       this.#byRequest.clear();
       this.#pending = [];
       this.#dirty = false;
@@ -236,6 +243,24 @@ export class ThreadUserQuestionProjection {
       )
         latestPublishedAt = timestamp;
     });
+    // Calls can finish out of order. Only an accepted result's append position
+    // advances publication identity; answers, recall, and page shifts cannot.
+    this.#latestPublishedQuestionId = undefined;
+    const publishedByResult = new Map(
+      this.#value.map((question) => [
+        question.resultItemId,
+        question.request.callItemId,
+      ]),
+    );
+    if (publishedByResult.size > 0) {
+      for (let index = contexts.length - 1; index >= 0; index--) {
+        const id = publishedByResult.get(contexts[index]!.id);
+        if (id !== undefined) {
+          this.#latestPublishedQuestionId = id;
+          break;
+        }
+      }
+    }
     this.#summary = {
       openCount,
       ...(latestPublishedAt === undefined ? {} : { latestPublishedAt }),
@@ -297,6 +322,9 @@ export class ThreadUserQuestionProjection {
     return {
       questions: structuredClone(entries.map(({ question }) => question)),
       totalPending: this.#pending.length,
+      ...(this.#latestPublishedQuestionId === undefined
+        ? {}
+        : { latestPublishedQuestionId: this.#latestPublishedQuestionId }),
       ...(left + entries.length < this.#pending.length
         ? { nextAfter: entries.at(-1)!.question.request.callItemId }
         : {}),
@@ -354,6 +382,90 @@ export function readUserQuestions(
   const pending = pendingQueuedMessages(facts).filter(
     (item) => item.threadId === threadId && localIds.has(item.id),
   );
+  // Rebuild once per relevant append, not once per historical question. These
+  // indexes are disposable views of the same facts, never admission authority.
+  const resultsByCall = new Map<string, typeof results>();
+  for (const result of results) {
+    const key = JSON.stringify([result.turnId, result.content.callId]);
+    const entries = resultsByCall.get(key) ?? [];
+    entries.push(result);
+    resultsByCall.set(key, entries);
+  }
+  type ResponseInput = {
+    clientId: unknown;
+    itemId: string;
+    raw: unknown;
+    body: string;
+    pending: boolean;
+  };
+  const repliesByCall = new Map<string, ResponseInput[]>();
+  let malformedReply = false;
+  const indexReply = (input: ResponseInput) => {
+    try {
+      const reply = parseUserQuestionReply(input.raw);
+      if (reply.request.threadId !== threadId) return;
+      const key = reply.request.callItemId;
+      const entries = repliesByCall.get(key) ?? [];
+      entries.push(input);
+      repliesByCall.set(key, entries);
+    } catch {
+      // Preserve the conservative old decoder: malformed local reply metadata
+      // makes every published question unavailable, never silently reopen it.
+      malformedReply = true;
+    }
+  };
+  for (const item of itemList) {
+    if (
+      item.threadId !== threadId ||
+      item.kind !== "message" ||
+      item.role !== "user" ||
+      item.source.kind !== "user_message" ||
+      !localIds.has(item.id) ||
+      item.source.metadata?.questionReply === undefined
+    )
+      continue;
+    const offset = item.source.metadata.bodyStart;
+    indexReply({
+      clientId: item.source.metadata.clientId,
+      itemId: item.id,
+      raw: item.source.metadata.questionReply,
+      body: textFromUserInput(
+        item.content.parts.slice(typeof offset === "number" ? offset : 0),
+      ),
+      pending: false,
+    });
+  }
+  for (const item of pending) {
+    if (item.type === "user_message_queued" && item.questionReply !== undefined)
+      indexReply({
+        clientId: item.clientId,
+        itemId: item.id,
+        raw: item.questionReply,
+        body: textFromUserInput(item.input),
+        pending: true,
+      });
+  }
+  const claimedByClient = new Map<
+    string | undefined,
+    Extract<CanonicalItem, { type: "user_message" }>
+  >();
+  const claimsByCall = new Map<string, CanonicalItem[]>();
+  for (const item of facts) {
+    if (item.threadId !== threadId) continue;
+    if (item.type === "user_message" && !claimedByClient.has(item.clientId))
+      claimedByClient.set(item.clientId, item);
+    if (
+      !localIds.has(item.id) ||
+      (item.type !== "user_message_queued" && item.type !== "user_message") ||
+      !item.questionReply ||
+      item.questionReply.request.threadId !== threadId
+    )
+      continue;
+    const key = item.questionReply.request.callItemId;
+    const entries = claimsByCall.get(key) ?? [];
+    entries.push(item);
+    claimsByCall.set(key, entries);
+  }
   const questions: UserQuestionState[] = [];
   for (const call of itemList) {
     if (
@@ -371,44 +483,38 @@ export function readUserQuestions(
       continue;
     }
     const request = { threadId, callItemId: call.id };
-    const accepted = results.filter((result) => {
+    const accepted = (
+      resultsByCall.get(JSON.stringify([call.turnId, call.content.callId])) ??
+      []
+    ).flatMap((result) => {
       if (
         result.turnId !== call.turnId ||
         result.content.callId !== call.content.callId
       )
-        return false;
+        return [];
       const offset = result.source.metadata?.bodyStart;
       if (
         typeof offset !== "number" ||
         !Number.isSafeInteger(offset) ||
         offset < 0
       )
-        return false;
-      try {
-        const envelope = JSON.parse(result.content.text.slice(offset)) as {
-          kind?: unknown;
-          version?: unknown;
-          request?: QuestionIdentity;
-        };
-        return (
-          envelope.kind === USER_QUESTION_PUBLICATION_KIND &&
-          envelope.version === 1 &&
-          envelope.request?.threadId === threadId &&
-          envelope.request.callItemId === call.id &&
-          Object.keys(envelope).length === 3
-        );
-      } catch {
-        return false;
-      }
+        return [];
+      const publication = parseUserQuestionPublication(
+        result.content.text.slice(offset),
+        request,
+        call.source.sequence,
+      );
+      return publication === undefined ? [] : [{ result, publication }];
     });
     if (accepted.length === 0) continue;
-    const result = accepted[0]!;
+    const { result, publication } = accepted[0]!;
     const question: UserQuestionState = {
       request,
+      ...publication,
       resultItemId: result.id,
       createdAt: result.createdAt,
       specification,
-      state: accepted.length === 1 ? "open" : "unavailable",
+      state: accepted.length === 1 && !malformedReply ? "open" : "unavailable",
     };
     const responses: {
       clientId: string;
@@ -429,7 +535,12 @@ export function readUserQuestions(
         const reply = normalizeUserQuestionReply(specification, candidate);
         if (
           typeof clientId !== "string" ||
-          body !== renderUserQuestionReply(specification, reply)
+          !matchesUserQuestionReplyBody(
+            specification,
+            reply,
+            body,
+            publication.requestRef,
+          )
         )
           throw new Error("Question response provenance/body mismatch");
         responses.push({ clientId, itemId, reply, pending: isPending });
@@ -437,42 +548,16 @@ export function readUserQuestions(
         question.state = "unavailable";
       }
     };
-    for (const item of itemList) {
-      if (
-        item.threadId !== threadId ||
-        item.kind !== "message" ||
-        item.role !== "user" ||
-        item.source.kind !== "user_message" ||
-        !localIds.has(item.id) ||
-        item.source.metadata?.questionReply === undefined
-      )
-        continue;
-      const offset = item.source.metadata.bodyStart;
+    for (const input of repliesByCall.get(call.id) ?? [])
       addResponse(
-        item.source.metadata.clientId,
-        item.id,
-        item.source.metadata.questionReply,
-        textFromUserInput(
-          item.content.parts.slice(typeof offset === "number" ? offset : 0),
-        ),
-        false,
+        input.clientId,
+        input.itemId,
+        input.raw,
+        input.body,
+        input.pending,
       );
-    }
-    for (const item of pending) {
-      if (
-        item.type === "user_message_queued" &&
-        item.questionReply !== undefined
-      )
-        addResponse(
-          item.clientId,
-          item.id,
-          item.questionReply,
-          textFromUserInput(item.input),
-          true,
-        );
-    }
     // A native claim whose semantic association went missing is unknown, not open.
-    for (const item of facts) {
+    for (const item of claimsByCall.get(call.id) ?? []) {
       if (
         item.threadId !== threadId ||
         !localIds.has(item.id) ||
@@ -481,12 +566,7 @@ export function readUserQuestions(
         !matches(item.questionReply, request)
       )
         continue;
-      const claimed = facts.find(
-        (fact) =>
-          fact.threadId === threadId &&
-          fact.type === "user_message" &&
-          fact.clientId === item.clientId,
-      );
+      const claimed = claimedByClient.get(item.clientId);
       if (
         claimed &&
         !responses.some(

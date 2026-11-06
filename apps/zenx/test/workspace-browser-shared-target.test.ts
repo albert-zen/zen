@@ -47,6 +47,25 @@ test("closing an expired workspace tab is idempotent but cannot close another Th
   }
 });
 
+test("workspace tabs have no arbitrary cross-thread twenty-tab admission cap", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    f.browser.bindThreadSession("b", "thread-b");
+    for (let index = 0; index < 21; index += 1) {
+      await f.browser.open("a", `https://example.test/${index}`);
+    }
+    const other = await f.browser.open("b", "https://example.test/other");
+    assert.equal((await f.browser.listTabs("a")).length, 21);
+    assert.equal((await f.browser.listTabs("b")).length, 1);
+    await f.browser.closeTab("b", other.tabId);
+    assert.equal((await f.browser.listTabs("b")).length, 0);
+    assert.equal((await f.browser.listTabs("a")).length, 21);
+  } finally {
+    await f.close();
+  }
+});
+
 test("Workspace Browser human view and Agent backend operate the exact same target", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-shared-browser-"),
@@ -301,12 +320,13 @@ test("mounting during an Agent action fences its outcome while an unchanged moun
       inspection.observationId,
       inspection.targets[0]!.targetId,
     );
-    const mount = (appearance: "light" | "dark" = "light") =>
+    const mount = (appearance: "light" | "dark" = "light", occluded = false) =>
       fixture.browser.mount(fixture.sender as never, {
         threadId: "thread-a",
         tabId,
         lease: "lease-a",
         appearance,
+        occluded,
         bounds: { x: 0, y: 0, width: 640, height: 480 },
       });
     mount();
@@ -314,7 +334,10 @@ test("mounting during an Agent action fences its outcome while an unchanged moun
     await assert.rejects(acting, /outcome is unknown/u);
 
     inspection = await fixture.browser.inspect("agent-session", tabId);
-    mount("dark");
+    mount("dark", true);
+    assert.equal(fixture.views[0]!.visible, false);
+    mount("dark", false);
+    assert.equal(fixture.views[0]!.visible, true);
     web.debuggerApi.defaultValue = { ok: true };
     await fixture.browser.click(
       "agent-session",
@@ -1030,7 +1053,7 @@ const actionInspection = {
   ],
 };
 
-async function sharedFixture(options: { popupReclaimIdleMs?: number } = {}) {
+async function sharedFixture() {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-shared-browser-race-"),
   );
@@ -1040,9 +1063,7 @@ async function sharedFixture(options: { popupReclaimIdleMs?: number } = {}) {
   let nextLoad: ReturnType<typeof deferred<void>> | undefined;
   const browser = new WorkspaceBrowser({
     artifactDirectory: directory,
-    ...(options.popupReclaimIdleMs === undefined
-      ? {}
-      : { popupReclaimIdleMs: options.popupReclaimIdleMs }),
+
     dependencies: {
       createView: () => {
         const view = new FakeView();
@@ -1221,18 +1242,8 @@ class FakeWebContents extends EventEmitter {
   endFrameSubscription() {
     this.frame = undefined;
   }
-  /** Sites call `window.open`; ZenX hosts that page as its own tab. */
-  openHandler?: (details: { url: string }) => { action: "deny" };
-  setWindowOpenHandler(
-    handler: (details: { url: string }) => {
-      action: "deny";
-    },
-  ) {
-    this.openHandler = handler;
-  }
-  openWindow(url: string) {
-    if (this.openHandler === undefined) throw new Error("No open handler");
-    return this.openHandler({ url });
+  setWindowOpenHandler() {
+    return undefined;
   }
   reload() {
     return undefined;
@@ -1258,8 +1269,9 @@ class FakeView {
   }
   readonly webContents = new FakeWebContents();
   #bounds = { x: 0, y: 0, width: 0, height: 0 };
-  setVisible() {
-    return undefined;
+  visible = false;
+  setVisible(value: boolean) {
+    this.visible = value;
   }
   setBounds(bounds: { x: number; y: number; width: number; height: number }) {
     this.#bounds = bounds;
@@ -1475,16 +1487,18 @@ test("Workspace takeover between targeted press and release withholds new input 
     assert.equal(fresh.inputViewport, undefined);
     assert.equal(fresh.inputBlocked?.reset, "available");
     assert.equal(fresh.inputBlocked?.key, undefined);
-    // A held key is still not pressed again, and the refusal names the state.
-    await assert.rejects(
-      f.browser.keyPress("a", tab.tabId, fresh.observationId, "Enter"),
-      /outcome is unknown/u,
+    assert.match(fresh.inputBlocked?.reason ?? "", /outcome is unknown/u);
+    // The block is about input only: navigation, reads and programmatic
+    // actions still run on the same tab.
+    await f.browser.navigate(
+      "a",
+      tab.tabId,
+      "https://example.test/recovered",
+      undefined,
+      fresh.observationId,
     );
-    await assert.rejects(
-      f.browser.pointerClick("a", tab.tabId, fresh.observationId, 20, 30),
-      /outcome is unknown/u,
-    );
-    // The block is about input only: reads and programmatic actions still run.
+    const afterNavigation = await f.browser.inspect("a", tab.tabId);
+    assert.equal(afterNavigation.inputBlocked?.reset, "available");
     const content = await f.browser.extension(
       "a",
       tab.tabId,
@@ -1493,6 +1507,26 @@ test("Workspace takeover between targeted press and release withholds new input 
       new AbortController().signal,
     );
     assert.ok(content !== undefined);
+    // A held key is still not pressed again, and the refusal names the state.
+    await assert.rejects(
+      f.browser.keyPress(
+        "a",
+        tab.tabId,
+        afterNavigation.observationId,
+        "Enter",
+      ),
+      /input is blocked/u,
+    );
+    await assert.rejects(
+      f.browser.pointerClick(
+        "a",
+        tab.tabId,
+        afterNavigation.observationId,
+        20,
+        30,
+      ),
+      /input is blocked/u,
+    );
     const readable = await f.browser.inspect("a", tab.tabId);
     const evaluated = await f.browser.extension(
       "a",
@@ -1569,49 +1603,6 @@ test("Workspace reports one withheld key, releases it once, and never repeats th
     // Input works again after a fresh observation.
     await f.browser.keyPress("a", tab.tabId, fresh.observationId, "Tab");
     assert.equal(input.events.length, 4);
-  } finally {
-    await f.close();
-  }
-});
-
-test("Workspace reclaims an untouched site popup but keeps one the Agent used", async () => {
-  const f = await sharedFixture({ popupReclaimIdleMs: 5 });
-  try {
-    f.browser.bindThreadSession("a", "thread-a");
-    const [human] = f.browser.command(
-      f.sender as never,
-      "thread-a",
-      "new",
-      undefined,
-      "https://example.test/app",
-    );
-    await new Promise((resolve) => setImmediate(resolve));
-    const openPopup = () => {
-      const parent = f.views[0]!.webContents;
-      parent.openWindow("https://login.example.test/authorize");
-    };
-    openPopup();
-    // The popup page is never inspected, so nothing needs it any more.
-    await new Promise((resolve) => setTimeout(resolve, 60));
-    assert.equal(
-      f.browser.command(f.sender as never, "thread-a", "list").length,
-      1,
-      "an abandoned popup must not hold a tab slot",
-    );
-    assert.ok(human);
-
-    openPopup();
-    const popups = f.browser
-      .command(f.sender as never, "thread-a", "list")
-      .filter((tab) => tab.id !== human!.id);
-    assert.equal(popups.length, 1);
-    await f.browser.inspect("a", popups[0]!.id);
-    await new Promise((resolve) => setTimeout(resolve, 60));
-    assert.equal(
-      f.browser.command(f.sender as never, "thread-a", "list").length,
-      2,
-      "a popup the Agent observed is kept",
-    );
   } finally {
     await f.close();
   }
@@ -1927,7 +1918,7 @@ test("Workspace native dialog blocks targeted input without accepting or activat
     debuggerApi.emit("message", {}, "Page.javascriptDialogOpening");
     await assert.rejects(
       f.browser.pointerClick("a", tab.tabId, observed.observationId, 20, 30),
-      /native dialog requires human control/,
+      /targeted input cannot operate this open native dialog/,
     );
     assert.equal(input.events.length, 0);
     debuggerApi.emit("message", {}, "Page.javascriptDialogClosed");
@@ -2884,5 +2875,129 @@ test("turn cleanup closes only this session's temporary pages and releases human
     assert.ok(remaining.every((t) => !t.temporary));
   } finally {
     await f.close();
+  }
+});
+
+test("occluded mounts stay hidden across bounds, tab and lease changes; stale cleanup cannot restore", async () => {
+  const f = await sharedFixture();
+  try {
+    const [first] = f.browser.command(f.sender as never, "thread-a", "new");
+    const second = f.browser
+      .command(f.sender as never, "thread-a", "new")
+      .find((tab) => tab.id !== first!.id)!;
+    const bounds = { x: 0, y: 0, width: 640, height: 480 };
+    const mount = (
+      tabId: string,
+      lease: string,
+      occluded: boolean,
+      width = 640,
+    ) =>
+      f.browser.mount(f.sender as never, {
+        threadId: "thread-a",
+        tabId,
+        lease,
+        occluded,
+        bounds: { ...bounds, width },
+      });
+    mount(first!.id, "first", true);
+    assert.equal(f.views[0]!.visible, false);
+    mount(first!.id, "first", true, 600);
+    assert.equal(f.views[0]!.visible, false);
+    mount(second.id, "second", true);
+    assert.equal(f.views[0]!.visible, false);
+    assert.equal(f.views[1]!.visible, false);
+    f.browser.mount(f.sender as never, {
+      threadId: "thread-a",
+      lease: "first",
+    });
+    assert.equal(f.views[1]!.visible, false);
+    mount(second.id, "second", false);
+    assert.equal(f.views[0]!.visible, false);
+    assert.equal(f.views[1]!.visible, true);
+    assert.throws(
+      () =>
+        f.browser.mount(f.sender as never, {
+          threadId: "thread-a",
+          tabId: second.id,
+          lease: "second",
+          bounds,
+          occluded: "false",
+        }),
+      /Invalid browser occlusion/,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("closing an overlay while its view is borrowed returns the exact visible mount and rejects late capture", async () => {
+  const { WorkspaceBrowserRenderer } =
+    await import("../src/main/workspace-browser-renderer.js");
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-overlay-render-"),
+  );
+  const owner = new PhysicalWindow();
+  owner.visible = true;
+  const view = new PhysicalView();
+  const renderer = new WorkspaceBrowserRenderer(
+    () => new PhysicalWindow() as never,
+    () => 1,
+  );
+  const browser = new WorkspaceBrowser({
+    artifactDirectory: directory,
+    dependencies: {
+      createView: () => view as never,
+      windowFor: () => owner as never,
+      renderWhileUnmounted: (v, current, operation) =>
+        renderer.render(v, current, operation),
+      releaseUnmountedView: (v) => renderer.release(v),
+      closeUnmountedRenderer: () => renderer.close(),
+    },
+  });
+  const entered = deferred<void>();
+  const finish = deferred<FakeImage>();
+  try {
+    browser.bindThreadSession("session", "thread");
+    const tab = await browser.open("session", "https://example.test/");
+    const bounds = { x: 20, y: 30, width: 640, height: 480 };
+    const mount = (occluded: boolean) =>
+      browser.mount(owner.webContents as never, {
+        threadId: "thread",
+        tabId: tab.tabId,
+        lease: "stable",
+        bounds,
+        occluded,
+      });
+    mount(true);
+    view.webContents.capturePage = async () => {
+      entered.resolve();
+      return await finish.promise;
+    };
+    const inspection = browser.inspect("session", tab.tabId);
+    const rejected = assert.rejects(inspection, /changed|stale|render/iu);
+    await entered.promise;
+    assert.notEqual(view.parent, owner);
+    mount(true);
+    assert.notEqual(
+      view.parent,
+      owner,
+      "same hidden presentation does not interrupt capture",
+    );
+    mount(false);
+    assert.equal(view.parent, owner);
+    assert.equal(view.visible, true);
+    assert.deepEqual(view.getBounds(), bounds);
+    finish.resolve(new FakeImage());
+    await rejected;
+    assert.equal(view.parent, owner);
+    assert.equal(
+      view.visible,
+      true,
+      "late cleanup cannot hide the restored view",
+    );
+  } finally {
+    finish.resolve(new FakeImage());
+    await browser.shutdown();
+    await rm(directory, { recursive: true, force: true });
   }
 });

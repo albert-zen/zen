@@ -176,7 +176,11 @@ export function prepareSampleContext(options: {
       content: { text, parts: [{ type: "text", text }] },
     });
   }
-  const supported = new Set(options.inputModalities ?? ["text"]);
+  // Match the sole compiler's Unknown attempt semantics. Only an explicit
+  // unsupported modality may claim its media was not sent/read.
+  const supported = new Set(
+    options.inputModalities ?? ["text", "image", "audio"],
+  );
   const omitted = new Set<string>();
   for (const item of options.itemList)
     if (item.kind === "message" || item.kind === "tool_result")
