@@ -1810,3 +1810,5 @@ The virtual transcript keeps ordinary native selection and per-message copy on t
 ZenX answered-question bubbles are a disposable read-only presentation of native questionReply provenance and the exact original ask_user_question call; they do not rewrite model inputs or infer missing historical question content.
 
 Question-list read recovery is a disposable mounted-view concern: existing authoritative invalidations and reconnection reads remain primary, with at most two delayed read retries per failure episode; it never resubmits answers or adds persistent retry authority.
+
+- **Early CI feedback** — Standalone static checks report errors before full acceptance; the CI-only pinned base/head impact report is shadow observation with conservative full fallback, never an execution selector or authority to omit existing acceptance checks.
