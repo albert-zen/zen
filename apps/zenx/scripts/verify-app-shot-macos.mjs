@@ -107,7 +107,9 @@ try {
         ],
         output: {
           entryFileNames: "acceptance.mjs",
-          inlineDynamicImports: true,
+          // Preserve platform boundaries: inlining hoists Linux-only externals
+          // into the macOS entry even when that capture path is never selected.
+          chunkFileNames: "acceptance-chunks/[name]-[hash].mjs",
         },
       },
     },

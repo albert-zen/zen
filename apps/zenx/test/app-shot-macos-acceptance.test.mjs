@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { build } from "vite";
 import { test } from "node:test";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
@@ -394,3 +400,85 @@ test("private session directory exists before Electron path overrides", async ()
   });
   assert.deepEqual(calls, ["mkdir", "userData", "sessionData"]);
 });
+
+test(
+  "the actual acceptance bundle loads without eager Linux or native dependencies",
+  { timeout: 15000 },
+  async () => {
+    const root = fileURLToPath(new URL("../../../", import.meta.url));
+    const launcher = await readFile(
+      new URL("../scripts/verify-app-shot-macos.mjs", import.meta.url),
+      "utf8",
+    );
+    const parsed = ts.createSourceFile(
+      "launcher.mjs",
+      launcher,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.JS,
+    );
+    let buildArgument;
+    function visit(node) {
+      if (
+        ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === "build"
+      )
+        buildArgument = node.arguments[0];
+      ts.forEachChild(node, visit);
+    }
+    visit(parsed);
+    assert.ok(
+      Boolean(buildArgument),
+      "Use the launcher's real production-service build configuration",
+    );
+    const scratch = await mkdtemp(join(tmpdir(), "app-shot-module-test-"));
+    try {
+      const appDirectory = join(scratch, "app");
+      const options = JSON.parse(
+        JSON.stringify(
+          runInNewContext("(" + buildArgument.getText(parsed) + ")", {
+            root,
+            appDirectory,
+            join,
+          }),
+        ),
+      );
+      assert.notEqual(
+        options.build.rollupOptions.output.inlineDynamicImports,
+        true,
+      );
+      await build(options);
+      // This is only a module-loading test. Readiness never resolves, and there
+      // are no native dependencies or capture-capable Electron APIs in this package.
+      const stub = join(appDirectory, "node_modules/electron");
+      await mkdir(stub, { recursive: true });
+      await writeFile(
+        join(stub, "package.json"),
+        JSON.stringify({ type: "module", exports: "./index.mjs" }),
+      );
+      await writeFile(
+        join(stub, "index.mjs"),
+        "export const app = { setPath() {}, disableHardwareAcceleration() {}, whenReady() { return new Promise(() => {}); } }; export const nativeImage = {}; export const systemPreferences = {};",
+      );
+      const config = join(scratch, "config.json");
+      await writeFile(
+        config,
+        JSON.stringify({ userData: join(scratch, "private"), appDirectory }),
+      );
+      const driver = join(appDirectory, "load.mjs");
+      await writeFile(
+        driver,
+        'process.argv[2] = process.argv[3]; await import("./acceptance.mjs"); console.log("MODULE_LOADED_WITHOUT_CAPTURE");',
+      );
+      const result = await promisify(execFile)(
+        process.execPath,
+        [driver, "unused", config],
+        { timeout: 3000, maxBuffer: 4096 },
+      );
+      assert.match(result.stdout, /MODULE_LOADED_WITHOUT_CAPTURE/);
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  },
+);
