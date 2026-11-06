@@ -1,26 +1,42 @@
 {
   "syntheticOnly": true,
-  "sourceHead": "985402c1be85c44dc4192235575f2cbd62ab9ca4",
-  "sourceMerge": "1d3adf87f529e667d6b1f452a2a23b7c69688c60",
-  "sourceTree": "d7abd3a2e8a25be3f01042d740386df4686331c0",
-  "baseHead": "581f53aa6d7ea8b9dab0e3bf01921d44aa4ba889",
-  "runId": 42202355199,
-  "artifactId": 13495217073,
-  "artifactDigest": "sha256:409872b76a9bed4d5ed8e3274dfeaac4a7d0f2fc820717e9965da3c36a925524",
+  "sourceHead": "186de4a0f963e76f78a85985f446deb79c708b87",
+  "sourceMerge": "2968d4b8e9b20d5d0c30aaebc9d30680e6044f57",
+  "sourceTree": "63ee6d209f7a4a1a97fb61500acb79cb605a0e25",
+  "baseHead": "fe1c1bcca93f83129490228fdde8891389bbd815",
+  "runId": 42211432220,
+  "artifactId": 13499552355,
+  "artifactDigest": "sha256:8c37d82612ac9399ea9b3f26b1d0f5749ab225208cba070aab9331641fa19a74",
   "passed": true,
   "scenes": 24,
   "screenshotCount": 120,
+  "acknowledgedTrustedSettledWheelReceipts": 15,
+  "minimumImageCoverage": 0.9142857142857143,
   "browserExceptions": [],
   "chromiumSandboxDisabled": false,
   "cleanupComplete": true,
   "retainedScreenshots": {
     "desktop-two-images.png": {
       "original": "zh-CN-light-1100-2-short-pending-body-start.png",
-      "sha256": "4c082ec37a40e111a1c7e21682bac0978703084fa63f7422c2ee08325848e748"
+      "sha256": "f0f93b3e543455baadf58d5af84abd602474ab19c5ae4fe8e18ddf008a4d51de"
     },
     "narrow-two-images.png": {
       "original": "en-dark-390-2-short-pending-body-start.png",
-      "sha256": "c2db5efd641a5aca745db0e94c7b729a6e3ffb31e60052c81156d456a6603985"
+      "sha256": "45d182dbfbe93a702ad77d70339cfe0333aefab89d50cf72d45ae6df4035d90f"
     }
+  },
+  "sourceFiles": {
+    "apps/zenx/src/renderer/src/ThreadView.tsx": "b3907f648d99563307d4fb8566631d6e65486d28c7ade30ca37cb72b504f0703",
+    "apps/zenx/src/renderer/src/PendingSteerPanel.tsx": "ffa27d8816db07f4152e85caad5e9b7c109066cc18b00cba60937cce1c0b7318",
+    "apps/zenx/src/renderer/src/steer-preview-column.ts": "a05f2403f659b8357bc7fdc4903ec8b1c4be2840ba666e298af82004788f95a5",
+    "apps/zenx/src/renderer/src/queued-messages.css": "39f0aa35edbfb0a57cfb8f7379b400aa9a406812532bc531d4067a5d0c13a1bf",
+    "apps/zenx/src/renderer/src/ImagePresentation.tsx": "ad1bddd19bdea955f3cdd9517ecbb37b7286e9eca20f6ad39d6f584c2ed0b8a0",
+    "apps/zenx/src/renderer/src/styles.css": "179d42aac9fab6544110520594b9e76a30bae61bfb2169264d377c60fce3f4ec",
+    "apps/zenx/src/renderer/src/theme.css": "9128df57b83980e609de0057081d641ba75b205b0e71de8767ffd84924e1977c",
+    "apps/zenx/test/fixtures/steer-image-visual.tsx": "d60bffc1f729fae84e71d24f411a4df0717a226d82ab0789228abdd167b98cd0",
+    "apps/zenx/scripts/build-steer-image-preview.mjs": "84c6c6eb4df6b58a5e7fd8b58c963c1e2f9ab2f64fcda5a6829700daee497163",
+    "apps/zenx/scripts/capture-steer-image-preview.mjs": "015cd6d37df63d097fcce71e804989213e16e91de1dcad88c1d5e7865f5eafc2",
+    "apps/zenx/scripts/steer-image-visibility.mjs": "9fc947e7e46abb38a05f7c718c6d6e9435fc37de18a6fdd4dec072f80c9626fc",
+    "apps/zenx/scripts/steer-image-geometry.mjs": "13b5e88d58371fc4d6719653a280ac08a5d6b389a70adfc5f9e75c6f32026b22"
   }
 }
