@@ -23,6 +23,31 @@ test("mock startup boundary does not start a C# compiler inside the assertion de
   assert.match(source, /Write-Phase "mock-boundary-ready"/u);
 });
 
+test("startup isolation removes environment keys and restores their original presence", () => {
+  const source = readFileSync(
+    new URL("../scripts/windows-startup-acceptance.ps1", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /function Set-FixtureEnvironment\(\$Key, \$State\)/u);
+  assert.match(
+    source,
+    /Remove-Item -LiteralPath "Env:\$Key" -ErrorAction Stop/u,
+  );
+  assert.match(
+    source,
+    /\$oldEnvironment\[\$key\] = @\{ present = \(Test-Path -LiteralPath "Env:\$key"\); value = \[Environment\]::GetEnvironmentVariable\(\$key\) \}/u,
+  );
+  assert.match(
+    source,
+    /Set-FixtureEnvironment \$key @\{ present = \$false \}/u,
+  );
+  assert.match(
+    source,
+    /try \{ Set-FixtureEnvironment \$key \$oldEnvironment\[\$key\] \}/u,
+  );
+  assert.doesNotMatch(source, /SetEnvironmentVariable\(\$key, \$null\)/u);
+});
+
 test("secondary failure state is captured before cleanup without replacing the original error", () => {
   const source = readFileSync(
     new URL("../scripts/windows-startup-acceptance.ps1", import.meta.url),

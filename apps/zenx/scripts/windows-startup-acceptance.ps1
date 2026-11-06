@@ -16,6 +16,15 @@ $utf8 = [System.Text.UTF8Encoding]::new($false)
 $report = @{ environment = @{ os = [Environment]::OSVersion.VersionString; runner = $env:RUNNER_NAME; workflowCommit = $env:GITHUB_SHA; arch = $env:PROCESSOR_ARCHITECTURE }; instrumentedPackage = $true; samples = @(); complete = $false }
 $oldEnvironment = @{}
 
+# PowerShell may coerce $null to an empty string for the .NET string overload.
+# Absence and an empty value are distinct to Node's nullish fallback.
+function Set-FixtureEnvironment($Key, $State) {
+  if ($State.present) {
+    [Environment]::SetEnvironmentVariable($Key, [string]$State.value)
+  } elseif (Test-Path -LiteralPath "Env:$Key") {
+    Remove-Item -LiteralPath "Env:$Key" -ErrorAction Stop
+  }
+}
 function Write-Json($Path, $Value) { [IO.File]::WriteAllText($Path, ($Value | ConvertTo-Json -Depth 12), $utf8) }
 function Open-SharedTextReader($Path) {
   # ReadAllText defaults to FileShare.Read and can block the live Node append
@@ -125,8 +134,8 @@ $runFailure = $null
 $finalizationErrors = @()
 try {
   foreach ($key in @("ZENX_DATA_DIR", "ELECTRON_RENDERER_URL", "ZENX_PROJECT_ACCEPTANCE_CONFIG", "ZENX_EXTERNAL_ZAS_ACCEPTANCE_CONFIG")) {
-    $oldEnvironment[$key] = [Environment]::GetEnvironmentVariable($key)
-    [Environment]::SetEnvironmentVariable($key, $null)
+    $oldEnvironment[$key] = @{ present = (Test-Path -LiteralPath "Env:$key"); value = [Environment]::GetEnvironmentVariable($key) }
+    Set-FixtureEnvironment $key @{ present = $false }
   }
   Add-Type -TypeDefinition @'
 using System;
@@ -282,7 +291,7 @@ public static class StartupWindows {
   $report.error = $_.Exception.Message
 } finally {
   foreach ($key in $oldEnvironment.Keys) {
-    try { [Environment]::SetEnvironmentVariable($key, $oldEnvironment[$key]) }
+    try { Set-FixtureEnvironment $key $oldEnvironment[$key] }
     catch { $finalizationErrors += "Restore environment $key`: $($_.Exception.Message)" }
   }
   try { Remove-Item -LiteralPath $fixtureRoot -Recurse -Force -ErrorAction Stop }
