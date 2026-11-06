@@ -150,6 +150,7 @@ async function loadObserverFixture(windows = [], seed) {
     exports,
     process,
     URL,
+    Promise,
     AbortSignal,
     setImmediate,
     setInterval: () => ({ unref() {} }),
@@ -350,7 +351,7 @@ async function rendererFixture(seed) {
   const contents = new fixture.EventEmitter();
   let callback;
   const state = {
-    url: "file:///index.html",
+    url: new URL("./fixtures/index.html", import.meta.url).href,
     loading: false,
     visible: true,
     cleanups: 0,
@@ -943,6 +944,8 @@ for (const stage of ["sidebar", "conversation"]) {
     "missing-row",
     "loading",
     "error",
+    "application-notice",
+    "background-shell-error",
     "unselected",
     "hidden-text",
     "occluded-text",
@@ -1068,6 +1071,16 @@ for (const stage of ["sidebar", "conversation"]) {
               `<p class="sidebar-empty ${invalid === "error" ? "sidebar-error" : ""}"></p>`,
             );
         if (invalid === "unselected") row.removeAttribute("aria-current");
+        if (
+          invalid === "application-notice" ||
+          invalid === "background-shell-error"
+        )
+          document.body.insertAdjacentHTML(
+            "beforeend",
+            invalid === "application-notice"
+              ? '<div class="app-notice" role="alert">Synthetic sidebar failure</div>'
+              : '<details class="background-shell-error">Synthetic Shell failure</details>',
+          );
         if (invalid === "hidden-text") labels[0].dataset.hidden = "true";
         const result = window.eval(observation.script);
         assert.equal(
@@ -1142,6 +1155,8 @@ for (const failConversation of [false, true]) {
     const f = await rendererFixture(productSeed);
     let clicks = 0;
     f.contents.executeJavaScript = async (code) => {
+      if (code.includes("window.zenx.threadSidebar.read"))
+        return { sidebar: true, shell: true };
       if (code.includes("row.click()")) {
         clicks++;
         return true;
@@ -1166,6 +1181,11 @@ for (const failConversation of [false, true]) {
     f.present(sidebar);
     await f.flush();
     assert.equal(clicks, 1);
+    assert.equal(
+      f.records.filter((event) => event.type === "trusted-document-reads")
+        .length,
+      1,
+    );
     assert.equal(
       f.records.some((event) => event.type === "sidebar-ready"),
       true,
@@ -1201,3 +1221,185 @@ for (const failConversation of [false, true]) {
     assert.equal(f.timers.size, 0);
   });
 }
+
+for (const outcome of [
+  "accepted",
+  "sidebar-rejected",
+  "shell-rejected",
+  "wrong-owner",
+  "unexpected-session",
+  "navigation",
+  "incomplete",
+]) {
+  test(`synthetic trusted document reads use only ordinary read APIs: ${outcome}`, async () => {
+    const f = await rendererFixture(productSeed);
+    const calls = [];
+    f.contents.executeJavaScript = async (code) => {
+      if (outcome === "incomplete") return { sidebar: true };
+      const receipt = await vm.runInNewContext(code, {
+        window: {
+          zenx: {
+            threadSidebar: {
+              read: async (threadId) => {
+                calls.push({ api: "sidebar", threadId });
+                if (outcome === "sidebar-rejected")
+                  throw Error("Synthetic trusted sidebar rejection");
+                return {
+                  owner: {
+                    kind: "thread",
+                    id: outcome === "wrong-owner" ? "foreign-thread" : threadId,
+                  },
+                  revision: 0,
+                  tabs: [],
+                };
+              },
+            },
+            shellPanel: {
+              request: async (request) => {
+                calls.push({ api: "shell", ...request });
+                if (outcome === "shell-rejected")
+                  throw Error("Synthetic trusted Shell rejection");
+                return {
+                  host: "local",
+                  sessions: outcome === "unexpected-session" ? [{}] : [],
+                };
+              },
+            },
+          },
+        },
+      });
+      if (outcome === "navigation")
+        f.state.url = new URL("other.html", f.state.url).href;
+      return receipt;
+    };
+    const pending = f.exports.verifyTrustedDocumentReads(
+      f.window,
+      productSeed,
+      Date.now() + 1000,
+    );
+    if (outcome === "accepted") await pending;
+    else
+      await assert.rejects(
+        pending,
+        /rejection|Unexpected|Renderer changed|incomplete/u,
+      );
+    assert.equal(
+      f.records.filter((event) => event.type === "trusted-document-reads")
+        .length,
+      outcome === "accepted" ? 1 : 0,
+    );
+    if (outcome !== "incomplete")
+      assert.deepEqual(calls, [
+        { api: "sidebar", threadId: productSeed.threadId },
+        { api: "shell", operation: "list", threadId: productSeed.threadId },
+      ]);
+    assert.equal(f.timers.size, 0);
+  });
+}
+
+test("trusted document read timeout keeps the original deadline and ignores late completion", async () => {
+  const f = await rendererFixture(productSeed);
+  let finish;
+  let calls = 0;
+  f.contents.executeJavaScript = () => {
+    calls++;
+    return new Promise((resolve) => {
+      finish = resolve;
+    });
+  };
+  await assert.rejects(
+    f.exports.verifyTrustedDocumentReads(
+      f.window,
+      productSeed,
+      Date.now() + 20,
+    ),
+    /original deadline/u,
+  );
+  finish({ sidebar: true, shell: true });
+  await f.flush();
+  assert.equal(calls, 1, "Never retry a timed out observation");
+  assert.equal(
+    f.records.some((event) => event.type === "trusted-document-reads"),
+    false,
+  );
+  assert.equal(f.timers.size, 0);
+});
+
+for (const interruption of [
+  "same-url-reload",
+  "renderer-exit",
+  "window-close",
+]) {
+  test(`trusted document read receipts retire on ${interruption}, without replay`, async () => {
+    const f = await rendererFixture(productSeed);
+    let finish;
+    let calls = 0;
+    f.contents.executeJavaScript = () => {
+      calls++;
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    };
+    const originalUrl = f.state.url;
+    const pending = f.exports.verifyTrustedDocumentReads(
+      f.window,
+      productSeed,
+      Date.now() + 1000,
+    );
+    const rejected = assert.rejects(pending, /navigated|exited|closed/u);
+    if (interruption === "same-url-reload")
+      f.contents.emit("did-start-navigation", {
+        isMainFrame: true,
+        isSameDocument: false,
+      });
+    if (interruption === "renderer-exit")
+      f.contents.emit("render-process-gone");
+    if (interruption === "window-close") f.window.emit("closed");
+    await rejected;
+    finish({ sidebar: true, shell: true });
+    await f.flush();
+    assert.equal(
+      f.state.url,
+      originalUrl,
+      "The URL string alone cannot certify document identity",
+    );
+    assert.equal(calls, 1);
+    assert.equal(
+      f.records.some((event) => event.type === "trusted-document-reads"),
+      false,
+    );
+    assert.equal(f.timers.size, 0);
+    assert.equal(f.contents.listenerCount("did-start-navigation"), 0);
+    assert.equal(f.contents.listenerCount("render-process-gone"), 0);
+    assert.equal(f.window.listenerCount("closed"), 0);
+  });
+}
+
+test("trusted reads latch navigation even when success settles in the same turn", async () => {
+  const f = await rendererFixture(productSeed);
+  f.contents.executeJavaScript = async () => {
+    queueMicrotask(() =>
+      f.contents.emit("did-start-navigation", {
+        isMainFrame: true,
+        isSameDocument: false,
+      }),
+    );
+    return { sidebar: true, shell: true };
+  };
+  await assert.rejects(
+    f.exports.verifyTrustedDocumentReads(
+      f.window,
+      productSeed,
+      Date.now() + 1000,
+    ),
+    /navigated/u,
+  );
+  assert.equal(
+    f.records.some((event) => event.type === "trusted-document-reads"),
+    false,
+  );
+  assert.equal(f.timers.size, 0);
+  assert.equal(f.contents.listenerCount("did-start-navigation"), 0);
+  assert.equal(f.contents.listenerCount("render-process-gone"), 0);
+  assert.equal(f.window.listenerCount("closed"), 0);
+});

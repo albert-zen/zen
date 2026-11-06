@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const config = JSON.parse(
   readFileSync(
@@ -582,9 +583,96 @@ export function productObservation(seed, stage) {
       return {selector:spec.selector,textPresent:true,...rect(element.getBoundingClientRect()),textRects:rects.map(rect),style:{color:style.color,fill:style.webkitTextFillColor,font:style.font,opacity:style.opacity,spacing:style.letterSpacing,transform:style.transform}};
     });
     const shell = document.querySelector('.app-shell');
-    return {selected, ranges, ready: document.visibilityState === 'visible' && visible(shell) && visible(row) && !row.disabled && !document.querySelector('#primary-sidebar .sidebar-error, #primary-sidebar .sidebar-empty') && (${JSON.stringify(stage)} !== 'conversation' || selected) && controls.every(Boolean),width:innerWidth,height:innerHeight,dpr:devicePixelRatio,viewport:visualViewport && {width:visualViewport.width,height:visualViewport.height,scale:visualViewport.scale,x:visualViewport.offsetLeft,y:visualViewport.offsetTop},shell:shell && rect(shell.getBoundingClientRect()),controls};
+    const errorNotice = Boolean(document.querySelector('.app-notice[role="alert"], .background-shell-error'));
+    return {selected, ranges, errorNotice, ready: document.visibilityState === 'visible' && visible(shell) && visible(row) && !row.disabled && !errorNotice && !document.querySelector('#primary-sidebar .sidebar-error, #primary-sidebar .sidebar-empty') && (${JSON.stringify(stage)} !== 'conversation' || selected) && controls.every(Boolean),width:innerWidth,height:innerHeight,dpr:devicePixelRatio,viewport:visualViewport && {width:visualViewport.width,height:visualViewport.height,scale:visualViewport.scale,x:visualViewport.offsetLeft,y:visualViewport.offsetTop},shell:shell && rect(shell.getBoundingClientRect()),controls};
   })()`;
   return { script, selectors: specs.map((spec) => spec.selector), row };
+}
+
+/** Read only the two ordinary preload APIs for the isolated synthetic owner. */
+export async function verifyTrustedDocumentReads(window, seed, deadline) {
+  productObservation(seed, "conversation"); // Validate the synthetic identity.
+  const contents = window.webContents;
+  const url = contents.getURL();
+  let timer;
+  let lifecycleError;
+  let rejectInvalidation;
+  const invalidated = new Promise((_, reject) => {
+    rejectInvalidation = reject;
+  });
+  const invalidate = (error) => {
+    lifecycleError ??= error;
+    rejectInvalidation(lifecycleError);
+  };
+  const navigated = (details) => {
+    if (details.isMainFrame)
+      invalidate(new Error("Renderer navigated during trusted reads"));
+  };
+  const gone = () =>
+    invalidate(new Error("Renderer exited during trusted reads"));
+  const closed = () =>
+    invalidate(new Error("Window closed during trusted reads"));
+  contents.on("did-start-navigation", navigated);
+  contents.once("render-process-gone", gone);
+  window.once("closed", closed);
+  try {
+    const receipt = await Promise.race([
+      invalidated,
+      contents.executeJavaScript(`(async () => {
+        const threadId = ${JSON.stringify(seed.threadId)};
+        const [sidebar, shell] = await Promise.all([
+          window.zenx.threadSidebar.read(threadId),
+          window.zenx.shellPanel.request({operation:'list', threadId})
+        ]);
+        if (sidebar?.owner?.kind !== 'thread' || sidebar.owner.id !== threadId || !Number.isSafeInteger(sidebar.revision) || !Array.isArray(sidebar.tabs) || shell?.host !== 'local' || !Array.isArray(shell.sessions) || shell.sessions.length !== 0) throw Error('Unexpected synthetic sidebar or Shell read result');
+        return {sidebar:true, shell:true};
+      })()`),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new Error("Trusted document reads exceeded original deadline"),
+            ),
+          Math.max(0, deadline - Date.now()),
+        );
+      }),
+    ]);
+    if (lifecycleError) throw lifecycleError;
+    if (
+      Date.now() >= deadline ||
+      contents.getURL() !== url ||
+      contents.isLoadingMainFrame()
+    )
+      throw new Error(
+        "Renderer changed or deadline elapsed during trusted reads",
+      );
+    if (receipt?.sidebar !== true || receipt?.shell !== true)
+      throw new Error("Trusted document read receipt is incomplete");
+    const expectedUrl = pathToFileURL(
+      path.resolve(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "../renderer/index.html",
+      ),
+    ).href;
+    const actual = new URL(url);
+    actual.hash = "";
+    event("trusted-document-reads", {
+      ...identity(window),
+      synthetic: true,
+      ...receipt,
+      url,
+      expectedUrl,
+      encodingDiffers: actual.href !== expectedUrl,
+      sameNativePath:
+        actual.protocol === "file:" &&
+        fileURLToPath(actual) === fileURLToPath(expectedUrl),
+    });
+  } finally {
+    clearTimeout(timer);
+    contents.removeListener("did-start-navigation", navigated);
+    contents.removeListener("render-process-gone", gone);
+    window.removeListener("closed", closed);
+  }
 }
 
 export async function verifyProductReady(window, deadline) {
@@ -607,6 +695,7 @@ export async function verifyProductReady(window, deadline) {
         interaction: "scripted-dom-click",
         synthetic: true,
       });
+      await verifyTrustedDocumentReads(window, seed, deadline);
     }
     const { image, evidence } = await captureRenderedApp(
       window,

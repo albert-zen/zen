@@ -265,3 +265,22 @@ image shows the synthetic messages, but also a trusted-document sidebar error
 and background-command status error. Those observed errors remain unresolved;
 this fixture-only correction does not change production trust checks or claim
 the broader product is accepted. Fresh native acceptance remains required.
+
+### Joint trusted-document acceptance (#722 and #726)
+
+The joint candidate includes the validated native-file-path comparison from
+#726 without changing owned-window, main-frame or current-document admission.
+After selecting the isolated seeded Thread, the disposable observer makes one
+ordinary sidebar read and one Shell-list request through the real preload APIs.
+It requires the exact synthetic owner and an empty local Shell list, records
+their successful receipts plus actual/expected file-URL spellings, and never
+retries an observation. Both reads share the original presentation deadline.
+This does not create a Shell session or call a model/provider.
+
+Sidebar/conversation frames now also reject application alert notices and
+background-Shell error details. These checks supplement the exact synthetic
+text, geometry, occlusion and presented-pixel gates; they do not replace them.
+The final native report, read receipts and original conversation screenshot must
+all be inspected together before claiming the earlier two errors disappeared.
+Until that combined hosted run completes, earlier standalone Windows results
+remain partial evidence, not joint product acceptance.

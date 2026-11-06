@@ -10,11 +10,19 @@
   flex-wrap: wrap;
   gap: 6px 8px;
 }
+/* As with reference-token-wrap, keep the fixed intrinsic cap separate from
+   percentage containment so a hidden long question cannot size the message. */
+.answered-question-trigger-wrap {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+}
 .answered-question-trigger {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  max-width: min(260px, 100%);
+  min-width: 0;
+  max-width: 260px;
   min-height: 28px;
   padding: 4px 9px;
   border: 1px solid var(--color-border-subtle);

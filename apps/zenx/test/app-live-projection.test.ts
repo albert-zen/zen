@@ -1942,6 +1942,71 @@ async function waitFor<T>(read: () => T | null | undefined | false) {
   throw new Error("Timed out waiting for renderer projection");
 }
 
+test("App reloads evicted history while preserving an unsent Composer draft", async () => {
+  const ids = Array.from({ length: 8 }, (_, index) => `thread-${index + 1}`);
+  let firstReads = 0;
+  let release!: (value: ReturnType<typeof resumed>) => void;
+  const pending = new Promise<ReturnType<typeof resumed>>((resolve) => {
+    release = resolve;
+  });
+  const value = (id: string) => ({
+    ...threadWithMessage(`history-for-${id}`),
+    id,
+  });
+  const harness = await mountApp({
+    threads: async (archived) =>
+      archived ? [] : ids.map((id) => summary(id, id)),
+    request: async (method, params) => {
+      if (method !== "zen/thread/resume")
+        throw new Error(`Unexpected request: ${method}`);
+      const id = (params as { threadId: string }).threadId;
+      if (id === ids[0] && ++firstReads === 2) return pending;
+      return resumed(value(id));
+    },
+  });
+  const choose = async (id: string) => {
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          `[data-thread-id="${id}"] .thread-row`,
+        )!
+        .click(),
+    );
+  };
+  try {
+    await choose(ids[0]!);
+    const textarea =
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!;
+    const key = Object.getOwnPropertyNames(textarea).find((key) =>
+      key.startsWith("__reactProps$"),
+    )!;
+    await act(async () => {
+      (
+        textarea as unknown as Record<
+          string,
+          { onChange(event: { target: { value: string } }): void }
+        >
+      )[key]!.onChange({ target: { value: "keep my unsent draft" } });
+    });
+    for (const id of ids.slice(1)) await choose(id);
+    await choose(ids[0]!);
+    assert.equal(firstReads, 2);
+    assert.ok(
+      !document.body.textContent?.includes(`history-for-${ids[0]}`),
+      "evicted history is not a stale cached view",
+    );
+    await act(async () => release(resumed(value(ids[0]!))));
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+      "keep my unsent draft",
+    );
+    assert.ok(document.body.textContent?.includes(`history-for-${ids[0]}`));
+  } finally {
+    release(resumed(value(ids[0]!)));
+    await harness.unmount();
+  }
+});
+
 test("actual App cached navigation restores tall-Composer position", async () => {
   const a = {
     ...thread(),

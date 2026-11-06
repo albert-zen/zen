@@ -67,30 +67,32 @@ function AnsweredQuestionPart({
           setOpen(next);
         }}
       >
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            className="answered-question-trigger"
-            aria-label={t("showAnsweredQuestion")}
-            onPointerEnter={(event) => {
-              if (event.pointerType !== "touch") {
+        <span className="answered-question-trigger-wrap">
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className="answered-question-trigger"
+              aria-label={t("showAnsweredQuestion")}
+              onPointerEnter={(event) => {
+                if (event.pointerType !== "touch") {
+                  clear();
+                  setOpen(true);
+                }
+              }}
+              onPointerLeave={closeSoon}
+              onClick={(event) => {
+                event.preventDefault();
                 clear();
-                setOpen(true);
-              }
-            }}
-            onPointerLeave={closeSoon}
-            onClick={(event) => {
-              event.preventDefault();
-              clear();
-              restoreFocus.current = true;
-              pinned.current = !pinned.current;
-              setOpen(pinned.current);
-            }}
-          >
-            <Icon name="question" size={14} />
-            <span>{label}</span>
-          </button>
-        </PopoverTrigger>
+                restoreFocus.current = true;
+                pinned.current = !pinned.current;
+                setOpen(pinned.current);
+              }}
+            >
+              <Icon name="question" size={14} />
+              <span>{label}</span>
+            </button>
+          </PopoverTrigger>
+        </span>
         <PopoverContent
           className="answered-question-popover"
           aria-labelledby={heading}
