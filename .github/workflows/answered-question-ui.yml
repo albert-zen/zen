@@ -27,7 +27,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   answered-question:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -35,8 +35,26 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Install CJK fonts for readable synthetic screenshots
-        run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
+      - name: Resolve CJK font from authenticated Ubuntu package indexes
+        id: cjk-package
+        timeout-minutes: 3
+        run: node apps/zenx/scripts/prepare-cjk-fonts.mjs resolve "${{ runner.temp }}/zenx-cjk-fonts"
+      - name: Restore exact verified CJK package archive
+        id: cjk-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.cjk-package.outputs.deb-path }}
+          key: ${{ steps.cjk-package.outputs.cache-key }}
+      - name: Install and verify CJK fonts before all synthetic UI capture
+        id: zenx-fonts
+        timeout-minutes: 5
+        run: node apps/zenx/scripts/prepare-cjk-fonts.mjs install "${{ runner.temp }}/zenx-cjk-fonts"
+      - name: Cache only the verified CJK package archive
+        if: ${{ steps.zenx-fonts.outcome == 'success' && steps.cjk-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.cjk-package.outputs.deb-path }}
+          key: ${{ steps.cjk-package.outputs.cache-key }}
       - run: npm ci
       - run: npm run build --workspace @zenx/plugin-sdk
       - name: Native answer provenance and real renderer interactions
