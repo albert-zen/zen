@@ -67,6 +67,9 @@ export class DomainThreadJournal implements ThreadJournal {
     string,
     { lastItemId: string; revision: string }
   >();
+  // Failed optional observations may exist only in this process. Never discard
+  // those facts merely to satisfy a cache budget.
+  readonly #volatileHistory = new Set<string>();
   readonly #chains = new Map<string, Promise<unknown>>();
   readonly #operations = new Set<Promise<unknown>>();
   readonly #uncertain = new Set<string>();
@@ -102,15 +105,29 @@ export class DomainThreadJournal implements ThreadJournal {
       this.#owner!.assertHeld();
       return action();
     });
-    this.#chains.set(
-      threadId,
-      next.catch(() => undefined),
+    const chain = next.then(
+      () => undefined,
+      () => undefined,
     );
+    this.#chains.set(threadId, chain);
     this.#operations.add(next);
     void next
-      .finally(() => this.#operations.delete(next))
+      .finally(() => {
+        this.#operations.delete(next);
+        if (this.#chains.get(threadId) === chain) this.#chains.delete(threadId);
+      })
       .catch(() => undefined);
     return next;
+  }
+  #retainLive(threadId: string, items: CanonicalItem[]): void {
+    this.#live.delete(threadId);
+    this.#live.set(threadId, items);
+    // Completed, durable projections can be reconstructed. Keep the most
+    // recently written one warm, plus any unpersisted optional observations.
+    const reconstructable = [...this.#live.keys()].filter(
+      (id) => !this.#volatileHistory.has(id),
+    );
+    for (const id of reconstructable.slice(0, -1)) this.#live.delete(id);
   }
   async close(): Promise<void> {
     if (this.#closed) return;
@@ -121,6 +138,7 @@ export class DomainThreadJournal implements ThreadJournal {
   async #record(event: TraceEvent, strict = false): Promise<void> {
     const receipt = await this.trace.record(event);
     if (receipt.durability === "degraded") {
+      if (!strict) this.#volatileHistory.add(event.threadId);
       this.#options.onTraceDegraded?.(event.threadId, receipt);
       if (strict) {
         this.#uncertain.add(event.threadId);
@@ -225,7 +243,7 @@ export class DomainThreadJournal implements ThreadJournal {
         // without it must never be compiled into an apparently complete Thread.
         await this.#writeFence(first.threadId);
         await this.#items.create(first.threadId, semantic);
-        this.#live.set(first.threadId, structuredClone(previous));
+        this.#retainLive(first.threadId, structuredClone(previous));
         await this.#rememberSummaryRevision(first.threadId);
       } catch (error) {
         this.#uncertain.add(first.threadId);
@@ -291,7 +309,7 @@ export class DomainThreadJournal implements ThreadJournal {
         await this.#route(item, 0, semantic);
         await this.#writeFence(item.threadId);
         await this.#items.create(item.threadId, semantic);
-        this.#live.set(item.threadId, [item]);
+        this.#retainLive(item.threadId, [item]);
         await this.#rememberSummaryRevision(item.threadId);
         return semantic;
       }
@@ -338,7 +356,7 @@ export class DomainThreadJournal implements ThreadJournal {
             throw error;
           throw new ThreadJournalAppendOutcomeUnknownError(error); // fact may be committed; compile-only reconciliation, never effect replay.
         }
-        this.#live.set(item.threadId, [...previous, item]);
+        this.#retainLive(item.threadId, [...previous, item]);
         await this.#rememberSummaryRevision(item.threadId);
         // These exact items were read/reconciled in this serialized append and
         // the new suffix is durable now. No follow-up full-log scan is needed.
@@ -514,6 +532,33 @@ export class DomainThreadJournal implements ThreadJournal {
     if (this.#owner !== undefined && !this.#uncertain.has(threadId))
       await this.reconcileCompilation(threadId);
     return this.#items.read(threadId);
+  }
+  async readSnapshot(threadId: string): Promise<{
+    items: CanonicalItem[];
+    itemList: ContextItem[];
+  }> {
+    if (this.#owner === undefined || this.#uncertain.has(threadId))
+      return {
+        items: await this.read(threadId),
+        itemList: await this.readItemList(threadId),
+      };
+    return this.#operation(threadId, async () => {
+      await this.#migrate(threadId);
+      // Preserve cold inspection of unpublished/absent Threads. No projection
+      // or recovery authority exists until the initial ItemList is published.
+      if (!(await this.#items.exists(threadId)))
+        return { items: await this.#read(threadId), itemList: [] };
+      const compiled = await this.#reconcileCompilation(threadId);
+      return {
+        items: structuredClone(
+          this.#live.get(threadId) ?? compiled?.originals ?? [],
+        ),
+        itemList:
+          compiled === undefined
+            ? await this.#items.read(threadId)
+            : structuredClone([...compiled.contexts]),
+      };
+    });
   }
   async read(threadId: string): Promise<CanonicalItem[]> {
     if (!(await this.#items.exists(threadId)) && this.#owner !== undefined)

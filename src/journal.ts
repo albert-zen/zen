@@ -18,6 +18,11 @@ export interface ThreadJournal {
     exactItemList?: readonly ContextItem[],
   ): Promise<void>;
   readItemList?(threadId: string): Promise<ContextItem[]>;
+  /** One operation-local source observation for canonical and semantic history. */
+  readSnapshot?(threadId: string): Promise<{
+    items: CanonicalItem[];
+    itemList?: ContextItem[];
+  }>;
   appendContext?(item: ContextItem): Promise<void>;
   /** Read-only history remains available; unsafe control recovery blocks new dispatch. */
   assertRecoverySafe?(threadId: string): Promise<void>;
