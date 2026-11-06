@@ -1,0 +1,26 @@
+{
+  "syntheticOnly": true,
+  "sourceHead": "985402c1be85c44dc4192235575f2cbd62ab9ca4",
+  "sourceMerge": "1d3adf87f529e667d6b1f452a2a23b7c69688c60",
+  "sourceTree": "d7abd3a2e8a25be3f01042d740386df4686331c0",
+  "baseHead": "581f53aa6d7ea8b9dab0e3bf01921d44aa4ba889",
+  "runId": 42202355199,
+  "artifactId": 13495217073,
+  "artifactDigest": "sha256:409872b76a9bed4d5ed8e3274dfeaac4a7d0f2fc820717e9965da3c36a925524",
+  "passed": true,
+  "scenes": 24,
+  "screenshotCount": 120,
+  "browserExceptions": [],
+  "chromiumSandboxDisabled": false,
+  "cleanupComplete": true,
+  "retainedScreenshots": {
+    "desktop-two-images.png": {
+      "original": "zh-CN-light-1100-2-short-pending-body-start.png",
+      "sha256": "4c082ec37a40e111a1c7e21682bac0978703084fa63f7422c2ee08325848e748"
+    },
+    "narrow-two-images.png": {
+      "original": "en-dark-390-2-short-pending-body-start.png",
+      "sha256": "c2db5efd641a5aca745db0e94c7b729a6e3ffb31e60052c81156d456a6603985"
+    }
+  }
+}
