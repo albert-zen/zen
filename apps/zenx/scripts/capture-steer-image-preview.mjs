@@ -220,6 +220,21 @@ try {
           await wait(
             `location.href === ${JSON.stringify(sceneUrl)} && !!document.querySelector('.pending-steer-panel .image-thumbnail')`,
           );
+          // Establish reader scroll ownership with a real browser wheel input.
+          // Programmatic scrollIntoView alone must not fight live-follow logic.
+          const readerPoint = await evaluate(`(() => {
+            const r = document.querySelector('.messages').getBoundingClientRect();
+            return {x: r.left + 40, y: r.top + 40};
+          })()`);
+          await send("Input.dispatchMouseEvent", {
+            type: "mouseWheel",
+            ...readerPoint,
+            deltaX: 0,
+            deltaY: -120,
+          });
+          await evaluate(
+            "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))",
+          );
           // Pending attachment payloads are lazy: make each real thumbnail
           // reachable before waiting for decoding, including clipped shelves.
           await wait(
