@@ -87,8 +87,9 @@ test("provenance binds head/base and actual checkout without collecting arbitrar
   const { join } = await import("node:path");
   const { fileURLToPath } = await import("node:url");
   const { execFileSync } = await import("node:child_process");
-  const { writeProvenance } =
-    await import("../../../scripts/write-ci-provenance.mjs");
+  const { writeProvenance } = await import(
+    "../../../scripts/write-ci-provenance.mjs"
+  );
   const directory = mkdtempSync(join(tmpdir(), "zen-ci-provenance-"));
   const cwd = fileURLToPath(new URL("../../../", import.meta.url));
   try {
@@ -154,7 +155,25 @@ test("pending steer browser matrix and failure artifacts stay in the synthetic U
     (s) => s.name === "Retain synthetic steer image evidence",
   );
   assert.ok(artifact);
-  assert.equal(artifact.if, "${{ always() }}");
+  assert.equal(
+    artifact.if,
+    "${{ matrix.shard == 'conversation' && always() }}",
+  );
+  assert.deepEqual(workflow.jobs["zenx-ui"].strategy.matrix.shard, [
+    "overflow",
+    "layout",
+    "conversation",
+  ]);
+  assert.match(capture.if, /matrix\.shard == 'conversation'/);
+  assert.equal(
+    steps.filter((s) => s.run?.includes("capture-steer-image-preview.mjs"))
+      .length,
+    1,
+  );
+  assert.equal(
+    steps.filter((s) => s.with?.name === artifact.with.name).length,
+    1,
+  );
   assert.equal(artifact.with.path, "${{ runner.temp }}/zenx-steer-image");
   assert.equal(artifact.with["retention-days"], 14);
   assert.ok(
