@@ -21,7 +21,7 @@ export const en = {
     "To revoke, disable the Composer action, remove the binding from your Hyprland configuration and remove the helper. Revoke any screen-sharing permission separately in Hyprland; disabling the action does not change compositor permissions.",
   appShotHyprlandEnable: "Enable Hyprland capture action for this Composer",
   appShotHyprlandHint:
-    "Registering the action does not confirm a physical shortcut. Bind it manually below. Disable closes this Composer's portal session, without editing your binding. Capture stays in review; Attach and Send remain separate.",
+    "Registering the action does not confirm a physical shortcut. Bind it manually below. Disable closes this Composer's portal session, without editing your binding. Captures are added directly to this draft. Click an attachment to inspect its context; Send remains separate.",
   appShotHyprlandActionRegistered:
     "Hyprland capture action is registered. Physical key binding is managed by your configuration.",
   appShotHyprlandActionMissing:
@@ -39,7 +39,7 @@ export const en = {
     "To revoke capture access, disable ZenX App Shots in GNOME Extensions. Stopping the Composer shortcut closes only that shortcut session. The desktop shortcut and capture extension are separate choices.",
   appShotPortalEnable: "Ask the desktop to enable this Composer's shortcut",
   appShotPortalHint:
-    "Your desktop may ask you to approve or choose a shortcut and may remember that choice. Disable closes this Composer's session. Capture stays in review; Attach and Send remain separate. Unsupported capture opens the window chooser; denial does not fall back.",
+    "Your desktop may ask you to approve or choose a shortcut and may remember that choice. Disable closes this Composer's session. Captures are added directly to this draft. Click an attachment to inspect its context; Send remains separate. Unsupported capture opens the window chooser; denial does not fall back.",
   appShotPortalAssigned: "Desktop shortcut: {{shortcut}}",
   appShotPortalAssignedUnknown: "Assigned by the desktop",
   appShotPortalNotAssigned:
@@ -48,19 +48,17 @@ export const en = {
   appShotPortalStop: "Stop shortcut setup",
   appShotNiriEnable: "Enable Niri capture action for this composer",
   appShotNiriHint:
-    "Registering this action does not reserve keys. Add the binding below to your own Niri configuration, then use it in an external app. Any same-session process can invoke the action while enabled. Disable to unregister. Review, Attach and Send remain separate.",
+    "Registering this action does not reserve keys. Add the binding below to your own Niri configuration, then use it in an external app. Any same-session process can invoke the action while enabled. Disable to unregister. Captures are added directly to this draft. Click an attachment to inspect its context; Send remains separate.",
   appShotNiriBinding: "Manual Niri shortcut setup",
   appShotNiriManualSetup:
     "Niri 25.11 or newer and gdbus are required. Place this line inside your existing binds block after checking conflicts. ZenX does not read or edit your configuration. If you remove the binding, disable the action here too.",
-  appShotWaiting:
-    "{{count}} more captures waiting for review. Closing discards unadded captures.",
   appShotQueueFull:
-    "Review the waiting captures first. The latest capture was not added.",
+    "Four captures are already being added. The latest capture was not added; wait for these imports before capturing again.",
   appShot: "App Shot",
   appShotShortcutTitle: "App Shot (⌘/Ctrl+Shift+2)",
   appShotClose: "Close App Shot",
   appShotPrivacy:
-    "Choose a window, review the capture, then attach it to this draft. Nothing is sent to the model until you send the message.",
+    "Choose a window manually, or enable a shortcut to add captures directly to this draft. Click an attachment to inspect its captured context. Nothing is sent to the model until you send the message.",
   appShotWorking: "Preparing capture…",
   appShotContext: "Captured context",
   appShotChooseAnother: "Choose another window",
@@ -102,9 +100,9 @@ export const en = {
     "Disable any active Composer shortcut before recording. Use a modifier and one key. Escape cancels; Tab leaves recording. Selection does not reserve keys. Enable to register; conflicts with other apps may fail then.",
   appShotShortcutWorking: "Updating shortcut…",
   appShotModifierPairHint:
-    "Hold the left and right keys of the chosen modifier together, not a double tap. Only modifier state is observed; the keys are not reserved and typing is not recorded. May capture immediately if both are already held. Disable to stop. Nothing is sent until you review, attach and send.",
+    "Hold the left and right keys of the chosen modifier together, not a double tap. Only modifier state is observed; the keys are not reserved and typing is not recorded. May capture immediately if both are already held. Disable to stop. Captures are added directly to this draft. Click an attachment to inspect its context; nothing is sent until Send.",
   appShotGlobalHint:
-    "Captures the foreground app for review while this composer remains open. Disable to release the shortcut. Enablement is not saved; attaching and sending are separate actions.",
+    "Captures the foreground app directly into this Composer’s draft, without opening a capture dialog. Click the attachment to inspect its context. Disable to release the shortcut. Enablement is not saved; Send remains separate.",
   appShotLinuxShortcutHint:
     "Opens the window chooser; it does not capture the foreground app automatically on Linux. Disable to release the shortcut. Availability depends on the desktop. Enablement is not saved.",
 
@@ -1128,7 +1126,7 @@ export const zhCN = {
     "撤销时请取消启用输入框动作，移除 Hyprland 配置中的绑定并删除辅助程序。已授予的屏幕共享权限需在 Hyprland 中单独撤销；停用动作不会改变 compositor 权限。",
   appShotHyprlandEnable: "为当前输入框启用 Hyprland 捕获动作",
   appShotHyprlandHint:
-    "注册动作不表示已绑定实体按键。请手动添加下方配置。取消启用会关闭当前输入框的 portal 会话，不会修改绑定。捕获仍需检查，添加与发送分开。",
+    "注册动作不表示已绑定实体按键。请手动添加下方配置。取消启用会关闭当前输入框的 portal 会话，不会修改绑定。捕获后直接添加到这条草稿，点击附件查看上下文；发送仍需单独操作。",
   appShotHyprlandActionRegistered:
     "Hyprland 捕获动作已注册。实体按键绑定由你的配置管理。",
   appShotHyprlandActionMissing: "Hyprland 捕获动作尚未注册，应用快照未启用。",
@@ -1145,7 +1143,7 @@ export const zhCN = {
     "撤销捕获权限请在 GNOME Extensions 中禁用 ZenX App Shots。停止输入框快捷键只关闭该快捷键会话。桌面快捷键与捕获扩展是两项独立选择。",
   appShotPortalEnable: "请求桌面为当前输入框启用快捷键",
   appShotPortalHint:
-    "桌面可能要求你批准或选择快捷键，并可能记住这次选择。取消启用会关闭当前输入框的会话。捕获仍需检查，添加与发送分开；不支持前台捕获时打开选窗器，拒绝授权不会自动降级。",
+    "桌面可能要求你批准或选择快捷键，并可能记住这次选择。取消启用会关闭当前输入框的会话。捕获后直接添加到这条草稿，点击附件查看上下文；发送仍需单独操作；不支持前台捕获时打开选窗器，拒绝授权不会自动降级。",
   appShotPortalAssigned: "桌面快捷键：{{shortcut}}",
   appShotPortalAssignedUnknown: "由桌面分配",
   appShotPortalNotAssigned: "桌面尚未分配快捷键，应用快照未启用。",
@@ -1153,17 +1151,17 @@ export const zhCN = {
   appShotPortalStop: "停止快捷键设置",
   appShotNiriEnable: "为当前输入框启用 Niri 捕获动作",
   appShotNiriHint:
-    "注册动作不等于保留按键。请自行添加下方 Niri 配置后，在外部应用使用快捷键。启用期间，同一会话内的其他进程也可调用该动作。取消启用会撤销注册；检查、添加和发送仍为独立步骤。",
+    "注册动作不等于保留按键。请自行添加下方 Niri 配置后，在外部应用使用快捷键。启用期间，同一会话内的其他进程也可调用该动作。取消启用会撤销注册；捕获后直接添加到这条草稿，点击附件查看上下文；发送仍需单独操作。",
   appShotNiriBinding: "手动设置 Niri 快捷键",
   appShotNiriManualSetup:
     "需要 Niri 25.11 或更新版本及 gdbus。请检查冲突后，将此行放入已有 binds 块。ZenX 不读取或修改配置。移除绑定后，也请在这里取消启用。",
-  appShotWaiting: "还有 {{count}} 张快照待检查。关闭会放弃尚未添加的快照。",
-  appShotQueueFull: "请先检查等待中的快照。最新这张尚未添加。",
+  appShotQueueFull:
+    "已有四张快照正在添加。最新这张尚未添加，请等待完成后再捕获。",
   appShot: "应用快照",
   appShotShortcutTitle: "应用快照（⌘/Ctrl+Shift+2）",
   appShotClose: "关闭应用快照",
   appShotPrivacy:
-    "选择窗口并检查快照，再添加到这条草稿。发送消息前，不会传给模型。",
+    "手动选择窗口，或启用快捷键将快照直接添加到这条草稿。点击附件查看捕获的上下文；发送消息前，不会传给模型。",
   appShotWorking: "正在准备快照…",
   appShotContext: "捕获的上下文",
   appShotChooseAnother: "选择其他窗口",
@@ -1203,9 +1201,9 @@ export const zhCN = {
     "录制前请在所属输入框关闭已启用的快捷键。使用修饰键加一个按键。Escape 取消；Tab 离开录制。选择不会占用按键，明确启用后才注册，届时仍可能与其他应用冲突。",
   appShotShortcutWorking: "正在更新快捷键…",
   appShotModifierPairHint:
-    "同时按住所选修饰键的左右两枚按键，不是双击。只观察修饰键状态，不独占按键，也不记录输入内容；启用时若已同时按住，可能立即捕获。取消勾选即可停止。检查、添加到草稿并发送前，不会传给模型。",
+    "同时按住所选修饰键的左右两枚按键，不是双击。只观察修饰键状态，不独占按键，也不记录输入内容；启用时若已同时按住，可能立即捕获。取消勾选即可停止。捕获后直接添加到这条草稿，点击附件查看上下文；只有发送才传给模型。",
   appShotGlobalHint:
-    "仅在当前输入框仍打开时捕获前台应用并供检查。取消勾选可释放快捷键。启用状态不会保存；添加到草稿与发送是分开的操作。",
+    "当前输入框打开时，捕获前台应用并直接添加到草稿，不弹出截图检查页。点击附件查看上下文。取消勾选可释放快捷键；启用状态不会保存，发送仍需单独操作。",
   appShotLinuxShortcutHint:
     "打开窗口选择器，不会在 Linux 自动捕获前台应用。取消勾选可释放快捷键，是否可用取决于桌面环境。启用状态不会保存。",
 

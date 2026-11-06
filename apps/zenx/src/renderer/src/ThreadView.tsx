@@ -176,6 +176,7 @@ import { Markdown, MessageLinkContext } from "./Markdown.js";
 import {
   AttachmentImage,
   ImagePreview,
+  type ImagePreviewUnavailable,
   ThreadImagesContext,
   ToolImages,
 } from "./ImagePresentation.js";
@@ -839,7 +840,29 @@ function ThreadViewContent({
     name: string;
     trigger: HTMLButtonElement;
     queueOwner?: { threadId: string; queuedItemId: string; clientId: string };
+    draftOwner?: {
+      composerId: string;
+      threadId: string | null;
+      imageId: string;
+    };
+    appShotContext?: string;
+    unavailable?: ImagePreviewUnavailable;
   } | null>(null);
+  const draftPreviewScope = useRef<{
+    composerId: string;
+    threadId: string | null;
+    images: readonly ComposerDraftImage[];
+  } | null>(null);
+  useLayoutEffect(() => {
+    draftPreviewScope.current = {
+      composerId,
+      threadId: thread?.id ?? null,
+      images: composer.draft.images,
+    };
+    return () => {
+      draftPreviewScope.current = null;
+    };
+  }, [composerId, thread?.id, composer.draft.images]);
   const onOpenImage = useCallback(
     (attachment: AttachmentRef, name: string, trigger: HTMLButtonElement) =>
       setPreview({ attachment, name, trigger }),
@@ -880,9 +903,20 @@ function ThreadViewContent({
       queuedImages[preview.queueOwner.queuedItemId]?.some((image) =>
         sameImageAttachment(image, preview.attachment),
       ) === true);
+  const draftPreviewCurrent =
+    preview?.draftOwner === undefined ||
+    (preview.draftOwner.composerId === composerId &&
+      preview.draftOwner.threadId === (thread?.id ?? null) &&
+      composer.draft.images.some(
+        (image) =>
+          image.id === preview.draftOwner!.imageId &&
+          image.name === preview.name &&
+          image.appShotContext === preview.appShotContext &&
+          sameImageAttachment(image.attachment, preview.attachment),
+      ));
   useEffect(() => {
-    if (!queuePreviewCurrent) setPreview(null);
-  }, [queuePreviewCurrent]);
+    if (!queuePreviewCurrent || !draftPreviewCurrent) setPreview(null);
+  }, [queuePreviewCurrent, draftPreviewCurrent]);
   const history = useContext(ThreadHistoryContext);
   const [atLive, setAtLive] = useState(readingState.scroll?.following ?? true);
   const [skills, setSkills] = useState<SkillEntry[]>([]);
@@ -2314,13 +2348,28 @@ function ThreadViewContent({
                 <DraftImage
                   image={image}
                   key={image.id}
-                  onOpen={(trigger) =>
+                  onOpen={(trigger, unavailable) => {
+                    const scope = draftPreviewScope.current;
+                    if (
+                      !trigger.isConnected ||
+                      scope?.composerId !== composerId ||
+                      scope.threadId !== (thread?.id ?? null) ||
+                      !scope.images.includes(image)
+                    )
+                      return;
                     setPreview({
                       attachment: image.attachment,
                       name: image.name,
                       trigger,
-                    })
-                  }
+                      appShotContext: image.appShotContext,
+                      unavailable,
+                      draftOwner: {
+                        composerId,
+                        threadId: thread?.id ?? null,
+                        imageId: image.id,
+                      },
+                    });
+                  }}
                   onReadAttachment={onReadAttachment}
                   onRemove={() => onRemoveImage(image.id)}
                 />
@@ -2582,7 +2631,20 @@ function ThreadViewContent({
                 <AppShotButton
                   key={thread?.id ?? composerId}
                   disabled={composerDisabled || submitting}
-                  onAttach={onAddAppShot}
+                  onAttach={(image) => {
+                    onAddAppShot(image);
+                    const scope = draftPreviewScope.current;
+                    if (
+                      scope?.composerId === composerId &&
+                      scope.threadId === (thread?.id ?? null) &&
+                      !document.querySelector(
+                        '[role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"]',
+                      )
+                    )
+                      composerTextareaRef.current?.focus({
+                        preventScroll: true,
+                      });
+                  }}
                 />
               )}
               {selectedModel === undefined ? null : (
@@ -2843,9 +2905,13 @@ function ThreadViewContent({
           />
         ))}
       </MessageLinkContext.Provider>
-      {preview === null || !queuePreviewCurrent ? null : (
+      {preview === null ||
+      !queuePreviewCurrent ||
+      !draftPreviewCurrent ? null : (
         <ImagePreview
           attachment={preview.attachment}
+          appShotContext={preview.appShotContext}
+          unavailable={preview.unavailable}
           name={preview.name}
           onClose={() => setPreview(null)}
           onReadAttachment={
@@ -2870,7 +2936,26 @@ function ThreadViewContent({
                       preventScroll: true,
                     });
                 }
-              : undefined
+              : preview.draftOwner
+                ? () => {
+                    const scope = draftPreviewScope.current;
+                    if (
+                      scope?.composerId !== preview.draftOwner!.composerId ||
+                      scope.threadId !== preview.draftOwner!.threadId ||
+                      !document.getSelection()?.isCollapsed
+                    )
+                      return;
+                    if (
+                      preview.trigger.isConnected &&
+                      !preview.trigger.closest("[hidden]")
+                    )
+                      preview.trigger.focus({ preventScroll: true });
+                    else
+                      composerTextareaRef.current?.focus({
+                        preventScroll: true,
+                      });
+                  }
+                : undefined
           }
         />
       )}
@@ -4514,7 +4599,10 @@ function DraftImage({
   onRemove,
 }: {
   image: ComposerDraftImage;
-  onOpen(trigger: HTMLButtonElement): void;
+  onOpen(
+    trigger: HTMLButtonElement,
+    unavailable?: ImagePreviewUnavailable,
+  ): void;
   onReadAttachment(attachment: AttachmentRef): Promise<Uint8Array>;
   onRemove(): void;
 }) {
@@ -4522,15 +4610,21 @@ function DraftImage({
     <div className="draft-image">
       <AttachmentImage
         attachment={image.attachment}
-        name={image.name}
-        onOpen={(_attachment, _name, trigger) => onOpen(trigger)}
+        name={
+          image.appShotContext === undefined
+            ? image.name
+            : `${i18n.t("shell:appShot")} · ${image.name}`
+        }
+        onOpen={(_attachment, _name, trigger, unavailable) =>
+          onOpen(trigger, unavailable)
+        }
+        previewWhenUnavailable={image.appShotContext !== undefined}
         onReadAttachment={onReadAttachment}
       />
-      {image.appShotContext && (
-        <details className="draft-app-shot-context">
-          <summary>App Shot</summary>
-          <pre>{image.appShotContext}</pre>
-        </details>
+      {image.appShotContext === undefined ? null : (
+        <span className="draft-app-shot-label" aria-hidden="true">
+          {i18n.t("shell:appShot")}
+        </span>
       )}
       <button
         className="remove-draft-image"

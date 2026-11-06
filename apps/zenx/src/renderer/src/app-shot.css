@@ -77,15 +77,73 @@
 .app-shot-actions {
   margin-top: 16px;
 }
-.draft-app-shot-context {
-  font-size: 11px;
-  max-width: 180px;
+.draft-app-shot-label {
+  position: absolute;
+  inset: auto 1px 1px;
+  overflow: hidden;
+  padding: 10px 4px 4px;
+  border-radius: 0 0 7px 7px;
+  background: linear-gradient(transparent, rgb(0 0 0 / 78%));
+  color: white;
+  font-size: 10px;
+  line-height: 1.2;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.app-shot-attachment-preview .image-preview-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: min(960px, 100%);
+  max-height: calc(100dvh - 96px);
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  pointer-events: auto;
+}
+.app-shot-attachment-preview .image-preview-content > img {
+  flex: 0 0 auto;
+  width: 100%;
+  max-height: min(48dvh, 520px);
+  min-height: 0;
+}
+.app-shot-attachment-context {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border-control);
+  border-radius: 12px;
+  background: var(--surface-overlay);
+  color: var(--text-1);
+}
+.app-shot-attachment-context header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  font-size: 13px;
   overflow-wrap: anywhere;
 }
-.draft-app-shot-context pre {
+.app-shot-attachment-context header span {
+  color: var(--color-text-muted);
+}
+.app-shot-attachment-context h2 {
+  margin: 12px 0 8px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.app-shot-attachment-context pre {
+  margin: 0;
   white-space: pre-wrap;
-  max-height: 180px;
-  overflow: auto;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.app-shot-attachment-context pre:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 4px;
 }
 
 .app-shot-preview.is-expanded img {

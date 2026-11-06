@@ -2,8 +2,16 @@ import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AppShotButton } from "../../src/renderer/src/AppShotButton.js";
 import { i18n } from "../../src/renderer/src/i18n.js";
-import type { AppShotApi } from "../../src/app-shot.js";
+import type { AppShotApi, AppShotEvent } from "../../src/app-shot.js";
 import type { ZenXImageDraft } from "../../src/main/image-attachments.js";
+import { ThreadView } from "../../src/renderer/src/ThreadView.js";
+import {
+  addComposerImages,
+  editComposer,
+  emptyComposerState,
+  removeComposerImage,
+} from "../../src/renderer/src/composer-state.js";
+import { withAppShotContext } from "../../src/renderer/src/app-shot-draft.js";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
 
@@ -102,7 +110,28 @@ const kde = params.get("platform") === "kde";
 const hyprland = params.get("platform") === "hyprland";
 const nativeReady = params.get("helper") === "ready";
 const portal = params.get("platform") === "portal" || gnome || kde || hyprland;
-const previewCalls = { arm: 0, capture: 0, beginRecording: 0, endRecording: 0 };
+const previewCalls = {
+  arm: 0,
+  capture: 0,
+  attach: 0,
+  shortcutCapture: 0,
+  remove: 0,
+  send: 0,
+  beginRecording: 0,
+  endRecording: 0,
+};
+const captureListeners = new Set<(event: AppShotEvent) => void>();
+let armedToken: string | null = null;
+let shortcutIncludeAccessibility = false;
+const selectedShot = (includeAccessibility: boolean) =>
+  params.get("context") === "semantic" && includeAccessibility
+    ? {
+        ...shot,
+        appShotContext:
+          "App Shot of Example Notes.\nAccessibility semantic tree from this same window (read-only): " +
+          JSON.stringify(semanticContext),
+      }
+    : shot;
 const api: AppShotApi = {
   beginRecording: async () => {
     previewCalls.beginRecording++;
@@ -155,22 +184,19 @@ const api: AppShotApi = {
   ],
   capture: async (_sourceId, includeAccessibility) => {
     previewCalls.capture++;
-    previewShot =
-      params.get("context") === "semantic" && includeAccessibility
-        ? {
-            ...shot,
-            appShotContext:
-              "App Shot of Example Notes.\nAccessibility semantic tree from this same window (read-only): " +
-              JSON.stringify(semanticContext),
-          }
-        : shot;
+    previewShot = selectedShot(includeAccessibility);
     return previewShot;
   },
   read: async () => png,
-  attach: async () => previewShot,
+  attach: async () => {
+    previewCalls.attach++;
+    return previewShot;
+  },
   discard: async () => {},
-  arm: async () => {
+  arm: async (token, includeAccessibility) => {
     previewCalls.arm++;
+    armedToken = token;
+    shortcutIncludeAccessibility = includeAccessibility;
     return hyprland
       ? { registered: false, actionRegistered: true, canConfigure: false }
       : portal
@@ -182,11 +208,26 @@ const api: AppShotApi = {
     shortcutDescription: "Super+F8",
     canConfigure: true,
   }),
-  disarm: async () => {},
-  onCapture: () => () => {},
+  disarm: async (token) => {
+    if (armedToken === token) armedToken = null;
+  },
+  onCapture: (listener) => {
+    captureListeners.add(listener);
+    return () => captureListeners.delete(listener);
+  },
 };
 Object.assign(window, {
   appShotPreviewCalls: previewCalls,
+  emitAppShotShortcutCapture: () => {
+    if (!armedToken) throw new Error("Synthetic shortcut is not armed");
+    previewCalls.shortcutCapture++;
+    previewShot = {
+      ...selectedShot(shortcutIncludeAccessibility),
+      id: `synthetic-shortcut-${previewCalls.shortcutCapture}`,
+    };
+    for (const listener of captureListeners)
+      listener({ token: armedToken, image: previewShot });
+  },
   zenx: {
     platform:
       niri || portal
@@ -195,7 +236,7 @@ Object.assign(window, {
           ? "win32"
           : "darwin",
     appShot: api,
-    imageAttachments: { read: async () => png },
+    imageAttachments: { read: async () => png, abandon: async () => {} },
   },
 });
 function Preview() {
@@ -215,6 +256,7 @@ function Preview() {
         );
     }, 100);
   }, []);
+  if (params.get("mode") === "composer") return <ComposerPreview />;
   return (
     <main className="thread-view" style={{ padding: 24 }}>
       <h1>应用快照 · 合成数据验收</h1>
@@ -229,6 +271,75 @@ function Preview() {
         </div>
       </div>
       <p>已添加 {count} 张，未发送。</p>
+    </main>
+  );
+}
+function ComposerPreview() {
+  const [composer, setComposer] = useState(() =>
+    editComposer(emptyComposerState(), "请检查这张应用快照。"),
+  );
+  useEffect(() => {
+    // Synthetic readback only. Ordinary Send is never invoked by the capture script.
+    Object.assign(window, {
+      appShotComposerSnapshot: {
+        text: composer.draft.text,
+        imageCount: composer.draft.images.length,
+        contexts: composer.draft.images.map((image) => image.appShotContext),
+        preparedText: withAppShotContext("", composer.draft.images),
+      },
+    });
+  }, [composer]);
+  return (
+    <main
+      className="app-shot-composer-fixture"
+      style={{
+        height: "100dvh",
+        display: "flex",
+        flexDirection: "column",
+        padding: 16,
+        minWidth: 0,
+      }}
+    >
+      <header>
+        <h1 style={{ fontSize: 18 }}>应用快照 · 合成数据验收</h1>
+        <p>真实 ThreadView / Composer，无 Host 连接。</p>
+      </header>
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          minWidth: 0,
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        <ThreadView
+          approvals={[]}
+          composer={composer}
+          thread={null}
+          composerId="synthetic-app-shot-composer"
+          emptyContent={
+            <p>在外部应用同时按住左右 Shift，快照会直接出现在输入框上方。</p>
+          }
+          onDraftChange={(text) =>
+            setComposer((current) => editComposer(current, text))
+          }
+          onAddAppShot={(image) =>
+            setComposer((current) => addComposerImages(current, [image]))
+          }
+          onRemoveImage={(id) => {
+            previewCalls.remove++;
+            setComposer((current) => removeComposerImage(current, id));
+          }}
+          onReadAttachment={async () => png}
+          onInterrupt={async () => {}}
+          onRespondToApproval={async () => {}}
+          onSubmit={async () => {
+            previewCalls.send++;
+          }}
+        />
+      </div>
+      <p>已添加 {composer.draft.images.length} 张，未发送。</p>
     </main>
   );
 }

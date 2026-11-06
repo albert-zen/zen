@@ -51,8 +51,17 @@ export function AppShotButton({
   const [image, setImage] = useState<ZenXImageDraft | null>(null);
   const currentImage = useRef<ZenXImageDraft | null>(null);
   currentImage.current = image;
-  const waitingImages = useRef<ZenXImageDraft[]>([]);
-  const [waitingCount, setWaitingCount] = useState(0);
+  // Shortcut captures go straight to this Composer's existing draft staging.
+  // This bounded, transient queue preserves capture order during slow imports.
+  const shortcutCaptures = useRef<{ image: ZenXImageDraft; token: string }[]>(
+    [],
+  );
+  const shortcutImport = useRef<{
+    image: ZenXImageDraft;
+    token: string;
+  } | null>(null);
+  const shortcutQueueEpoch = useRef(0);
+  const shortcutCaptureIds = useRef(new Set<string>());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [includeAccessibility, setIncludeAccessibility] = useState(false);
@@ -150,8 +159,55 @@ export function AppShotButton({
     };
   }, [api, open, configurationRevision]);
 
+  const discardShortcutCaptures = () => {
+    const captures = [shortcutImport.current, ...shortcutCaptures.current];
+    shortcutQueueEpoch.current++;
+    shortcutImport.current = null;
+    shortcutCaptures.current = [];
+    shortcutCaptureIds.current.clear();
+    for (const capture of captures)
+      if (capture) void api.discard(capture.image.id).catch(() => {});
+  };
+  const importShortcutCaptures = async () => {
+    if (shortcutImport.current) return;
+    const epoch = shortcutQueueEpoch.current;
+    while (
+      epoch === shortcutQueueEpoch.current &&
+      shortcutCaptures.current.length
+    ) {
+      const capture = shortcutCaptures.current.shift()!;
+      shortcutImport.current = capture;
+      const isCurrent = () =>
+        live.current &&
+        epoch === shortcutQueueEpoch.current &&
+        !latest.current.disabled &&
+        shortcutRequested.current &&
+        shortcutToken.current === capture.token;
+      try {
+        if (!isCurrent()) {
+          void api.discard(capture.image.id).catch(() => {});
+          continue;
+        }
+        const attached = await api.attach(capture.image.id);
+        if (isCurrent()) latest.current.onAttach(attached);
+        else abandonDraftImage(attached.id);
+      } catch (cause) {
+        void api.discard(capture.image.id).catch(() => {});
+        if (isCurrent()) {
+          setError(cause instanceof Error ? cause.message : String(cause));
+          setOpen(true); // Failure is explicit; no automatic capture/import retry.
+        }
+      } finally {
+        if (shortcutImport.current === capture) shortcutImport.current = null;
+      }
+    }
+  };
+
   useEffect(() => {
     live.current = true;
+    setArmed(false);
+    setShortcutBusy(false);
+    setPortalState(null);
     const dispose = api.onCapture((event) => {
       if (
         !live.current ||
@@ -167,6 +223,7 @@ export function AppShotButton({
       if (event.disarmed) {
         shortcutOperation.current++;
         shortcutRequested.current = false;
+        discardShortcutCaptures();
         setShortcutBusy(false);
         setArmed(false);
         setPortalState(null);
@@ -193,29 +250,35 @@ export function AppShotButton({
         else void openLatest.current();
         return;
       }
-      if (currentImage.current) {
-        if (event.image) {
-          if (waitingImages.current.length >= 3) {
-            void api.discard(event.image.id).catch(() => {});
-            setError(i18n.t("shell:appShotQueueFull"));
-            return;
-          }
-          waitingImages.current.push(event.image);
-          setWaitingCount(waitingImages.current.length);
-        }
-        if (event.error) setError(event.error);
-        setOpen(true);
-        return;
-      }
-      operation.current++;
-      pending.current = false;
-      setBusy(false);
       if (event.image) {
-        currentImage.current = event.image;
-        setImage(event.image);
+        if (shortcutCaptureIds.current.has(event.image.id)) return;
+        if (
+          shortcutCaptures.current.length +
+            Number(Boolean(shortcutImport.current)) >=
+          4
+        ) {
+          void api.discard(event.image.id).catch(() => {});
+          setError(i18n.t("shell:appShotQueueFull"));
+          setOpen(true);
+          return;
+        }
+        // Bound renderer duplicate suppression; the host still consumes each
+        // preview once and is the final staging admission for older event IDs.
+        shortcutCaptureIds.current.add(event.image.id);
+        if (shortcutCaptureIds.current.size > 64)
+          shortcutCaptureIds.current.delete(
+            shortcutCaptureIds.current.values().next().value!,
+          );
+        shortcutCaptures.current.push({
+          image: event.image,
+          token: event.token,
+        });
+        void importShortcutCaptures();
       }
-      setError(event.error ?? null);
-      setOpen(true);
+      if (event.error) {
+        setError(event.error);
+        setOpen(true);
+      }
     });
     return () => {
       live.current = false;
@@ -223,8 +286,9 @@ export function AppShotButton({
       shortcutRequested.current = false;
       operation.current++;
       dispose();
-      for (const image of [currentImage.current, ...waitingImages.current])
-        if (image) void api.discard(image.id).catch(() => {});
+      discardShortcutCaptures();
+      if (currentImage.current)
+        void api.discard(currentImage.current.id).catch(() => {});
       void api.disarm(shortcutToken.current).catch(() => {});
     };
   }, [api, token]);
@@ -233,17 +297,16 @@ export function AppShotButton({
     if (!disabled) return;
     shortcutOperation.current++;
     shortcutRequested.current = false;
+    discardShortcutCaptures();
     setShortcutBusy(false);
     operation.current++;
     pending.current = false;
     setExpanded(false);
     recorder.stop();
     setOpen(false);
-    for (const image of [currentImage.current, ...waitingImages.current])
-      if (image) void api.discard(image.id).catch(() => {});
+    if (currentImage.current)
+      void api.discard(currentImage.current.id).catch(() => {});
     currentImage.current = null;
-    waitingImages.current = [];
-    setWaitingCount(0);
     setImage(null);
     setBusy(false);
     setArmed(false);
@@ -262,11 +325,9 @@ export function AppShotButton({
     pending.current = true;
     setOpen(true);
     setConfigurationRevision((revision) => revision + 1);
-    for (const image of [currentImage.current, ...waitingImages.current])
-      if (image) void api.discard(image.id).catch(() => {});
+    if (currentImage.current)
+      void api.discard(currentImage.current.id).catch(() => {});
     currentImage.current = null;
-    waitingImages.current = [];
-    setWaitingCount(0);
     setImage(null);
     setSources([]);
     setError(null);
@@ -333,11 +394,9 @@ export function AppShotButton({
     setExpanded(false);
     recorder.stop();
     setOpen(false);
-    for (const image of [currentImage.current, ...waitingImages.current])
-      if (image) void api.discard(image.id).catch(() => {});
+    if (currentImage.current)
+      void api.discard(currentImage.current.id).catch(() => {});
     currentImage.current = null;
-    waitingImages.current = [];
-    setWaitingCount(0);
     setImage(null);
     setError(null);
   };
@@ -383,13 +442,7 @@ export function AppShotButton({
         return;
       }
       latest.current.onAttach(attached);
-      const next = waitingImages.current.shift();
-      if (next) {
-        currentImage.current = next;
-        setImage(next);
-        setWaitingCount(waitingImages.current.length);
-        setExpanded(false);
-      } else close();
+      close();
     } catch (cause) {
       if (live.current && operation.current === generation)
         setError(String(cause instanceof Error ? cause.message : cause));
@@ -417,6 +470,7 @@ export function AppShotButton({
       if (next) {
         // Every registration gets a new token, so queued events from a revoked
         // session cannot revive its state after a later enable.
+        discardShortcutCaptures();
         const registrationToken = `${token}:${crypto.randomUUID()}`;
         shortcutToken.current = registrationToken;
         const result = await api.arm(
@@ -438,12 +492,14 @@ export function AppShotButton({
           setArmed(result.registered || result.actionRegistered === true);
         }
       } else {
+        discardShortcutCaptures();
         setPortalState(null);
         await api.disarm(shortcutToken.current);
       }
     } catch (cause) {
       if (live.current && shortcutOperation.current === generation) {
         shortcutRequested.current = false;
+        discardShortcutCaptures();
         setArmed(false);
         setPortalState(null);
         setError(String(cause instanceof Error ? cause.message : cause));
@@ -524,9 +580,6 @@ export function AppShotButton({
           )}
           {busy && <p role="status">{t("appShotWorking")}</p>}
           {shortcutBusy && <p role="status">{t("appShotShortcutWorking")}</p>}
-          {waitingCount > 0 && (
-            <p role="status">{t("appShotWaiting", { count: waitingCount })}</p>
-          )}
           {image ? (
             <>
               <div
@@ -547,7 +600,6 @@ export function AppShotButton({
                 <button
                   type="button"
                   className="quiet-button"
-                  disabled={waitingCount > 0}
                   onClick={() => void load()}
                 >
                   {t("appShotChooseAnother")}

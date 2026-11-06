@@ -14,7 +14,7 @@ assert.equal(process.platform, "linux", "Capture targets Ubuntu CI.");
 const directory = path.resolve(process.argv[2] ?? ".app-shot-preview");
 const evidence = {
   scope:
-    "Real AppShotButton, Dialog, AttachmentImage and CSS in Chromium. All window identities, images and API results are synthetic. This does not test Electron desktopCapturer, native shortcuts, Screen Recording, AX or model delivery.",
+    "Real AppShotButton, ThreadView, Composer, Dialog, AttachmentImage and CSS in Chromium. All window identities, images and API results are synthetic. This does not test Electron desktopCapturer, native shortcuts, Screen Recording, AX or model delivery.",
   sourceRevision: execFileSync("git", ["rev-parse", "HEAD"], {
     encoding: "utf8",
   }).trim(),
@@ -592,6 +592,195 @@ try {
           (await check(width, height)).count,
           "已添加 1 张，未发送。",
         );
+        receipt.status = "passed";
+      }
+
+      // Additional direct-shortcut scenarios use the actual ThreadView/Composer.
+      // Only the fixture's armed listener is injected; no OS shortcut or window is read.
+      for (const { theme, width, height, context } of [
+        { theme: "light", width: 390, height: 600, context: "pixels" },
+        { theme: "dark", width: 1280, height: 900, context: "pixels" },
+        { theme: "light", width: 390, height: 600, context: "semantic" },
+      ]) {
+        const name = `composer-darwin-${theme}-${width}-${context}`;
+        const receipt = {
+          name,
+          theme,
+          width,
+          height,
+          platform: "darwin",
+          context,
+          states: [],
+        };
+        evidence.cases.push(receipt);
+        await send("Emulation.setDeviceMetricsOverride", {
+          width,
+          height,
+          deviceScaleFactor: 1,
+          mobile: false,
+        });
+        const destination = `${url}/app-shot.html?mode=composer&theme=${theme}&platform=darwin&context=${context}`;
+        await send("Page.navigate", { url: destination });
+        await wait(
+          `location.href===${JSON.stringify(destination)} && document.querySelectorAll('.app-shot-sources button').length===2`,
+        );
+        await click('input[type="radio"][value="both-shift"]');
+        if (context === "semantic")
+          await click('.app-shot-option input[type="checkbox"]');
+        await click('.app-shot-shortcut input[type="checkbox"]');
+        await wait(
+          "document.querySelector('.app-shot-shortcut input[type=checkbox]').checked && !document.querySelector('.app-shot-shortcut input[type=checkbox]').disabled",
+        );
+        await click(".app-shot-heading button");
+        await wait("!document.querySelector('[role=dialog]')");
+        await evaluate("window.emitAppShotShortcutCapture()");
+        await wait(
+          "window.appShotComposerSnapshot?.imageCount === 1 && document.querySelector('.draft-image img')?.naturalWidth > 0",
+        );
+        assert.equal(
+          await evaluate("document.querySelectorAll('[role=dialog]').length"),
+          0,
+          "Shortcut success stages directly without a capture modal.",
+        );
+        assert.equal(
+          await evaluate(
+            "document.querySelector('.draft-image').closest('.composer') === null",
+          ),
+          true,
+          "The attachment uses the existing shelf outside Composer.",
+        );
+        assert.equal(
+          await evaluate(
+            "document.querySelector('.draft-image pre, .draft-image details') === null",
+          ),
+          true,
+          "Context is not a permanent shelf disclosure.",
+        );
+        assert.equal(
+          await evaluate(
+            "document.activeElement === document.querySelector('#synthetic-app-shot-composer')",
+          ),
+          true,
+          "Direct capture returns focus to the same Composer.",
+        );
+        const calls = await evaluate("({...window.appShotPreviewCalls})");
+        assert.equal(calls.shortcutCapture, 1);
+        assert.equal(
+          calls.capture,
+          0,
+          "Opening and attaching never repeats capture.",
+        );
+        assert.equal(calls.attach, 1);
+        assert.equal(calls.send, 0);
+        receipt.states.push({
+          phase: "shortcut-direct-draft-no-modal",
+          ...(await check(width, height)),
+          calls,
+        });
+        await screenshot(`${name}-direct-draft.png`);
+
+        await click(".draft-image .image-thumbnail");
+        await wait(
+          "document.querySelector('.app-shot-attachment-context pre') && document.querySelector('.app-shot-attachment-preview img')?.naturalWidth > 0",
+        );
+        const details = await evaluate(`(() => {
+          const text = document.querySelector('.app-shot-attachment-context pre').textContent;
+          const state = window.appShotComposerSnapshot;
+          const sent = JSON.parse(state.preparedText.slice(state.preparedText.indexOf('\\n') + 1));
+          const dialog = document.querySelector('.app-shot-attachment-preview');
+          const bounds = document.querySelector('.app-shot-attachment-preview .image-preview-content').getBoundingClientRect();
+          return {
+            exactContext: text === state.contexts[0] && text === sent[0].context,
+            readOnly: dialog.querySelectorAll('button').length === 1 && !dialog.querySelector('input, textarea'),
+            contentWithinViewport: bounds.left >= 0 && bounds.top >= 0 && bounds.right <= innerWidth + 1 && bounds.bottom <= innerHeight + 1,
+            context: text,
+          };
+        })()`);
+        assert.equal(
+          details.exactContext,
+          true,
+          "Viewer text equals the exact data in ordinary Send preparation.",
+        );
+        assert.equal(
+          details.readOnly,
+          true,
+          "The viewer has only its Close action.",
+        );
+        assert.equal(details.contentWithinViewport, true);
+        assert.equal(await evaluate("window.appShotPreviewCalls.send"), 0);
+        receipt.states.push({
+          phase: "attachment-details",
+          ...(await check(width, height)),
+          ...details,
+        });
+        await screenshot(`${name}-details.png`);
+        if (context === "semantic") {
+          assert.match(details.context, /review-end/);
+          const endReachable = await evaluate(`(() => {
+            const content = document.querySelector('.app-shot-attachment-preview .image-preview-content');
+            content.scrollTop = content.scrollHeight;
+            const end = document.querySelector('.app-shot-attachment-context pre').getBoundingClientRect();
+            const close = document.querySelector('.image-preview-close').getBoundingClientRect();
+            return content.scrollHeight - content.clientHeight - content.scrollTop < 1 && end.bottom <= content.getBoundingClientRect().bottom + 1 && close.top >= 0 && close.bottom <= innerHeight;
+          })()`);
+          assert.equal(
+            endReachable,
+            true,
+            "Long context ends and Close remain reachable in a 390 × 600 window.",
+          );
+          receipt.states.push({
+            phase: "attachment-context-end",
+            contextEndReachable: true,
+            ...(await check(width, height)),
+          });
+          await screenshot(`${name}-context-end.png`);
+        }
+        for (const type of ["rawKeyDown", "keyUp"])
+          await send("Input.dispatchKeyEvent", {
+            type,
+            key: "Escape",
+            code: "Escape",
+            windowsVirtualKeyCode: 27,
+          });
+        await wait("!document.querySelector('[role=dialog]')");
+        assert.equal(
+          await evaluate(
+            "document.activeElement === document.querySelector('.draft-image .image-thumbnail')",
+          ),
+          true,
+        );
+        await click(".draft-image .image-thumbnail");
+        await wait(
+          "Boolean(document.querySelector('.app-shot-attachment-context'))",
+        );
+        await click(".image-preview-close");
+        await wait("!document.querySelector('[role=dialog]')");
+        assert.equal(
+          await evaluate(
+            "document.activeElement === document.querySelector('.draft-image .image-thumbnail')",
+          ),
+          true,
+        );
+        await click(".remove-draft-image");
+        await wait(
+          "window.appShotComposerSnapshot.imageCount === 0 && !document.querySelector('.draft-image')",
+        );
+        const removed = await evaluate(
+          "({snapshot: window.appShotComposerSnapshot, calls: {...window.appShotPreviewCalls}})",
+        );
+        assert.equal(removed.snapshot.text, "请检查这张应用快照。");
+        assert.deepEqual(removed.snapshot.contexts, []);
+        assert.equal(removed.snapshot.preparedText, "");
+        assert.equal(removed.calls.remove, 1);
+        assert.equal(removed.calls.attach, 1);
+        assert.equal(removed.calls.capture, 0);
+        assert.equal(removed.calls.send, 0);
+        receipt.states.push({
+          phase: "removed-without-send",
+          ...(await check(width, height)),
+          ...removed,
+        });
+        await screenshot(`${name}-removed.png`);
         receipt.status = "passed";
       }
     },

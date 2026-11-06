@@ -33,10 +33,12 @@ const shot: ZenXImageDraft = {
 };
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((done, fail) => {
     resolve = done;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 async function fixture(
@@ -51,6 +53,7 @@ async function fixture(
       disabled?: boolean,
       key?: string,
       additional?: boolean,
+      replacementApi?: AppShotApi,
     ): Promise<void>;
     armed(): string | null;
     disarmed: string[];
@@ -165,7 +168,12 @@ async function fixture(
     },
   });
   const root = createRoot(document.getElementById("root")!);
-  const render = async (disabled = false, key = "one", additional = false) => {
+  const render = async (
+    disabled = false,
+    key = "one",
+    additional = false,
+    replacementApi = api,
+  ) => {
     await act(async () =>
       root.render(
         React.createElement(
@@ -174,7 +182,7 @@ async function fixture(
           React.createElement(AppShotButton, {
             key,
             disabled,
-            api,
+            api: replacementApi,
             onAttach: (image) => attached.push(image),
           }),
           additional
@@ -260,53 +268,52 @@ test("cancelled, disabled and replaced composer captures cannot attach later", a
     assert.equal(document.querySelector('[role="dialog"]'), null);
   });
 });
-test("opt-in shortcut is composer-scoped and its capture still requires review", async () => {
-  await fixture(async ({ click, attached, emit, armed, disarmed, render }) => {
-    await click("App Shot");
-    const checkbox = [
-      ...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
-    ][1]!;
-    await act(async () => checkbox.click());
-    const token = armed();
-    assert.ok(token);
-    await click("Close App Shot");
-    await act(async () => emit({ token, image: shot }));
-    assert.equal(attached.length, 0);
-    assert.ok(document.querySelector('[role="dialog"]'));
-    await act(async () => emit({ token, disarmed: true }));
-    assert.equal(
-      [
-        ...document.querySelectorAll<HTMLInputElement>(
-          'input[type="checkbox"]',
-        ),
-      ].at(-1)!.checked,
-      false,
-    );
-    await render(false, "new");
-    assert.ok(disarmed.includes(token));
-  });
+test("opt-in shortcut attaches directly without a capture modal or reading pixels", async () => {
+  await fixture(
+    async ({ click, attached, emit, armed, disarmed, render, calls }) => {
+      await click("App Shot");
+      await act(async () => shortcutCheckbox().click());
+      const token = armed()!;
+      await click("Close App Shot");
+      await act(async () => emit({ token, image: shot }));
+      assert.deepEqual(attached, [shot]);
+      assert.deepEqual(calls, ["list", "attach"]);
+      assert.equal(document.querySelector('[role="dialog"]'), null);
+      await act(async () => emit({ token, disarmed: true }));
+      assert.equal(document.querySelector('[role="dialog"]'), null);
+      await click("App Shot");
+      assert.equal(shortcutCheckbox().checked, false);
+      await render(false, "new");
+      assert.ok(disarmed.includes(token));
+    },
+  );
 });
 
-test("repeated shortcut captures remain ordered for review instead of replacing a preview", async () => {
-  await fixture(async ({ click, attached, emit, armed }) => {
+test("repeated shortcut captures stage once and in order without interrupting the draft", async () => {
+  await fixture(async ({ api, click, attached, emit, armed }) => {
     await click("App Shot");
-    const checkbox = [
-      ...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
-    ][1]!;
-    await act(async () => checkbox.click());
+    await act(async () => shortcutCheckbox().click());
     const token = armed()!;
     await click("Close App Shot");
+    const first = deferred<ZenXImageDraft>();
     const second = { ...shot, id: "second", name: "Second.png" };
+    const calls: string[] = [];
+    api.attach = async (id) => {
+      calls.push(id);
+      return id === "shot" ? first.promise : second;
+    };
     await act(async () => {
       emit({ token, image: shot });
+      emit({ token, image: shot }); // Same pending event must not double-import.
       emit({ token, image: second });
     });
-    assert.equal(attached.length, 0);
-    assert.match(document.body.textContent!, /1 more captures/);
-    await click("Attach to draft");
-    assert.deepEqual(attached, [shot]);
-    assert.ok(document.querySelector('[role="dialog"]'));
-    await click("Attach to draft");
+    assert.deepEqual(calls, ["shot"]);
+    assert.deepEqual(attached, []);
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    await act(async () => first.resolve(shot));
+    assert.deepEqual(calls, ["shot", "second"]);
+    await act(async () => emit({ token, image: shot }));
+    assert.deepEqual(calls, ["shot", "second"]);
     assert.deepEqual(attached, [shot, second]);
     assert.equal(document.querySelector('[role="dialog"]'), null);
   });
@@ -338,28 +345,23 @@ test("locale updates keep an armed shortcut and image preview can expand", async
   });
 });
 
-test("a repeated shortcut cannot supersede an explicit attach in flight", async () => {
+test("a shortcut capture cannot supersede an explicit manual attach in flight", async () => {
   await fixture(async ({ api, click, attached, emit, armed }) => {
     await click("App Shot");
-    await act(async () =>
-      [
-        ...document.querySelectorAll<HTMLInputElement>(
-          'input[type="checkbox"]',
-        ),
-      ][1]!.click(),
-    );
+    await act(async () => shortcutCheckbox().click());
     const token = armed()!;
     await click("Example");
     const pendingAttach = deferred<ZenXImageDraft>();
-    api.attach = async () => pendingAttach.promise;
+    const second = { ...shot, id: "second", name: "Second.png" };
+    api.attach = async (id) =>
+      id === "second" ? second : pendingAttach.promise;
     await click("Attach to draft");
-    await act(async () =>
-      emit({ token, image: { ...shot, id: "second", name: "Second.png" } }),
-    );
+    await act(async () => emit({ token, image: second }));
+    assert.deepEqual(attached, [second]);
+    assert.ok(document.querySelector('[aria-label="Preview Example.png"]'));
     await act(async () => pendingAttach.resolve(shot));
-    assert.deepEqual(attached, [shot]);
-    assert.ok(document.querySelector('[role="dialog"]'));
-    assert.ok(document.querySelector('[aria-label="Preview Second.png"]'));
+    assert.deepEqual(attached, [second, shot]);
+    assert.equal(document.querySelector('[role="dialog"]'), null);
   });
 });
 
@@ -434,7 +436,7 @@ test("Linux exposes only the chord and its event opens an explicit chooser", asy
   }, "linux");
 });
 
-test("held-at-enable capture does not erase shortcut startup state or skip review", async () => {
+test("held-at-enable capture attaches without replacing the explicitly opened settings", async () => {
   await fixture(async ({ api, click, emit, attached }) => {
     const arm = api.arm;
     api.arm = async (token, includeAccessibility, kind) => {
@@ -445,9 +447,10 @@ test("held-at-enable capture does not erase shortcut startup state or skip revie
     await click("App Shot");
     await act(async () => shortcutCheckbox().click());
     assert.equal(shortcutCheckbox().checked, true);
-    assert.ok(document.querySelector('[aria-label="Preview Example.png"]'));
-    assert.deepEqual(attached, []);
-    await click("Attach to draft");
+    assert.equal(
+      document.querySelector('[aria-label="Preview Example.png"]'),
+      null,
+    );
     assert.deepEqual(attached, [shot]);
   });
 });
@@ -733,9 +736,7 @@ test("another mounted Composer cannot discard the active owner's captured image"
     const firstToken = armed()!;
     await act(async () => emit({ token: firstToken, image: shot }));
     assert.equal(discarded.length, 0);
-    await click("Attach to draft");
     assert.deepEqual(attached, [shot]);
-    await click("App Shot");
     await act(async () => shortcutCheckbox().click());
     await act(async () =>
       emit({ token: firstToken, image: { ...shot, id: "retired" } }),
@@ -832,7 +833,7 @@ test("a stale native readiness probe cannot overwrite a refreshed or reopened pi
   }, "linux");
 });
 
-test("Hyprland action-only state enables capture review without claiming keys or configuring the desktop", async () => {
+test("Hyprland action-only state directly attaches captures without claiming keys or configuring the desktop", async () => {
   await fixture(async ({ api, click, armed, emit, attached, disarmed }) => {
     const originalArm = api.arm;
     api.configuration = async () => ({
@@ -898,15 +899,17 @@ test("Hyprland action-only state enables capture review without claiming keys or
     api.configuration = async () => pendingConfiguration.promise;
     await click("Close App Shot");
     await act(async () => emit({ token: oldToken, image: shot }));
+    assert.deepEqual(attached, [shot]);
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    await click("App Shot");
     assert.match(document.body.textContent!, /action is registered/);
     assert.equal(document.body.textContent!.includes("not armed"), false);
     assert.equal(
       document.body.textContent!.includes("Configure desktop shortcut"),
       false,
     );
-    assert.deepEqual(attached, []);
-    await click("Attach to draft");
     assert.deepEqual(attached, [shot]);
+    await click("Close App Shot");
     document
       .querySelector<HTMLButtonElement>('[aria-label="App Shot"]')!
       .focus();
@@ -1899,5 +1902,185 @@ test("recovered unmounted admission cannot release or interrupt a newer sibling 
     assert.deepEqual(armRequests, []);
     await pressRecorder({ key: "Escape" });
     assert.equal(ended.at(-1), started[1]);
+  });
+});
+
+test("direct shortcut staging is revoked on disable, replacement or disarm while imports are pending", async () => {
+  for (const action of ["disable", "replace", "disarm", "remote-disarm"]) {
+    await fixture(
+      async ({
+        api,
+        click,
+        emit,
+        armed,
+        attached,
+        abandoned,
+        discarded,
+        render,
+      }) => {
+        await click("App Shot");
+        await act(async () => shortcutCheckbox().click());
+        const token = armed()!;
+        const importing = deferred<ZenXImageDraft>();
+        const calls: string[] = [];
+        api.attach = async (id) => {
+          calls.push(id);
+          return importing.promise;
+        };
+        await act(async () => {
+          emit({ token, image: shot });
+          emit({ token, image: { ...shot, id: "queued" } });
+        });
+        if (action === "disarm")
+          await act(async () => shortcutCheckbox().click());
+        else if (action === "remote-disarm")
+          await act(async () => emit({ token, disarmed: true }));
+        else
+          await render(
+            action === "disable",
+            action === "replace" ? "replacement" : "one",
+          );
+        await act(async () => importing.resolve(shot));
+        assert.deepEqual(attached, []);
+        assert.deepEqual(abandoned, [shot.id]);
+        assert.deepEqual(calls, [shot.id]);
+        assert.ok(discarded.includes("queued"));
+        assert.ok(discarded.includes(shot.id));
+      },
+    );
+  }
+});
+
+test("closing settings does not revoke a pending direct draft attachment", async () => {
+  await fixture(async ({ api, click, emit, armed, attached }) => {
+    await click("App Shot");
+    await act(async () => shortcutCheckbox().click());
+    const token = armed()!;
+    const importing = deferred<ZenXImageDraft>();
+    api.attach = async () => importing.promise;
+    await act(async () => emit({ token, image: shot }));
+    await click("Close App Shot");
+    await act(async () => importing.resolve(shot));
+    assert.deepEqual(attached, [shot]);
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+  });
+});
+
+test("direct staging has a bounded queue, discards overflow and never retries failed imports", async () => {
+  await fixture(async ({ api, click, emit, armed, attached, discarded }) => {
+    await click("App Shot");
+    await act(async () => shortcutCheckbox().click());
+    const token = armed()!;
+    await click("Close App Shot");
+    const importing = deferred<ZenXImageDraft>();
+    const calls: string[] = [];
+    api.attach = async (id) => {
+      calls.push(id);
+      if (id === "shot") return importing.promise;
+      throw new Error("Synthetic staging unavailable");
+    };
+    await act(async () => {
+      emit({ token, image: shot });
+      for (const id of ["two", "three", "four", "overflow"])
+        emit({ token, image: { ...shot, id } });
+    });
+    assert.deepEqual(discarded, ["overflow"]);
+    await act(async () => importing.resolve(shot));
+    assert.deepEqual(attached, [shot]);
+    assert.deepEqual(calls, ["shot", "two", "three", "four"]);
+    assert.match(
+      document.querySelector('[role="alert"]')!.textContent!,
+      /Synthetic staging unavailable/,
+    );
+    assert.deepEqual(discarded, ["overflow", "two", "three", "four"]);
+  });
+});
+
+test("rearming or replacing the API cannot block or misroute captures behind a revoked import", async () => {
+  for (const replaceApi of [false, true]) {
+    await fixture(
+      async ({ api, click, emit, armed, attached, abandoned, render }) => {
+        await click("App Shot");
+        await act(async () => shortcutCheckbox().click());
+        const token = armed()!;
+        const importing = deferred<ZenXImageDraft>();
+        const oldCalls: string[] = [];
+        api.attach = async (id) => {
+          oldCalls.push(id);
+          return importing.promise;
+        };
+        await act(async () => emit({ token, image: shot }));
+        const next = { ...shot, id: "new-session" };
+        const newCalls: string[] = [];
+        let listener: ((event: AppShotEvent) => void) | undefined;
+        if (replaceApi) {
+          const nextApi: AppShotApi = {
+            ...api,
+            attach: async (id) => {
+              newCalls.push(id);
+              return next;
+            },
+            onCapture: (callback) => {
+              listener = callback;
+              return () => {
+                listener = undefined;
+              };
+            },
+          };
+          await render(false, "one", false, nextApi);
+          assert.equal(shortcutCheckbox().checked, false);
+        } else {
+          await act(async () => shortcutCheckbox().click());
+          api.attach = async (id) => {
+            newCalls.push(id);
+            return next;
+          };
+        }
+        await act(async () => shortcutCheckbox().click());
+        const newToken = armed()!;
+        assert.notEqual(newToken, token);
+        await act(async () =>
+          (listener ?? emit)({ token: newToken, image: next }),
+        );
+        assert.deepEqual(attached, [next]);
+        assert.deepEqual(newCalls, [next.id]);
+        assert.deepEqual(oldCalls, [shot.id]);
+        await act(async () => importing.resolve(shot));
+        assert.deepEqual(attached, [next]);
+        assert.deepEqual(abandoned, [shot.id]);
+      },
+    );
+  }
+});
+
+test("a revoked import rejection cannot unlock or drain the new session's pending import", async () => {
+  await fixture(async ({ api, click, emit, armed, attached }) => {
+    const old = deferred<ZenXImageDraft>();
+    const current = deferred<ZenXImageDraft>();
+    await click("App Shot");
+    await act(async () => shortcutCheckbox().click());
+    api.attach = async () => old.promise;
+    await act(async () => emit({ token: armed()!, image: shot }));
+    await act(async () => shortcutCheckbox().click());
+    const second = { ...shot, id: "current" };
+    const third = { ...shot, id: "next" };
+    const calls: string[] = [];
+    api.attach = async (id) => {
+      calls.push(id);
+      return id === second.id ? current.promise : third;
+    };
+    await act(async () => shortcutCheckbox().click());
+    const token = armed()!;
+    await click("Close App Shot");
+    await act(async () => emit({ token, image: second }));
+    await act(async () => old.reject(new Error("Revoked import failed")));
+    await act(async () => emit({ token, image: third }));
+    assert.deepEqual(calls, [second.id]);
+    assert.deepEqual(attached, []);
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    await act(async () => current.resolve(second));
+    assert.deepEqual(calls, [second.id, third.id]);
+    assert.deepEqual(attached, [second, third]);
+    assert.equal(document.querySelector('[role="dialog"]'), null);
   });
 });

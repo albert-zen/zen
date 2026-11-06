@@ -7,10 +7,12 @@ on:
       - apps/zenx/src/**/app-shot*
       - apps/zenx/src/renderer/src/AppShotButton.tsx
       - apps/zenx/src/renderer/src/ImagePresentation.tsx
+      - apps/zenx/src/renderer/src/ThreadView.tsx
       - apps/zenx/src/renderer/src/ui/controls.tsx
       - apps/zenx/src/renderer/src/styles.css
       - apps/zenx/src/renderer/src/theme.css
       - apps/zenx/test/app-shot*.test.ts
+      - apps/zenx/test/image-composer-interaction.test.ts
       - apps/zenx/test/fixtures/app-shot-visual.tsx
       - apps/zenx/scripts/*app-shot*.mjs
       - apps/zenx/scripts/preview-browser*.mjs
@@ -52,7 +54,7 @@ jobs:
       - name: Prepare workspace SDK for packaging tests
         run: npm run prepare:plugin-sdk --workspace @zen/zenx
       - name: Verify App Shot contracts
-        run: node --import tsx --test apps/zenx/test/app-shot*.test.ts apps/zenx/test/app-shot*.test.mjs apps/zenx/test/stage-app-shot*.test.mjs apps/zenx/test/package-zenx-portable.test.mjs
+        run: node --import tsx --test apps/zenx/test/app-shot*.test.ts apps/zenx/test/app-shot*.test.mjs apps/zenx/test/stage-app-shot*.test.mjs apps/zenx/test/package-zenx-portable.test.mjs apps/zenx/test/image-composer-interaction.test.ts
       - name: Typecheck integrated desktop contract
         run: npm run typecheck --workspace @zen/zenx
       - name: Resolve and install authenticated CJK font package
