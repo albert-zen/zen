@@ -1826,3 +1826,5 @@ ZenX answered-question bubbles are a disposable read-only presentation of native
 Question-list read recovery is a disposable mounted-view concern: existing authoritative invalidations and reconnection reads remain primary, with at most two delayed read retries per failure episode; it never resubmits answers or adds persistent retry authority.
 
 - **Early CI feedback** — Standalone static checks report errors before full acceptance; the CI-only pinned base/head impact report is shadow observation with conservative full fallback, never an execution selector or authority to omit existing acceptance checks.
+
+- **Transcript reader cancellation** — The exact pinned Legend web adapter cancels initial and delayed imperative positioning when the existing reader takes control, without queuing a replacement offset or changing nested scrolling, follow intent, history or runtime authority.

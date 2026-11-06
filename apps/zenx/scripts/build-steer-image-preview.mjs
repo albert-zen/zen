@@ -64,6 +64,10 @@ const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewp
 await writeFile(path.join(directory, "steer-image.html"), html);
 const sources = [
   "apps/zenx/src/renderer/src/ThreadView.tsx",
+  "apps/zenx/src/renderer/src/ExperimentalTranscriptViewport.tsx",
+  "apps/zenx/src/renderer/src/transcript-viewport-pins.ts",
+  "apps/zenx/patches/legend-list-3.3.5-react.patch",
+  "apps/zenx/scripts/prepare-legend-list.mjs",
   "apps/zenx/src/renderer/src/PendingSteerPanel.tsx",
   "apps/zenx/src/renderer/src/steer-preview-column.ts",
   "apps/zenx/src/renderer/src/queued-messages.css",
