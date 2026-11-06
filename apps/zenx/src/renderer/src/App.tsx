@@ -1,3 +1,4 @@
+import { withAppShotContext } from "./app-shot-draft.js";
 import { UserQuestionCards } from "./UserQuestionCards.js";
 import { createUserQuestionStore } from "./user-question-state.js";
 import { useCommittedCallback } from "./use-committed-callback.js";
@@ -113,6 +114,7 @@ import type { ZenXThreadAttachmentProjection } from "../../main/image-attachment
 import {
   abandonClosedComposerImages,
   abandonUnusedComposerImage,
+  abandonDraftImage,
 } from "./draft-image-lifecycle.js";
 import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
 import type {
@@ -492,6 +494,34 @@ export function updateThreadProjectionCache(
   const next = { ...updated, activeTurnNotifications };
   cache.set(threadId, next);
   return next;
+}
+
+/** Drafts live separately; only reconstructable, inactive history is disposable. */
+export function trimThreadProjectionCache(
+  cache: Map<string, ThreadProjectionCacheEntry>,
+  selectedThreadId: string | null,
+  composers: Readonly<Record<string, ComposerState>>,
+): void {
+  if (selectedThreadId !== null) {
+    const selected = cache.get(selectedThreadId);
+    if (selected !== undefined) {
+      cache.delete(selectedThreadId);
+      cache.set(selectedThreadId, selected);
+    }
+  }
+  const inactive = [...cache].filter(([threadId, entry]) => {
+    const composer = composers[threadId];
+    return (
+      threadId !== selectedThreadId &&
+      entry.thread.status.type !== "active" &&
+      !entry.thread.turns.some((turn) => turn.status === "inProgress") &&
+      !entry.thread.queuedMessages?.length &&
+      composer?.submission == null &&
+      !composer?.pendingSends?.length &&
+      composer?.compactionRequest === undefined
+    );
+  });
+  for (const [threadId] of inactive.slice(0, -4)) cache.delete(threadId);
 }
 
 export function AppConversationProviders({
@@ -919,6 +949,15 @@ function AppContent() {
   const [composerStates, setComposerStates] = useState<
     Record<string, ComposerState>
   >({});
+  const trimThreadHistoryCache = () =>
+    trimThreadProjectionCache(
+      threadProjectionCacheRef.current,
+      selectedThreadIdRef.current,
+      composerStatesRef.current,
+    );
+  useEffect(() => {
+    trimThreadHistoryCache();
+  }, [selectedThreadId, threadDetail, composerStates]);
   const [threadAttachments, setThreadAttachments] =
     useState<ZenXThreadAttachmentProjection>({});
   const [threadUsage, setThreadUsage] = useState<
@@ -1854,6 +1893,7 @@ function AppContent() {
               .threadId,
           );
         }
+        trimThreadHistoryCache();
       },
     );
     const disposeApprovals = window.zenx.protocol.onApprovalRequest((event) => {
@@ -2437,8 +2477,9 @@ function AppContent() {
         | import("../../../../../src/item.js").UserInputPart
         | import("../../../../../src/skill-input.js").SkillReference
       )[] = [];
-      if (messageText.trim().length > 0)
-        input.push({ type: "text", text: messageText });
+      const textWithShots = withAppShotContext(messageText, submission.images);
+      if (textWithShots.trim().length > 0)
+        input.push({ type: "text", text: textWithShots });
       for (const skill of skillDraft.skills)
         input.push({ type: "skill", id: skill.id });
       for (const image of submission.images)
@@ -3962,6 +4003,9 @@ function AppContent() {
             ),
           )
         }
+        onAddAppShot={(image) => {
+          void sideChatDrafts.importImages(id, async () => [image]);
+        }}
         onPickImages={() =>
           sideChatDrafts.importImages(id, () =>
             window.zenx.imageAttachments.pick(),
@@ -4608,6 +4652,19 @@ function AppContent() {
                   } finally {
                     releaseNewThreadImageLease(draftId);
                   }
+                }}
+                onAddAppShot={(threadId, image) =>
+                  updateComposer(threadId, (state) =>
+                    addComposerImages(state, [image]),
+                  )
+                }
+                onAddNewThreadAppShot={(image) => {
+                  const id = newThreadDraftRef.current?.id;
+                  if (id)
+                    updateNewThreadComposer(id, (state) =>
+                      addComposerImages(state, [image]),
+                    );
+                  else abandonDraftImage(image.id);
                 }}
                 onPickImages={async (threadId) => {
                   const images = await window.zenx.imageAttachments.pick();
@@ -5389,6 +5446,8 @@ function AgentSurface({
   onImportNewThreadImages,
   onPickImages,
   onPickNewThreadImages,
+  onAddAppShot,
+  onAddNewThreadAppShot,
   onReadAttachment,
   onRemoveImage,
   onRemoveNewThreadImage,
@@ -5466,6 +5525,13 @@ function AgentSurface({
   onImportNewThreadImages(files: readonly File[]): Promise<void>;
   onPickImages(threadId: string): Promise<void>;
   onPickNewThreadImages(): Promise<void>;
+  onAddAppShot(
+    threadId: string,
+    image: import("../../main/image-attachments.js").ZenXImageDraft,
+  ): void;
+  onAddNewThreadAppShot(
+    image: import("../../main/image-attachments.js").ZenXImageDraft,
+  ): void;
   onReadAttachment(
     attachment: import("../../../../../src/attachment.js").AttachmentRef,
   ): Promise<Uint8Array>;
@@ -5673,6 +5739,7 @@ function AgentSurface({
               onDraftChange={onNewThreadDraftChange}
               onImportImages={onImportNewThreadImages}
               onPickImages={onPickNewThreadImages}
+              onAddAppShot={onAddNewThreadAppShot}
               onReadAttachment={onReadAttachment}
               onRemoveImage={onRemoveNewThreadImage}
               onInterrupt={async () => undefined}
@@ -5809,6 +5876,7 @@ function AgentSurface({
             onDraftChange={(draft) => onDraftChange(threadDetail.id, draft)}
             onImportImages={(files) => onImportImages(threadDetail.id, files)}
             onPickImages={() => onPickImages(threadDetail.id)}
+            onAddAppShot={(image) => onAddAppShot(threadDetail.id, image)}
             onReadAttachment={onReadAttachment}
             onRemoveImage={(imageId) => onRemoveImage(threadDetail.id, imageId)}
             onRetryTurn={onRetryTurn}
@@ -6426,8 +6494,9 @@ async function composerSubmissionInput(
   submission: ComposerSubmission,
 ): Promise<import("../../protocol-client/index.js").UserInputPart[]> {
   const input: import("../../protocol-client/index.js").UserInputPart[] = [];
-  if (submission.text.length > 0)
-    input.push({ type: "text", text: submission.text });
+  const textWithShots = withAppShotContext(submission.text, submission.images);
+  if (textWithShots.length > 0)
+    input.push({ type: "text", text: textWithShots });
   for (const image of submission.images) {
     input.push({ type: "attachment", attachment: image.attachment });
   }

@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=ZenX App Shot
+NoDisplay=true
+Exec="@ABSOLUTE_INSTALLED_HELPER_PATH@" check
+X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2
+X-ZenX-Capture-Helper=true

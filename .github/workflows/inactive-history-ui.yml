@@ -1,0 +1,50 @@
+name: Inactive history renderer retention
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/inactive-history-ui.yml
+      - apps/zenx/scripts/*inactive-history-preview.mjs
+      - apps/zenx/scripts/inactive-history-baseline.*
+      - apps/zenx/test/inactive-history-baseline.test.mjs
+      - apps/zenx/scripts/preview-browser-lifecycle.mjs
+      - apps/zenx/test/fixtures/inactive-history-visual.tsx
+      - apps/zenx/test/native-recovery-fixture.ts
+      - apps/zenx/test/thread-history-cache.test.ts
+      - apps/zenx/src/renderer/**
+      - apps/zenx/tsconfig.inactive-history-preview.json
+permissions:
+  contents: read
+concurrency:
+  group: inactive-history-renderer-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  renderer-retention:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build --workspace @zenx/plugin-sdk
+      - name: Verify cache-only counterfactual contract
+        run: node --test apps/zenx/test/inactive-history-baseline.test.mjs
+      - name: Check synthetic fixture and production renderer types
+        run: npx tsc -p apps/zenx/tsconfig.inactive-history-preview.json --noEmit
+      - name: Verify cache protections and evicted draft recovery
+        run: node --import tsx --test --test-name-pattern='evicted history|inactive histories|selection, active events|late image owner' apps/zenx/test/thread-history-cache.test.ts apps/zenx/test/app-live-projection.test.ts
+      - name: Build exact before and after production App fixtures
+        run: node apps/zenx/scripts/build-inactive-history-preview.mjs "${{ runner.temp }}/inactive-history"
+      - name: Measure sandboxed Chromium history retention and restored drafts
+        run: node apps/zenx/scripts/capture-inactive-history-preview.mjs "${{ runner.temp }}/inactive-history"
+      - name: Retain synthetic memory measurements and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: inactive-history-${{ github.sha }}
+          path: ${{ runner.temp }}/inactive-history
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,3 +1,13 @@
+import { stageAppShotDbus } from "./stage-app-shot-dbus.mjs";
+import { copyGnomeAppShotResource } from "./stage-app-shot-gnome.mjs";
+import {
+  prepareLinuxAppShotResources,
+  copyLinuxAppShotResources,
+} from "./stage-app-shot-linux.mjs";
+import {
+  appShotRuntimeDependencies,
+  stageAppShotRuntime,
+} from "./stage-app-shot-runtime.mjs";
 import { stageStorageWriter } from "./stage-storage-writer.mjs";
 import { applyShellPtyPatch } from "./shell-pty-patch.mjs";
 import { prepareRtkResource } from "./prepare-rtk.mjs";
@@ -106,6 +116,10 @@ export async function packageZenX(arguments_, options = {}) {
         appDirectory: appDir,
         manifestSha256: assembly.manifestSha256,
       });
+      const linuxAppShotResources = await prepareLinuxAppShotResources({
+        target,
+        stagingDirectory: staging,
+      });
       const windowsSmokeGuard = await prepareWindowsSmokeGuard({
         target,
         mainDirectory: path.join(appDir, "main"),
@@ -170,6 +184,17 @@ export async function packageZenX(arguments_, options = {}) {
             await copyChromeExtensionResource({
               buildPath,
               sourceDirectory: path.join(zenx, "resources", "chrome-extension"),
+            });
+            await copyGnomeAppShotResource({
+              buildPath,
+              sourceDirectory: path.join(zenx, "resources", "app-shot-gnome"),
+              target,
+              platform: process.platform,
+            });
+            await copyLinuxAppShotResources({
+              buildPath,
+              sourceDirectory: linuxAppShotResources,
+              target,
             });
             await copyChromeNativeHostResource({
               buildPath,
@@ -236,6 +261,16 @@ export async function packageZenX(arguments_, options = {}) {
         version: zenxPackage.version,
         manifestDigest: assembly.manifestSha256,
         releaseSizeBytes: assembly.releaseSizeBytes,
+        ...(target === "app" && process.platform === "linux"
+          ? {
+              appShotNativeHelpers: {
+                status: linuxAppShotResources
+                  ? "packaged"
+                  : "unsupported-architecture",
+                architecture: process.arch,
+              },
+            }
+          : {}),
       };
       console.log(JSON.stringify(result, null, 2));
       return result;
@@ -861,6 +896,9 @@ export async function stagePackage(options) {
       : path.join(options.appDirectory, "main");
   if (options.target === "app") {
     await stageShellPty(options.rootDirectory, options.appDirectory);
+    await stageAppShotRuntime(options.rootDirectory, options.appDirectory);
+    if (process.platform === "linux")
+      await stageAppShotDbus(options.rootDirectory, options.appDirectory);
     const licenseDirectory = path.join(options.appDirectory, "licenses");
     await mkdir(licenseDirectory, { recursive: true });
     for (const name of ["xterm", "addon-fit"])
@@ -1228,7 +1266,11 @@ export async function copyMarketplaceCatalogResource(options) {
   return destination;
 }
 
-export function packageManifest(target, zenxPackage) {
+export function packageManifest(
+  target,
+  zenxPackage,
+  platform = process.platform,
+) {
   return target === "app"
     ? {
         name: "zenx",
@@ -1237,6 +1279,8 @@ export function packageManifest(target, zenxPackage) {
         type: "module",
         main: "out/main/index.js",
         dependencies: {
+          ...appShotRuntimeDependencies(platform),
+          ...(platform === "linux" ? { "dbus-next": "0.10.2" } : {}),
           "@zenx/plugin-sdk": zenxPackage.dependencies["@zenx/plugin-sdk"],
           ws: zenxPackage.dependencies.ws,
           "node-pty": zenxPackage.dependencies["node-pty"],

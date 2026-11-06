@@ -16,6 +16,15 @@ $utf8 = [System.Text.UTF8Encoding]::new($false)
 $report = @{ environment = @{ os = [Environment]::OSVersion.VersionString; runner = $env:RUNNER_NAME; workflowCommit = $env:GITHUB_SHA; arch = $env:PROCESSOR_ARCHITECTURE }; instrumentedPackage = $true; samples = @(); complete = $false }
 $oldEnvironment = @{}
 
+# PowerShell may coerce $null to an empty string for the .NET string overload.
+# Absence and an empty value are distinct to Node's nullish fallback.
+function Set-FixtureEnvironment($Key, $State) {
+  if ($State.present) {
+    [Environment]::SetEnvironmentVariable($Key, [string]$State.value)
+  } elseif (Test-Path -LiteralPath "Env:$Key") {
+    Remove-Item -LiteralPath "Env:$Key" -ErrorAction Stop
+  }
+}
 function Write-Json($Path, $Value) { [IO.File]::WriteAllText($Path, ($Value | ConvertTo-Json -Depth 12), $utf8) }
 function Open-SharedTextReader($Path) {
   # ReadAllText defaults to FileShare.Read and can block the live Node append
@@ -125,8 +134,8 @@ $runFailure = $null
 $finalizationErrors = @()
 try {
   foreach ($key in @("ZENX_DATA_DIR", "ELECTRON_RENDERER_URL", "ZENX_PROJECT_ACCEPTANCE_CONFIG", "ZENX_EXTERNAL_ZAS_ACCEPTANCE_CONFIG")) {
-    $oldEnvironment[$key] = [Environment]::GetEnvironmentVariable($key)
-    [Environment]::SetEnvironmentVariable($key, $null)
+    $oldEnvironment[$key] = @{ present = (Test-Path -LiteralPath "Env:$key"); value = [Environment]::GetEnvironmentVariable($key) }
+    Set-FixtureEnvironment $key @{ present = $false }
   }
   Add-Type -TypeDefinition @'
 using System;
@@ -161,6 +170,10 @@ public static class StartupWindows {
       defaultModel = "fake"; models = @("fake"); workspace = $null; workspaces = @(); lastUsedWorkspace = $null; approvalPolicy = "never"
     }
     $env:ZENX_DATA_DIR = Join-Path $fixtureRoot "$mode-data"
+    if ($mode -eq "success") {
+      & node --import tsx (Join-Path $PSScriptRoot "seed-windows-startup-thread.ts") $env:ZENX_DATA_DIR (Join-Path $directory "seed.json")
+      if ($LASTEXITCODE -ne 0) { throw "Could not create fresh synthetic startup history" }
+    }
     $primary = $null
     $secondary = $null
     $sample = @{ mode = $mode; passed = $false; targetMilliseconds = 1000; firstVisibleMilliseconds = $null; withinOneSecond = $null; focus = "not-observed" }
@@ -232,6 +245,25 @@ public static class StartupWindows {
       if ($mode -eq "success" -and $result.hostStatus -ne "ready") { throw "Real Host startup was not ready: $($result.hostStatus)" }
       if ($mode -eq "success") { Assert-RendererPresentation $result }
       if ($mode -eq "failure" -and ($result.role -ne "alert" -or !$result.text.Contains("Synthetic startup acceptance failure <inert> & visible"))) { throw "Actual bootstrap failure is not visible as inert error text" }
+      if ($mode -eq "success") {
+        $bootstrap = Wait-Event $directory $primary "bootstrap-completed"
+        $sidebar = Wait-Event $directory $primary "sidebar-ready"
+        $conversation = Wait-Event $directory $primary "conversation-ready"
+        foreach ($stage in @($sidebar, $conversation)) {
+          Assert-SoleVisibleWindow $primary.Id $hwnd
+          if ($stage.hwnd -ne $sample.hwnd -or $stage.windowsCreated -ne 1 -or $stage.synthetic -ne $true -or $stage.visible -ne $true) { throw "Product readiness changed the sole synthetic window" }
+          if ($stage.presentation.source -ne "frame-subscription" -or @($stage.presentation.controls).Count -ne 2) { throw "Product readiness has no verified presentation" }
+        }
+        $sample.milestones = @{
+          hostReadyMilliseconds = ((Get-EventUtcTime $bootstrap) - $primary.StartTime.ToUniversalTime()).TotalMilliseconds
+          shellPresentedMilliseconds = ((Get-EventUtcTime $result) - $primary.StartTime.ToUniversalTime()).TotalMilliseconds
+          sidebarReadyMilliseconds = ((Get-EventUtcTime $sidebar) - $primary.StartTime.ToUniversalTime()).TotalMilliseconds
+          firstConversationMilliseconds = ((Get-EventUtcTime $conversation) - $primary.StartTime.ToUniversalTime()).TotalMilliseconds
+          includesSyntheticGateMilliseconds = $sample.gateHeldMilliseconds
+        }
+        $sample.sidebar = $sidebar
+        $sample.conversation = $conversation
+      }
       $sample.result = $result
       $sample.passed = $true
     } catch {
@@ -259,7 +291,7 @@ public static class StartupWindows {
   $report.error = $_.Exception.Message
 } finally {
   foreach ($key in $oldEnvironment.Keys) {
-    try { [Environment]::SetEnvironmentVariable($key, $oldEnvironment[$key]) }
+    try { Set-FixtureEnvironment $key $oldEnvironment[$key] }
     catch { $finalizationErrors += "Restore environment $key`: $($_.Exception.Message)" }
   }
   try { Remove-Item -LiteralPath $fixtureRoot -Recurse -Force -ErrorAction Stop }

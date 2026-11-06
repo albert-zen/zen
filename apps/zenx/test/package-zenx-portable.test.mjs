@@ -1,3 +1,5 @@
+import { appShotRuntimeDependencies } from "../scripts/stage-app-shot-runtime.mjs";
+import { writeAppShotRuntimeFixture } from "./fixtures/app-shot-runtime-fixture.mjs";
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import {
@@ -989,6 +991,8 @@ test("stages the real app without modifying reusable build output", async () => 
         type: "module",
         main: "out/main/index.js",
         dependencies: {
+          ...appShotRuntimeDependencies(),
+          ...(process.platform === "linux" ? { "dbus-next": "0.10.2" } : {}),
           "@zenx/plugin-sdk": "0.1.0",
           ws: "^8.18.3",
           "node-pty": "1.1.0",
@@ -1031,7 +1035,12 @@ test("stages only the provider smoke through the same digest path", async () => 
     await access(
       path.join(appDirectory, "node_modules", "fs-native-extensions"),
     );
-    for (const omitted of ["node-pty"])
+    for (const omitted of [
+      "node-pty",
+      "@crowecawcaw/xa11y",
+      "ffi-rs",
+      "dbus-next",
+    ])
       await assert.rejects(
         access(path.join(appDirectory, "node_modules", omitted)),
         { code: "ENOENT" },
@@ -1764,6 +1773,7 @@ async function writeStorageWriterFixture(rootDirectory) {
 }
 
 async function writePtyFixture(rootDirectory) {
+  await writeAppShotRuntimeFixture(rootDirectory);
   await writeStorageWriterFixture(rootDirectory);
   for (const name of ["xterm", "addon-fit"]) {
     const directory = path.join(rootDirectory, "node_modules", "@xterm", name);

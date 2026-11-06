@@ -53,6 +53,10 @@ const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewp
 await writeFile(path.join(directory, "pending-image.html"), html);
 const sources = [
   "apps/zenx/src/renderer/src/ThreadView.tsx",
+  "apps/zenx/src/renderer/src/ExperimentalTranscriptViewport.tsx",
+  "apps/zenx/src/renderer/src/transcript-viewport-pins.ts",
+  "apps/zenx/patches/legend-list-3.3.5-react.patch",
+  "apps/zenx/scripts/prepare-legend-list.mjs",
   "apps/zenx/src/renderer/src/composer-state.ts",
   "apps/zenx/src/renderer/src/PendingSendRows.tsx",
   "apps/zenx/src/renderer/src/ImagePresentation.tsx",

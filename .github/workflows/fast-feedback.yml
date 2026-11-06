@@ -1,0 +1,64 @@
+name: Fast feedback (not full acceptance)
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fast-feedback-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: Early static feedback (full CI still required)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Test the exact PR head; existing full CI still tests integration.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Report pinned impact candidates (shadow only)
+        env:
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node scripts/ci-impact-shadow.mjs "${{ runner.temp }}/impact-shadow.json"
+      - name: Verify shadow planner contracts
+        run: node --test scripts/test/ci-impact-shadow.test.mjs
+      - name: Install static-check dependencies without native lifecycle work
+        id: dependencies
+        timeout-minutes: 4
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build SDK declarations for standalone typechecks
+        id: sdk
+        run: npm run build --workspace @zenx/plugin-sdk
+      - name: Core and CLI typecheck
+        if: ${{ !cancelled() && steps.sdk.outcome == 'success' }}
+        run: npm run typecheck
+      - name: ZenX main and renderer typecheck
+        if: ${{ !cancelled() && steps.sdk.outcome == 'success' }}
+        run: npm --workspace apps/zenx run typecheck:prepared
+      - name: Repository Prettier check (Python lint remains in full CI)
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        run: npx --no-install prettier --check .
+      - name: Retain shadow report even when static checks fail
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: impact-shadow-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/impact-shadow.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Clarify feedback boundary
+        if: ${{ always() }}
+        run: echo 'Early static feedback only. Shadow impact candidates never skip tests. All existing full CI, native, build, integration and UI acceptance checks remain required.' >> "$GITHUB_STEP_SUMMARY"

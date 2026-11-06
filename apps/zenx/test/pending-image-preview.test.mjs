@@ -46,7 +46,7 @@ test("pending image capture is sandboxed and asserts real decoded images at ever
 });
 
 test("CI retains pending-image evidence on failure and bounds browser execution", () => {
-  const steps = workflow.jobs.zenx.steps;
+  const steps = workflow.jobs["zenx-ui"].steps;
   const run = steps.find((step) =>
     step.run?.includes("capture-pending-image-preview.mjs"),
   );
@@ -55,7 +55,11 @@ test("CI retains pending-image evidence on failure and bounds browser execution"
   const upload = steps.find(
     (step) => step.with?.name === "zenx-pending-image-${{ github.sha }}",
   );
-  assert.equal(upload.if, "${{ always() }}");
+  assert.equal(upload.if, "${{ matrix.shard == 'conversation' && always() }}");
+  assert.equal(
+    run.if,
+    "${{ matrix.shard == 'conversation' && !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}",
+  );
   assert.equal(upload.with.path, "${{ runner.temp }}/zenx-pending-image");
 });
 

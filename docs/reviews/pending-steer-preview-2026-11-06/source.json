@@ -1,0 +1,59 @@
+{
+  "syntheticOnly": true,
+  "sourceHead": "e45423b5844006322d4ed7abb6b5848e8e3a7725",
+  "sourceMerge": "505465273c9531e03fcc455574bfa74be9fe130a",
+  "sourceTree": "5b1c337ef6709f8ced0ebbb4e90fcfb3e6d3eb75",
+  "runId": 42251786082,
+  "artifactId": 13521595956,
+  "artifactDigest": "sha256:dc6eb61132567615d5d1c727969141314d641027ac6dbf7da72d1393741176b8",
+  "passed": true,
+  "scenes": 24,
+  "screenshotCount": 120,
+  "acknowledgedTrustedSettledWheelReceipts": 15,
+  "imageVisibilityCount": 72,
+  "minimumImageCoverage": 0.9142857142857143,
+  "browserExceptions": [],
+  "chromiumSandboxDisabled": false,
+  "cleanupComplete": true,
+  "retainedScreenshots": {
+    "desktop-two-images.png": {
+      "original": "zh-CN-light-1100-2-short-pending-body-start.png",
+      "sha256": "ed806f24742cb788cf0c57b045cc388c98807c8263ea3d54ea4fcfa347226534"
+    },
+    "narrow-two-images.png": {
+      "original": "en-dark-390-2-short-pending-body-start.png",
+      "sha256": "6fa71e56f7db2caffda61276f9a9330ff28c928561314447591bf031395db786"
+    }
+  },
+  "sourceFiles": {
+    "apps/zenx/src/renderer/src/ThreadView.tsx": "302f8fc673e1b2999f47f6c1dc9a9494f902bcd0b3b2601209d784d60044be29",
+    "apps/zenx/src/renderer/src/ExperimentalTranscriptViewport.tsx": "30c3de4e2ef74f658c82213a6903cda170c00578756463b18113f6cf23763083",
+    "apps/zenx/src/renderer/src/transcript-viewport-pins.ts": "a5ab18cdc54ee93bf4756d71e84b2c4d36a1decf8a9766de3fb4be0b605a04b8",
+    "apps/zenx/patches/legend-list-3.3.5-react.patch": "f146e0970f275c4dc289644ce81e56fdedf8c86d7c1ddde0f5b2403aebb79ebb",
+    "apps/zenx/scripts/prepare-legend-list.mjs": "7638cf1bd7f38eafaf583cdaa65daa14c510d2cdfa340303b42ff5821747e4dc",
+    "apps/zenx/src/renderer/src/PendingSteerPanel.tsx": "ffa27d8816db07f4152e85caad5e9b7c109066cc18b00cba60937cce1c0b7318",
+    "apps/zenx/src/renderer/src/steer-preview-column.ts": "a05f2403f659b8357bc7fdc4903ec8b1c4be2840ba666e298af82004788f95a5",
+    "apps/zenx/src/renderer/src/queued-messages.css": "39f0aa35edbfb0a57cfb8f7379b400aa9a406812532bc531d4067a5d0c13a1bf",
+    "apps/zenx/src/renderer/src/ImagePresentation.tsx": "1ad6558d2f86b623bbfa84aaa96c50f64538199316df86ebe7a46f6eaf59c355",
+    "apps/zenx/src/renderer/src/styles.css": "066eaab6ce30d3462b036ad179f4696231ae73b66a539617db19c5fabf0922fa",
+    "apps/zenx/src/renderer/src/theme.css": "14dd5b966908bc0a630044169fc7cba7ffcfdc495c09d7a4c85829ca9c4c4497",
+    "apps/zenx/test/fixtures/steer-image-visual.tsx": "d60bffc1f729fae84e71d24f411a4df0717a226d82ab0789228abdd167b98cd0",
+    "apps/zenx/scripts/build-steer-image-preview.mjs": "8769e14de1fe3a97d6ef45e9cbedac3d459c216bfe90de8a0d6b328c704d56e2",
+    "apps/zenx/scripts/capture-steer-image-preview.mjs": "7e9181a35076a92fbc12a8226a8f7017d61837188f5cc8369a2eb57059108247",
+    "apps/zenx/scripts/steer-image-visibility.mjs": "9fc947e7e46abb38a05f7c718c6d6e9435fc37de18a6fdd4dec072f80c9626fc",
+    "apps/zenx/scripts/steer-image-geometry.mjs": "13b5e88d58371fc4d6719653a280ac08a5d6b389a70adfc5f9e75c6f32026b22",
+    "apps/zenx/scripts/steer-scroll-diagnostic.mjs": "3b584d82e5d3b544d5059c60b870703a2b65814d91508edce492ec9175bb41ea"
+  },
+  "fullCi": {
+    "successfulJobs": 8,
+    "failedJobs": [
+      "synthetic UI overflow: Chromium startup DevToolsActivePort missing at 30000ms",
+      "Windows attached browser: Page.captureScreenshot fixture timeout, id754, transportAccepted true, 10001ms/10000ms",
+      "compatibility gate"
+    ],
+    "cancelledJobs": [
+      "macOS packaged capability smoke (queued; no acceptance result)"
+    ],
+    "aggregate": "success"
+  }
+}

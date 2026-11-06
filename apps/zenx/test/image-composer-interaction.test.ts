@@ -8,6 +8,7 @@ import { createRoot } from "react-dom/client";
 
 import type { AttachmentRef } from "../../../src/attachment.js";
 import type { Thread } from "../src/protocol-client/index.js";
+import type { AppShotApi, AppShotEvent } from "../src/app-shot.js";
 import {
   addComposerImages,
   beginImmediateComposerSubmission,
@@ -18,7 +19,12 @@ import {
   dismissPendingSend,
   editComposer,
   emptyComposerState,
+  removeComposerImage,
+  type ComposerDraftImage,
 } from "../src/renderer/src/composer-state.js";
+
+import { withAppShotContext } from "../src/renderer/src/app-shot-draft.js";
+import { i18n } from "../src/renderer/src/i18n.js";
 
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
@@ -166,6 +172,561 @@ test("image preview closes with Escape and returns focus to its named trigger", 
   });
 });
 
+test("App Shot is an image-style draft with exact context visible only on click", async () => {
+  await withDom(async (_dom, root) => {
+    const context =
+      "  App: Example\nWindow: Design notes\nScreenshot only\n" +
+      "<script>do not execute</script>\n[link](https://example.invalid)\n" +
+      "  Leading and trailing spaces stay intact  \n" +
+      "Long captured line ".repeat(1500);
+    const shot = appShotImage(context);
+    const composer = addComposerImages(
+      editComposer(emptyComposerState(), "Keep my draft"),
+      [shot],
+    );
+    await act(async () => root.render(attachmentView({ composer })));
+    const trigger = required<HTMLButtonElement>(
+      '[aria-label="Preview App Shot · Example.png"]',
+    );
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.equal(document.querySelector(".draft-image details"), null);
+    assert.equal(document.querySelector(".draft-image pre"), null);
+    assert.equal(required(".draft-app-shot-label").textContent, "App Shot");
+    assert.equal(required(".draft-image").closest(".composer"), null);
+    assert.equal(
+      required<HTMLTextAreaElement>("textarea").value,
+      "Keep my draft",
+    );
+
+    await act(async () => trigger.click());
+    const dialog = required<HTMLElement>(".app-shot-attachment-preview");
+    assert.equal(dialog.getAttribute("role"), "dialog");
+    assert.equal(dialog.getAttribute("aria-label"), shot.name);
+    assert.equal(dialog.querySelector("img")?.getAttribute("alt"), shot.name);
+    const preview = required<HTMLElement>(".app-shot-attachment-context pre");
+    assert.equal(preview.textContent, context);
+    assert.equal(dialog.querySelector("script, a"), null);
+    assert.equal(dialog.querySelectorAll("button").length, 1);
+    assert.equal(
+      dialog.querySelector("button")?.getAttribute("aria-label"),
+      "Close image preview",
+    );
+    const sent = withAppShotContext("", composer.draft.images);
+    const payload = JSON.parse(sent.slice(sent.indexOf("\n") + 1)) as Array<{
+      context: string;
+    }>;
+    assert.equal(payload[0]?.context, preview.textContent);
+
+    const close = required<HTMLButtonElement>(".image-preview-close");
+    assert.equal(document.activeElement, close);
+    await pressPreviewKey("Tab");
+    assert.equal(document.activeElement, preview);
+    await pressPreviewKey("Tab");
+    assert.equal(document.activeElement, close);
+    await pressPreviewKey("Tab", true);
+    assert.equal(document.activeElement, preview);
+    await pressPreviewKey("Escape");
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.equal(document.activeElement, trigger);
+    assert.equal(
+      required<HTMLTextAreaElement>("textarea").value,
+      "Keep my draft",
+    );
+  });
+});
+
+test("App Shot repeated opening, close and backdrop never attach or send", async () => {
+  await withDom(async (dom, root) => {
+    Object.assign(window, {
+      zenx: {
+        appShot: {
+          capture: () => assert.fail("preview cannot capture"),
+          attach: () => assert.fail("preview cannot attach"),
+        },
+      },
+    });
+    await act(async () =>
+      root.render(
+        attachmentView({
+          composer: addComposerImages(emptyComposerState(), [appShotImage()]),
+        }),
+      ),
+    );
+    const trigger = required<HTMLButtonElement>(
+      ".draft-image .image-thumbnail",
+    );
+    for (const dismiss of ["close", "backdrop", "escape"]) {
+      await act(async () => trigger.click());
+      assert.equal(document.querySelectorAll('[role="dialog"]').length, 1);
+      assert.equal(
+        required(".app-shot-attachment-context pre").textContent,
+        appShotImage().appShotContext,
+      );
+      if (dismiss === "close") {
+        await act(async () =>
+          required<HTMLButtonElement>(".image-preview-close").click(),
+        );
+      } else if (dismiss === "backdrop") {
+        await act(async () =>
+          required(".image-preview-layer").dispatchEvent(
+            new dom.window.Event("pointerdown", { bubbles: true }),
+          ),
+        );
+      } else await pressPreviewKey("Escape");
+      assert.equal(document.querySelector('[role="dialog"]'), null);
+      assert.equal(document.activeElement, trigger);
+    }
+  });
+});
+
+test("removing an App Shot closes its preview and removes only its image and context", async () => {
+  await withDom(async (_dom, root) => {
+    let composer = addComposerImages(
+      editComposer(emptyComposerState(), "Keep this text"),
+      [
+        appShotImage(),
+        { id: "ordinary", name: "ordinary.png", attachment: ref },
+      ],
+    );
+    const render = () =>
+      root.render(
+        attachmentView({
+          composer,
+          onRemoveImage: (id) => {
+            composer = removeComposerImage(composer, id);
+            render();
+          },
+        }),
+      );
+    await act(async () => render());
+    await act(async () =>
+      required<HTMLButtonElement>(
+        '[aria-label="Preview App Shot · Example.png"]',
+      ).click(),
+    );
+    await act(async () =>
+      required<HTMLButtonElement>('[aria-label="Remove Example.png"]').click(),
+    );
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.equal(document.querySelector(".draft-app-shot-label"), null);
+    assert.equal(composer.draft.text, "Keep this text");
+    assert.deepEqual(
+      composer.draft.images.map((image) => image.id),
+      ["ordinary"],
+    );
+    assert.equal(
+      withAppShotContext(composer.draft.text, composer.draft.images),
+      "Keep this text",
+    );
+    assert.equal(document.activeElement, required("textarea"));
+    const ordinary = required<HTMLButtonElement>(
+      '[aria-label="Preview ordinary.png"]',
+    );
+    await act(async () => ordinary.click());
+    assert.equal(required('[role="dialog"]').className, "image-preview-layer");
+    assert.equal(document.querySelector(".app-shot-attachment-context"), null);
+    await pressPreviewKey("Escape");
+    assert.equal(document.activeElement, ordinary);
+  });
+});
+
+test("closing App Shot details does not steal newer focus outside the viewer", async () => {
+  await withDom(async (_dom, root) => {
+    await act(async () =>
+      root.render(
+        attachmentView({
+          composer: addComposerImages(emptyComposerState(), [appShotImage()]),
+        }),
+      ),
+    );
+    await act(async () =>
+      required<HTMLButtonElement>(".draft-image .image-thumbnail").click(),
+    );
+    const textarea = required<HTMLTextAreaElement>("textarea");
+    await act(async () => textarea.focus());
+    await pressPreviewKey("Escape");
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.equal(document.activeElement, textarea);
+  });
+});
+
+test("App Shot preview retires on Composer, Thread, attachment or context replacement", async () => {
+  for (const change of [
+    "composer",
+    "thread",
+    "attachment",
+    "context",
+    "remove",
+  ]) {
+    await withDom(async (_dom, root) => {
+      const shot = appShotImage();
+      const original = {
+        composerId: "composer-one",
+        thread: emptyThread(),
+        composer: addComposerImages(emptyComposerState(), [shot]),
+      };
+      await act(async () => root.render(attachmentView(original)));
+      await act(async () =>
+        required<HTMLButtonElement>(".draft-image .image-thumbnail").click(),
+      );
+      const next = {
+        ...original,
+        ...(change === "composer" ? { composerId: "composer-two" } : {}),
+        ...(change === "thread"
+          ? { thread: { ...emptyThread(), id: "thread-two" } }
+          : {}),
+        ...(change === "attachment" ||
+        change === "context" ||
+        change === "remove"
+          ? {
+              composer: addComposerImages(
+                emptyComposerState(),
+                change === "remove"
+                  ? []
+                  : [
+                      {
+                        ...shot,
+                        ...(change === "context"
+                          ? { appShotContext: "New context" }
+                          : {}),
+                        ...(change === "attachment"
+                          ? { attachment: { ...ref, sha256: "c".repeat(64) } }
+                          : {}),
+                      },
+                    ],
+              ),
+            }
+          : {}),
+      };
+      await act(async () => root.render(attachmentView(next)));
+      assert.equal(document.querySelector('[role="dialog"]'), null, change);
+      if (change === "composer" || change === "thread") {
+        assert.equal(
+          document.activeElement,
+          document.body,
+          "no focus stolen into new owner",
+        );
+      }
+      if (change === "context") {
+        await act(async () =>
+          required<HTMLButtonElement>(".draft-image .image-thumbnail").click(),
+        );
+        assert.equal(
+          required(".app-shot-attachment-context pre").textContent,
+          "New context",
+        );
+      }
+    });
+  }
+});
+
+test("each App Shot opens its own context, including an empty captured string", async () => {
+  await withDom(async (_dom, root) => {
+    await act(async () =>
+      root.render(
+        attachmentView({
+          composer: addComposerImages(emptyComposerState(), [
+            appShotImage("First context"),
+            { ...appShotImage(""), id: "second-shot", name: "Second.png" },
+          ]),
+        }),
+      ),
+    );
+    assert.equal(document.querySelectorAll(".draft-app-shot-label").length, 2);
+    for (const [name, context] of [
+      ["Example.png", "First context"],
+      ["Second.png", ""],
+    ]) {
+      await act(async () =>
+        required<HTMLButtonElement>(
+          `[aria-label="Preview App Shot · ${name}"]`,
+        ).click(),
+      );
+      assert.equal(
+        required(".app-shot-attachment-context pre").textContent,
+        context,
+      );
+      await pressPreviewKey("Escape");
+    }
+  });
+});
+
+test("App Shot context stays readable after image decode failure and respects localization", async () => {
+  await withDom(async (dom, root) => {
+    await i18n.changeLanguage("zh-CN");
+    try {
+      await act(async () =>
+        root.render(
+          attachmentView({
+            composer: addComposerImages(emptyComposerState(), [appShotImage()]),
+          }),
+        ),
+      );
+      assert.equal(
+        required(".draft-app-shot-label").textContent,
+        i18n.t("shell:appShot"),
+      );
+      await act(async () =>
+        required<HTMLButtonElement>(".draft-image .image-thumbnail").click(),
+      );
+      await act(async () =>
+        required(".image-preview-content img").dispatchEvent(
+          new dom.window.Event("error"),
+        ),
+      );
+      assert.equal(
+        required('[role="alert"]').textContent,
+        i18n.t("panels:imageUnavailable"),
+      );
+      assert.equal(
+        required(".app-shot-attachment-context h2").textContent,
+        i18n.t("shell:appShotContext"),
+      );
+      assert.equal(
+        required(".app-shot-attachment-context pre").textContent,
+        appShotImage().appShotContext,
+      );
+      await pressPreviewKey("Escape");
+      assert.equal(document.querySelector('[role="dialog"]'), null);
+    } finally {
+      await act(async () => i18n.changeLanguage("en"));
+    }
+  });
+});
+
+test("App Shot details open after thumbnail read or decode failure without retrying", async () => {
+  for (const failure of ["read", "decode"]) {
+    await withDom(async (dom, root) => {
+      let reads = 0;
+      const shot = {
+        ...appShotImage(),
+        attachment: {
+          ...ref,
+          sha256: (failure === "read" ? "d" : "e").repeat(64),
+        },
+      };
+      await act(async () =>
+        root.render(
+          attachmentView({
+            composer: addComposerImages(emptyComposerState(), [shot]),
+            onReadAttachment: async () => {
+              reads++;
+              if (failure === "read")
+                throw new Error("synthetic unavailable draft");
+              return new Uint8Array([1]);
+            },
+          }),
+        ),
+      );
+      if (failure === "decode") {
+        await act(async () =>
+          required(".draft-image img").dispatchEvent(
+            new dom.window.Event("error"),
+          ),
+        );
+      }
+      const trigger = required<HTMLButtonElement>(
+        ".draft-image .image-thumbnail",
+      );
+      assert.equal(
+        trigger.disabled,
+        false,
+        "App Shot context is independently readable",
+      );
+      assert.equal(reads, 1);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await act(async () => trigger.click());
+        const dialog = required('[role="dialog"]');
+        assert.equal(
+          dialog.querySelector(".app-shot-attachment-context pre")?.textContent,
+          shot.appShotContext,
+        );
+        assert.equal(
+          dialog.querySelector('[role="alert"]')?.textContent,
+          i18n.t("panels:imageUnavailable"),
+        );
+        assert.equal(dialog.querySelector("img"), null);
+        assert.equal(
+          reads,
+          1,
+          "Inspecting context must not retry the failed payload",
+        );
+        await pressPreviewKey("Escape");
+        assert.equal(document.activeElement, trigger);
+      }
+    });
+  }
+});
+
+test("App Shot context opens while pixels load and ordinary failed images stay disabled", async () => {
+  await withDom(async (_dom, root) => {
+    let resolve!: (bytes: Uint8Array) => void;
+    const pending = new Promise<Uint8Array>((done) => {
+      resolve = done;
+    });
+    let reads = 0;
+    await act(async () =>
+      root.render(
+        attachmentView({
+          composer: addComposerImages(emptyComposerState(), [
+            {
+              ...appShotImage(),
+              attachment: { ...ref, sha256: "9".repeat(64) },
+            },
+          ]),
+          onReadAttachment: async () => {
+            reads++;
+            return pending;
+          },
+        }),
+      ),
+    );
+    const trigger = required<HTMLButtonElement>(
+      ".draft-image .image-thumbnail",
+    );
+    assert.equal(trigger.disabled, false);
+    await act(async () => trigger.click());
+    assert.equal(
+      required(".app-shot-attachment-context pre").textContent,
+      appShotImage().appShotContext,
+    );
+    assert.ok(required('[role="dialog"] [role="status"]'));
+    assert.ok(reads <= 2, "At most one read per mounted thumbnail/viewer");
+    await act(async () => resolve(new Uint8Array([1])));
+    assert.ok(required('[role="dialog"] img'));
+    await pressPreviewKey("Escape");
+    await act(async () =>
+      root.render(
+        attachmentView({
+          composer: addComposerImages(emptyComposerState(), [
+            {
+              id: "ordinary-failed",
+              name: "ordinary-failed.png",
+              attachment: { ...ref, sha256: "8".repeat(64) },
+            },
+          ]),
+          onReadAttachment: async () => {
+            throw new Error("ordinary unavailable");
+          },
+        }),
+      ),
+    );
+    assert.equal(
+      required<HTMLButtonElement>(".draft-image .image-thumbnail").disabled,
+      true,
+    );
+  });
+});
+
+test("direct App Shot attachment focuses Composer only when no modal remains open", async () => {
+  await withDom(async (_dom, root) => {
+    let token = "";
+    let listener: ((event: AppShotEvent) => void) | undefined;
+    let attached = 0;
+    const api: AppShotApi = {
+      configuration: async () => ({ nativeForeground: true }),
+      list: async () => [],
+      capture: async () => assert.fail("shortcut must not recapture"),
+      read: async () => new Uint8Array([1]),
+      attach: async () => appShotImage(),
+      discard: async () => {},
+      arm: async (nextToken) => {
+        token = nextToken;
+        return "Both Shift";
+      },
+      disarm: async () => {},
+      beginRecording: async () => {},
+      endRecording: async () => {},
+      onCapture: (callback) => {
+        listener = callback;
+        return () => {
+          listener = undefined;
+        };
+      },
+    };
+    Object.assign(window, { zenx: { platform: "darwin", appShot: api } });
+    await act(async () =>
+      root.render(
+        attachmentView({
+          onAddAppShot: () => {
+            attached++;
+          },
+        }),
+      ),
+    );
+    await act(async () =>
+      required<HTMLButtonElement>('[aria-label="App Shot"]').click(),
+    );
+    await act(async () =>
+      required<HTMLInputElement>(
+        '.app-shot-shortcut input[type="checkbox"]',
+      ).click(),
+    );
+    assert.ok(token);
+    const close = required<HTMLButtonElement>('[aria-label="Close App Shot"]');
+    await act(async () => close.focus());
+    await act(async () =>
+      listener?.({ token, image: { ...appShotImage(), id: "first" } }),
+    );
+    assert.equal(attached, 1);
+    assert.equal(
+      document.activeElement,
+      close,
+      "An open picker retains its focus",
+    );
+    await act(async () => close.click());
+    // Radix dismisses modal presence asynchronously; wait for its DOM removal.
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 30)));
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    await act(async () =>
+      listener?.({ token, image: { ...appShotImage(), id: "second" } }),
+    );
+    assert.equal(attached, 2);
+    assert.equal(document.activeElement, required("textarea"));
+  });
+});
+
+function appShotImage(
+  context = "App: Example\nWindow: Example\nScreenshot only",
+): ComposerDraftImage {
+  return {
+    id: "app-shot-draft",
+    name: "Example.png",
+    attachment: { ...ref, sha256: "b".repeat(64) },
+    appShotContext: context,
+  };
+}
+
+function attachmentView(
+  overrides: Partial<React.ComponentProps<typeof ThreadView>>,
+) {
+  return createElement(ThreadView, {
+    approvals: [],
+    composer: emptyComposerState(),
+    thread: emptyThread(),
+    onDraftChange: () => assert.fail("preview cannot edit text"),
+    onInterrupt: async () => assert.fail("preview cannot interrupt"),
+    onReadAttachment: async () => new Uint8Array([1, 2, 3, 4]),
+    onRemoveImage: () => assert.fail("preview cannot remove images"),
+    onRespondToApproval: async () => undefined,
+    onSubmit: async () => assert.fail("preview cannot send"),
+    ...overrides,
+  });
+}
+
+async function pressPreviewKey(key: string, shiftKey = false) {
+  await act(async () =>
+    document.dispatchEvent(
+      new window.KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key,
+        shiftKey,
+      }),
+    ),
+  );
+}
+
 test("unsupported image capability disables Send without removing the draft", async () => {
   await withDom(async (_dom, root) => {
     const composer = addComposerImages(emptyComposerState(), [
@@ -311,7 +872,7 @@ test("pending multi-image send preserves warm previews, honest status and recove
     const images = ["b", "c"].map((digit, index) => ({
       id: `pending-${digit}`,
       name: `synthetic-${index}.png`,
-      attachment: { ...ref, sha256: digit.repeat(64) },
+      attachment: { ...ref, sha256: `728${index}${digit}`.padEnd(64, "0") },
     }));
     let composer = addComposerImages(
       editComposer(emptyComposerState(), "Synthetic message"),
@@ -424,6 +985,45 @@ test("pending multi-image send preserves warm previews, honest status and recove
       "navigation retires the old pending preview",
     );
   });
+});
+
+test("pending preview retires on Composer replacement even with the same null Thread", async () => {
+  for (const thread of [null, emptyThread()]) {
+    await withDom(async (_dom, root) => {
+      let composerId = "pending-owner-one";
+      let composer = beginImmediateComposerSubmission(
+        addComposerImages(emptyComposerState(), [
+          { id: "pending-owned", name: "owned.png", attachment: ref },
+        ]),
+        "start",
+        null,
+        () => "pending-owned-client",
+      );
+      const render = () =>
+        root.render(attachmentView({ composerId, composer, thread }));
+      await act(async () => render());
+      await act(async () =>
+        required<HTMLButtonElement>(
+          ".pending-send-row .image-thumbnail",
+        ).click(),
+      );
+      assert.ok(document.querySelector('[role="dialog"]'));
+      assert.equal(
+        composer.draft.images.length,
+        0,
+        "pending viewer must not depend on cleared draft images",
+      );
+      composerId = "pending-owner-two";
+      composer = emptyComposerState();
+      await act(async () => render());
+      assert.equal(document.querySelector('[role="dialog"]'), null);
+      assert.equal(
+        document.activeElement,
+        document.body,
+        "old preview must not focus the new Composer",
+      );
+    });
+  }
 });
 
 test("image-only pending send becomes one canonical image row without an empty bubble or payload reload", async () => {

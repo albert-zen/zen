@@ -3,7 +3,10 @@ import test from "node:test";
 import vm from "node:vm";
 import { instrumentStartup } from "../scripts/prepare-windows-startup-acceptance.mjs";
 
-const source = `const bootstrapFence = { run: async (f) => { calls.push("fence"); await f(); } };
+const source = `function isTrustedImZenXSetupSender(sender, rendererUrl) {
+  return sender.ownedWindow && sender.mainFrame && sender.url === rendererUrl;
+}
+const bootstrapFence = { run: async (f) => { calls.push("fence"); await f(); } };
 const appServerManager = { status: { type: "ready" } };
 async function bootstrapZenX() { calls.push("bootstrap"); }
 (async () => { calls.push("window"); await bootstrapFence.run(bootstrapZenX); })();`;
@@ -66,6 +69,59 @@ test("comments and strings cannot impersonate the awaited lifecycle seam", () =>
   );
 });
 
+test("trusted sender diagnostics preserve exact arguments and original admission even when observation fails", async () => {
+  const transformed = instrumentStartup(source).replace(/^import[^\n]+\n/u, "");
+  const observations = [];
+  let throwDiagnostic = false;
+  const context = {
+    calls: [],
+    startupAcceptanceFixture: {
+      observe() {},
+      gate: async () => {},
+      completed() {},
+      trustedSenderObserved(sender, expected) {
+        observations.push([sender, expected]);
+        if (throwDiagnostic) throw new Error("diagnostic failed");
+      },
+    },
+  };
+  vm.createContext(context);
+  await vm.runInContext(transformed, context);
+  for (throwDiagnostic of [false, true]) {
+    for (const [ownedWindow, mainFrame, url] of [
+      [true, true, "file:///fixture/index.html"],
+      [false, true, "file:///fixture/index.html"],
+      [true, false, "file:///fixture/index.html"],
+      [true, true, "https://untrusted.example/"],
+    ]) {
+      const sender = Object.freeze({ ownedWindow, mainFrame, url });
+      const expected = "file:///fixture/index.html";
+      assert.equal(
+        context.isTrustedImZenXSetupSender(sender, expected),
+        ownedWindow && mainFrame && url === expected,
+      );
+      assert.equal(observations.at(-1)[0], sender);
+      assert.equal(observations.at(-1)[1], expected);
+    }
+  }
+  assert.equal(observations.length, 8);
+});
+
+test("instrumentation requires one unambiguous trusted sender argument seam", () => {
+  for (const changed of [
+    source.replace("function isTrustedImZenXSetupSender", "function unrelated"),
+    source.replace("sender, rendererUrl)", "sender)"),
+    source.replace("sender, rendererUrl)", "{ ownedWindow }, rendererUrl)"),
+    source.replace("sender, rendererUrl)", "sender, rendererUrl = 'default')"),
+    source + "function isTrustedImZenXSetupSender(a, b) {}",
+    source + "function isTrustedImZenXSetupSender(a) {}",
+  ])
+    assert.throws(
+      () => instrumentStartup(changed),
+      /trusted sender diagnostic seam/u,
+    );
+});
+
 test("private staging preserves the original package and refuses reused destinations", async () => {
   const { mkdtemp, mkdir, readFile, writeFile, rm } =
     await import("node:fs/promises");
@@ -120,7 +176,7 @@ test("private staging preserves the original package and refuses reused destinat
   }
 });
 
-async function loadObserverFixture(windows = []) {
+async function loadObserverFixture(windows = [], seed) {
   const { readFile } = await import("node:fs/promises");
   const { EventEmitter } = await import("node:events");
   const { createRequire } = await import("node:module");
@@ -150,6 +206,7 @@ async function loadObserverFixture(windows = []) {
     exports,
     process,
     URL,
+    Promise,
     AbortSignal,
     setImmediate,
     setInterval: () => ({ unref() {} }),
@@ -170,11 +227,15 @@ async function loadObserverFixture(windows = []) {
         ? { app, BrowserWindow: { getAllWindows: () => windows } }
         : name === "node:fs"
           ? {
-              readFileSync: () =>
-                JSON.stringify({
-                  evidenceDirectory: "/synthetic",
-                  mode: "failure",
-                }),
+              readFileSync: (file) =>
+                JSON.stringify(
+                  String(file).endsWith("seed.json")
+                    ? seed
+                    : {
+                        evidenceDirectory: "/synthetic",
+                        mode: "failure",
+                      },
+                ),
               appendFileSync: (_path, line) => records.push(JSON.parse(line)),
               writeFileSync: (path, bytes) => writes.push({ path, bytes }),
             }
@@ -183,6 +244,34 @@ async function loadObserverFixture(windows = []) {
   exports.observe();
   return { app, records, writes, EventEmitter, exports, timers };
 }
+
+test("trusted sender observation is bounded and retains the actual rejected argument pair", async () => {
+  const { exports, records } = await loadObserverFixture();
+  const sender = Object.freeze({
+    ownedWindow: true,
+    mainFrame: false,
+    url: "file:///C:/RUNNER~1/index.html",
+  });
+  const expected = "file:///C:/RUNNER%7E1/index.html";
+  exports.trustedSenderObserved(sender, expected);
+  assert.deepEqual(JSON.parse(JSON.stringify(records.at(-1))), {
+    type: "trusted-sender-observed",
+    pid: process.pid,
+    at: records.at(-1).at,
+    ...sender,
+    rendererUrl: expected,
+  });
+  exports.trustedSenderObserved({ url: "x".repeat(4097) }, undefined);
+  assert.equal(records.at(-1).url, null);
+  assert.equal(records.at(-1).rendererUrl, null);
+  for (let index = 0; index < 40; index++)
+    exports.trustedSenderObserved(sender, expected);
+  assert.equal(
+    records.filter((record) => record.type === "trusted-sender-observed")
+      .length,
+    32,
+  );
+});
 
 test("second-instance receipt is immediate while window identity remains deferred", async () => {
   const windows = [];
@@ -339,14 +428,14 @@ function visibleRenderer() {
     ],
   };
 }
-async function rendererFixture() {
+async function rendererFixture(seed) {
   const windows = [];
-  const fixture = await loadObserverFixture(windows);
+  const fixture = await loadObserverFixture(windows, seed);
   const window = new fixture.EventEmitter();
   const contents = new fixture.EventEmitter();
   let callback;
   const state = {
-    url: "file:///index.html",
+    url: new URL("./fixtures/index.html", import.meta.url).href,
     loading: false,
     visible: true,
     cleanups: 0,
@@ -490,6 +579,9 @@ for (const failure of [
     const pending = f.exports.captureRenderedApp(
       f.window,
       Date.now() + (failure === "timeout" ? 20 : 1000),
+      undefined,
+      undefined,
+      "conversation",
     );
     const rejected = assert.rejects(pending);
     await f.flush();
@@ -509,6 +601,18 @@ for (const failure of [
       });
     else f.present(presentedImage({ painted: true }));
     await rejected;
+    const diagnostic = f.writes.find((write) =>
+      write.path.endsWith("conversation-rejected-dom.json"),
+    );
+    assert(
+      diagnostic,
+      "Failed product capture retains stage-specific diagnostic",
+    );
+    assert.equal(JSON.parse(diagnostic.bytes).accepted, false);
+    assert.equal(
+      f.writes.some((write) => write.path.endsWith("conversation-ready.png")),
+      false,
+    );
     assert.equal(f.state.cleanups, failure === "query-rejected" ? 0 : 1);
     assert.equal(f.timers.size, 0);
     assert.equal(f.contents.listenerCount("did-start-navigation"), 0);
@@ -904,4 +1008,482 @@ test("one isolated dark or bright point fails at every text-crop location", asyn
         for (const offset of offsets) bytes.set(background, offset);
       }
   }
+});
+
+const productSeed = {
+  synthetic: true,
+  threadId: "seed-thread",
+  userItemId: "seed-user",
+  agentItemId: "seed-agent",
+  title: "Startup acceptance thread",
+  userText: "Synthetic startup history is readable",
+  agentText: "Echo: Synthetic startup history is readable",
+};
+
+for (const stage of ["sidebar", "conversation"]) {
+  for (const invalid of [
+    null,
+    "wrong-text",
+    "disabled-row",
+    "missing-row",
+    "loading",
+    "error",
+    "application-notice",
+    "background-shell-error",
+    "unselected",
+    "hidden-text",
+    "occluded-text",
+    "line-break-rect",
+    "whitespace-rect",
+    "only-line-break-rect",
+    "negative-width-rect",
+    "nonfinite-rect",
+    "zero-height-rect",
+  ]) {
+    test(`product ${stage} readiness rejects incomplete UI: ${invalid ?? "ready"}`, async () => {
+      const { JSDOM } = await import("jsdom");
+      const { exports } = await loadObserverFixture();
+      const observation = exports.productObservation(productSeed, stage);
+      const dom = new JSDOM(
+        `<div class="app-shell"><aside id="primary-sidebar">
+        <div data-thread-id="seed-thread"><button class="thread-row selected" aria-current="page"><span class="thread-title"><span>${productSeed.title}</span></span></button></div>
+        <button class="new-thread-action"><span>New thread</span></button>
+      </aside><div class="thread-view"><article data-sent-message-id="seed-user"><div class="user-bubble"><p>${productSeed.userText}</p></div></article>
+      <article data-read-message-id="seed-agent"><div data-message-quote-body><p>${productSeed.agentText}</p></div></article></div></div>`,
+        { runScripts: "outside-only", pretendToBeVisual: true },
+      );
+      try {
+        const { window } = dom;
+        const { document } = window;
+        window.visualViewport = null;
+        const rect = (y = 10) => ({
+          x: 10,
+          y,
+          left: 10,
+          top: y,
+          width: 70,
+          height: 15,
+          right: 80,
+          bottom: y + 15,
+        });
+        window.HTMLElement.prototype.getBoundingClientRect = () => rect();
+        window.HTMLElement.prototype.checkVisibility = function () {
+          return this.dataset.hidden !== "true";
+        };
+        window.getComputedStyle = () => ({
+          visibility: "visible",
+          opacity: "1",
+          fontSize: "12px",
+          color: "rgb(0,0,0)",
+          webkitTextFillColor: "rgb(0,0,0)",
+          font: "12px sans-serif",
+          letterSpacing: "normal",
+          transform: "none",
+        });
+        const labels = observation.selectors.map((selector, index) => {
+          const element = document.querySelector(selector);
+          const label = element.querySelector(
+            stage === "sidebar"
+              ? index === 0
+                ? ".thread-title > span"
+                : ":scope > span"
+              : "p",
+          );
+          element.getBoundingClientRect = label.getBoundingClientRect = () =>
+            rect(10 + index * 25);
+          return label;
+        });
+        document.createRange = () => {
+          let node, start, end;
+          return {
+            selectNodeContents(value) {
+              node = value;
+              start = undefined;
+              end = undefined;
+            },
+            setStart(value, offset) {
+              node = value;
+              start = offset;
+            },
+            setEnd(value, offset) {
+              node = value;
+              end = offset;
+            },
+            getClientRects: () => {
+              const glyph = node.parentElement.getBoundingClientRect();
+              const lineBreak = {
+                ...glyph,
+                x: glyph.right,
+                left: glyph.right,
+                width: 0,
+              };
+              if (invalid === "whitespace-rect" && start === undefined)
+                return [
+                  glyph,
+                  { ...lineBreak, width: 4, right: glyph.right + 4 },
+                ];
+              if (invalid === "whitespace-rect")
+                assert(
+                  !/\s/u.test(node.textContent.slice(start, end)),
+                  "Only non-whitespace glyph runs are sampled",
+                );
+              if (invalid === "only-line-break-rect") return [lineBreak];
+              if (invalid === "negative-width-rect")
+                return [glyph, { ...lineBreak, width: -1 }];
+              if (invalid === "nonfinite-rect")
+                return [glyph, { ...lineBreak, x: NaN }];
+              if (invalid === "zero-height-rect")
+                return [glyph, { ...lineBreak, height: 0 }];
+              return invalid === "line-break-rect"
+                ? [glyph, lineBreak]
+                : [glyph];
+            },
+          };
+        };
+        document.elementFromPoint = (_x, y) =>
+          invalid === "occluded-text" ? document.body : labels[y < 30 ? 0 : 1];
+        const row = document.querySelector(observation.row);
+        if (invalid === "wrong-text")
+          labels[0].textContent = "Wrong fixture content";
+        if (invalid === "disabled-row") row.disabled = true;
+        if (invalid === "missing-row") row.remove();
+        if (invalid === "loading" || invalid === "error")
+          document
+            .querySelector("#primary-sidebar")
+            .insertAdjacentHTML(
+              "beforeend",
+              `<p class="sidebar-empty ${invalid === "error" ? "sidebar-error" : ""}"></p>`,
+            );
+        if (invalid === "unselected") row.removeAttribute("aria-current");
+        if (
+          invalid === "application-notice" ||
+          invalid === "background-shell-error"
+        )
+          document.body.insertAdjacentHTML(
+            "beforeend",
+            invalid === "application-notice"
+              ? '<div class="app-notice" role="alert">Synthetic sidebar failure</div>'
+              : '<details class="background-shell-error">Synthetic Shell failure</details>',
+          );
+        if (invalid === "hidden-text") labels[0].dataset.hidden = "true";
+        const result = window.eval(observation.script);
+        assert.equal(
+          result.ready,
+          invalid === null ||
+            invalid === "line-break-rect" ||
+            invalid === "whitespace-rect" ||
+            (stage === "sidebar" && invalid === "unselected"),
+        );
+        assert.equal(
+          JSON.stringify(result).includes(productSeed.userText),
+          false,
+          "Receipts contain geometry, not message contents",
+        );
+      } finally {
+        dom.window.close();
+      }
+    });
+  }
+}
+
+test("product stages require their own text pixels, not the earlier shell receipt", async () => {
+  const { exports } = await loadObserverFixture();
+  const { selectors } = exports.productObservation(productSeed, "conversation");
+  assert.equal(
+    exports.rendererFrameEvidence(
+      presentedImage({ painted: true }),
+      visibleRenderer(),
+      selectors,
+    ),
+    null,
+  );
+  const valid = visibleRenderer();
+  valid.controls.forEach((control, index) => {
+    control.selector = selectors[index];
+  });
+  assert(
+    exports.rendererFrameEvidence(
+      presentedImage({ painted: true }),
+      valid,
+      selectors,
+    ),
+  );
+  assert.equal(
+    exports.rendererFrameEvidence(presentedImage(), valid, selectors),
+    null,
+  );
+  assert.throws(
+    () =>
+      exports.productObservation(
+        { ...productSeed, synthetic: false },
+        "sidebar",
+      ),
+    /synthetic/u,
+  );
+  assert.throws(
+    () =>
+      exports.productObservation(
+        { ...productSeed, threadId: 'bad"selector' },
+        "sidebar",
+      ),
+    /identity/u,
+  );
+  assert.throws(
+    () => exports.productObservation(productSeed, "shell"),
+    /stage/u,
+  );
+});
+
+for (const failConversation of [false, true]) {
+  test(`product follow-through retains exact frames and deadline, failure=${failConversation}`, async () => {
+    const f = await rendererFixture(productSeed);
+    let clicks = 0;
+    f.contents.executeJavaScript = async (code) => {
+      if (code.includes("window.zenx.threadSidebar.read"))
+        return { sidebar: true, shell: true };
+      if (code.includes("row.click()")) {
+        clicks++;
+        return true;
+      }
+      const state = visibleRenderer();
+      const stage = code.includes("seed-user") ? "conversation" : "sidebar";
+      const { selectors } = f.exports.productObservation(productSeed, stage);
+      state.controls.forEach((control, index) => {
+        control.selector = selectors[index];
+      });
+      return state;
+    };
+    const pending = f.exports.verifyProductReady(
+      f.window,
+      Date.now() + (failConversation ? 200 : 1000),
+    );
+    const settled = failConversation
+      ? assert.rejects(pending, /deadline/u)
+      : pending;
+    await f.flush();
+    const sidebar = presentedImage({ painted: true });
+    f.present(sidebar);
+    await f.flush();
+    assert.equal(clicks, 1);
+    assert.equal(
+      f.records.filter((event) => event.type === "trusted-document-reads")
+        .length,
+      1,
+    );
+    assert.equal(
+      f.records.some((event) => event.type === "sidebar-ready"),
+      true,
+    );
+    assert.equal(
+      f.records.some((event) => event.type === "conversation-ready"),
+      false,
+    );
+    const conversation = presentedImage({ painted: !failConversation });
+    f.present(conversation);
+    await settled;
+    assert.equal(
+      f.records.some((event) => event.type === "conversation-ready"),
+      !failConversation,
+    );
+    assert.deepEqual(
+      f.writes.find((write) => write.path.endsWith("sidebar-ready.png"))?.bytes,
+      sidebar.toPNG(),
+    );
+    if (!failConversation)
+      assert.deepEqual(
+        f.writes.find((write) => write.path.endsWith("conversation-ready.png"))
+          ?.bytes,
+        conversation.toPNG(),
+      );
+    else
+      assert.equal(
+        f.writes.some((write) => write.path.endsWith("conversation-ready.png")),
+        false,
+      );
+    assert.equal(f.state.cleanups, 2);
+    assert.equal(f.state.captures, 0);
+    assert.equal(f.timers.size, 0);
+  });
+}
+
+for (const outcome of [
+  "accepted",
+  "sidebar-rejected",
+  "shell-rejected",
+  "wrong-owner",
+  "unexpected-session",
+  "navigation",
+  "incomplete",
+]) {
+  test(`synthetic trusted document reads use only ordinary read APIs: ${outcome}`, async () => {
+    const f = await rendererFixture(productSeed);
+    const calls = [];
+    f.contents.executeJavaScript = async (code) => {
+      if (outcome === "incomplete") return { sidebar: true };
+      const receipt = await vm.runInNewContext(code, {
+        window: {
+          zenx: {
+            threadSidebar: {
+              read: async (threadId) => {
+                calls.push({ api: "sidebar", threadId });
+                if (outcome === "sidebar-rejected")
+                  throw Error("Synthetic trusted sidebar rejection");
+                return {
+                  owner: {
+                    kind: "thread",
+                    id: outcome === "wrong-owner" ? "foreign-thread" : threadId,
+                  },
+                  revision: 0,
+                  tabs: [],
+                };
+              },
+            },
+            shellPanel: {
+              request: async (request) => {
+                calls.push({ api: "shell", ...request });
+                if (outcome === "shell-rejected")
+                  throw Error("Synthetic trusted Shell rejection");
+                return {
+                  host: "local",
+                  sessions: outcome === "unexpected-session" ? [{}] : [],
+                };
+              },
+            },
+          },
+        },
+      });
+      if (outcome === "navigation")
+        f.state.url = new URL("other.html", f.state.url).href;
+      return receipt;
+    };
+    const pending = f.exports.verifyTrustedDocumentReads(
+      f.window,
+      productSeed,
+      Date.now() + 1000,
+    );
+    if (outcome === "accepted") await pending;
+    else
+      await assert.rejects(
+        pending,
+        /rejection|Unexpected|Renderer changed|incomplete/u,
+      );
+    assert.equal(
+      f.records.filter((event) => event.type === "trusted-document-reads")
+        .length,
+      outcome === "accepted" ? 1 : 0,
+    );
+    if (outcome !== "incomplete")
+      assert.deepEqual(calls, [
+        { api: "sidebar", threadId: productSeed.threadId },
+        { api: "shell", operation: "list", threadId: productSeed.threadId },
+      ]);
+    assert.equal(f.timers.size, 0);
+  });
+}
+
+test("trusted document read timeout keeps the original deadline and ignores late completion", async () => {
+  const f = await rendererFixture(productSeed);
+  let finish;
+  let calls = 0;
+  f.contents.executeJavaScript = () => {
+    calls++;
+    return new Promise((resolve) => {
+      finish = resolve;
+    });
+  };
+  await assert.rejects(
+    f.exports.verifyTrustedDocumentReads(
+      f.window,
+      productSeed,
+      Date.now() + 20,
+    ),
+    /original deadline/u,
+  );
+  finish({ sidebar: true, shell: true });
+  await f.flush();
+  assert.equal(calls, 1, "Never retry a timed out observation");
+  assert.equal(
+    f.records.some((event) => event.type === "trusted-document-reads"),
+    false,
+  );
+  assert.equal(f.timers.size, 0);
+});
+
+for (const interruption of [
+  "same-url-reload",
+  "renderer-exit",
+  "window-close",
+]) {
+  test(`trusted document read receipts retire on ${interruption}, without replay`, async () => {
+    const f = await rendererFixture(productSeed);
+    let finish;
+    let calls = 0;
+    f.contents.executeJavaScript = () => {
+      calls++;
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    };
+    const originalUrl = f.state.url;
+    const pending = f.exports.verifyTrustedDocumentReads(
+      f.window,
+      productSeed,
+      Date.now() + 1000,
+    );
+    const rejected = assert.rejects(pending, /navigated|exited|closed/u);
+    if (interruption === "same-url-reload")
+      f.contents.emit("did-start-navigation", {
+        isMainFrame: true,
+        isSameDocument: false,
+      });
+    if (interruption === "renderer-exit")
+      f.contents.emit("render-process-gone");
+    if (interruption === "window-close") f.window.emit("closed");
+    await rejected;
+    finish({ sidebar: true, shell: true });
+    await f.flush();
+    assert.equal(
+      f.state.url,
+      originalUrl,
+      "The URL string alone cannot certify document identity",
+    );
+    assert.equal(calls, 1);
+    assert.equal(
+      f.records.some((event) => event.type === "trusted-document-reads"),
+      false,
+    );
+    assert.equal(f.timers.size, 0);
+    assert.equal(f.contents.listenerCount("did-start-navigation"), 0);
+    assert.equal(f.contents.listenerCount("render-process-gone"), 0);
+    assert.equal(f.window.listenerCount("closed"), 0);
+  });
+}
+
+test("trusted reads latch navigation even when success settles in the same turn", async () => {
+  const f = await rendererFixture(productSeed);
+  f.contents.executeJavaScript = async () => {
+    queueMicrotask(() =>
+      f.contents.emit("did-start-navigation", {
+        isMainFrame: true,
+        isSameDocument: false,
+      }),
+    );
+    return { sidebar: true, shell: true };
+  };
+  await assert.rejects(
+    f.exports.verifyTrustedDocumentReads(
+      f.window,
+      productSeed,
+      Date.now() + 1000,
+    ),
+    /navigated/u,
+  );
+  assert.equal(
+    f.records.some((event) => event.type === "trusted-document-reads"),
+    false,
+  );
+  assert.equal(f.timers.size, 0);
+  assert.equal(f.contents.listenerCount("did-start-navigation"), 0);
+  assert.equal(f.contents.listenerCount("render-process-gone"), 0);
+  assert.equal(f.window.listenerCount("closed"), 0);
 });
