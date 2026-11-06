@@ -494,6 +494,9 @@ for (const failure of [
     const pending = f.exports.captureRenderedApp(
       f.window,
       Date.now() + (failure === "timeout" ? 20 : 1000),
+      undefined,
+      undefined,
+      "conversation",
     );
     const rejected = assert.rejects(pending);
     await f.flush();
@@ -513,6 +516,18 @@ for (const failure of [
       });
     else f.present(presentedImage({ painted: true }));
     await rejected;
+    const diagnostic = f.writes.find((write) =>
+      write.path.endsWith("conversation-rejected-dom.json"),
+    );
+    assert(
+      diagnostic,
+      "Failed product capture retains stage-specific diagnostic",
+    );
+    assert.equal(JSON.parse(diagnostic.bytes).accepted, false);
+    assert.equal(
+      f.writes.some((write) => write.path.endsWith("conversation-ready.png")),
+      false,
+    );
     assert.equal(f.state.cleanups, failure === "query-rejected" ? 0 : 1);
     assert.equal(f.timers.size, 0);
     assert.equal(f.contents.listenerCount("did-start-navigation"), 0);
@@ -931,6 +946,11 @@ for (const stage of ["sidebar", "conversation"]) {
     "unselected",
     "hidden-text",
     "occluded-text",
+    "line-break-rect",
+    "only-line-break-rect",
+    "negative-width-rect",
+    "nonfinite-rect",
+    "zero-height-rect",
   ]) {
     test(`product ${stage} readiness rejects incomplete UI: ${invalid ?? "ready"}`, async () => {
       const { JSDOM } = await import("jsdom");
@@ -991,7 +1011,25 @@ for (const stage of ["sidebar", "conversation"]) {
             selectNodeContents(value) {
               node = value;
             },
-            getClientRects: () => [node.parentElement.getBoundingClientRect()],
+            getClientRects: () => {
+              const glyph = node.parentElement.getBoundingClientRect();
+              const lineBreak = {
+                ...glyph,
+                x: glyph.right,
+                left: glyph.right,
+                width: 0,
+              };
+              if (invalid === "only-line-break-rect") return [lineBreak];
+              if (invalid === "negative-width-rect")
+                return [glyph, { ...lineBreak, width: -1 }];
+              if (invalid === "nonfinite-rect")
+                return [glyph, { ...lineBreak, x: NaN }];
+              if (invalid === "zero-height-rect")
+                return [glyph, { ...lineBreak, height: 0 }];
+              return invalid === "line-break-rect"
+                ? [glyph, lineBreak]
+                : [glyph];
+            },
           };
         };
         document.elementFromPoint = (_x, y) =>
@@ -1013,7 +1051,9 @@ for (const stage of ["sidebar", "conversation"]) {
         const result = window.eval(observation.script);
         assert.equal(
           result.ready,
-          invalid === null || (stage === "sidebar" && invalid === "unselected"),
+          invalid === null ||
+            invalid === "line-break-rect" ||
+            (stage === "sidebar" && invalid === "unselected"),
         );
         assert.equal(
           JSON.stringify(result).includes(productSeed.userText),

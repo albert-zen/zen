@@ -302,7 +302,13 @@ export function captureRenderedApp(
   deadline,
   observationScript = rendererObservation,
   selectors = rendererControls,
+  diagnosticStage,
 ) {
+  if (
+    diagnosticStage !== undefined &&
+    !["sidebar", "conversation"].includes(diagnosticStage)
+  )
+    throw new Error("Invalid diagnostic stage");
   const contents = window.webContents;
   return new Promise((resolve, reject) => {
     let done = false,
@@ -331,8 +337,31 @@ export function captureRenderedApp(
           error ??= cleanupError;
         }
       }
-      if (error) reject(error);
-      else resolve(value);
+      if (error) {
+        // Diagnostic only: never accepted as a presentation receipt or screenshot.
+        if (diagnosticStage) {
+          try {
+            writeFileSync(
+              path.join(
+                config.evidenceDirectory,
+                `${diagnosticStage}-rejected-dom.json`,
+              ),
+              JSON.stringify(
+                {
+                  accepted: false,
+                  presentedFrames: sequence,
+                  observation: baseline ?? null,
+                },
+                null,
+                2,
+              ),
+            );
+          } catch {
+            /* Keep the original acceptance failure. */
+          }
+        }
+        reject(error);
+      } else resolve(value);
     };
     const navigated = (details) => {
       if (details.isMainFrame && indexUrl !== undefined)
@@ -526,6 +555,7 @@ export function productObservation(seed, stage) {
     const opaque = value => value && value !== 'transparent' && Number.parseFloat(value.includes('/') ? value.slice(value.lastIndexOf('/') + 1, -1) : value.startsWith('rgba(') ? value.slice(value.lastIndexOf(',') + 1, -1) : '1') > 0;
     const row = document.querySelector(${JSON.stringify(row)});
     const selected = row?.getAttribute('aria-current') === 'page' && row.classList.contains('selected');
+    const ranges = [];
     const controls = ${JSON.stringify(specs)}.map(spec => {
       const element = document.querySelector(spec.selector);
       const label = element?.querySelector(spec.label);
@@ -534,13 +564,17 @@ export function productObservation(seed, stage) {
       if (style.visibility !== 'visible' || Number(style.opacity) <= 0 || Number.parseFloat(style.fontSize) <= 0 || !opaque(style.color) || !opaque(style.webkitTextFillColor)) return null;
       if (label.childNodes.length !== 1 || label.firstChild.nodeType !== Node.TEXT_NODE || !label.firstChild.textContent.trim() || (spec.text !== undefined && label.textContent !== spec.text)) return null;
       const range = document.createRange(); range.selectNodeContents(label.firstChild);
-      const rects = Array.from(range.getClientRects()); const box = label.getBoundingClientRect();
+      const rawRects = Array.from(range.getClientRects()); const box = label.getBoundingClientRect();
+      ranges.push({selector:spec.selector,rawRects:rawRects.map(rect),box:rect(box)});
+      if (rawRects.some(r => ![r.x,r.y,r.width,r.height].every(Number.isFinite) || r.width < 0 || r.height <= 0)) return null;
+      // Pre-wrap newlines can have zero-width layout rectangles, not glyph pixels.
+      const rects = rawRects.filter(r => r.width > 0);
       if (!rects.length || rects.some(r => !inside(r) || r.left < box.left || r.top < box.top || r.right > box.right || r.bottom > box.bottom)) return null;
       if (rects.some(r => [0.1,0.5,0.9].some(f => !label.contains(document.elementFromPoint(r.x + r.width * f, r.y + r.height / 2))))) return null;
       return {selector:spec.selector,textPresent:true,...rect(element.getBoundingClientRect()),textRects:rects.map(rect),style:{color:style.color,fill:style.webkitTextFillColor,font:style.font,opacity:style.opacity,spacing:style.letterSpacing,transform:style.transform}};
     });
     const shell = document.querySelector('.app-shell');
-    return {ready: document.visibilityState === 'visible' && visible(shell) && visible(row) && !row.disabled && !document.querySelector('#primary-sidebar .sidebar-error, #primary-sidebar .sidebar-empty') && (${JSON.stringify(stage)} !== 'conversation' || selected) && controls.every(Boolean),width:innerWidth,height:innerHeight,dpr:devicePixelRatio,viewport:visualViewport && {width:visualViewport.width,height:visualViewport.height,scale:visualViewport.scale,x:visualViewport.offsetLeft,y:visualViewport.offsetTop},shell:shell && rect(shell.getBoundingClientRect()),controls};
+    return {selected, ranges, ready: document.visibilityState === 'visible' && visible(shell) && visible(row) && !row.disabled && !document.querySelector('#primary-sidebar .sidebar-error, #primary-sidebar .sidebar-empty') && (${JSON.stringify(stage)} !== 'conversation' || selected) && controls.every(Boolean),width:innerWidth,height:innerHeight,dpr:devicePixelRatio,viewport:visualViewport && {width:visualViewport.width,height:visualViewport.height,scale:visualViewport.scale,x:visualViewport.offsetLeft,y:visualViewport.offsetTop},shell:shell && rect(shell.getBoundingClientRect()),controls};
   })()`;
   return { script, selectors: specs.map((spec) => spec.selector), row };
 }
@@ -571,6 +605,7 @@ export async function verifyProductReady(window, deadline) {
       deadline,
       observation.script,
       observation.selectors,
+      stage,
     );
     writeFileSync(
       path.join(config.evidenceDirectory, `${stage}-ready.png`),

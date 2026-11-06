@@ -223,3 +223,25 @@ installed-Windows scope of #167. That scope needs a separately identified releas
 artifact in an isolated Windows VM. Retain #167's installation/performance scope
 until that evidence exists. Review the new native screenshots before claiming
 this enhancement passed; local unit tests are not Windows acceptance.
+
+### First product-readiness run and observer correction (2026-11-06)
+
+[Run 42147269551](https://github.com/albert-zen/zen/actions/runs/42147269551)
+for PR #722 head `d40d4bc9` failed the conversation presentation deadline after
+successfully observing the sidebar. Its initial window appeared in 414.2ms,
+retained HWND 459242 and gained foreground on second launch; the measured hold
+was 3031ms. The failure scenario did not run. The original
+[artifact 13471036597](https://github.com/albert-zen/zen/actions/runs/42147269551/artifacts/13471036597)
+ZIP SHA-256 is `b147ea733b8870d87ca5d2c6fbdf6826662929866104f2afefdc6c645d7455c1`.
+These partial results are not full product acceptance.
+
+The product observer now distinguishes zero-width newline layout rectangles
+from glyph rectangles. Exact complete text, a nonempty set of positive glyph
+rectangles, bounds, occlusion and pixel evidence remain mandatory; malformed
+geometry still fails. A focused regression failed before this correction and
+passed afterward. This demonstrates the observer boundary defect, not the
+historical Windows timeout's unique cause. Failed product stages now retain
+fixed selection/range geometry in `*-rejected-dom.json`, explicitly marked
+`accepted: false`; this is diagnostic data, never presentation acceptance.
+The original deadline and screenshot acceptance rules are unchanged. Fresh
+Windows receipts and screenshot inspection are still required.
