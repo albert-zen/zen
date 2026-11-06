@@ -17,6 +17,9 @@ import {
   type TranscriptAnchor,
 } from "./transcript-viewport-pins.js";
 
+/** The exact pinned web patch adds cancellation without a new scroll request. */
+type ReaderLegendListRef = LegendListRef & { cancelScroll(): void };
+
 export interface VirtualTranscriptRow {
   key: string;
   content: ReactNode;
@@ -125,7 +128,7 @@ export function ExperimentalTranscriptViewport({
 
   useLayoutEffect(() => {
     const node = viewport.current;
-    const instance = list.current;
+    const instance = list.current as ReaderLegendListRef | null;
     if (!node || !instance) return;
     let alive = true;
     let settleFrame = 0;
@@ -176,14 +179,10 @@ export function ExperimentalTranscriptViewport({
     const userInput = (event: Event) => {
       if (isNestedTranscriptScroll(event.target, node)) return false;
       keepReaderActive();
-      if (pending.size > 0) {
-        for (const cancel of pending) cancel();
-        // A public offset command supersedes Legend's queued index correction.
-        void instance.scrollToOffset({
-          offset: node.scrollTop,
-          animated: false,
-        });
-      }
+      for (const cancel of pending) cancel();
+      // Initial and delayed library work need not belong to a pending reveal.
+      // Cancel it without queuing an offset that could overwrite native input.
+      instance.cancelScroll();
       generation.current++;
       setTarget(null);
       return true;
@@ -265,10 +264,7 @@ export function ExperimentalTranscriptViewport({
     const cancelNavigation = () => {
       if (pending.size > 0) {
         for (const cancel of pending) cancel();
-        void instance.scrollToOffset({
-          offset: node.scrollTop,
-          animated: false,
-        });
+        instance.cancelScroll();
       }
       generation.current++;
       setTarget(null);

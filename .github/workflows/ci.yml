@@ -243,6 +243,22 @@ jobs:
           path: ${{ runner.temp }}/zenx-reference-width
           if-no-files-found: warn
           retention-days: 14
+      - name: Verify pending steer previews against canonical messages
+        if: ${{ matrix.shard == 'conversation' && !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
+        timeout-minutes: 5
+        run: |
+          npx tsc -p apps/zenx/tsconfig.steer-image-preview.json --noEmit
+          node --test apps/zenx/test/steer-image-geometry.test.mjs
+          node apps/zenx/scripts/build-steer-image-preview.mjs "${{ runner.temp }}/zenx-steer-image"
+          node apps/zenx/scripts/capture-steer-image-preview.mjs "${{ runner.temp }}/zenx-steer-image"
+      - name: Retain synthetic steer image evidence
+        if: ${{ matrix.shard == 'conversation' && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-steer-image-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-steer-image
+          if-no-files-found: warn
+          retention-days: 14
       - name: Build and capture approved UI previews
         if: ${{ matrix.shard == 'conversation' && success() && steps.zenx-fonts.outcome == 'success' }}
         timeout-minutes: 4

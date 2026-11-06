@@ -1,5 +1,7 @@
 # ARCHITECTURE
 
+- **Pending steer preview column** — Disposable renderer measurements align the shelf content box with the existing transcript column while leaving native scrollbars in the gutter; this geometry never changes admission, recall, or reader scroll ownership.
+
 - **Owned App Shot acceptance** — A disposable hosted-only Electron package bundles the real service, stages the pinned runtime and emitted worker, and captures only a freshly identified, launcher-owned opaque nonce fixture through the production exact-window backend; existing OS grants, returned nonce pixels, optional AX image coordinates, foreground identity and confirmed owned-process cleanup are separate fail-closed outcomes, never permission changes or a substitute runtime.
 
 - **macOS App Shot surface transport** — Explicit selected/foreground captures require exact PID/title/bounds before invoking the system screencapture tool for only that window ID; zero-thumbnail enumeration, fresh identity/exclusion fences, bounded PNG validation and cancellation govern a private temporary file removed after confirmed child close and before successful memory-only review, without desktop fallback, permission changes or durable recovery.
@@ -1825,3 +1827,5 @@ ZenX answered-question bubbles are a disposable read-only presentation of native
 Question-list read recovery is a disposable mounted-view concern: existing authoritative invalidations and reconnection reads remain primary, with at most two delayed read retries per failure episode; it never resubmits answers or adds persistent retry authority.
 
 - **Early CI feedback** — Standalone static checks report errors before full acceptance; the CI-only pinned base/head impact report is shadow observation with conservative full fallback, never an execution selector or authority to omit existing acceptance checks.
+
+- **Transcript reader cancellation** — The exact pinned Legend web adapter cancels initial and delayed imperative positioning when the existing reader takes control, without queuing a replacement offset or changing nested scrolling, follow intent, history or runtime authority.
