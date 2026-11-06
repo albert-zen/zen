@@ -42,11 +42,55 @@ jobs:
       - run: npm ci
       - run: npm run check
 
-  zenx:
-    name: ZenX typecheck, tests, and build
+  zenx-check:
+    name: ZenX aggregate checks
     runs-on: ubuntu-24.04
-    # Complete previews, typechecks, tests and build reached the former 26-minute
-    # budget with zero test failures; keep all coverage and bounded cleanup headroom.
+    # Aggregate gets its own budget, independent of fonts and browser captures.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Record exact checkout provenance
+        timeout-minutes: 1
+        env:
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: node scripts/write-ci-provenance.mjs "${{ runner.temp }}/zenx-${{ github.job }}-provenance.json"
+      - name: Retain exact checkout provenance
+        if: ${{ always() }}
+        timeout-minutes: 2
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-${{ github.job }}-provenance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/zenx-${{ github.job }}-provenance.json
+          if-no-files-found: error
+          retention-days: 14
+      - run: npm ci
+        timeout-minutes: 5
+        id: zenx-dependencies
+      - name: Check ZenX with bounded execution-order evidence
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
+        env:
+          ZENX_TEST_EXECUTION_TRACE_FILE: ${{ runner.temp }}/zenx-test-execution.ndjson
+        timeout-minutes: 20
+        run: npm --workspace apps/zenx run check:observed
+      - name: Retain partial ZenX execution-order evidence
+        if: ${{ always() }}
+        timeout-minutes: 2
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-test-execution-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-test-execution.ndjson
+          if-no-files-found: warn
+          retention-days: 14
+
+  zenx-ui:
+    name: ZenX synthetic UI evidence
+    runs-on: ubuntu-24.04
+    # Keep the previous lane budget; captures no longer compete with the aggregate.
     timeout-minutes: 32
     steps:
       - uses: actions/checkout@v4
@@ -54,7 +98,23 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Record exact checkout provenance
+        timeout-minutes: 1
+        env:
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: node scripts/write-ci-provenance.mjs "${{ runner.temp }}/zenx-${{ github.job }}-provenance.json"
+      - name: Retain exact checkout provenance
+        if: ${{ always() }}
+        timeout-minutes: 2
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-${{ github.job }}-provenance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/zenx-${{ github.job }}-provenance.json
+          if-no-files-found: error
+          retention-days: 14
       - run: npm ci
+        timeout-minutes: 5
         id: zenx-dependencies
       - name: Test fail-closed CJK prerequisite contracts (synthetic data)
         run: node --test apps/zenx/test/cjk-font-prerequisite.test.mjs
@@ -108,6 +168,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Capture titlebar leading-safe-area matrix (synthetic production components)
+        timeout-minutes: 4
         run: |
           node apps/zenx/scripts/build-titlebar-safe-area-preview.mjs "${{ runner.temp }}/zenx-titlebar-safe-area"
           node apps/zenx/scripts/capture-titlebar-safe-area-preview.mjs "${{ runner.temp }}/zenx-titlebar-safe-area"
@@ -149,6 +210,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Capture compaction capsules (production components, synthetic records)
+        timeout-minutes: 4
         run: |
           node apps/zenx/scripts/build-compaction-preview.mjs "${{ runner.temp }}/zenx-compaction"
           node apps/zenx/scripts/capture-compaction-preview.mjs "${{ runner.temp }}/zenx-compaction"
@@ -161,6 +223,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Capture reference bubble width diagnostic (production components, synthetic identity)
+        timeout-minutes: 4
         run: |
           node apps/zenx/scripts/build-reference-width-preview.mjs "${{ runner.temp }}/zenx-reference-width"
           node apps/zenx/scripts/capture-reference-width-preview.mjs "${{ runner.temp }}/zenx-reference-width"
@@ -189,6 +252,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Build and capture approved UI previews
+        timeout-minutes: 4
         run: |
           node apps/zenx/scripts/build-approved-ui-preview.mjs "${{ runner.temp }}/zenx-approved-ui-preview"
           ZENX_PREVIEW_DESKTOP_INPUT=1 node apps/zenx/scripts/capture-approved-ui-preview.mjs "${{ runner.temp }}/zenx-approved-ui-preview"
@@ -215,6 +279,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Build and capture synthetic process-style preview
+        timeout-minutes: 4
         run: |
           node apps/zenx/scripts/build-process-style-preview.mjs "${{ runner.temp }}/zenx-process-style-preview"
           node apps/zenx/scripts/capture-process-style-preview.mjs "${{ runner.temp }}/zenx-process-style-preview"
@@ -230,6 +295,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Build and capture synthetic quote draft and sent states
+        timeout-minutes: 4
         run: |
           node --import tsx apps/zenx/scripts/capture-inline-reference-context.mjs "${{ runner.temp }}/zenx-quote-preview/reference-context-v3"
           node apps/zenx/scripts/build-quote-preview.mjs "${{ runner.temp }}/zenx-quote-preview"
@@ -332,19 +398,22 @@ jobs:
           path: ${{ runner.temp }}/zenx-trigger-management
           if-no-files-found: warn
           retention-days: 14
-      - name: Check ZenX with bounded execution-order evidence
-        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
+
+  # Preserve the existing check name while requiring BOTH independent lanes.
+  zenx:
+    name: ZenX typecheck, tests, and build
+    needs: [zenx-check, zenx-ui]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require all ZenX coverage
         env:
-          ZENX_TEST_EXECUTION_TRACE_FILE: ${{ runner.temp }}/zenx-test-execution.ndjson
-        run: npm --workspace apps/zenx run check:observed
-      - name: Retain partial ZenX execution-order evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: zenx-test-execution-${{ github.sha }}
-          path: ${{ runner.temp }}/zenx-test-execution.ndjson
-          if-no-files-found: warn
-          retention-days: 14
+          CHECK_RESULT: ${{ needs.zenx-check.result }}
+          UI_RESULT: ${{ needs.zenx-ui.result }}
+        run: |
+          test "$CHECK_RESULT" = success
+          test "$UI_RESULT" = success
 
   zenx-capability-smoke:
     name: ZenX packaged capability smoke

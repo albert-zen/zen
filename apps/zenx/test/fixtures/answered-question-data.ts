@@ -6,8 +6,11 @@ import {
   type UserQuestionReply,
 } from "../../../../src/user-question.js";
 
-export function answeredQuestionFixture(missing = false) {
-  const specification = parseUserQuestionSpecification({
+export function answeredQuestionFixture(
+  missing = false,
+  widthCase: string | null = null,
+) {
+  let specification = parseUserQuestionSpecification({
     questions: [
       {
         id: "scope",
@@ -47,6 +50,28 @@ export function answeredQuestionFixture(missing = false) {
       },
     ],
   };
+  if (widthCase) {
+    specification.questions.splice(1);
+    specification.questions[0]!.prompt =
+      widthCase === "short-prompt"
+        ? "继续吗？"
+        : "合成问题：哪些事项需要确认，下一步应该怎样处理？".repeat(30);
+    specification = parseUserQuestionSpecification({
+      questions: specification.questions,
+    });
+    reply.answers = [
+      {
+        questionId: "scope",
+        optionIds: [],
+        text:
+          widthCase === "long-answer"
+            ? "这是较长的回答，需要自然换行并完整保留。".repeat(40)
+            : widthCase === "unbroken-answer"
+              ? "abcdefghij".repeat(100)
+              : "具体什么情况",
+      },
+    ];
+  }
   const text = renderUserQuestionReply(specification, reply);
   const facts = {
     threadId: "question-demo",
