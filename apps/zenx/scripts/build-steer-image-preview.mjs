@@ -1,5 +1,7 @@
 /** Build-only fixture: production ThreadView/CSS, no browser or network launch. */
 import assert from "node:assert/strict";
+import { instrumentSteerReader } from "./steer-scroll-diagnostic.mjs";
+const diagnostic = process.argv.includes("--diagnostic");
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -15,6 +17,18 @@ const sourceTree = git(["rev-parse", "HEAD^{tree}"]);
 await mkdir(directory, { recursive: true });
 const result = await build({
   configFile: false,
+  plugins: diagnostic
+    ? [
+        {
+          name: "synthetic-steer-reader-observation",
+          enforce: "pre",
+          transform(source, id) {
+            if (id.endsWith("/ThreadView.tsx"))
+              return instrumentSteerReader(source);
+          },
+        },
+      ]
+    : [],
   root,
   logLevel: "warn",
   define: {
@@ -26,7 +40,7 @@ const result = await build({
   },
   build: {
     write: false,
-    minify: true,
+    minify: !diagnostic,
     cssCodeSplit: false,
     lib: {
       entry: path.join(root, "apps/zenx/test/fixtures/steer-image-visual.tsx"),
@@ -61,6 +75,7 @@ const sources = [
   "apps/zenx/scripts/capture-steer-image-preview.mjs",
   "apps/zenx/scripts/steer-image-visibility.mjs",
   "apps/zenx/scripts/steer-image-geometry.mjs",
+  "apps/zenx/scripts/steer-scroll-diagnostic.mjs",
 ];
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 await writeFile(
@@ -69,6 +84,7 @@ await writeFile(
     {
       sourceCommit,
       sourceTree,
+      diagnostic,
       workingTreeDiffSha256: sha(git(["diff", "HEAD", "--", "apps/zenx/src"])),
       synthetic: true,
       scope:

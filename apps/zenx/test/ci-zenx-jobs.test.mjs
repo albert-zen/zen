@@ -87,9 +87,8 @@ test("provenance binds head/base and actual checkout without collecting arbitrar
   const { join } = await import("node:path");
   const { fileURLToPath } = await import("node:url");
   const { execFileSync } = await import("node:child_process");
-  const { writeProvenance } = await import(
-    "../../../scripts/write-ci-provenance.mjs"
-  );
+  const { writeProvenance } =
+    await import("../../../scripts/write-ci-provenance.mjs");
   const directory = mkdtempSync(join(tmpdir(), "zen-ci-provenance-"));
   const cwd = fileURLToPath(new URL("../../../", import.meta.url));
   try {

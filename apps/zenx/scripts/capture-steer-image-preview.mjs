@@ -1,5 +1,7 @@
 /** Bounded synthetic browser acceptance. Chromium sandbox stays enabled. */
 import assert from "node:assert/strict";
+import { installSteerScrollDiagnostic } from "./steer-scroll-diagnostic.mjs";
+const diagnostic = process.argv.includes("--diagnostic");
 import {
   assertSteerGeometry,
   measureSteerComparison,
@@ -88,6 +90,7 @@ let socket,
   requestId = 0;
 let expectedState = null;
 let reportFailure;
+let collectDiagnostic;
 try {
   socket = await lifecycle.connect();
   socket.on("message", (data) => {
@@ -327,6 +330,18 @@ try {
   };
   await send("Page.enable");
   await send("Runtime.enable");
+  if (diagnostic) {
+    await send("Page.addScriptToEvaluateOnNewDocument", {
+      source: `(${installSteerScrollDiagnostic.toString()})()`,
+    });
+    collectDiagnostic = async () => {
+      await writeFile(
+        path.join(directory, "scroll-diagnostic.json"),
+        JSON.stringify(await evaluate("window.__steerScrollTrace"), null, 2) +
+          "\n",
+      );
+    };
+  }
   lifecycle.captureStarted();
   for (const [lang, theme, width, height] of [
     ["zh-CN", "light", 1100, 900],
@@ -336,6 +351,7 @@ try {
       for (const body of ["short", "long"])
         for (const state of ["pending", "held", "recall-failure"]) {
           const scene = `${lang}-${theme}-${width}-${count}-${body}-${state}`;
+          if (diagnostic && scene !== "en-dark-390-2-long-held") continue;
           expectedState = { scene };
           await send("Emulation.setDeviceMetricsOverride", {
             width,
@@ -442,9 +458,17 @@ try {
           cases.at(-1).bubbleVisibility = bubbleVisibility;
         }
   assert.deepEqual(errors, []);
+  if (collectDiagnostic) await collectDiagnostic();
   lifecycle.captureFinished("passed");
 } catch (error) {
   lifecycle.captureFinished("failed", error);
+  if (collectDiagnostic) {
+    try {
+      await collectDiagnostic();
+    } catch (diagnosticError) {
+      errors.push({ diagnosticFailure: String(diagnosticError) });
+    }
+  }
   if (reportFailure) {
     try {
       await reportFailure(error);
@@ -468,6 +492,7 @@ try {
     JSON.stringify(
       {
         ok: lifecycle.receipt.captureStatus === "passed" && closed,
+        diagnostic,
         scope:
           "Synthetic production ThreadView canonical/pending steer geometry comparison with generated PNGs. Not full App, packaged, native Host, macOS or Windows acceptance.",
         source: JSON.parse(
