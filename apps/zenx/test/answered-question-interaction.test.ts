@@ -1,5 +1,6 @@
 import "./dom-primitives.js";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import React, { act } from "react";
@@ -7,6 +8,21 @@ import { createRoot } from "react-dom/client";
 import { ThreadView } from "../src/renderer/src/ThreadView.js";
 import { emptyComposerState } from "../src/renderer/src/composer-state.js";
 import { answeredQuestionFixture } from "./fixtures/answered-question-data.js";
+
+test("question chips separate intrinsic width from responsive containment", () => {
+  const css = readFileSync(
+    new URL("../src/renderer/src/answered-question.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    css,
+    /\.answered-question-trigger-wrap\s*\{[^}]*min-width: 0;[^}]*max-width: 100%;/su,
+  );
+  assert.match(
+    css,
+    /\.answered-question-trigger\s*\{[^}]*min-width: 0;[^}]*max-width: 260px;/su,
+  );
+});
 
 test("real ThreadView renders labels and text, reveals question on hover/click, dismisses and retires on navigation", async () => {
   const dom = new JSDOM(
@@ -67,6 +83,10 @@ test("real ThreadView renders labels and text, reveals question on hover/click, 
     const trigger = document.querySelector<HTMLButtonElement>(
       ".answered-question-trigger",
     )!;
+    assert.equal(
+      trigger.parentElement?.className,
+      "answered-question-trigger-wrap",
+    );
     await act(async () => {
       trigger.dispatchEvent(
         new window.MouseEvent("pointerover", { bubbles: true }),

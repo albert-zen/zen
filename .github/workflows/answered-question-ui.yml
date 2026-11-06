@@ -18,6 +18,7 @@ on:
       - apps/zenx/src/renderer/src/RoomQuestionCards.tsx
       - apps/zenx/test/fixtures/message-quote-visual.tsx
       - apps/zenx/scripts/capture-answered-question-preview.mjs
+      - apps/zenx/scripts/capture-question-width-preview.mjs
   workflow_dispatch:
 permissions:
   contents: read
@@ -42,6 +43,8 @@ jobs:
         run: node --import tsx --test apps/zenx/test/answered-question-presentation.test.ts apps/zenx/test/answered-question-interaction.test.ts apps/zenx/test/turn-canonical-presentation.test.ts apps/zenx/test/user-question-cards-interaction.test.ts apps/zenx/test/question-read-recovery.test.ts
       - name: Build production renderer with synthetic question history
         run: node apps/zenx/scripts/build-quote-preview.mjs "${{ runner.temp }}/answered-question"
+      - name: Question width containment across desktop and narrow screens
+        run: node apps/zenx/scripts/capture-question-width-preview.mjs "${{ runner.temp }}/answered-question"
       - name: Hover, click, keyboard, navigation and historical fallback
         run: node apps/zenx/scripts/capture-answered-question-preview.mjs "${{ runner.temp }}/answered-question"
       - uses: actions/upload-artifact@v4

@@ -225,7 +225,10 @@ export function appendSyntheticSent(
   });
 }
 const initial = params.has("questions")
-  ? answeredQuestionFixture(params.has("missing-question"))
+  ? answeredQuestionFixture(
+      params.has("missing-question"),
+      params.get("question-width"),
+    )
   : params.has("legacy-quote")
     ? appendSyntheticSent(
         base,
