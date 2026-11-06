@@ -96,7 +96,7 @@ await withPreviewBrowser(
       const destination = `${url}/titlebar-safe-area.html?${new URLSearchParams({ platform, sidebar: "open", count: "short", information: "true", resource: "closed" })}`;
       await send("Page.navigate", { url: destination });
       await wait(
-        `location.href===${JSON.stringify(destination)}&&document.body.dataset.previewReady==='true'&&!!document.querySelector('.information-toolbar button')`,
+        `location.href===${JSON.stringify(destination)}&&document.body?.dataset.previewReady==='true'&&!!document.querySelector('.information-toolbar button')`,
       );
       await evaluate(
         "window.__entryComposer=document.querySelector('#synthetic-composer');true",
