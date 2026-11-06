@@ -172,6 +172,21 @@ jobs:
           path: ${{ runner.temp }}/zenx-reference-width
           if-no-files-found: warn
           retention-days: 14
+      - name: Verify pending image sends in production ThreadView
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
+        timeout-minutes: 3
+        run: |
+          npx tsc -p apps/zenx/tsconfig.pending-image-preview.json --noEmit
+          node apps/zenx/scripts/build-pending-image-preview.mjs "${{ runner.temp }}/zenx-pending-image"
+          node apps/zenx/scripts/capture-pending-image-preview.mjs "${{ runner.temp }}/zenx-pending-image"
+      - name: Retain synthetic pending image evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-pending-image-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-pending-image
+          if-no-files-found: warn
+          retention-days: 14
       - name: Build and capture approved UI previews
         run: |
           node apps/zenx/scripts/build-approved-ui-preview.mjs "${{ runner.temp }}/zenx-approved-ui-preview"

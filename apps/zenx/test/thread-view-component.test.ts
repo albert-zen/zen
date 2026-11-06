@@ -5346,6 +5346,8 @@ test("local sending presentation hides draft framing but keeps readable skill an
   );
   const html = renderToStaticMarkup(
     createElement(PendingSendRows, {
+      onReadAttachment: async () => new Uint8Array(),
+      onOpenImage: () => undefined,
       messages: [
         {
           clientId: "presentation-only",

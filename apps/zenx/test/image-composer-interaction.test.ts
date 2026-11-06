@@ -10,6 +10,12 @@ import type { AttachmentRef } from "../../../src/attachment.js";
 import type { Thread } from "../src/protocol-client/index.js";
 import {
   addComposerImages,
+  beginImmediateComposerSubmission,
+  acceptComposerSubmission,
+  failImmediateComposerSubmission,
+  recoverPendingSend,
+  reconcileCanonicalAdmission,
+  dismissPendingSend,
   editComposer,
   emptyComposerState,
 } from "../src/renderer/src/composer-state.js";
@@ -297,6 +303,244 @@ test("the Composer overlay publishes its live bottom-zone height", async () => {
     } finally {
       Reflect.deleteProperty(globalThis, "ResizeObserver");
     }
+  });
+});
+
+test("pending multi-image send preserves warm previews, honest status and recoverable attachments", async () => {
+  await withDom(async (_dom, root) => {
+    const images = ["b", "c"].map((digit, index) => ({
+      id: `pending-${digit}`,
+      name: `synthetic-${index}.png`,
+      attachment: { ...ref, sha256: digit.repeat(64) },
+    }));
+    let composer = addComposerImages(
+      editComposer(emptyComposerState(), "Synthetic message"),
+      images,
+    );
+    let reads = 0;
+    let viewThread = emptyThread();
+    const render = () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer,
+          thread: viewThread,
+          onDraftChange: () => undefined,
+          onInterrupt: async () => undefined,
+          onReadAttachment: async () => {
+            reads++;
+            return new Uint8Array([1, 2, 3, 4]);
+          },
+          onRespondToApproval: async () => undefined,
+          onSubmit: async () => undefined,
+        }),
+      );
+    await act(async () => render());
+    const sources = [
+      ...document.querySelectorAll<HTMLImageElement>(".draft-image img"),
+    ].map((image) => image.src);
+    assert.equal(reads, 2);
+    composer = beginImmediateComposerSubmission(
+      composer,
+      "start",
+      null,
+      () => "pending-images",
+    );
+    await act(async () => render());
+    const row = required(".pending-send-row");
+    assert.deepEqual(
+      [...row.querySelectorAll<HTMLImageElement>(".message-images img")].map(
+        (image) => image.src,
+      ),
+      sources,
+    );
+    assert.equal(row.querySelector("ul"), null);
+    assert.equal(
+      row.querySelector(".user-bubble")?.textContent,
+      "Synthetic message",
+    );
+    assert.equal(row.getAttribute("data-send-state"), "sending");
+    assert.equal(reads, 2, "draft-to-pending must reuse warm payloads");
+    assert.equal(
+      beginImmediateComposerSubmission(
+        composer,
+        "start",
+        null,
+        () => "duplicate",
+      ),
+      composer,
+    );
+    await act(async () =>
+      required<HTMLButtonElement>(".pending-send-row .image-thumbnail").click(),
+    );
+    assert.ok(document.querySelector('[role="dialog"]'));
+    await act(async () =>
+      document.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      ),
+    );
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    composer = failImmediateComposerSubmission(
+      composer,
+      "pending-images",
+      "Synthetic disconnected transport",
+      true,
+    );
+    await act(async () => render());
+    assert.equal(
+      required(".pending-send-row").getAttribute("data-send-state"),
+      "unconfirmed",
+    );
+    assert.equal(document.querySelectorAll(".pending-send-row img").length, 2);
+    composer = recoverPendingSend(composer, "pending-images");
+    composer = dismissPendingSend(composer, "pending-images");
+    await act(async () => render());
+    assert.equal(document.querySelector(".pending-send-row"), null);
+    assert.equal(document.querySelectorAll(".draft-image img").length, 2);
+    assert.equal(reads, 2, "dismissal must not revoke recovered previews");
+    composer = beginImmediateComposerSubmission(
+      composer,
+      "start",
+      null,
+      () => "unused",
+    );
+    composer = acceptComposerSubmission(composer, "pending-images");
+    await act(async () => render());
+    assert.equal(
+      required(".pending-send-row").getAttribute("data-send-state"),
+      "admitted",
+    );
+    assert.equal(document.querySelectorAll(".pending-send-row img").length, 2);
+    await act(async () =>
+      required<HTMLButtonElement>(".pending-send-row .image-thumbnail").click(),
+    );
+    assert.ok(document.querySelector('[role="dialog"]'));
+    viewThread = { ...viewThread, id: "other-thread" };
+    composer = emptyComposerState();
+    await act(async () => render());
+    assert.equal(
+      document.querySelector('[role="dialog"]'),
+      null,
+      "navigation retires the old pending preview",
+    );
+  });
+});
+
+test("image-only pending send becomes one canonical image row without an empty bubble or payload reload", async () => {
+  await withDom(async (_dom, root) => {
+    const attachment = { ...ref, sha256: "d".repeat(64) };
+    let composer = addComposerImages(emptyComposerState(), [
+      { id: "image-only", name: "only.png", attachment },
+    ]);
+    let thread = emptyThread();
+    let reads = 0;
+    const render = () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer,
+          thread,
+          threadAttachments: { "image-message": [attachment] },
+          onDraftChange: () => undefined,
+          onInterrupt: async () => undefined,
+          onReadAttachment: async () => {
+            reads++;
+            return new Uint8Array([1, 2, 3, 4]);
+          },
+          onRespondToApproval: async () => undefined,
+          onSubmit: async () => undefined,
+        }),
+      );
+    await act(async () => render());
+    const src = required<HTMLImageElement>(".draft-image img").src;
+    composer = beginImmediateComposerSubmission(
+      composer,
+      "start",
+      null,
+      () => "image-client",
+    );
+    await act(async () => render());
+    assert.equal(required<HTMLImageElement>(".pending-send-row img").src, src);
+    assert.equal(
+      document.querySelector(".pending-send-row .user-bubble"),
+      null,
+    );
+    composer = failImmediateComposerSubmission(
+      composer,
+      "image-client",
+      "Synthetic pre-dispatch failure",
+      false,
+    );
+    await act(async () => render());
+    assert.equal(
+      required(".pending-send-row").getAttribute("data-send-state"),
+      "notSent",
+    );
+    assert.equal(document.querySelectorAll(".draft-image img").length, 1);
+    composer = beginImmediateComposerSubmission(
+      composer,
+      "start",
+      null,
+      () => "must-not-change-id",
+    );
+    await act(async () => render());
+    await act(async () =>
+      required<HTMLButtonElement>(".pending-send-row .image-thumbnail").click(),
+    );
+    assert.ok(document.querySelector('[role="dialog"]'));
+    composer = reconcileCanonicalAdmission(composer, [
+      {
+        type: "user_message",
+        id: "image-message",
+        clientId: "image-client",
+        threadId: thread.id,
+        turnId: "image-turn",
+        createdAt: "2026-01-01T00:00:00Z",
+        content: [{ type: "image", attachment }],
+      },
+    ]);
+    thread = {
+      ...thread,
+      turns: [
+        {
+          id: "image-turn",
+          itemsView: "full",
+          status: "completed",
+          error: null,
+          startedAt: 1,
+          completedAt: 2,
+          durationMs: 1000,
+          items: [
+            {
+              type: "userMessage",
+              id: "image-message",
+              clientId: "image-client",
+              content: [],
+            },
+          ],
+        },
+      ],
+    };
+    await act(async () => render());
+    assert.equal(document.querySelector(".pending-send-row"), null);
+    assert.equal(document.querySelectorAll(".user-row").length, 1);
+    assert.equal(document.querySelector(".user-bubble"), null);
+    assert.equal(
+      required<HTMLImageElement>('[data-sent-message-id="image-message"] img')
+        .src,
+      src,
+    );
+    assert.equal(reads, 1);
+    await act(async () =>
+      document.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      ),
+    );
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.ok(
+      document.activeElement === required("textarea"),
+      "canonical handoff removes the trigger, so dismissal returns to the same Composer",
+    );
   });
 });
 

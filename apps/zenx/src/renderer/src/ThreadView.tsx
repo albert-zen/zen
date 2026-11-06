@@ -836,11 +836,22 @@ function ThreadViewContent({
     name: string;
     trigger: HTMLButtonElement;
     queueOwner?: { threadId: string; queuedItemId: string; clientId: string };
+    pendingOwner?: { threadId: string | null };
   } | null>(null);
   const onOpenImage = useCallback(
     (attachment: AttachmentRef, name: string, trigger: HTMLButtonElement) =>
       setPreview({ attachment, name, trigger }),
     [],
+  );
+  const onOpenPendingImage = useCallback(
+    (attachment: AttachmentRef, name: string, trigger: HTMLButtonElement) =>
+      setPreview({
+        attachment,
+        name,
+        trigger,
+        pendingOwner: { threadId: thread?.id ?? null },
+      }),
+    [thread?.id],
   );
   const queuedImages = useMemo(
     () => projectQueuedImages(thread),
@@ -877,9 +888,13 @@ function ThreadViewContent({
       queuedImages[preview.queueOwner.queuedItemId]?.some((image) =>
         sameImageAttachment(image, preview.attachment),
       ) === true);
+  const previewCurrent =
+    queuePreviewCurrent &&
+    (preview?.pendingOwner === undefined ||
+      preview.pendingOwner.threadId === (thread?.id ?? null));
   useEffect(() => {
-    if (!queuePreviewCurrent) setPreview(null);
-  }, [queuePreviewCurrent]);
+    if (!previewCurrent) setPreview(null);
+  }, [previewCurrent]);
   const history = useContext(ThreadHistoryContext);
   const [atLive, setAtLive] = useState(readingState.scroll?.following ?? true);
   const [skills, setSkills] = useState<SkillEntry[]>([]);
@@ -1930,6 +1945,8 @@ function ThreadViewContent({
                     <PendingSendRows
                       key={thread?.id ?? composerId}
                       messages={composer.pendingSends}
+                      onReadAttachment={onReadAttachment}
+                      onOpenImage={onOpenPendingImage}
                       onRecover={onRecoverPendingSend}
                       onDismiss={onDismissPendingSend}
                       onCheck={onCheckPendingSends}
@@ -2043,6 +2060,8 @@ function ThreadViewContent({
                   <PendingSendRows
                     key={thread?.id ?? composerId}
                     messages={composer.pendingSends}
+                    onReadAttachment={onReadAttachment}
+                    onOpenImage={onOpenPendingImage}
                     onRecover={onRecoverPendingSend}
                     onDismiss={onDismissPendingSend}
                     onCheck={onCheckPendingSends}
@@ -2833,7 +2852,7 @@ function ThreadViewContent({
           />
         ))}
       </MessageLinkContext.Provider>
-      {preview === null || !queuePreviewCurrent ? null : (
+      {preview === null || !previewCurrent ? null : (
         <ImagePreview
           attachment={preview.attachment}
           name={preview.name}
@@ -2843,10 +2862,11 @@ function ThreadViewContent({
           }
           trigger={preview.trigger}
           restoreFocus={
-            preview.queueOwner
+            preview.queueOwner || preview.pendingOwner
               ? () => {
                   if (
-                    currentThreadRef.current !== preview.queueOwner!.threadId ||
+                    currentThreadRef.current !==
+                      (preview.queueOwner ?? preview.pendingOwner)!.threadId ||
                     !document.getSelection()?.isCollapsed
                   )
                     return;
