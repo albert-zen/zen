@@ -97,7 +97,8 @@ test("Ubuntu image capture is bounded and retains artifacts on failure without r
   const upload = job.steps.find(
     (step) => step.with?.name === "zenx-image-preparation-${{ github.sha }}",
   );
-  assert.equal(upload.if, "${{ always() }}");
+  assert.match(upload.if, /always\(\)/);
+  assert.match(upload.if, /matrix\.shard == 'conversation'/);
   assert.equal(upload.uses, "actions/upload-artifact@v4");
   assert.equal(upload.with.path, "${{ runner.temp }}/zenx-image-preparation");
   for (const existing of [
