@@ -222,3 +222,24 @@ test("real harness preserves production worker/service and never requests grants
     /CGWindowListCreateImage|CGRequestScreenCaptureAccess|AXIsProcessTrustedWithOptions|\.activate\(/,
   );
 });
+
+test("hosted acceptance admits same-repository PRs or explicit manual runs only", async () => {
+  const workflow = await readFile(
+    new URL("../../../.github/workflows/app-shot.yml", import.meta.url),
+    "utf8",
+  );
+  const job = workflow
+    .split("  macos-owned-acceptance:\n")[1]
+    ?.split("\n  formatting:")[0];
+  assert.ok(typeof job === "string", "Owned acceptance job must exist");
+  assert.match(
+    job,
+    /if: \$\{\{ \(github\.event_name == 'pull_request' && github\.event\.pull_request\.head\.repo\.full_name == github\.repository\) \|\| \(github\.event_name == 'workflow_dispatch' && inputs\.macos_owned_acceptance\) \}\}/,
+  );
+  assert.match(workflow, /permissions:\n  contents: read\n/);
+  assert.doesNotMatch(workflow, /pull_request_target|secrets\./);
+  assert.match(job, /runs-on: macos-latest/);
+  assert.match(job, /ZENX_APP_SHOT_MACOS_ACCEPTANCE: "1"/);
+  assert.match(job, /\/receipt\.json\n/);
+  assert.doesNotMatch(job, /continue-on-error|if:.*success\(\)/);
+});

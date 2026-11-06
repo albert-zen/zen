@@ -96,8 +96,11 @@ Coordinate unit tests establish source-derived mapping, clipping, reliability ga
 
 ## Owned macOS native acceptance
 
-The opt-in `macos_owned_acceptance` input in `.github/workflows/app-shot.yml`
-executes `scripts/verify-app-shot-macos.mjs` only on a hosted macOS runner.
+Same-repository pull requests in `.github/workflows/app-shot.yml` execute
+`scripts/verify-app-shot-macos.mjs` only on a hosted macOS runner, so the exact
+draft can be checked before merging the workflow into the default branch.
+Fork pull requests cannot run this job. Manual runs retain the explicit
+`macos_owned_acceptance` opt-in input; unrelated events do not enable it.
 Review and build the exact production capture backend on the same commit first.
 The harness refuses the old all-window-thumbnail adapter before capture. It uses
 an isolated Electron package/userData, the real service, emitted worker/chunks and
