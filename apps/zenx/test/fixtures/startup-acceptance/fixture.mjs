@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const config = JSON.parse(
   readFileSync(
@@ -32,6 +33,20 @@ function event(type, details = {}) {
       ...details,
     }) + "\n",
   );
+}
+// Only a disposable synthetic package inserts this observation at guard entry.
+// Bound both event count and strings; never return an admission decision.
+let trustedSenderObservations = 0;
+export function trustedSenderObserved(sender, rendererUrl) {
+  if (trustedSenderObservations++ >= 32) return;
+  const boundedUrl = (value) =>
+    typeof value === "string" && value.length <= 4096 ? value : null;
+  event("trusted-sender-observed", {
+    ownedWindow: sender?.ownedWindow === true,
+    mainFrame: sender?.mainFrame === true,
+    url: boundedUrl(sender?.url),
+    rendererUrl: boundedUrl(rendererUrl),
+  });
 }
 function identity(window) {
   const bytes = window.getNativeWindowHandle();
@@ -156,7 +171,11 @@ const rendererObservation = `(() => {
 })()`;
 
 // Pure validation of the actual presented bitmap, not a DOM-only paint claim.
-export function rendererFrameEvidence(image, observation) {
+export function rendererFrameEvidence(
+  image,
+  observation,
+  selectors = rendererControls,
+) {
   if (!observation?.ready || image.isEmpty()) return null;
   const size = image.getSize(1);
   const bytes = image.toBitmap({ scaleFactor: 1 });
@@ -172,13 +191,13 @@ export function rendererFrameEvidence(image, observation) {
     )
   )
     return null;
-  if (observation.controls?.length !== rendererControls.length) return null;
+  if (observation.controls?.length !== selectors.length) return null;
   const controls = [];
-  for (let index = 0; index < rendererControls.length; index++) {
+  for (let index = 0; index < selectors.length; index++) {
     const control = observation.controls[index];
     if (
       !control ||
-      control.selector !== rendererControls[index] ||
+      control.selector !== selectors[index] ||
       control.textPresent !== true
     )
       return null;
@@ -293,7 +312,18 @@ export function rendererFrameEvidence(image, observation) {
   return { width: size.width, height: size.height, controls };
 }
 
-export function captureRenderedApp(window, deadline) {
+export function captureRenderedApp(
+  window,
+  deadline,
+  observationScript = rendererObservation,
+  selectors = rendererControls,
+  diagnosticStage,
+) {
+  if (
+    diagnosticStage !== undefined &&
+    !["sidebar", "conversation"].includes(diagnosticStage)
+  )
+    throw new Error("Invalid diagnostic stage");
   const contents = window.webContents;
   return new Promise((resolve, reject) => {
     let done = false,
@@ -322,8 +352,31 @@ export function captureRenderedApp(window, deadline) {
           error ??= cleanupError;
         }
       }
-      if (error) reject(error);
-      else resolve(value);
+      if (error) {
+        // Diagnostic only: never accepted as a presentation receipt or screenshot.
+        if (diagnosticStage) {
+          try {
+            writeFileSync(
+              path.join(
+                config.evidenceDirectory,
+                `${diagnosticStage}-rejected-dom.json`,
+              ),
+              JSON.stringify(
+                {
+                  accepted: false,
+                  presentedFrames: sequence,
+                  observation: baseline ?? null,
+                },
+                null,
+                2,
+              ),
+            );
+          } catch {
+            /* Keep the original acceptance failure. */
+          }
+        }
+        reject(error);
+      } else resolve(value);
     };
     const navigated = (details) => {
       if (details.isMainFrame && indexUrl !== undefined)
@@ -350,7 +403,7 @@ export function captureRenderedApp(window, deadline) {
           const frame = pending;
           pending = undefined;
           const observation =
-            await contents.executeJavaScript(rendererObservation);
+            await contents.executeJavaScript(observationScript);
           if (done) return;
           if (Date.now() >= deadline)
             throw new Error("Renderer presentation exceeded original deadline");
@@ -366,7 +419,7 @@ export function captureRenderedApp(window, deadline) {
             frame.sequence === sequence &&
             JSON.stringify(frame.before) === JSON.stringify(observation);
           const evidence = stable
-            ? rendererFrameEvidence(frame.image, observation)
+            ? rendererFrameEvidence(frame.image, observation, selectors)
             : null;
           if (evidence) {
             finish(undefined, {
@@ -413,7 +466,7 @@ export function captureRenderedApp(window, deadline) {
             throw new Error(
               "Renderer document changed before presentation acceptance",
             );
-          baseline = await contents.executeJavaScript(rendererObservation);
+          baseline = await contents.executeJavaScript(observationScript);
           if (done) return;
           if (contents.getURL() !== url || contents.isLoadingMainFrame())
             throw new Error("Renderer changed during baseline observation");
@@ -469,5 +522,211 @@ export function completed(hostStatus) {
       visible: window.isVisible(),
       presentation: evidence,
     });
+    if (config.mode === "success") await verifyProductReady(window, deadline);
   })().catch((error) => event("fixture-error", { message: String(error) }));
+}
+
+/** Fixed synthetic text only. Product readiness is separate from the first shell. */
+export function productObservation(seed, stage) {
+  if (
+    seed.synthetic !== true ||
+    ![seed.threadId, seed.userItemId, seed.agentItemId].every((id) =>
+      /^[A-Za-z0-9_-]+$/.test(id),
+    )
+  )
+    throw new Error("Invalid synthetic startup seed identity");
+  if (!["sidebar", "conversation"].includes(stage))
+    throw new Error("Invalid product stage");
+  const row = `#primary-sidebar [data-thread-id="${seed.threadId}"] > button.thread-row`;
+  const specs =
+    stage === "sidebar"
+      ? [
+          {
+            selector: row,
+            label: ".thread-title > span:first-child",
+            text: seed.title,
+          },
+          {
+            selector: "#primary-sidebar .new-thread-action",
+            label: ":scope > span",
+          },
+        ]
+      : [
+          {
+            selector: `.thread-view [data-sent-message-id="${seed.userItemId}"] .user-bubble`,
+            label: "p",
+            text: seed.userText,
+          },
+          {
+            selector: `.thread-view [data-read-message-id="${seed.agentItemId}"] [data-message-quote-body]`,
+            label: "p",
+            text: seed.agentText,
+          },
+        ];
+  const script = `(() => {
+    const rect = r => ({x:r.x,y:r.y,width:r.width,height:r.height});
+    const inside = r => r.width > 0 && r.height > 0 && r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight;
+    const visible = e => Boolean(e && e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}) && inside(e.getBoundingClientRect()));
+    const opaque = value => value && value !== 'transparent' && Number.parseFloat(value.includes('/') ? value.slice(value.lastIndexOf('/') + 1, -1) : value.startsWith('rgba(') ? value.slice(value.lastIndexOf(',') + 1, -1) : '1') > 0;
+    const row = document.querySelector(${JSON.stringify(row)});
+    const selected = row?.getAttribute('aria-current') === 'page' && row.classList.contains('selected');
+    const ranges = [];
+    const controls = ${JSON.stringify(specs)}.map(spec => {
+      const element = document.querySelector(spec.selector);
+      const label = element?.querySelector(spec.label);
+      if (!visible(element) || !visible(label) || element.disabled || element.getAttribute('aria-disabled') === 'true') return null;
+      const style = getComputedStyle(label);
+      if (style.visibility !== 'visible' || Number(style.opacity) <= 0 || Number.parseFloat(style.fontSize) <= 0 || !opaque(style.color) || !opaque(style.webkitTextFillColor)) return null;
+      if (label.childNodes.length !== 1 || label.firstChild.nodeType !== Node.TEXT_NODE || !label.firstChild.textContent.trim() || (spec.text !== undefined && label.textContent !== spec.text)) return null;
+      const range = document.createRange(); range.selectNodeContents(label.firstChild);
+      const rawRects = Array.from(range.getClientRects()); const box = label.getBoundingClientRect();
+      ranges.push({selector:spec.selector,rawRects:rawRects.map(rect),box:rect(box)});
+      if (rawRects.some(r => ![r.x,r.y,r.width,r.height].every(Number.isFinite) || r.width < 0 || r.height <= 0)) return null;
+      // Spaces/newlines have layout rectangles but no ink. Cover every non-space
+      // run in the exact already-checked text; never demand pixels from whitespace.
+      const glyphRects = [];
+      for (const match of label.firstChild.textContent.matchAll(/\\S+/g)) {
+        range.setStart(label.firstChild, match.index);
+        range.setEnd(label.firstChild, match.index + match[0].length);
+        glyphRects.push(...range.getClientRects());
+      }
+      if (glyphRects.some(r => ![r.x,r.y,r.width,r.height].every(Number.isFinite) || r.width < 0 || r.height <= 0)) return null;
+      const rects = glyphRects.filter(r => r.width > 0);
+      if (!rects.length || rects.some(r => !inside(r) || r.left < box.left || r.top < box.top || r.right > box.right || r.bottom > box.bottom)) return null;
+      if (rects.some(r => [0.1,0.5,0.9].some(f => !label.contains(document.elementFromPoint(r.x + r.width * f, r.y + r.height / 2))))) return null;
+      return {selector:spec.selector,textPresent:true,...rect(element.getBoundingClientRect()),textRects:rects.map(rect),style:{color:style.color,fill:style.webkitTextFillColor,font:style.font,opacity:style.opacity,spacing:style.letterSpacing,transform:style.transform}};
+    });
+    const shell = document.querySelector('.app-shell');
+    const errorNotice = Boolean(document.querySelector('.app-notice[role="alert"], .background-shell-error'));
+    return {selected, ranges, errorNotice, ready: document.visibilityState === 'visible' && visible(shell) && visible(row) && !row.disabled && !errorNotice && !document.querySelector('#primary-sidebar .sidebar-error, #primary-sidebar .sidebar-empty') && (${JSON.stringify(stage)} !== 'conversation' || selected) && controls.every(Boolean),width:innerWidth,height:innerHeight,dpr:devicePixelRatio,viewport:visualViewport && {width:visualViewport.width,height:visualViewport.height,scale:visualViewport.scale,x:visualViewport.offsetLeft,y:visualViewport.offsetTop},shell:shell && rect(shell.getBoundingClientRect()),controls};
+  })()`;
+  return { script, selectors: specs.map((spec) => spec.selector), row };
+}
+
+/** Read only the two ordinary preload APIs for the isolated synthetic owner. */
+export async function verifyTrustedDocumentReads(window, seed, deadline) {
+  productObservation(seed, "conversation"); // Validate the synthetic identity.
+  const contents = window.webContents;
+  const url = contents.getURL();
+  let timer;
+  let lifecycleError;
+  let rejectInvalidation;
+  const invalidated = new Promise((_, reject) => {
+    rejectInvalidation = reject;
+  });
+  const invalidate = (error) => {
+    lifecycleError ??= error;
+    rejectInvalidation(lifecycleError);
+  };
+  const navigated = (details) => {
+    if (details.isMainFrame)
+      invalidate(new Error("Renderer navigated during trusted reads"));
+  };
+  const gone = () =>
+    invalidate(new Error("Renderer exited during trusted reads"));
+  const closed = () =>
+    invalidate(new Error("Window closed during trusted reads"));
+  contents.on("did-start-navigation", navigated);
+  contents.once("render-process-gone", gone);
+  window.once("closed", closed);
+  try {
+    const receipt = await Promise.race([
+      invalidated,
+      contents.executeJavaScript(`(async () => {
+        const threadId = ${JSON.stringify(seed.threadId)};
+        const [sidebar, shell] = await Promise.all([
+          window.zenx.threadSidebar.read(threadId),
+          window.zenx.shellPanel.request({operation:'list', threadId})
+        ]);
+        if (sidebar?.owner?.kind !== 'thread' || sidebar.owner.id !== threadId || !Number.isSafeInteger(sidebar.revision) || !Array.isArray(sidebar.tabs) || shell?.host !== 'local' || !Array.isArray(shell.sessions) || shell.sessions.length !== 0) throw Error('Unexpected synthetic sidebar or Shell read result');
+        return {sidebar:true, shell:true};
+      })()`),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new Error("Trusted document reads exceeded original deadline"),
+            ),
+          Math.max(0, deadline - Date.now()),
+        );
+      }),
+    ]);
+    if (lifecycleError) throw lifecycleError;
+    if (
+      Date.now() >= deadline ||
+      contents.getURL() !== url ||
+      contents.isLoadingMainFrame()
+    )
+      throw new Error(
+        "Renderer changed or deadline elapsed during trusted reads",
+      );
+    if (receipt?.sidebar !== true || receipt?.shell !== true)
+      throw new Error("Trusted document read receipt is incomplete");
+    const expectedUrl = pathToFileURL(
+      path.resolve(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "../renderer/index.html",
+      ),
+    ).href;
+    const actual = new URL(url);
+    actual.hash = "";
+    event("trusted-document-reads", {
+      ...identity(window),
+      synthetic: true,
+      ...receipt,
+      url,
+      expectedUrl,
+      encodingDiffers: actual.href !== expectedUrl,
+      sameNativePath:
+        actual.protocol === "file:" &&
+        fileURLToPath(actual) === fileURLToPath(expectedUrl),
+    });
+  } finally {
+    clearTimeout(timer);
+    contents.removeListener("did-start-navigation", navigated);
+    contents.removeListener("render-process-gone", gone);
+    window.removeListener("closed", closed);
+  }
+}
+
+export async function verifyProductReady(window, deadline) {
+  const seed = JSON.parse(
+    readFileSync(path.join(config.evidenceDirectory, "seed.json"), "utf8"),
+  );
+  for (const stage of ["sidebar", "conversation"]) {
+    const observation = productObservation(seed, stage);
+    if (stage === "conversation") {
+      // Invoke the real React selection handler only on this isolated synthetic row.
+      const clicked = await window.webContents.executeJavaScript(`(() => {
+        const row = document.querySelector(${JSON.stringify(observation.row)});
+        if (!row || row.disabled || !row.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) return false;
+        row.click(); return true;
+      })()`);
+      if (clicked !== true)
+        throw new Error("Synthetic sidebar row was not interactive");
+      event("conversation-selected", {
+        ...identity(window),
+        interaction: "scripted-dom-click",
+        synthetic: true,
+      });
+      await verifyTrustedDocumentReads(window, seed, deadline);
+    }
+    const { image, evidence } = await captureRenderedApp(
+      window,
+      deadline,
+      observation.script,
+      observation.selectors,
+      stage,
+    );
+    writeFileSync(
+      path.join(config.evidenceDirectory, `${stage}-ready.png`),
+      image.toPNG({ scaleFactor: 1 }),
+    );
+    event(`${stage}-ready`, {
+      ...identity(window),
+      synthetic: true,
+      visible: window.isVisible(),
+      presentation: evidence,
+    });
+  }
 }

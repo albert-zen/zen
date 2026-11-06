@@ -23,6 +23,31 @@ test("mock startup boundary does not start a C# compiler inside the assertion de
   assert.match(source, /Write-Phase "mock-boundary-ready"/u);
 });
 
+test("startup isolation removes environment keys and restores their original presence", () => {
+  const source = readFileSync(
+    new URL("../scripts/windows-startup-acceptance.ps1", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /function Set-FixtureEnvironment\(\$Key, \$State\)/u);
+  assert.match(
+    source,
+    /Remove-Item -LiteralPath "Env:\$Key" -ErrorAction Stop/u,
+  );
+  assert.match(
+    source,
+    /\$oldEnvironment\[\$key\] = @\{ present = \(Test-Path -LiteralPath "Env:\$key"\); value = \[Environment\]::GetEnvironmentVariable\(\$key\) \}/u,
+  );
+  assert.match(
+    source,
+    /Set-FixtureEnvironment \$key @\{ present = \$false \}/u,
+  );
+  assert.match(
+    source,
+    /try \{ Set-FixtureEnvironment \$key \$oldEnvironment\[\$key\] \}/u,
+  );
+  assert.doesNotMatch(source, /SetEnvironmentVariable\(\$key, \$null\)/u);
+});
+
 test("secondary failure state is captured before cleanup without replacing the original error", () => {
   const source = readFileSync(
     new URL("../scripts/windows-startup-acceptance.ps1", import.meta.url),
@@ -176,3 +201,43 @@ test(
     assert.match(result, /Startup event reader sharing checks passed/u);
   },
 );
+
+test("startup success requires durable history and both product stages before passing", () => {
+  const harness = readFileSync(
+    new URL("../scripts/windows-startup-acceptance.ps1", import.meta.url),
+    "utf8",
+  );
+  assert(
+    harness.indexOf("seed-windows-startup-thread.ts") <
+      harness.indexOf("$primary = Start-Process"),
+  );
+  assert(
+    harness.indexOf('"sidebar-ready"') <
+      harness.indexOf("$sample.passed = $true"),
+  );
+  assert(
+    harness.indexOf('"conversation-ready"') <
+      harness.indexOf("$sample.passed = $true"),
+  );
+  assert.match(
+    harness,
+    /includesSyntheticGateMilliseconds = \$sample.gateHeldMilliseconds/u,
+  );
+  const fixture = readFileSync(
+    new URL("./fixtures/startup-acceptance/fixture.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    fixture,
+    /if \(config.mode === "success"\) await verifyProductReady\(window, deadline\)/u,
+  );
+  const product = fixture.slice(
+    fixture.indexOf("export async function verifyProductReady"),
+  );
+  assert.match(product, /captureRenderedApp\(\s*window,\s*deadline,/u);
+  assert.doesNotMatch(
+    product,
+    /Date\.now\(\)\s*\+/u,
+    "New stages must not reset the original deadline",
+  );
+});
