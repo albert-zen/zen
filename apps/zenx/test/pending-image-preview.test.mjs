@@ -215,3 +215,62 @@ test("capture waits for expected image counts and retains failed-transition diag
     capture.indexOf("cases.push({ lang") < capture.indexOf("const record ="),
   );
 });
+
+test("virtual-row visibility waits use the bounded strict probe for thumbnails and preview", async () => {
+  const start = capture.indexOf("const waitForVisibleImage =");
+  const end = capture.indexOf("const click =", start);
+  const helperSource = capture.slice(start, end);
+  const { measureImageVisibility } =
+    await import("../scripts/pending-image-visibility.mjs");
+  assert.match(helperSource, /await wait\(/);
+  assert.match(helperSource, /measureImageVisibility\.toString\(\)/);
+  assert.match(capture, /for \(let i = 0; i < 200; i\+\+\)/);
+  assert.match(capture, /throw Error\(`Condition timed out:/);
+  assert.match(capture, /const geometry = await waitForVisibleImage/);
+  assert.match(capture, /const previewGeometry = await waitForVisibleImage/);
+  assert.match(capture, /observed\.imageGeometry = await evaluate/);
+  let waited = false;
+  const geometry = { visible: true, painted: true, coverage: 1 };
+  const makeHelper = new Function(
+    "wait",
+    "evaluate",
+    "measureImageVisibility",
+    `${helperSource}; return waitForVisibleImage;`,
+  );
+  const helper = makeHelper(
+    async (expression) => {
+      assert.match(expression, /\?\.visible === true/);
+      assert.match(expression, /style\.opacity/);
+      waited = true;
+    },
+    async () => {
+      assert.equal(
+        waited,
+        true,
+        "do not sample the screenshot geometry before visible readiness",
+      );
+      return geometry;
+    },
+    measureImageVisibility,
+  );
+  assert.equal(await helper("document.querySelector('img')"), geometry);
+  let sampled = false;
+  const failing = makeHelper(
+    async () => {
+      throw Error("Condition timed out: still transparent");
+    },
+    async () => {
+      sampled = true;
+    },
+    measureImageVisibility,
+  );
+  await assert.rejects(
+    failing("document.querySelector('img')"),
+    /still transparent/,
+  );
+  assert.equal(
+    sampled,
+    false,
+    "persistent opacity must fail, not accept a screenshot",
+  );
+});

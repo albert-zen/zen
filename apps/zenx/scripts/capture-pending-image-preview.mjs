@@ -121,6 +121,13 @@ try {
     }
     throw Error(`Condition timed out: ${expression}`);
   };
+  const waitForVisibleImage = async (selector) => {
+    const probe = `(() => { const image = ${selector}; return image ? (${measureImageVisibility.toString()})(image) : null; })()`;
+    // Virtual rows can remain transparent while the list measures them. Reuse
+    // the bounded wait and the exact strict predicate; never change list CSS.
+    await wait(`(${probe})?.visible === true`);
+    return await evaluate(probe);
+  };
   const click = async (selector) => {
     await evaluate(
       `(${selector}).scrollIntoView({block: 'center', inline: 'nearest', behavior: 'instant'})`,
@@ -163,6 +170,9 @@ try {
   }))()`);
   reportFailure = async (error) => {
     const observed = await snapshot();
+    observed.imageGeometry = await evaluate(
+      `[...document.querySelectorAll('.draft-image img, .message-images img, [role="dialog"] img')].map(${measureImageVisibility.toString()})`,
+    );
     const dom = await evaluate(`(() => ({
       text: document.body.innerText,
       images: [...document.querySelectorAll('img')].map(e => ({src: e.getAttribute('src'), complete: e.complete, naturalWidth: e.naturalWidth, outerHTML: e.outerHTML})),
@@ -260,8 +270,8 @@ try {
           await evaluate(
             "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))",
           );
-          const geometry = await evaluate(
-            `(${measureImageVisibility.toString()})(document.querySelectorAll(${JSON.stringify(imageSelector)})[${index}])`,
+          const geometry = await waitForVisibleImage(
+            `document.querySelectorAll(${JSON.stringify(imageSelector)})[${index}]`,
           );
           state.imageGeometry.push(geometry);
           assert.equal(
@@ -293,8 +303,8 @@ try {
       await evaluate(
         "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))",
       );
-      const previewGeometry = await evaluate(
-        `(${measureImageVisibility.toString()})(document.querySelector('[role="dialog"] img'))`,
+      const previewGeometry = await waitForVisibleImage(
+        `document.querySelector('[role="dialog"] img')`,
       );
       assert.equal(
         previewGeometry.visible,
