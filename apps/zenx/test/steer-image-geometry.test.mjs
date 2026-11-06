@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertSteerGeometry } from "../scripts/steer-image-geometry.mjs";
+import {
+  assertSteerGeometry,
+  assertSteerWheelReceipt,
+} from "../scripts/steer-image-geometry.mjs";
 
 // Pure guard tests only. These numbers are NOT browser evidence.
 const geometry = () => ({
@@ -156,4 +159,43 @@ test("bubble visibility probe rejects hidden or obscured bodies, allows clipped 
       else delete globalThis[key];
     }
   }
+});
+
+test("reader scrolling requires trusted delivery and observed progress before another input", () => {
+  const valid = {
+    settled: true,
+    commandAcknowledged: true,
+    before: 500,
+    after: 100,
+    event: { trusted: true, inTranscript: true, deltaY: -400 },
+  };
+  assert.doesNotThrow(() => assertSteerWheelReceipt(valid));
+  assert.throws(
+    () => assertSteerWheelReceipt({ ...valid, settled: false }),
+    /did not settle/,
+  );
+  assert.throws(
+    () => assertSteerWheelReceipt({ ...valid, commandAcknowledged: false }),
+    /unknown/,
+  );
+  assert.throws(
+    () => assertSteerWheelReceipt({ ...valid, event: null }),
+    /trusted/,
+  );
+  assert.throws(
+    () =>
+      assertSteerWheelReceipt({
+        ...valid,
+        event: { ...valid.event, inTranscript: false },
+      }),
+    /another surface/,
+  );
+  assert.throws(
+    () => assertSteerWheelReceipt({ ...valid, after: 500 }),
+    /no observed/,
+  );
+  assert.throws(
+    () => assertSteerWheelReceipt({ ...valid, after: 700 }),
+    /no observed/,
+  );
 });

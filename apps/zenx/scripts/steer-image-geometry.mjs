@@ -97,3 +97,25 @@ export function assertSteerDisclosure(geometry, longBody, scene) {
     `${scene}: summary must be a bounded prefix, not the full body`,
   );
 }
+
+/** Never issue another scroll after an unacknowledged or unobserved input. */
+export function assertSteerWheelReceipt(receipt) {
+  assert.equal(receipt.settled, true, "reader scroll did not settle");
+  assert.equal(
+    receipt.commandAcknowledged,
+    true,
+    "wheel command outcome unknown",
+  );
+  assert.equal(receipt.event?.trusted, true, "trusted wheel not observed");
+  assert.equal(
+    receipt.event?.inTranscript,
+    true,
+    "wheel reached another surface",
+  );
+  assert.ok(receipt.event.deltaY < 0, "wheel direction changed");
+  assert.ok(Number.isFinite(receipt.before) && Number.isFinite(receipt.after));
+  assert.ok(
+    receipt.after < receipt.before,
+    "wheel produced no observed upward movement",
+  );
+}

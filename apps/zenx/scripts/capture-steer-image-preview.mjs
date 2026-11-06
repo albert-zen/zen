@@ -4,6 +4,7 @@ import {
   assertSteerGeometry,
   measureSteerComparison,
   assertSteerDisclosure,
+  assertSteerWheelReceipt,
 } from "./steer-image-geometry.mjs";
 import {
   measureImageVisibility,
@@ -78,6 +79,7 @@ const child = spawn(chrome, args, {
   stdio: ["ignore", "ignore", "pipe"],
 });
 const lifecycle = observePreviewChrome(child, profile);
+const wheelReceipts = [];
 const cases = [],
   screenshots = [],
   errors = [],
@@ -127,6 +129,85 @@ try {
     }
     throw Error(`Condition timed out: ${expression}`);
   };
+  const scrollCanonicalToStart = async (scene) => {
+    const confirmStart = async () => {
+      await evaluate("new Promise(r => setTimeout(r, 300))");
+      assert.ok(
+        await evaluate("document.querySelector('.messages').scrollTop <= 1"),
+        `${scene}: transcript moved after reader scrolling`,
+      );
+    };
+    for (let step = 0; step < 8; step++) {
+      const prepared = await evaluate(`(() => {
+        const viewport = document.querySelector('.messages');
+        const r = viewport.getBoundingClientRect();
+        const point = {x: r.left + 8, y: r.top + 16};
+        const hit = document.elementFromPoint(point.x, point.y);
+        if (!hit || !(hit === viewport || viewport.contains(hit)))
+          throw Error('Reader wheel target is not the current transcript');
+        const receipt = window.__steerWheelReceipt = {before: viewport.scrollTop, event: null};
+        if (receipt.before > 1) viewport.addEventListener('wheel', event => {
+          receipt.event = {trusted: event.isTrusted, inTranscript: viewport.contains(event.target), deltaY: event.deltaY};
+        }, {capture: true, once: true});
+        return {...point, before: receipt.before, deltaY: -Math.max(120, viewport.clientHeight)};
+      })()`);
+      if (prepared.before <= 1) {
+        // Wait beyond the production reader-idle timer before claiming a
+        // stable position; a later automatic correction is a failure.
+        await confirmStart();
+        return;
+      }
+      const receipt = {
+        scene,
+        step,
+        before: prepared.before,
+        commandAcknowledged: false,
+      };
+      wheelReceipts.push(receipt);
+      await send("Input.dispatchMouseEvent", {
+        type: "mouseWheel",
+        x: prepared.x,
+        y: prepared.y,
+        deltaX: 0,
+        deltaY: prepared.deltaY,
+      });
+      receipt.commandAcknowledged = true;
+      await wait(
+        `window.__steerWheelReceipt?.event && document.querySelector('.messages').scrollTop < ${prepared.before}`,
+      );
+      // Do not spend another input on an intermediate compositor offset.
+      // Observe a quiet position beyond the reader-idle timer, or fail closed.
+      const settled = await evaluate(`(async () => {
+        const viewport = document.querySelector('.messages');
+        const deadline = performance.now() + 2000;
+        let previous = viewport.scrollTop, quietSince = performance.now();
+        while (performance.now() < deadline) {
+          await new Promise(r => setTimeout(r, 50));
+          const top = viewport.scrollTop;
+          if (Math.abs(top - previous) > 0.5) quietSince = performance.now();
+          previous = top;
+          if (performance.now() - quietSince >= 300) return true;
+        }
+        return false;
+      })()`);
+      receipt.settled = settled;
+      assert.equal(settled, true, `${scene}: reader scroll did not settle`);
+      Object.assign(
+        receipt,
+        await evaluate(
+          `({event: window.__steerWheelReceipt.event, after: document.querySelector('.messages').scrollTop})`,
+        ),
+      );
+      assertSteerWheelReceipt(receipt);
+      if (receipt.after <= 1) {
+        await confirmStart();
+        return;
+      }
+    }
+    throw Error(
+      `${scene}: bounded reader scrolling did not reach transcript start`,
+    );
+  };
   const waitForVisibleImage = async (selector) => {
     const probe = `(() => { const image = ${selector}; return image ? (${measureImageVisibility.toString()})(image) : null; })()`;
     // Virtual rows can remain transparent while the list measures them. Reuse
@@ -166,6 +247,8 @@ try {
   };
   const snapshot = () =>
     evaluate(`(() => ({
+    transcriptScrollTop: document.querySelector('.messages')?.scrollTop,
+    latestWheelReceipt: window.__steerWheelReceipt ?? null,
     pendingImages: document.querySelectorAll('.pending-steer-panel .message-images img').length,
     pendingBody: document.querySelector('.pending-steer-panel .user-bubble')?.textContent,
     messageImages: document.querySelectorAll('.message-images img').length,
@@ -187,6 +270,7 @@ try {
       JSON.stringify(
         {
           expected: expectedState,
+          wheelReceipts,
           observed,
           error: { message: error.message, stack: error.stack },
           dom,
@@ -219,21 +303,6 @@ try {
           await send("Page.navigate", { url: sceneUrl });
           await wait(
             `location.href === ${JSON.stringify(sceneUrl)} && !!document.querySelector('.pending-steer-panel .image-thumbnail')`,
-          );
-          // Establish reader scroll ownership with a real browser wheel input.
-          // Programmatic scrollIntoView alone must not fight live-follow logic.
-          const readerPoint = await evaluate(`(() => {
-            const r = document.querySelector('.messages').getBoundingClientRect();
-            return {x: r.left + 40, y: r.top + 40};
-          })()`);
-          await send("Input.dispatchMouseEvent", {
-            type: "mouseWheel",
-            ...readerPoint,
-            deltaX: 0,
-            deltaY: -120,
-          });
-          await evaluate(
-            "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))",
           );
           // Pending attachment payloads are lazy: make each real thumbnail
           // reachable before waiting for decoding, including clipped shelves.
@@ -294,15 +363,7 @@ try {
             for (let index = 0; index < count; index++) {
               const target = `document.querySelectorAll(${JSON.stringify(selector)})[${index}]`;
               if (selector.startsWith("[data-sent")) {
-                // The canonical images are at the start of this one-turn
-                // fixture. Reach them by real reader scrolling, rather than
-                // a programmatic correction that live-follow may undo.
-                await send("Input.dispatchMouseEvent", {
-                  type: "mouseWheel",
-                  ...readerPoint,
-                  deltaX: 0,
-                  deltaY: -10000,
-                });
+                await scrollCanonicalToStart(scene);
               } else {
                 await evaluate(
                   `(${target}).scrollIntoView({block:'center',inline:'nearest',behavior:'instant'})`,
@@ -368,6 +429,7 @@ try {
         ),
         chromiumSandboxDisabled: false,
         cases,
+        wheelReceipts,
         screenshots,
         errors,
       },
