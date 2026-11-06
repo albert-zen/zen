@@ -100,6 +100,21 @@ export function assertSteerDisclosure(geometry, longBody, scene) {
 
 /** Never issue another scroll after an unacknowledged or unobserved input. */
 export function assertSteerWheelReceipt(receipt) {
+  assert.equal(
+    receipt.pointerCommandAcknowledged,
+    true,
+    "pointer command outcome unknown",
+  );
+  assert.equal(
+    receipt.pointerEvent?.trusted,
+    true,
+    "trusted pointer movement not observed",
+  );
+  assert.equal(
+    receipt.pointerEvent?.inTranscript,
+    true,
+    "pointer reached another surface",
+  );
   assert.equal(receipt.settled, true, "reader scroll did not settle");
   assert.equal(
     receipt.commandAcknowledged,

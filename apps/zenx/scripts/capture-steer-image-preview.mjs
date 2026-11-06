@@ -130,6 +130,7 @@ try {
     throw Error(`Condition timed out: ${expression}`);
   };
   const scrollCanonicalToStart = async (scene) => {
+    let lastPointer = null;
     const confirmStart = async () => {
       await evaluate("new Promise(r => setTimeout(r, 300))");
       assert.ok(
@@ -145,10 +146,19 @@ try {
         const hit = document.elementFromPoint(point.x, point.y);
         if (!hit || !(hit === viewport || viewport.contains(hit)))
           throw Error('Reader wheel target is not the current transcript');
-        const receipt = window.__steerWheelReceipt = {before: viewport.scrollTop, event: null};
-        if (receipt.before > 1) viewport.addEventListener('wheel', event => {
-          receipt.event = {trusted: event.isTrusted, inTranscript: viewport.contains(event.target), deltaY: event.deltaY};
-        }, {capture: true, once: true});
+        const receipt = window.__steerWheelReceipt = {before: viewport.scrollTop, pointerEvent: null, event: null, scrollEvents: []};
+        if (receipt.before > 1) {
+          viewport.addEventListener('pointermove', event => {
+            receipt.pointerEvent = {trusted: event.isTrusted, inTranscript: viewport.contains(event.target), x: event.clientX, y: event.clientY};
+          }, {capture: true, once: true});
+          viewport.addEventListener('wheel', event => {
+            receipt.event = {trusted: event.isTrusted, inTranscript: viewport.contains(event.target), deltaY: event.deltaY, defaultPrevented: event.defaultPrevented};
+            setTimeout(() => {receipt.event.defaultPrevented = event.defaultPrevented;}, 0);
+          }, {capture: true, once: true});
+          viewport.addEventListener('scroll', () => {
+            if (receipt.scrollEvents.length < 32) receipt.scrollEvents.push(viewport.scrollTop);
+          }, {capture: true, passive: true});
+        }
         return {...point, before: receipt.before, deltaY: -Math.max(120, viewport.clientHeight)};
       })()`);
       if (prepared.before <= 1) {
@@ -161,9 +171,42 @@ try {
         scene,
         step,
         before: prepared.before,
+        pointerCommandAcknowledged: false,
         commandAcknowledged: false,
       };
       wheelReceipts.push(receipt);
+      // Move the real pointer away from the disclosure before asking the
+      // browser to scroll a different surface. DOM hit-testing alone does not
+      // establish the compositor's current pointer/scroll target.
+      if (lastPointer?.x === prepared.x && lastPointer?.y === prepared.y) {
+        // No intervening pointer input occurs inside this loop. Reuse the
+        // acknowledged position instead of demanding an unchanged-point move.
+        receipt.pointerCommandAcknowledged = true;
+        receipt.pointerEvent = lastPointer.event;
+        receipt.pointerReused = true;
+      } else {
+        await send("Input.dispatchMouseEvent", {
+          type: "mouseMoved",
+          x: prepared.x,
+          y: prepared.y,
+          buttons: 0,
+        });
+        receipt.pointerCommandAcknowledged = true;
+        await wait(
+          "window.__steerWheelReceipt?.pointerEvent?.trusted === true && window.__steerWheelReceipt.pointerEvent.inTranscript === true",
+        );
+        receipt.pointerEvent = await evaluate(
+          "window.__steerWheelReceipt.pointerEvent",
+        );
+        lastPointer = {
+          x: prepared.x,
+          y: prepared.y,
+          event: receipt.pointerEvent,
+        };
+        await evaluate(
+          "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))",
+        );
+      }
       await send("Input.dispatchMouseEvent", {
         type: "mouseWheel",
         x: prepared.x,
@@ -195,7 +238,7 @@ try {
       Object.assign(
         receipt,
         await evaluate(
-          `({event: window.__steerWheelReceipt.event, after: document.querySelector('.messages').scrollTop})`,
+          `({event: window.__steerWheelReceipt.event, scrollEvents: window.__steerWheelReceipt.scrollEvents, after: document.querySelector('.messages').scrollTop})`,
         ),
       );
       assertSteerWheelReceipt(receipt);

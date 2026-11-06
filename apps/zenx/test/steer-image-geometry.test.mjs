@@ -163,6 +163,8 @@ test("bubble visibility probe rejects hidden or obscured bodies, allows clipped 
 
 test("reader scrolling requires trusted delivery and observed progress before another input", () => {
   const valid = {
+    pointerCommandAcknowledged: true,
+    pointerEvent: { trusted: true, inTranscript: true },
     settled: true,
     commandAcknowledged: true,
     before: 500,
@@ -170,6 +172,15 @@ test("reader scrolling requires trusted delivery and observed progress before an
     event: { trusted: true, inTranscript: true, deltaY: -400 },
   };
   assert.doesNotThrow(() => assertSteerWheelReceipt(valid));
+  assert.throws(
+    () =>
+      assertSteerWheelReceipt({ ...valid, pointerCommandAcknowledged: false }),
+    /pointer command outcome unknown/,
+  );
+  assert.throws(
+    () => assertSteerWheelReceipt({ ...valid, pointerEvent: null }),
+    /pointer movement not observed/,
+  );
   assert.throws(
     () => assertSteerWheelReceipt({ ...valid, settled: false }),
     /did not settle/,
