@@ -1,3 +1,7 @@
+import {
+  APP_SHOT_DEFAULT_CHORD,
+  parseAppShotKeyChord,
+} from "../src/app-shot-key-chord.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -52,6 +56,9 @@ function fixture(
   };
   let shortcut: (() => void) | undefined;
   let unregisters = 0;
+  const registeredKeys: string[] = [];
+  const unregisteredKeys: string[] = [];
+  let registerSucceeds = true;
   let imports = 0;
   const abandoned: string[] = [];
   let importWait: Promise<void> | undefined;
@@ -177,11 +184,14 @@ function fixture(
       modifierStarts.push(options);
       return startModifier(options);
     },
-    registerShortcut(_key, callback) {
+    registerShortcut(key, callback) {
+      registeredKeys.push(key);
+      if (!registerSucceeds) return false;
       shortcut = callback;
       return true;
     },
-    unregisterShortcut() {
+    unregisterShortcut(key) {
+      unregisteredKeys.push(key);
       unregisters++;
       shortcut = undefined;
     },
@@ -197,6 +207,11 @@ function fixture(
   });
   return {
     controller,
+    registeredKeys,
+    unregisteredKeys,
+    setRegistrationResult(value: boolean) {
+      registerSucceeds = value;
+    },
     portalHandle,
     portalStarts,
     setFocused(value: boolean) {
@@ -901,6 +916,247 @@ test("invalid shortcut enums never launch or replace the current owner", async (
       assert.deepEqual(f.events, []);
     }
     await f.controller.disarm(f.caller(), "current");
+    f.controller.dispose();
+  }
+});
+
+test("custom chords unregister their exact accelerator and stale callbacks cannot capture or revoke replacement", async () => {
+  for (const platform of ["darwin", "win32"]) {
+    const f = fixture(platform);
+    const first = parseAppShotKeyChord("mod+alt+k")!;
+    const second = parseAppShotKeyChord("ctrl+shift+space")!;
+    await f.controller.arm(f.caller(), "first", false, "chord", first);
+    const stale = f.shortcut!;
+    assert.deepEqual(f.registeredKeys, ["CommandOrControl+Alt+K"]);
+    await f.controller.arm(f.caller(), "second", false, "chord", second);
+    assert.deepEqual(f.unregisteredKeys, ["CommandOrControl+Alt+K"]);
+    stale();
+    await f.controller.disarm(f.caller(), "first");
+    assert.equal(f.activeCaptures, 0);
+    assert.deepEqual(f.unregisteredKeys, ["CommandOrControl+Alt+K"]);
+    await f.controller.disarm(f.caller(), "second");
+    assert.deepEqual(f.unregisteredKeys, [
+      "CommandOrControl+Alt+K",
+      "Control+Shift+Space",
+    ]);
+    f.controller.dispose();
+  }
+});
+
+test("malformed, bare, unsupported and conflicting chord IPC cannot replace an armed owner", async () => {
+  const f = fixture();
+  await f.controller.arm(
+    f.caller(),
+    "current",
+    false,
+    "chord",
+    parseAppShotKeyChord("mod+alt+k"),
+  );
+  const original = f.shortcut;
+  for (const chord of [
+    null,
+    "mod+shift+k",
+    [],
+    {},
+    { ...APP_SHOT_DEFAULT_CHORD, key: "a+b" },
+    { ...APP_SHOT_DEFAULT_CHORD, key: "audioPlay" },
+    { ...APP_SHOT_DEFAULT_CHORD, modKey: false, shiftKey: false },
+    { ...APP_SHOT_DEFAULT_CHORD, modKey: "true" },
+    { ...APP_SHOT_DEFAULT_CHORD, enabled: true },
+    parseAppShotKeyChord("mod+c"),
+    parseAppShotKeyChord("shift+k"),
+    parseAppShotKeyChord("alt+tab"),
+    parseAppShotKeyChord("ctrl+z"),
+  ])
+    await assert.rejects(
+      f.controller.arm(f.caller(), "invalid", false, "chord", chord),
+    );
+  await assert.rejects(
+    f.controller.arm(
+      f.caller(),
+      "invalid",
+      false,
+      "both-shift",
+      APP_SHOT_DEFAULT_CHORD,
+    ),
+  );
+  assert.equal(f.shortcut === original, true);
+  assert.equal(f.unregisters, 0);
+  assert.equal(f.modifierStarts.length, 0);
+  assert.deepEqual(f.events, []);
+  f.controller.dispose();
+});
+
+test("custom registration failure is visible and does not retry or unregister an unowned key", async () => {
+  const f = fixture();
+  f.setRegistrationResult(false);
+  await assert.rejects(
+    f.controller.arm(
+      f.caller(),
+      "failed",
+      false,
+      "chord",
+      parseAppShotKeyChord("mod+alt+k"),
+    ),
+    /unavailable/,
+  );
+  assert.deepEqual(f.registeredKeys, ["CommandOrControl+Alt+K"]);
+  assert.deepEqual(f.unregisteredKeys, []);
+  assert.equal(f.activeCaptures, 0);
+  f.controller.dispose();
+});
+
+test("generic portal receives selected chord, while Niri and Hyprland reject custom chord IPC without replacing owner", async () => {
+  const chord = parseAppShotKeyChord("mod+alt+arrowup")!;
+  const portal = fixture("linux", false, true);
+  await portal.controller.arm(portal.caller(), "portal", false, "chord", chord);
+  assert.deepEqual(portal.portalStarts[0]?.chord, chord);
+  assert.equal(portal.modifierStarts.length, 0);
+  await assert.rejects(
+    portal.controller.arm(portal.caller(), "bad", false, "chord", {
+      ...chord,
+      key: "Unknown",
+    }),
+  );
+  assert.equal(portal.portalStarts.length, 1);
+  assert.equal(portal.portalStops, 0);
+  portal.controller.dispose();
+  for (const f of [
+    fixture("linux", true),
+    fixture("linux", false, true, undefined, {
+      hyprlandBinding: { legacy: "binding", lua: "binding" },
+    }),
+  ]) {
+    await f.controller.arm(f.caller(), "current", false);
+    await assert.rejects(
+      f.controller.arm(f.caller(), "custom", false, "chord", chord),
+      /Custom chords/,
+    );
+    assert.equal(f.portalStops, 0);
+    assert.equal(f.modifierStops, 0);
+    assert.equal(f.registeredKeys.length, 0);
+    if (f.portalStarts.length)
+      assert.equal(f.portalStarts[0]?.chord, undefined);
+    f.controller.dispose();
+  }
+});
+
+test("X11 custom shortcut continues to open the explicit picker without native capture", async () => {
+  const f = fixture("linux");
+  await f.controller.arm(
+    f.caller(),
+    "x11",
+    false,
+    "chord",
+    parseAppShotKeyChord("ctrl+alt+k"),
+  );
+  await f.controller.onShortcut();
+  assert.deepEqual(f.events, [{ token: "x11", openPicker: true }]);
+  assert.equal(f.activeCaptures, 0);
+  assert.equal(f.modifierStarts.length, 0);
+  f.controller.dispose();
+});
+
+test("recording admission rejects active or starting capture owners without disarming them", async () => {
+  const f = fixture();
+  await f.controller.arm(f.caller(), "armed", false);
+  assert.throws(
+    () => f.controller.beginRecording(f.caller(), "record"),
+    /Disable the active/,
+  );
+  assert.equal(f.unregisters, 0);
+  assert.deepEqual(f.events, []);
+  await f.controller.disarm(f.caller(), "armed");
+  const starting = f.controller.arm(
+    f.caller(),
+    "starting",
+    false,
+    "both-shift",
+  );
+  assert.throws(
+    () => f.controller.beginRecording(f.caller(), "record"),
+    /Disable the active/,
+  );
+  await starting;
+  f.controller.dispose();
+});
+
+test("recording admission blocks arming, retains exact caller/token and does not register or capture", async () => {
+  const f = fixture();
+  const other = { ...f.renderer, frame: {} };
+  const otherCaller = { renderer: other, frame: other.frame };
+  f.controller.beginRecording(f.caller(), "record");
+  f.controller.beginRecording(f.caller(), "record"); // Same request is idempotent.
+  assert.throws(
+    () => f.controller.beginRecording(otherCaller, "record"),
+    /Another Composer/,
+  );
+  await assert.rejects(
+    f.controller.arm(otherCaller, "arm", false),
+    /Finish or cancel/,
+  );
+  await assert.rejects(
+    f.controller.arm(f.caller(), "arm", false, "both-shift"),
+    /Finish or cancel/,
+  );
+  f.controller.endRecording(otherCaller, "record");
+  f.controller.endRecording(f.caller(), "stale");
+  await assert.rejects(
+    f.controller.arm(f.caller(), "arm", false),
+    /Finish or cancel/,
+  );
+  assert.deepEqual(f.registeredKeys, []);
+  assert.equal(f.modifierStarts.length, 0);
+  assert.equal(f.activeCaptures, 0);
+  f.controller.endRecording(f.caller(), "record");
+  f.controller.beginRecording(f.caller(), "new-record");
+  f.controller.endRecording(f.caller(), "record");
+  await assert.rejects(
+    f.controller.arm(f.caller(), "arm", false),
+    /Finish or cancel/,
+  );
+  f.controller.endRecording(f.caller(), "new-record");
+  await f.controller.arm(f.caller(), "arm", false);
+  assert.deepEqual(f.registeredKeys, ["CommandOrControl+Shift+2"]);
+  f.controller.dispose();
+});
+
+test("navigation, renderer destruction and shutdown release recording admission without persistence or expiry", async () => {
+  for (const lifecycle of ["navigation", "destroy", "dispose"]) {
+    const f = fixture();
+    f.controller.beginRecording(f.caller(), "record");
+    if (lifecycle === "navigation") {
+      f.renderer.frame = {};
+      await f.controller.list(f.caller());
+    } else if (lifecycle === "destroy") f.controller.forget(f.renderer);
+    else f.controller.dispose();
+    await f.controller.arm(f.caller(), "after", false);
+    assert.deepEqual(f.registeredKeys, ["CommandOrControl+Shift+2"]);
+    f.controller.dispose();
+  }
+});
+
+test("known app and OS conflict IPC fails before replacing or registering an owner", async () => {
+  for (const [platform, conflicts] of [
+    ["darwin", ["mod+1", "mod+9", "mod+0", "mod+plus", "mod+-"]],
+    ["win32", ["mod+1", "mod+9", "alt+f4", "ctrl+shift+escape"]],
+    ["linux", ["mod+1", "alt+f4"]],
+  ] as const) {
+    const f = fixture(platform);
+    await f.controller.arm(f.caller(), "current", false);
+    for (const text of conflicts)
+      await assert.rejects(
+        f.controller.arm(
+          f.caller(),
+          "invalid",
+          false,
+          "chord",
+          parseAppShotKeyChord(text),
+        ),
+      );
+    assert.deepEqual(f.registeredKeys, ["CommandOrControl+Shift+2"]);
+    assert.deepEqual(f.unregisteredKeys, []);
+    assert.deepEqual(f.events, []);
     f.controller.dispose();
   }
 });

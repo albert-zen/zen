@@ -1,3 +1,11 @@
+import { useAppShotShortcutRecorder } from "./use-app-shot-shortcut-recorder.js";
+import {
+  APP_SHOT_DEFAULT_CHORD,
+  appShotKeyChordAccelerator,
+  appShotKeyChordFromEvent,
+  validateAppShotKeyChord,
+  type AppShotKeyChord,
+} from "../../app-shot-key-chord.js";
 import { abandonDraftImage } from "./draft-image-lifecycle.js";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -59,21 +67,29 @@ export function AppShotButton({
     window.zenx.platform === "darwin" || window.zenx.platform === "win32";
   // Snapshot only: another Composer or a storage event must not alter a live
   // shortcut session. Reading a choice never restores capture authority.
-  const [shortcutKind, setShortcutKind] = useState<AppShotShortcutKind>(() =>
+  const [shortcutSelection, setShortcutSelection] = useState(() =>
     readAppShotShortcutPreference(window.zenx.platform),
   );
+  const { kind: shortcutKind, chord: shortcutChord } = shortcutSelection;
   const [shortcutSaveFailed, setShortcutSaveFailed] = useState(false);
-  const changeShortcutKind = (kind: AppShotShortcutKind) => {
+  const changeShortcutKind = (
+    kind: AppShotShortcutKind,
+    chord: AppShotKeyChord = APP_SHOT_DEFAULT_CHORD,
+  ) => {
     if (
       disabled ||
       armed ||
       busy ||
       shortcutBusy ||
+      recorder.pending ||
+      recorder.releaseFailed ||
       (kind !== "chord" && !supportsModifierPairs)
     )
       return;
-    setShortcutKind(kind);
-    setShortcutSaveFailed(!saveAppShotShortcutPreference(kind));
+    const selection = { kind, chord };
+    recorder.stop();
+    setShortcutSelection(selection);
+    setShortcutSaveFailed(!saveAppShotShortcutPreference(selection));
   };
   const modifierChoices = [
     ["both-shift", "appShotBothShift"],
@@ -100,6 +116,20 @@ export function AppShotButton({
   const managedByHyprland =
     Boolean(configuration?.hyprlandBinding) ||
     portalState?.actionRegistered !== undefined;
+
+  const compositorManaged =
+    managedByHyprland || Boolean(configuration?.niriBinding);
+  // Wait for Linux capabilities before showing any ordinary chord preference.
+  const canChooseShortcut =
+    supportsModifierPairs || (configuration !== null && !compositorManaged);
+  const shortcutEditingDisabled = disabled || armed || busy || shortcutBusy;
+  const recorder = useAppShotShortcutRecorder({
+    api,
+    token,
+    disabled: shortcutEditingDisabled || !open || !canChooseShortcut,
+    onError: setError,
+  });
+  const { recording } = recorder;
 
   useEffect(() => {
     let current = true;
@@ -207,6 +237,7 @@ export function AppShotButton({
     operation.current++;
     pending.current = false;
     setExpanded(false);
+    recorder.stop();
     setOpen(false);
     for (const image of [currentImage.current, ...waitingImages.current])
       if (image) void api.discard(image.id).catch(() => {});
@@ -258,8 +289,19 @@ export function AppShotButton({
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (
+        event.defaultPrevented ||
+        (event.target instanceof window.Element &&
+          event.target.closest("[data-keybinding-capture]")) ||
         (armed &&
           shortcutKind === "chord" &&
+          shortcutChord.key === "2" &&
+          shortcutChord.shiftKey &&
+          !shortcutChord.altKey &&
+          (window.zenx.platform === "darwin"
+            ? (shortcutChord.modKey || shortcutChord.metaKey) &&
+              !shortcutChord.ctrlKey
+            : (shortcutChord.modKey || shortcutChord.ctrlKey) &&
+              !shortcutChord.metaKey) &&
           !configuration?.portalShortcut &&
           !portalState) ||
         event.repeat ||
@@ -276,13 +318,20 @@ export function AppShotButton({
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [armed, shortcutKind, configuration?.portalShortcut, portalState]);
+  }, [
+    armed,
+    shortcutKind,
+    shortcutChord,
+    configuration?.portalShortcut,
+    portalState,
+  ]);
 
   const close = () => {
     operation.current++;
     pending.current = false;
     setBusy(false);
     setExpanded(false);
+    recorder.stop();
     setOpen(false);
     for (const image of [currentImage.current, ...waitingImages.current])
       if (image) void api.discard(image.id).catch(() => {});
@@ -352,7 +401,12 @@ export function AppShotButton({
     }
   };
   const toggleShortcut = async (requested?: boolean) => {
-    if (latest.current.disabled) return;
+    if (
+      latest.current.disabled ||
+      (requested === true &&
+        (busy || recording || recorder.pending || recorder.releaseFailed))
+    )
+      return;
     const generation = ++shortcutOperation.current;
     const next = requested ?? !shortcutRequested.current;
     shortcutRequested.current = next;
@@ -368,7 +422,10 @@ export function AppShotButton({
         const result = await api.arm(
           registrationToken,
           includeAccessibility,
-          shortcutKind,
+          compositorManaged ? "chord" : shortcutKind,
+          !compositorManaged && shortcutKind === "chord"
+            ? shortcutChord
+            : undefined,
         );
         if (
           !live.current ||
@@ -441,6 +498,11 @@ export function AppShotButton({
         }}
         title={t("appShot")}
         className="app-shot-dialog"
+        onEscapeKeyDown={(event) => {
+          if (!recording) return;
+          event.preventDefault();
+          if (!event.repeat) recorder.stop();
+        }}
       >
         <div ref={overlay}>
           <header className="app-shot-heading">
@@ -616,8 +678,8 @@ export function AppShotButton({
                 <p>{t("appShotHyprlandRevokeHint")}</p>
               </details>
             )}
-            {!managedByHyprland && (
-              <fieldset disabled={disabled || armed || busy || shortcutBusy}>
+            {canChooseShortcut && (
+              <fieldset disabled={shortcutEditingDisabled}>
                 <legend>{t("appShotShortcutPreference")}</legend>
                 <p className="app-shot-hint">
                   {t("appShotShortcutRemembered")}
@@ -633,6 +695,7 @@ export function AppShotButton({
                       <input
                         type="radio"
                         name={`app-shot-shortcut-${token}`}
+                        disabled={recorder.pending || recorder.releaseFailed}
                         value={kind}
                         checked={shortcutKind === kind}
                         onChange={() => changeShortcutKind(kind)}
@@ -644,19 +707,135 @@ export function AppShotButton({
                   <input
                     type="radio"
                     name={`app-shot-shortcut-${token}`}
+                    disabled={recorder.pending || recorder.releaseFailed}
                     value="chord"
-                    checked={shortcutKind === "chord"}
+                    checked={
+                      shortcutKind === "chord" &&
+                      appShotKeyChordAccelerator(shortcutChord) ===
+                        appShotKeyChordAccelerator(APP_SHOT_DEFAULT_CHORD)
+                    }
                     onChange={() => changeShortcutKind("chord")}
                   />
                   {t("appShotChord")}
                 </label>
+                <button
+                  type="button"
+                  className="quiet-button"
+                  data-keybinding-capture=""
+                  aria-label={t("appShotRecordChord")}
+                  aria-pressed={recording}
+                  disabled={shortcutEditingDisabled || recorder.releaseFailed}
+                  onClick={() => {
+                    setError(null);
+                    void recorder.start();
+                  }}
+                  onBlur={() => {
+                    if (recording || recorder.pending) recorder.stop();
+                  }}
+                  onKeyDown={(event) => {
+                    if (
+                      !recording ||
+                      shortcutEditingDisabled ||
+                      event.key === "Tab" ||
+                      event.repeat
+                    )
+                      return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (event.key === "Escape") {
+                      recorder.stop();
+                      return;
+                    }
+                    if (
+                      !event.metaKey &&
+                      !event.ctrlKey &&
+                      !event.altKey &&
+                      !event.shiftKey
+                    )
+                      return;
+                    const chord = appShotKeyChordFromEvent(
+                      event,
+                      window.zenx.platform,
+                    );
+                    if (!chord) {
+                      if (
+                        ![
+                          "Control",
+                          "Shift",
+                          "Alt",
+                          "Meta",
+                          "OS",
+                          "AltGraph",
+                        ].includes(event.key)
+                      )
+                        setError(t("appShotUnsupportedChord"));
+                      return;
+                    }
+                    try {
+                      const normalized = validateAppShotKeyChord(
+                        chord,
+                        window.zenx.platform,
+                      );
+                      changeShortcutKind("chord", normalized);
+                      setError(null);
+                    } catch (cause) {
+                      setError(
+                        cause instanceof Error ? cause.message : String(cause),
+                      );
+                    }
+                  }}
+                >
+                  {recording ? t("appShotPressChord") : t("appShotRecordChord")}
+                </button>
+                {recorder.releaseFailed && (
+                  <p role="alert" className="settings-error">
+                    {t("appShotRecordingReleaseFailed")} {recorder.releaseError}
+                  </p>
+                )}
+                {recorder.releaseFailed && (
+                  <button
+                    type="button"
+                    className="quiet-button"
+                    onClick={() => recorder.retryRelease()}
+                  >
+                    {t("appShotStopRecording")}
+                  </button>
+                )}
+                {shortcutKind === "chord" && (
+                  <p className="app-shot-hint" data-app-shot-chord="">
+                    {t("appShotSelectedChord", {
+                      chord: appShotKeyChordAccelerator(shortcutChord)
+                        .replace(
+                          "CommandOrControl",
+                          window.zenx.platform === "darwin"
+                            ? "Command"
+                            : "Ctrl",
+                        )
+                        .replace(
+                          "Super",
+                          window.zenx.platform === "darwin"
+                            ? "Command"
+                            : "Super",
+                        ),
+                    })}
+                  </p>
+                )}
+                <p className="app-shot-hint">{t("appShotRecordHint")}</p>
               </fieldset>
             )}
             <label className="app-shot-option">
               <input
                 type="checkbox"
                 checked={armed}
-                disabled={disabled}
+                disabled={
+                  disabled ||
+                  (!armed &&
+                    (busy ||
+                      recording ||
+                      recorder.pending ||
+                      recorder.releaseFailed ||
+                      (!canChooseShortcut && !compositorManaged)))
+                }
                 onChange={(event) => void toggleShortcut(event.target.checked)}
               />
               {t(

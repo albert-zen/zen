@@ -90,7 +90,16 @@ export const en = {
     "Windows keys may also open the system menu. App Shot cannot reserve or suppress them.",
   appShotAltMenuWarning:
     "Alt keys may also activate app menu bars. App Shot cannot reserve or suppress them.",
-  appShotChord: "⌘/Ctrl+Shift+2",
+  appShotChord: "Default chord: ⌘/Ctrl+Shift+2",
+  appShotRecordChord: "Record a custom shortcut",
+  appShotStopRecording: "Release recording",
+  appShotRecordingReleaseFailed:
+    "Recording access was not released. Use Release recording to try again, or close this window. Capture cannot be enabled until release is confirmed.",
+  appShotUnsupportedChord: "This key is not supported. Choose another key.",
+  appShotPressChord: "Press a shortcut…",
+  appShotSelectedChord: "Selected: {{chord}}",
+  appShotRecordHint:
+    "Disable any active Composer shortcut before recording. Use a modifier and one key. Escape cancels; Tab leaves recording. Selection does not reserve keys. Enable to register; conflicts with other apps may fail then.",
   appShotShortcutWorking: "Updating shortcut…",
   appShotModifierPairHint:
     "Hold the left and right keys of the chosen modifier together, not a double tap. Only modifier state is observed; the keys are not reserved and typing is not recorded. May capture immediately if both are already held. Disable to stop. Nothing is sent until you review, attach and send.",
@@ -1182,7 +1191,16 @@ export const zhCN = {
     "Windows 键也可能打开系统菜单；应用快照无法独占或拦截它们。",
   appShotAltMenuWarning:
     "Alt 键也可能激活应用菜单栏；应用快照无法独占或拦截它们。",
-  appShotChord: "⌘/Ctrl+Shift+2",
+  appShotChord: "默认组合键：⌘/Ctrl+Shift+2",
+  appShotRecordChord: "录制自定义快捷键",
+  appShotStopRecording: "结束录制占用",
+  appShotRecordingReleaseFailed:
+    "录制占用尚未解除。请点击结束录制占用重试，或关闭此窗口；确认解除前不能启用捕获。",
+  appShotUnsupportedChord: "不支持此按键，请选择其他按键。",
+  appShotPressChord: "请按快捷键…",
+  appShotSelectedChord: "已选择：{{chord}}",
+  appShotRecordHint:
+    "录制前请在所属输入框关闭已启用的快捷键。使用修饰键加一个按键。Escape 取消；Tab 离开录制。选择不会占用按键，明确启用后才注册，届时仍可能与其他应用冲突。",
   appShotShortcutWorking: "正在更新快捷键…",
   appShotModifierPairHint:
     "同时按住所选修饰键的左右两枚按键，不是双击。只观察修饰键状态，不独占按键，也不记录输入内容；启用时若已同时按住，可能立即捕获。取消勾选即可停止。检查、添加到草稿并发送前，不会传给模型。",

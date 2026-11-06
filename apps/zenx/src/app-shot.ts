@@ -1,3 +1,4 @@
+import type { AppShotKeyChord } from "./app-shot-key-chord.js";
 import type { AppShotSource } from "./main/app-shot.js";
 import type { ZenXImageDraft } from "./main/image-attachments.js";
 
@@ -84,7 +85,10 @@ export interface AppShotApi {
     token: string,
     includeAccessibility: boolean,
     kind?: AppShotShortcutKind,
+    chord?: AppShotKeyChord,
   ): Promise<string | AppShotShortcutState>;
+  beginRecording(token: string): Promise<void>;
+  endRecording(token: string): Promise<void>;
   configureShortcut?(token: string): Promise<AppShotShortcutState>;
   disarm(token: string): Promise<void>;
   onCapture(listener: (event: AppShotEvent) => void): () => void;

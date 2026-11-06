@@ -1,3 +1,4 @@
+import type { AppShotKeyChord } from "../app-shot-key-chord.js";
 import type {
   AppShotApi,
   AppShotEvent,
@@ -367,16 +368,24 @@ contextBridge.exposeInMainWorld("zenx", {
         sourceId,
         includeAccessibility,
       ),
+    beginRecording: async (token: string) => {
+      await ipcRenderer.invoke(ipcChannels.appShotBeginRecording, token);
+    },
+    endRecording: async (token: string) => {
+      await ipcRenderer.invoke(ipcChannels.appShotEndRecording, token);
+    },
     arm: async (
       token: string,
       includeAccessibility: boolean,
       kind?: AppShotShortcutKind,
+      chord?: AppShotKeyChord,
     ) =>
       await ipcRenderer.invoke(
         ipcChannels.appShotArm,
         token,
         includeAccessibility,
         kind,
+        chord,
       ),
     disarm: async (token: string) => {
       await ipcRenderer.invoke(ipcChannels.appShotDisarm, token);

@@ -1,3 +1,7 @@
+import {
+  APP_SHOT_DEFAULT_CHORD,
+  parseAppShotKeyChord,
+} from "../src/app-shot-key-chord.js";
 /** Synthetic D-Bus only. These tests never connect to a real portal. */
 import assert from "node:assert/strict";
 import { it } from "node:test";
@@ -741,3 +745,54 @@ for (const failure of ["error", "end", "close", "owner", "session"] as const) {
     assert.equal(f.bus.calls.length, calls);
   });
 }
+
+it("keys generic portal identity to normalized preference and preserves desktop-assigned description", async () => {
+  const identities: string[] = [];
+  for (const [text, trigger] of [
+    ["mod+alt+space", "CTRL+ALT+space"],
+    ["control+alt+Space", "CTRL+ALT+space"],
+    ["ctrl+alt+plus", "CTRL+ALT+plus"],
+    ["mod+shift+arrowup", "CTRL+SHIFT+Up"],
+  ]) {
+    const f = fixture();
+    f.options.chord = parseAppShotKeyChord(text)!;
+    const handle = await f.start();
+    const bind = f.bus.calls.find((call) => call.member === "BindShortcuts")!;
+    assert.equal(bind.body[1][0][1].preferred_trigger.value, trigger);
+    assert.equal(handle.shortcutDescription, "Super+Print");
+    assert.equal(
+      f.bus.calls.some((call) => call.member === "ConfigureShortcuts"),
+      false,
+    );
+    identities.push(f.bus.shortcutId);
+    handle.stop();
+  }
+  assert.equal(identities[0], identities[1]);
+  assert.equal(new Set(identities).size, 3);
+});
+
+it("rejects unsupported or conflicting chords before loading D-Bus or asking for consent", async () => {
+  for (const chord of [
+    { ...APP_SHOT_DEFAULT_CHORD, key: "Unknown" },
+    parseAppShotKeyChord("alt+tab")!,
+    { ...APP_SHOT_DEFAULT_CHORD, modKey: false, shiftKey: false },
+  ]) {
+    const f = fixture();
+    f.options.chord = chord;
+    let loads = 0;
+    f.dependencies.loadDbus = async () => {
+      loads++;
+      throw new Error("unexpected");
+    };
+    await assert.rejects(f.start());
+    assert.equal(loads, 0);
+    assert.deepEqual(f.bus.calls, []);
+  }
+});
+
+it("refuses a custom chord for the fixed Hyprland action before connecting", async () => {
+  const f = fixture(true);
+  f.options.chord = parseAppShotKeyChord("ctrl+alt+k")!;
+  await assert.rejects(f.start(), /Hyprland bindings/);
+  assert.deepEqual(f.bus.calls, []);
+});

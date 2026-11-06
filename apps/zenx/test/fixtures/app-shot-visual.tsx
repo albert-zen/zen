@@ -102,7 +102,14 @@ const kde = params.get("platform") === "kde";
 const hyprland = params.get("platform") === "hyprland";
 const nativeReady = params.get("helper") === "ready";
 const portal = params.get("platform") === "portal" || gnome || kde || hyprland;
+const previewCalls = { arm: 0, capture: 0, beginRecording: 0, endRecording: 0 };
 const api: AppShotApi = {
+  beginRecording: async () => {
+    previewCalls.beginRecording++;
+  },
+  endRecording: async () => {
+    previewCalls.endRecording++;
+  },
   configuration: async () =>
     niri
       ? {
@@ -147,6 +154,7 @@ const api: AppShotApi = {
     },
   ],
   capture: async (_sourceId, includeAccessibility) => {
+    previewCalls.capture++;
     previewShot =
       params.get("context") === "semantic" && includeAccessibility
         ? {
@@ -161,12 +169,14 @@ const api: AppShotApi = {
   read: async () => png,
   attach: async () => previewShot,
   discard: async () => {},
-  arm: async () =>
-    hyprland
+  arm: async () => {
+    previewCalls.arm++;
+    return hyprland
       ? { registered: false, actionRegistered: true, canConfigure: false }
       : portal
         ? { registered: false, canConfigure: true }
-        : "⌘⇧2",
+        : "⌘⇧2";
+  },
   configureShortcut: async () => ({
     registered: true,
     shortcutDescription: "Super+F8",
@@ -176,6 +186,7 @@ const api: AppShotApi = {
   onCapture: () => () => {},
 };
 Object.assign(window, {
+  appShotPreviewCalls: previewCalls,
   zenx: {
     platform:
       niri || portal

@@ -1,4 +1,6 @@
 export const ipcChannels = {
+  appShotBeginRecording: "zenx:app-shot:begin-recording",
+  appShotEndRecording: "zenx:app-shot:end-recording",
   appShotConfigureShortcut: "zenx:app-shot:configure-shortcut",
   appShotConfiguration: "zenx:app-shot:configuration",
   appShotRead: "zenx:app-shot:read",

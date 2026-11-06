@@ -2076,6 +2076,8 @@ function installFailedProtocolIpc(message: string): void {
     ipcChannels.appShotList,
     ipcChannels.appShotCapture,
     ipcChannels.appShotArm,
+    ipcChannels.appShotBeginRecording,
+    ipcChannels.appShotEndRecording,
     ipcChannels.appShotDisarm,
     ipcChannels.imageAttachmentsPick,
     ipcChannels.imageAttachmentsImport,

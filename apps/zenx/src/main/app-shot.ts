@@ -16,6 +16,7 @@ import type { PortalAppShotCapture } from "./app-shot-portal.js";
 import {
   resizeAppShotAccessibility,
   isAppShotImageSize,
+  isAppShotIdentity,
   type AppShotImageSize,
   type AppShotLinuxCaptureIdentity,
   type AppShotText,
@@ -62,17 +63,24 @@ export interface AppShotAccessibilityRead {
   truncated?: boolean;
 }
 
+export interface AppShotCaptureOptions {
+  includeAccessibility?: boolean;
+  signal?: AbortSignal;
+  /** Host-only narrowing for an already observed exact macOS target; never renderer IPC. */
+  expectedIdentity?: AppShotActiveWindow;
+}
+
 export interface AppShotService {
+  readonly hasExactWindowSurfaceCapture?: boolean;
   readonly hasNativeActiveCapture?: boolean;
   listSources(): Promise<AppShotSource[]>;
   capture(
     sourceId: string,
-    options?: { includeAccessibility?: boolean; signal?: AbortSignal },
+    options?: AppShotCaptureOptions,
   ): Promise<AppShotCapture>;
-  captureActive(options?: {
-    includeAccessibility?: boolean;
-    signal?: AbortSignal;
-  }): Promise<AppShotCapture | undefined>;
+  captureActive(
+    options?: AppShotCaptureOptions,
+  ): Promise<AppShotCapture | undefined>;
 }
 
 export interface AppShotDependencies {
@@ -82,6 +90,11 @@ export interface AppShotDependencies {
     height: number;
   }): Promise<readonly AppShotNativeSource[]>;
   excludedSourceIds?: () => readonly string[];
+  /** Exact macOS surface transport; metadata is mandatory and thumbnails are never requested. */
+  captureWindowSurface?: (
+    identity: AppShotActiveWindow,
+    options: { signal?: AbortSignal },
+  ) => Promise<Uint8Array>;
   readAccessibility?: (request: {
     windowId: number;
     windowTitle: string;
@@ -139,6 +152,7 @@ export function createAppShotService(
 ): AppShotService {
   let selections = new Map<string, Selection>();
   return {
+    hasExactWindowSurfaceCapture: Boolean(dependencies.captureWindowSurface),
     hasNativeActiveCapture: Boolean(
       dependencies.captureActiveNative || dependencies.getActiveWindow,
     ),
@@ -172,6 +186,18 @@ export function createAppShotService(
       return listed;
     },
     async captureActive(options) {
+      if (
+        options?.expectedIdentity !== undefined &&
+        (!dependencies.captureWindowSurface ||
+          dependencies.captureActiveNative ||
+          !isAppShotIdentity({
+            ...options.expectedIdentity,
+            platform: "darwin",
+          }))
+      )
+        throw new Error(
+          "Expected App Shot window identity is invalid or unsupported",
+        );
       if (options?.signal?.aborted) throw new Error("App Shot cancelled");
       if (dependencies.captureActiveNative)
         return dependencies.captureActiveNative(options);
@@ -187,10 +213,19 @@ export function createAppShotService(
         !Number.isSafeInteger(active.pid) ||
         active.pid <= 0 ||
         active.pid === process.pid ||
-        !active.windowTitle
+        !active.windowTitle ||
+        (dependencies.captureWindowSurface &&
+          !isAppShotIdentity({ ...active, platform: "darwin" }))
       )
         throw new Error(
           "Active window identity is unavailable; choose a window instead",
+        );
+      if (
+        options?.expectedIdentity !== undefined &&
+        !sameObservedWindow(options.expectedIdentity, active)
+      )
+        throw new Error(
+          "Foreground window does not match the expected App Shot identity",
         );
       await this.listSources();
       const matches = Array.from(selections, ([token, value]) => ({
@@ -205,8 +240,16 @@ export function createAppShotService(
         throw new Error(
           "Active window is unavailable or ambiguous; choose a window instead",
         );
-      const shot = await this.capture(matches[0]!.token, options);
+      // The host's optional expected identity already matched active above. Preserve
+      // that initial observation, rather than rebinding a reused ID before pixels.
+      const shot = await this.capture(matches[0]!.token, {
+        ...options,
+        ...(dependencies.captureWindowSurface
+          ? { expectedIdentity: active }
+          : {}),
+      });
       const after = await dependencies.getActiveWindow();
+      if (options?.signal?.aborted) throw new Error("App Shot cancelled");
       if (!sameObservedWindow(active, after))
         throw new Error(
           "Active window changed during App Shot; choose a window instead",
@@ -219,6 +262,17 @@ export function createAppShotService(
         : shot;
     },
     async capture(sourceId, options) {
+      if (
+        options?.expectedIdentity !== undefined &&
+        (!dependencies.captureWindowSurface ||
+          !isAppShotIdentity({
+            ...options.expectedIdentity,
+            platform: "darwin",
+          }))
+      )
+        throw new Error(
+          "Expected App Shot window identity is invalid or unsupported",
+        );
       if (options?.signal?.aborted) throw new Error("App Shot cancelled");
       const selected = selections.get(sourceId);
       if (selected === undefined)
@@ -237,14 +291,28 @@ export function createAppShotService(
           if (
             before.windowId === selected.windowId &&
             before.windowTitle === selected.title &&
+            Number.isSafeInteger(before.pid) &&
             before.pid > 0
           )
             expectedIdentity = before;
         } catch {
-          /* Metadata is optional for an explicit screenshot. */
+          /* Exact surface capture below fails closed; legacy thumbnail metadata is optional. */
         }
       }
-      const sources = await dependencies.getWindowSources(CAPTURE_SIZE);
+      if (
+        dependencies.captureWindowSurface &&
+        (!expectedIdentity ||
+          !isAppShotIdentity({ ...expectedIdentity, platform: "darwin" }) ||
+          expectedIdentity.pid === process.pid ||
+          (options?.expectedIdentity !== undefined &&
+            !sameObservedWindow(options.expectedIdentity, expectedIdentity)))
+      )
+        throw new Error(
+          "Selected window requires exact external PID, title and bounds before App Shot",
+        );
+      const sources = await dependencies.getWindowSources(
+        dependencies.captureWindowSurface ? LIST_SIZE : CAPTURE_SIZE,
+      );
       const matches = sources.filter(
         (candidate) => candidate.id === selected.nativeId,
       );
@@ -255,11 +323,25 @@ export function createAppShotService(
       const source = matches[0]!;
       if (source.title !== selected.title)
         throw new Error("Selected window title changed; choose it again");
-      if (!source.image || source.image.isEmpty())
-        throw new Error(
-          "Selected window capture is empty; check Screen Recording permission and try again",
-        );
-      const bytes = source.image.toPNG();
+      if (options?.signal?.aborted) throw new Error("App Shot cancelled");
+      if (excluded(selected.nativeId, dependencies.excludedSourceIds?.() ?? []))
+        throw new Error("App Shot cannot capture its own window");
+      let bytes: Uint8Array;
+      if (dependencies.captureWindowSurface) {
+        if (selections.get(sourceId) !== selected)
+          throw new Error(
+            "App Shot selection is stale; choose the window again",
+          );
+        bytes = await dependencies.captureWindowSurface(expectedIdentity!, {
+          signal: options?.signal,
+        });
+      } else {
+        if (!source.image || source.image.isEmpty())
+          throw new Error(
+            "Selected window capture is empty; check Screen Recording permission and try again",
+          );
+        bytes = source.image.toPNG();
+      }
       if (!bytes.byteLength)
         throw new Error("Selected window capture is empty");
       if (bytes.byteLength > MAX_IMAGE_BYTES)
@@ -274,7 +356,11 @@ export function createAppShotService(
         )
       )
         throw new Error("Selected window changed during App Shot");
-      if (dependencies.getWindowMetadata) {
+      if (dependencies.captureWindowSurface) {
+        applicationName = expectedIdentity?.applicationName
+          ? plain(expectedIdentity.applicationName, 100)
+          : undefined;
+      } else if (dependencies.getWindowMetadata) {
         try {
           const metadata = await dependencies.getWindowMetadata(
             selected.windowId,
@@ -306,7 +392,8 @@ export function createAppShotService(
             read?.windowId === selected.windowId &&
             read.windowTitle === selected.title &&
             Number.isSafeInteger(read.pid) &&
-            read.pid > 0
+            read.pid > 0 &&
+            (!expectedIdentity || read.pid === expectedIdentity.pid)
           ) {
             applicationName = read.applicationName
               ? plain(read.applicationName, 100)
@@ -335,9 +422,27 @@ export function createAppShotService(
         }
       }
       if (options?.signal?.aborted) throw new Error("App Shot cancelled");
+      if (dependencies.captureWindowSurface) {
+        if (
+          selections.get(sourceId) !== selected ||
+          excluded(
+            selected.nativeId,
+            dependencies.excludedSourceIds?.() ?? [],
+          ) ||
+          !sameObservedWindow(
+            expectedIdentity!,
+            await dependencies.getWindowMetadata!(selected.windowId),
+          )
+        )
+          throw new Error("Selected window changed during App Shot");
+        if (options?.signal?.aborted) throw new Error("App Shot cancelled");
+      }
       const context = [
         `App Shot of external window "${plain(selected.title, 1000)}"${applicationName ? ` in ${applicationName}` : ""}.`,
         `Captured at: ${capturedAt}.`,
+        ...(dependencies.captureWindowSurface
+          ? ["Capture: exact macOS window surface, without its drop shadow."]
+          : []),
         accessibility?.text
           ? appShotAccessibilityContext(accessibility)
           : options?.includeAccessibility
@@ -355,7 +460,7 @@ export function createAppShotService(
   };
 }
 
-/** Electron adapter: never requests screen sources or keeps unselected thumbnails. */
+/** Electron adapter: macOS enumerates metadata only; other explicit pickers retain Electron window thumbnails. */
 export function createElectronAppShotService(
   options: {
     excludedSourceIds?: () => readonly string[];
@@ -363,11 +468,26 @@ export function createElectronAppShotService(
 ): AppShotService {
   return createAppShotService({
     excludedSourceIds: options.excludedSourceIds,
+    captureWindowSurface:
+      process.platform === "darwin"
+        ? async (identity, captureOptions) => {
+            const { captureMacAppShotWindow } =
+              await import("./app-shot-macos.js");
+            return captureMacAppShotWindow(identity, {
+              signal: captureOptions.signal,
+              excludedWindowIds: () =>
+                (options.excludedSourceIds?.() ?? [])
+                  .map(windowIdOf)
+                  .filter((id): id is number => id !== undefined),
+            });
+          }
+        : undefined,
     getWindowSources: async (thumbnailSize) => {
       const { desktopCapturer } = await import("electron");
       const sources = await desktopCapturer.getSources({
         types: ["window"],
-        thumbnailSize,
+        thumbnailSize:
+          process.platform === "darwin" ? LIST_SIZE : thumbnailSize,
         fetchWindowIcons: false,
       });
       return sources.map((source) => ({

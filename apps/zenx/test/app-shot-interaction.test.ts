@@ -1,3 +1,7 @@
+import {
+  appShotKeyChordAccelerator,
+  type AppShotKeyChord,
+} from "../src/app-shot-key-chord.js";
 import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -53,6 +57,7 @@ async function fixture(
     armRequests: Array<{
       token: string;
       kind?: AppShotShortcutKind;
+      chord?: AppShotKeyChord;
       includeAccessibility: boolean;
     }>;
     calls: string[];
@@ -89,12 +94,26 @@ async function fixture(
   const armRequests: Array<{
     token: string;
     kind?: AppShotShortcutKind;
+    chord?: AppShotKeyChord;
     includeAccessibility: boolean;
   }> = [];
   const calls: string[] = [];
   const listeners = new Set<(event: AppShotEvent) => void>();
   let armed: string | null = null;
+  let recordingPermit: string | null = null;
   const api: AppShotApi = {
+    configuration: async () => ({ nativeForeground: false }),
+    beginRecording: async (token) => {
+      if (armed)
+        throw new Error(
+          "Disable the active App Shot shortcut in its Composer before recording.",
+        );
+      if (recordingPermit) throw new Error("Another Composer is recording.");
+      recordingPermit = token;
+    },
+    endRecording: async (token) => {
+      if (recordingPermit === token) recordingPermit = null;
+    },
     list: async () => {
       calls.push("list");
       return [{ id: "source", title: "Example" }];
@@ -116,8 +135,9 @@ async function fixture(
     discard: async (id) => {
       discarded.push(id);
     },
-    arm: async (token, includeAccessibility, kind) => {
-      armRequests.push({ token, kind, includeAccessibility });
+    arm: async (token, includeAccessibility, kind, chord) => {
+      if (recordingPermit) throw new Error("Finish or cancel recording first.");
+      armRequests.push({ token, kind, chord, includeAccessibility });
       armed = token;
       return "⌘⇧2";
     },
@@ -1298,5 +1318,586 @@ test("physical pair choices cannot change during pending capture or shortcut sta
     );
     assert.equal(armRequests.length, 0);
     await act(async () => captured.resolve(shot));
+  });
+});
+
+function recordButton(): HTMLButtonElement {
+  const element = document.querySelector<HTMLButtonElement>(
+    "[data-keybinding-capture]",
+  );
+  assert.ok(element, "Missing custom chord recorder");
+  return element;
+}
+async function pressRecorder(init: KeyboardEventInit) {
+  const event = new window.KeyboardEvent("keydown", {
+    bubbles: true,
+    cancelable: true,
+    ...init,
+  });
+  await act(async () => recordButton().dispatchEvent(event));
+  return event;
+}
+async function startRecording(click: (label: string) => Promise<void>) {
+  await act(async () => recordButton().focus());
+  await click("Record a custom shortcut");
+  assert.equal(recordButton().getAttribute("aria-pressed"), "true");
+}
+
+test("actual recorder cancels Escape, ignores Tab/repeat, releases on blur and remount, and never auto-arms", async () => {
+  await fixture(async ({ click, render, armRequests, calls, attached }) => {
+    await click("App Shot");
+    await startRecording(click);
+    await pressRecorder({ key: "Escape", code: "Escape" });
+    assert.equal(recordButton().getAttribute("aria-pressed"), "false");
+    assert.ok(
+      Boolean(document.querySelector('[role="dialog"]')),
+      "Escape cancels recording, not the dialog",
+    );
+    await startRecording(click);
+    await pressRecorder({ key: "Tab", code: "Tab" });
+    // The Dialog moves focus on Tab; blur ends recording without saving Tab.
+    assert.equal(window.localStorage.getItem(shortcutPreferenceKey), null);
+    assert.equal(recordButton().getAttribute("aria-pressed"), "false");
+    await startRecording(click);
+    await pressRecorder({
+      key: "K",
+      code: "KeyK",
+      metaKey: true,
+      altKey: true,
+      repeat: true,
+    });
+    assert.equal(recordButton().getAttribute("aria-pressed"), "true");
+    assert.equal(window.localStorage.getItem(shortcutPreferenceKey), null);
+    await act(async () => shortcutRadio("chord").focus());
+    assert.equal(recordButton().getAttribute("aria-pressed"), "false");
+    await startRecording(click);
+    await render(false, "remount");
+    await click("App Shot");
+    assert.equal(recordButton().getAttribute("aria-pressed"), "false");
+    await startRecording(click); // The old instance released its admission.
+    await pressRecorder({
+      key: "@",
+      code: "Digit2",
+      metaKey: true,
+      shiftKey: true,
+    });
+    assert.equal(recordButton().getAttribute("aria-pressed"), "false");
+    assert.equal(shortcutRadio("chord").checked, true);
+    assert.equal(window.localStorage.getItem(shortcutPreferenceKey), "chord");
+    assert.deepEqual(armRequests, []);
+    assert.deepEqual(attached, []);
+    assert.deepEqual(calls, ["list", "list"]);
+  });
+});
+
+test("custom selection survives remount without authority and blocked storage retains only the live choice", async () => {
+  await fixture(async ({ click, render, armRequests }) => {
+    await click("App Shot");
+    await startRecording(click);
+    await pressRecorder({
+      key: "k",
+      code: "KeyK",
+      metaKey: true,
+      altKey: true,
+    });
+    assert.equal(
+      document.querySelector("[data-app-shot-chord]")?.textContent,
+      "Selected: Command+Alt+K",
+    );
+    assert.equal(
+      shortcutRadio("chord").checked,
+      false,
+      "Custom selection is not mislabeled as the default",
+    );
+    assert.equal(
+      window.localStorage.getItem(shortcutPreferenceKey),
+      '{"kind":"chord","chord":"mod+alt+k"}',
+    );
+    await render(false, "fresh");
+    await click("App Shot");
+    assert.equal(
+      document.querySelector("[data-app-shot-chord]")?.textContent,
+      "Selected: Command+Alt+K",
+    );
+    assert.equal(shortcutCheckbox().checked, false);
+    assert.equal(applicationTextCheckbox().checked, false);
+    const prototype = Object.getPrototypeOf(window.localStorage) as Storage;
+    const original = prototype.setItem;
+    prototype.setItem = () => {
+      throw new Error("blocked");
+    };
+    try {
+      await startRecording(click);
+      await pressRecorder({
+        key: " ",
+        code: "Space",
+        metaKey: true,
+        shiftKey: true,
+      });
+      assert.match(
+        document.querySelector('[role="alert"]')?.textContent ?? "",
+        /could not be saved/,
+      );
+      assert.equal(
+        document.querySelector("[data-app-shot-chord]")?.textContent,
+        "Selected: Command+Shift+Space",
+      );
+      assert.equal(
+        window.localStorage.getItem(shortcutPreferenceKey),
+        '{"kind":"chord","chord":"mod+alt+k"}',
+      );
+      assert.equal(armRequests.length, 0);
+    } finally {
+      prototype.setItem = original;
+    }
+    await act(async () => shortcutCheckbox().click());
+    assert.equal(
+      appShotKeyChordAccelerator(armRequests[0]!.chord!),
+      "CommandOrControl+Shift+Space",
+    );
+    assert.equal(recordButton().disabled, true);
+  });
+});
+
+test("unsupported and editing conflicts remain visible and cannot save or arm", async () => {
+  await fixture(async ({ click, armRequests }) => {
+    await click("App Shot");
+    await startRecording(click);
+    for (const key of [
+      { key: "c", code: "KeyC", metaKey: true },
+      { key: "k", code: "KeyK", shiftKey: true },
+      { key: "MediaPlayPause", code: "MediaPlayPause", metaKey: true },
+    ]) {
+      await pressRecorder(key);
+      assert.ok(
+        Boolean(document.querySelector('[role="alert"]')),
+        "Invalid recording needs visible feedback",
+      );
+      assert.equal(recordButton().getAttribute("aria-pressed"), "true");
+      assert.equal(window.localStorage.getItem(shortcutPreferenceKey), null);
+      assert.deepEqual(armRequests, []);
+    }
+    await pressRecorder({ key: "Escape" });
+  });
+});
+
+test("another armed Composer blocks Record visibly without capture or silent revocation", async () => {
+  await fixture(
+    async ({ click, render, armed, armRequests, disarmed, calls }) => {
+      await render(false, "one", true);
+      await click("App Shot");
+      await act(async () => shortcutCheckbox().click());
+      const owner = armed();
+      await click("Close App Shot");
+      const buttons = [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          '[aria-label="App Shot"]',
+        ),
+      ];
+      await act(async () => buttons[1]!.click());
+      await click("Record a custom shortcut");
+      assert.match(
+        document.querySelector('[role="alert"]')?.textContent ?? "",
+        /Disable the active/,
+      );
+      assert.equal(recordButton().getAttribute("aria-pressed"), "false");
+      assert.equal(armed(), owner);
+      assert.equal(armRequests.length, 1);
+      assert.deepEqual(disarmed, []);
+      assert.deepEqual(calls, ["list", "list"]);
+      assert.equal(window.localStorage.getItem(shortcutPreferenceKey), null);
+    },
+  );
+});
+
+test("local fixed picker remains available with a different custom chord but not a matching chord", async () => {
+  for (const custom of [true, false])
+    await fixture(async ({ click, calls }) => {
+      await click("App Shot");
+      if (custom) {
+        await startRecording(click);
+        await pressRecorder({
+          key: "k",
+          code: "KeyK",
+          metaKey: true,
+          altKey: true,
+        });
+      } else await act(async () => shortcutRadio("chord").click());
+      await act(async () => shortcutCheckbox().click());
+      await click("Close App Shot");
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>('[aria-label="App Shot"]')!
+          .focus(),
+      );
+      await act(async () =>
+        document.dispatchEvent(
+          new window.KeyboardEvent("keydown", {
+            key: "@",
+            code: "Digit2",
+            metaKey: true,
+            shiftKey: true,
+            bubbles: true,
+            cancelable: true,
+          }),
+        ),
+      );
+      assert.equal(Boolean(document.querySelector('[role="dialog"]')), custom);
+      assert.equal(
+        calls.filter((call) => call === "list").length,
+        custom ? 2 : 1,
+      );
+    });
+});
+
+test("Niri and Hyprland do not expose ordinary chord recording or apply a saved custom chord", async () => {
+  for (const mode of ["niri", "hyprland"])
+    await fixture(
+      async ({ api, click, armRequests }) => {
+        api.configuration = async () => ({
+          nativeForeground: true,
+          ...(mode === "niri"
+            ? { niriBinding: "manual" }
+            : {
+                hyprlandBinding: { legacy: "manual", lua: "manual" },
+                portalShortcut: true as const,
+              }),
+        });
+        await click("App Shot");
+        assert.equal(
+          Boolean(document.querySelector("[data-keybinding-capture]")),
+          false,
+        );
+        assert.equal(Boolean(document.querySelector("fieldset")), false);
+        await act(async () => shortcutCheckbox().click());
+        assert.equal(armRequests[0]?.kind, "chord");
+        assert.equal(armRequests[0]?.chord, undefined);
+        assert.equal(
+          [...document.querySelectorAll("button")].some(
+            (button) => button.textContent === "Configure shortcut",
+          ),
+          false,
+        );
+      },
+      "linux",
+      (dom) =>
+        dom.window.localStorage.setItem(
+          shortcutPreferenceKey,
+          '{"kind":"chord","chord":"mod+alt+k"}',
+        ),
+    );
+});
+
+test("blur or unmount during pending Record releases late admission without ending a newer recorder", async () => {
+  for (const interrupt of ["blur", "unmount"])
+    await fixture(async ({ api, click, render, armRequests }) => {
+      const originalBegin = api.beginRecording;
+      const originalEnd = api.endRecording;
+      const delayed = deferred<void>();
+      const begun: string[] = [];
+      const ended: string[] = [];
+      api.beginRecording = async (token) => {
+        begun.push(token);
+        await originalBegin(token);
+        if (begun.length === 1) await delayed.promise;
+      };
+      api.endRecording = async (token) => {
+        ended.push(token);
+        await originalEnd(token);
+      };
+      await click("App Shot");
+      await act(async () => recordButton().focus());
+      await click("Record a custom shortcut");
+      assert.equal(recordButton().getAttribute("aria-pressed"), "false");
+      assert.equal(shortcutCheckbox().disabled, true);
+      if (interrupt === "blur")
+        await act(async () =>
+          document
+            .querySelector<HTMLButtonElement>('[aria-label="Close App Shot"]')!
+            .focus(),
+        );
+      else {
+        await render(false, "replacement");
+        await click("App Shot");
+      }
+      assert.ok(ended.includes(begun[0]!));
+      await startRecording(click);
+      assert.equal(begun.length, 2);
+      await act(async () => delayed.resolve());
+      assert.equal(recordButton().getAttribute("aria-pressed"), "true");
+      assert.equal(ended.includes(begun[1]!), false);
+      assert.deepEqual(armRequests, []);
+      await pressRecorder({ key: "Escape" });
+      assert.ok(ended.includes(begun[1]!));
+    });
+});
+
+test("failed recording release stays visible, blocks enable and retries only on explicit release", async () => {
+  await fixture(async ({ api, click, armRequests }) => {
+    const originalEnd = api.endRecording;
+    let attempts = 0;
+    api.endRecording = async (token) => {
+      attempts++;
+      if (attempts === 1) throw new Error("Recording release unavailable");
+      await originalEnd(token);
+    };
+    await click("App Shot");
+    await startRecording(click);
+    await pressRecorder({ key: "Escape" });
+    assert.match(
+      document.body.textContent!,
+      /Recording access was not released/,
+    );
+    assert.equal(shortcutCheckbox().disabled, true);
+    assert.equal(recordButton().disabled, true);
+    assert.equal(attempts, 1);
+    await act(async () => shortcutCheckbox().click());
+    assert.deepEqual(armRequests, []);
+    assert.equal(attempts, 1);
+    await click("Release recording");
+    assert.equal(attempts, 2);
+    assert.equal(recordButton().disabled, false);
+    assert.equal(shortcutCheckbox().disabled, false);
+    assert.deepEqual(armRequests, []);
+  });
+});
+
+test("late recording admission does not automatically retry a failed release", async () => {
+  await fixture(async ({ api, click, armRequests }) => {
+    const originalBegin = api.beginRecording;
+    const originalEnd = api.endRecording;
+    const delayed = deferred<void>();
+    let attempts = 0;
+    api.beginRecording = async (token) => {
+      await originalBegin(token);
+      await delayed.promise;
+    };
+    api.endRecording = async (token) => {
+      attempts++;
+      if (attempts === 1) throw new Error("release unavailable");
+      await originalEnd(token);
+    };
+    await click("App Shot");
+    await act(async () => recordButton().focus());
+    await click("Record a custom shortcut");
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="Close App Shot"]')!
+        .focus(),
+    );
+    assert.equal(attempts, 1);
+    assert.match(
+      document.body.textContent!,
+      /Recording access was not released/,
+    );
+    await act(async () => delayed.resolve());
+    assert.equal(attempts, 1);
+    assert.equal(recordButton().getAttribute("aria-pressed"), "false");
+    assert.equal(shortcutCheckbox().disabled, true);
+    assert.deepEqual(armRequests, []);
+    await click("Release recording");
+    assert.equal(attempts, 2);
+    assert.equal(shortcutCheckbox().disabled, false);
+  });
+});
+
+test("failed unmount release survives replacement and only explicit recovery releases that token", async () => {
+  await fixture(async ({ api, click, render, armRequests }) => {
+    const originalBegin = api.beginRecording;
+    const originalEnd = api.endRecording;
+    const started: string[] = [];
+    const ended: string[] = [];
+    api.beginRecording = async (token) => {
+      started.push(token);
+      await originalBegin(token);
+    };
+    api.endRecording = async (token) => {
+      ended.push(token);
+      if (ended.length === 1) throw new Error("unmount release unavailable");
+      await originalEnd(token);
+    };
+    await click("App Shot");
+    await startRecording(click);
+    await render(false, "replacement");
+    await click("App Shot");
+    assert.equal(recordButton().getAttribute("aria-pressed"), "false");
+    assert.match(
+      document.body.textContent!,
+      /Recording access was not released/,
+    );
+    assert.match(document.body.textContent!, /unmount release unavailable/);
+    assert.equal(shortcutCheckbox().disabled, true);
+    assert.equal(recordButton().disabled, true);
+    assert.deepEqual(ended, [started[0]]);
+    assert.equal(started.length, 1);
+    assert.deepEqual(armRequests, []);
+    await click("Release recording");
+    assert.deepEqual(ended, [started[0], started[0]]);
+    assert.equal(shortcutCheckbox().disabled, false);
+    await startRecording(click);
+    assert.equal(started.length, 2);
+    assert.notEqual(started[0], started[1]);
+    await render(false, "successful-cleanup");
+    await click("App Shot");
+    assert.equal(Boolean(document.querySelector('[role="alert"]')), false);
+    assert.equal(shortcutCheckbox().disabled, false);
+    assert.equal(ended.at(-1), started[1]);
+    await startRecording(click);
+    assert.equal(started.length, 3);
+    await pressRecorder({ key: "Escape" });
+  });
+});
+
+test("pending unmount release reports a late failure to the new Composer without retrying", async () => {
+  await fixture(async ({ api, click, render }) => {
+    const originalEnd = api.endRecording;
+    const delayed = deferred<void>();
+    let attempts = 0;
+    api.endRecording = async (token) => {
+      attempts++;
+      if (attempts === 1) {
+        await delayed.promise;
+        throw new Error("late unmount failure");
+      }
+      await originalEnd(token);
+    };
+    await click("App Shot");
+    await startRecording(click);
+    await render(false, "new");
+    await click("App Shot");
+    assert.equal(shortcutCheckbox().disabled, true);
+    await act(async () => delayed.resolve());
+    assert.match(document.body.textContent!, /late unmount failure/);
+    assert.equal(attempts, 1);
+    await click("Release recording");
+    assert.equal(attempts, 2);
+    await startRecording(click);
+    await pressRecorder({ key: "Escape" });
+  });
+});
+
+test("a sibling can retry failed release without leaving the original Composer stuck on a released token", async () => {
+  await fixture(async ({ api, click, render }) => {
+    const originalEnd = api.endRecording;
+    let attempts = 0;
+    api.endRecording = async (token) => {
+      attempts++;
+      if (attempts === 1) throw new Error("release unavailable");
+      await originalEnd(token);
+    };
+    await render(false, "one", true);
+    await click("App Shot");
+    await startRecording(click);
+    await pressRecorder({ key: "Escape" });
+    assert.equal(attempts, 1);
+    // Closing remains an explicit cancellation; keep the dialog mounted but open
+    // the sibling by its own external entry to exercise the shared cleanup receipt.
+    const buttons = [
+      ...document.querySelectorAll<HTMLButtonElement>(
+        '[aria-label="App Shot"]',
+      ),
+    ];
+    await act(async () => buttons[1]!.click());
+    const releases = [
+      ...document.querySelectorAll<HTMLButtonElement>("button"),
+    ].filter((button) => button.textContent === "Release recording");
+    assert.equal(releases.length, 2);
+    await act(async () => releases[1]!.click());
+    assert.equal(attempts, 2);
+    // Both components observed the same successful exact-token cleanup.
+    const recorders = [
+      ...document.querySelectorAll<HTMLButtonElement>(
+        "[data-keybinding-capture]",
+      ),
+    ];
+    assert.equal(
+      recorders.every((button) => !button.disabled),
+      true,
+    );
+    await act(async () => recorders[0]!.click());
+    assert.equal(recorders[0]!.getAttribute("aria-pressed"), "true");
+  });
+});
+
+test("window blur and page hiding stop recording and release pending admission", async () => {
+  for (const signal of ["blur", "hidden"])
+    for (const pendingBegin of [false, true])
+      await fixture(async ({ api, click, armRequests }) => {
+        const originalBegin = api.beginRecording;
+        const originalEnd = api.endRecording;
+        const delayed = deferred<void>();
+        const ended: string[] = [];
+        api.beginRecording = async (token) => {
+          await originalBegin(token);
+          if (pendingBegin) await delayed.promise;
+        };
+        api.endRecording = async (token) => {
+          ended.push(token);
+          await originalEnd(token);
+        };
+        await click("App Shot");
+        await act(async () => recordButton().focus());
+        await click("Record a custom shortcut");
+        await act(async () => {
+          if (signal === "blur") window.dispatchEvent(new window.Event("blur"));
+          else {
+            Object.defineProperty(document, "visibilityState", {
+              configurable: true,
+              value: "hidden",
+            });
+            document.dispatchEvent(new window.Event("visibilitychange"));
+          }
+        });
+        assert.equal(recordButton().getAttribute("aria-pressed"), "false");
+        assert.ok(ended.length >= 1);
+        if (pendingBegin) await act(async () => delayed.resolve());
+        assert.equal(recordButton().getAttribute("aria-pressed"), "false");
+        assert.deepEqual(armRequests, []);
+        assert.equal(window.localStorage.getItem(shortcutPreferenceKey), null);
+        await startRecording(click);
+        await pressRecorder({ key: "Escape" });
+      });
+});
+
+test("recovered unmounted admission cannot release or interrupt a newer sibling on late resolution", async () => {
+  await fixture(async ({ api, click, render, armRequests }) => {
+    const originalBegin = api.beginRecording;
+    const originalEnd = api.endRecording;
+    const delayed = deferred<void>();
+    const started: string[] = [];
+    const ended: string[] = [];
+    api.beginRecording = async (token) => {
+      started.push(token);
+      await originalBegin(token);
+      if (started.length === 1) await delayed.promise;
+    };
+    api.endRecording = async (token) => {
+      ended.push(token);
+      if (ended.length === 1) throw new Error("release unavailable");
+      await originalEnd(token);
+    };
+    await click("App Shot");
+    await act(async () => recordButton().focus());
+    await click("Record a custom shortcut");
+    await render(false, "sibling");
+    await click("App Shot");
+    assert.match(
+      document.body.textContent!,
+      /Recording access was not released/,
+    );
+    await click("Release recording");
+    await startRecording(click);
+    assert.equal(started.length, 2);
+    assert.deepEqual(ended, [started[0], started[0]]);
+    await act(async () => delayed.resolve());
+    assert.deepEqual(
+      ended,
+      [started[0], started[0]],
+      "Confirmed old cleanup must not be attempted again",
+    );
+    assert.equal(recordButton().getAttribute("aria-pressed"), "true");
+    assert.deepEqual(armRequests, []);
+    await pressRecorder({ key: "Escape" });
+    assert.equal(ended.at(-1), started[1]);
   });
 });

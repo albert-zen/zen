@@ -24,6 +24,11 @@ on:
       - apps/zenx/test/stage-app-shot*.test.mjs
       - apps/zenx/resources/app-shot-gnome/**
   workflow_dispatch:
+    inputs:
+      macos_owned_acceptance:
+        description: Run owned synthetic macOS capture only with existing OS grants
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -134,6 +139,42 @@ jobs:
           name: app-shot-native-${{ matrix.os }}-${{ github.sha }}
           path: ${{ runner.temp }}/app-shot-windows.json
           if-no-files-found: ignore
+          retention-days: 14
+
+  macos-owned-acceptance:
+    name: Owned synthetic macOS App Shot acceptance (permission-gated)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.macos_owned_acceptance }}
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build unmodified production worker and shared chunks
+        run: |
+          npm run prepare:plugin-sdk --workspace @zen/zenx
+          npm run build:prepared --workspace @zen/zenx
+      - name: Verify acceptance safety contracts without capture
+        run: node --test apps/zenx/test/app-shot-macos-acceptance.test.mjs
+      - name: Capture only the owned nonce window through the real Electron service
+        timeout-minutes: 5
+        env:
+          ZENX_APP_SHOT_MACOS_ACCEPTANCE: "1"
+        run: node apps/zenx/scripts/verify-app-shot-macos.mjs "${{ runner.temp }}/app-shot-owned-macos"
+      - name: Retain only allowlisted receipts and verified synthetic PNGs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-shot-owned-macos-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/app-shot-owned-macos/receipt.json
+            ${{ runner.temp }}/app-shot-owned-macos/selected.png
+            ${{ runner.temp }}/app-shot-owned-macos/accessibility.png
+            ${{ runner.temp }}/app-shot-owned-macos/foreground.png
+          if-no-files-found: warn
           retention-days: 14
 
   formatting:

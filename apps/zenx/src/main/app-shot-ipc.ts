@@ -1,3 +1,9 @@
+import {
+  APP_SHOT_DEFAULT_CHORD,
+  appShotKeyChordAccelerator,
+  validateAppShotKeyChord,
+  appShotPortalTrigger,
+} from "../app-shot-key-chord.js";
 import { join } from "node:path";
 import { InMemoryAttachmentStore } from "../../../../src/attachment.js";
 import type { ZenXDraftAttachments } from "./draft-attachments.js";
@@ -38,8 +44,9 @@ import {
   startNiriAppShotShortcut,
 } from "./app-shot-niri-shortcut.js";
 
-const SHORTCUT = "CommandOrControl+Shift+2";
 const CHANNELS = {
+  beginRecording: "zenx:app-shot:begin-recording",
+  endRecording: "zenx:app-shot:end-recording",
   configureShortcut: "zenx:app-shot:configure-shortcut",
   configuration: "zenx:app-shot:configuration",
   list: "zenx:app-shot:list",
@@ -123,6 +130,7 @@ type Owner<R extends object, F extends object> = {
   token: string;
   includeAccessibility: boolean;
   kind: AppShotShortcutKind;
+  registeredAccelerator?: string;
   abort: AbortController;
   modifierPair?: Promise<{ stop(): Promise<void> }>;
   portal?: PortalAppShotShortcutHandle;
@@ -138,7 +146,7 @@ export class AppShotIpcController<
   readonly #deps: AppShotIpcDependencies<Renderer, Frame>;
   readonly #sessions = new Map<Renderer, Session<Frame>>();
   #owner?: Owner<Renderer, Frame>;
-  #registered = false;
+  #recording?: { caller: Caller<Renderer, Frame>; token: string };
   #stagedBytes = 0;
 
   constructor(deps: AppShotIpcDependencies<Renderer, Frame>) {
@@ -382,13 +390,46 @@ export class AppShotIpcController<
         if (preview.expiresAt <= now) this.#removePreview(session, id);
   }
 
+  /** UI admission only: no OS key registration, observation or capture suppression. */
+  beginRecording(caller: Caller<Renderer, Frame>, token: unknown): void {
+    if (typeof token !== "string" || !/^[\x21-\x7e]{1,80}$/u.test(token))
+      throw new Error("Invalid App Shot recording token");
+    this.#require(caller);
+    if (this.#owner)
+      throw new Error(
+        "Disable the active App Shot shortcut in its Composer before recording.",
+      );
+    if (
+      this.#recording &&
+      (this.#recording.caller.renderer !== caller.renderer ||
+        this.#recording.caller.frame !== caller.frame ||
+        this.#recording.token !== token)
+    )
+      throw new Error(
+        "Another Composer is recording an App Shot shortcut. Finish or cancel it first.",
+      );
+    this.#recording = { caller, token };
+  }
+
+  endRecording(caller: Caller<Renderer, Frame>, token: unknown): void {
+    if (typeof token !== "string" || !/^[\x21-\x7e]{1,80}$/u.test(token))
+      throw new Error("Invalid App Shot recording token");
+    this.#require(caller);
+    if (
+      this.#recording?.caller.renderer === caller.renderer &&
+      this.#recording.caller.frame === caller.frame &&
+      this.#recording.token === token
+    )
+      this.#recording = undefined;
+  }
+
   async arm(
     caller: Caller<Renderer, Frame>,
     token: unknown,
     includeAccessibility: unknown,
     kind: unknown = "chord",
+    chord: unknown = undefined,
   ): Promise<string | AppShotShortcutState> {
-    const session = this.#require(caller);
     if (
       typeof token !== "string" ||
       !/^[\x21-\x7e]{1,80}$/u.test(token) ||
@@ -403,6 +444,26 @@ export class AppShotIpcController<
     )
       throw new Error(
         "Physical modifier pairs are available only on macOS and Windows",
+      );
+    if (
+      chord !== undefined &&
+      (kind !== "chord" || this.#deps.niriBinding || this.#deps.hyprlandBinding)
+    )
+      throw new Error(
+        "Custom chords are not available for this shortcut action",
+      );
+    const normalized = validateAppShotKeyChord(
+      chord === undefined ? APP_SHOT_DEFAULT_CHORD : chord,
+      this.#deps.platform,
+    );
+    // Validate portal key support before changing the current owner or requesting consent.
+    if (this.#deps.startPortalShortcut && !this.#deps.hyprlandBinding)
+      appShotPortalTrigger(normalized);
+    const accelerator = appShotKeyChordAccelerator(normalized);
+    const session = this.#require(caller);
+    if (this.#recording)
+      throw new Error(
+        "Finish or cancel App Shot shortcut recording before enabling capture.",
       );
     const previous = this.#owner;
     const cleanup = this.#clearOwner();
@@ -473,6 +534,7 @@ export class AppShotIpcController<
       ) {
         owner.modifierPair = this.#deps
           .startPortalShortcut({
+            ...(!this.#deps.hyprlandBinding ? { chord: normalized } : {}),
             signal: owner.abort.signal,
             isCurrentOwner: () =>
               this.#owner === owner && this.#still(caller, session),
@@ -500,12 +562,12 @@ export class AppShotIpcController<
         return portalShortcutState(owner.portal!);
       } else {
         if (
-          !this.#deps.registerShortcut(SHORTCUT, () => {
+          !this.#deps.registerShortcut(accelerator, () => {
             if (this.#owner === owner) void this.onShortcut();
           })
         )
           throw new Error("App Shot shortcut is unavailable");
-        this.#registered = true;
+        owner.registeredAccelerator = accelerator;
       }
       const mac = this.#deps.platform === "darwin";
       const pairLabels = {
@@ -516,9 +578,11 @@ export class AppShotIpcController<
       };
       return kind !== "chord"
         ? `Left ${pairLabels[kind]} + Right ${pairLabels[kind]}`
-        : this.#deps.platform === "darwin"
-          ? "⌘⇧2"
-          : "Ctrl+Shift+2";
+        : accelerator === appShotKeyChordAccelerator(APP_SHOT_DEFAULT_CHORD)
+          ? mac
+            ? "⌘⇧2"
+            : "Ctrl+Shift+2"
+          : accelerator;
     } catch (error) {
       if (this.#owner === owner) await this.#clearOwner();
       throw error;
@@ -575,9 +639,9 @@ export class AppShotIpcController<
     const owner = this.#owner;
     this.#owner = undefined;
     owner?.abort.abort();
-    if (this.#registered) {
-      this.#deps.unregisterShortcut(SHORTCUT);
-      this.#registered = false;
+    if (owner?.registeredAccelerator) {
+      this.#deps.unregisterShortcut(owner.registeredAccelerator);
+      owner.registeredAccelerator = undefined;
     }
     if (owner) await this.#stopModifierPair(owner);
   }
@@ -592,6 +656,8 @@ export class AppShotIpcController<
   }
 
   forget(renderer: Renderer): void {
+    if (this.#recording?.caller.renderer === renderer)
+      this.#recording = undefined;
     const session = this.#sessions.get(renderer);
     session?.abort.abort();
     if (session)
@@ -603,6 +669,7 @@ export class AppShotIpcController<
   }
 
   dispose(): void {
+    this.#recording = undefined;
     void this.#clearOwner().catch(() => {});
     for (const renderer of this.#sessions.keys()) this.forget(renderer);
     this.#sessions.clear();
@@ -877,6 +944,12 @@ export async function installAppShotIpc(options: {
   ipcMain.handle(CHANNELS.configuration, (event) =>
     controller.configuration(caller(event)),
   );
+  ipcMain.handle(CHANNELS.beginRecording, (event, token: unknown) =>
+    controller.beginRecording(caller(event), token),
+  );
+  ipcMain.handle(CHANNELS.endRecording, (event, token: unknown) =>
+    controller.endRecording(caller(event), token),
+  );
   ipcMain.handle(CHANNELS.configureShortcut, (event, token: unknown) =>
     controller.configureShortcut(caller(event), token),
   );
@@ -897,8 +970,14 @@ export async function installAppShotIpc(options: {
   );
   ipcMain.handle(
     CHANNELS.arm,
-    (event, token: unknown, includeAccessibility: unknown, kind: unknown) =>
-      controller.arm(caller(event), token, includeAccessibility, kind),
+    (
+      event,
+      token: unknown,
+      includeAccessibility: unknown,
+      kind: unknown,
+      chord: unknown,
+    ) =>
+      controller.arm(caller(event), token, includeAccessibility, kind, chord),
   );
   ipcMain.handle(CHANNELS.disarm, (event, token: unknown) =>
     controller.disarm(caller(event), token),
@@ -906,6 +985,8 @@ export async function installAppShotIpc(options: {
   return () => {
     for (const channel of [
       CHANNELS.configuration,
+      CHANNELS.beginRecording,
+      CHANNELS.endRecording,
       CHANNELS.configureShortcut,
       CHANNELS.list,
       CHANNELS.capture,

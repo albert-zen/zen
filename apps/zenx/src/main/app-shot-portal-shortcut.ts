@@ -19,6 +19,12 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
+import {
+  APP_SHOT_DEFAULT_CHORD,
+  appShotPortalTrigger,
+  validateAppShotKeyChord,
+  type AppShotKeyChord,
+} from "../app-shot-key-chord.js";
 import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { Message, MessageBus, MessageLike, Variant } from "dbus-next";
@@ -44,6 +50,8 @@ export interface PortalAppShotShortcutState {
 }
 export interface PortalAppShotShortcutOptions {
   development?: boolean;
+  /** A preference only; desktop-assigned description remains authoritative. */
+  chord?: AppShotKeyChord;
   /** Host-selected native Hyprland mode; never supplied by the renderer. */
   managedByHyprland?: boolean;
   signal?: AbortSignal;
@@ -109,7 +117,16 @@ export async function startPortalAppShotShortcut(
     ? "io.github.albert_zen.ZenX.Development"
     : "io.github.albert_zen.ZenX";
   const managedByHyprland = options.managedByHyprland === true;
-  const trigger = "CTRL+SHIFT+2";
+  if (managedByHyprland && options.chord !== undefined)
+    throw new Error(
+      "Hyprland bindings are configured in the compositor config",
+    );
+  const trigger = appShotPortalTrigger(
+    validateAppShotKeyChord(
+      options.chord === undefined ? APP_SHOT_DEFAULT_CHORD : options.chord,
+      "linux",
+    ),
+  );
   const shortcutId = managedByHyprland
     ? "capture-window"
     : `zen-app-shot-${createHash("sha256")

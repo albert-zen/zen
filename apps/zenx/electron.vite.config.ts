@@ -108,8 +108,23 @@ function startupHtml(): string {
   return startupScreenHtml(bootstrap);
 }
 
+const appShotLicense: Plugin = {
+  name: "zenx-app-shot-license",
+  generateBundle() {
+    this.emitFile({
+      type: "asset",
+      fileName: "licenses/app-shot-t3code.txt",
+      source: readFileSync(
+        resolve(__dirname, "src/app-shot-key-chord.LICENSE"),
+        "utf8",
+      ),
+    });
+  },
+};
+
 export default defineConfig({
   main: {
+    plugins: [appShotLicense],
     build: {
       // Portable packaging stages only the native/runtime externals explicitly.
       externalizeDeps: {

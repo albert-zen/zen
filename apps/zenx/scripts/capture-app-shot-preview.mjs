@@ -270,6 +270,81 @@ try {
           // Leave the remaining synthetic scenarios at the normal platform choice.
           await click('input[type="radio"][value="both-shift"]');
         }
+        if (
+          (platform === "darwin" ||
+            platform === "win32" ||
+            platform === "portal") &&
+          context === "pixels"
+        ) {
+          const before = await evaluate("({...window.appShotPreviewCalls})");
+          await click("[data-keybinding-capture]");
+          await wait(
+            `document.querySelector('[data-keybinding-capture]').getAttribute('aria-pressed') === 'true'`,
+          );
+          const key = {
+            key: "k",
+            code: "KeyK",
+            windowsVirtualKeyCode: 75,
+            modifiers: platform === "darwin" ? 5 : 3,
+          };
+          await send("Input.dispatchKeyEvent", { type: "keyDown", ...key });
+          await send("Input.dispatchKeyEvent", { type: "keyUp", ...key });
+          await wait(
+            `document.querySelector('[data-app-shot-chord]')?.textContent.includes('Alt+K') && !document.querySelector('.app-shot-shortcut input[type="checkbox"]').disabled`,
+          );
+          assert.equal(
+            await evaluate(
+              `document.querySelector('.app-shot-shortcut input[type="checkbox"]').checked`,
+            ),
+            false,
+          );
+          assert.equal(
+            await evaluate("window.appShotPreviewCalls.arm"),
+            before.arm,
+          );
+          assert.equal(
+            await evaluate("window.appShotPreviewCalls.capture"),
+            before.capture,
+          );
+          await reveal("[data-keybinding-capture]");
+          receipt.states.push({
+            phase: "recorded-custom-chord-not-armed",
+            ...(await check(width, height)),
+          });
+          await screenshot(`${name}-custom-chord.png`);
+          await click("[data-keybinding-capture]");
+          await wait(
+            `document.querySelector('[data-keybinding-capture]').getAttribute('aria-pressed') === 'true'`,
+          );
+          for (const type of ["keyDown", "keyUp"])
+            await send("Input.dispatchKeyEvent", {
+              type,
+              key: "Escape",
+              code: "Escape",
+              windowsVirtualKeyCode: 27,
+            });
+          await wait(
+            `document.querySelector('.app-shot-dialog') && document.querySelector('[data-keybinding-capture]').getAttribute('aria-pressed') === 'false' && !document.querySelector('.app-shot-shortcut input[type="checkbox"]').disabled`,
+          );
+          assert.equal(
+            await evaluate("window.appShotPreviewCalls.arm"),
+            before.arm,
+          );
+          // Keep subsequent capture scenarios at their existing platform defaults.
+          await click(
+            platform === "portal"
+              ? 'input[value="chord"]'
+              : 'input[value="both-shift"]',
+          );
+        }
+        if (platform === "niri" || platform === "hyprland") {
+          assert.equal(
+            await evaluate(
+              "Boolean(document.querySelector('[data-keybinding-capture]'))",
+            ),
+            false,
+          );
+        }
         if (platform === "niri") {
           await click(".app-shot-shortcut details summary");
           await wait(
@@ -431,6 +506,9 @@ try {
             "document.querySelector('.app-shot-option input').checked",
           );
         }
+        const capturesBeforeSelection = await evaluate(
+          "window.appShotPreviewCalls.capture",
+        );
         await click(".app-shot-sources button");
         await wait(`(${measure}).imageReady`);
         await stable();
@@ -447,6 +525,11 @@ try {
           assert.match(review.context, /review-end/);
         } else assert.match(review.context, /screenshot only/);
         assert.equal(review.count, "已添加 0 张，未发送。");
+        assert.equal(
+          await evaluate("window.appShotPreviewCalls.capture"),
+          capturesBeforeSelection + 1,
+          "Explicit window selection must increment the synthetic capture counter exactly once",
+        );
         receipt.states.push({ phase: "review", ...review });
         await screenshot(`${name}-review.png`);
         if (context === "semantic") {
