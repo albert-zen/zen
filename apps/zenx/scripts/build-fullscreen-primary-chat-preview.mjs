@@ -53,6 +53,7 @@ const sources = [
   "src/renderer/src/App.tsx",
   "src/renderer/src/companion-workspace.tsx",
   "src/renderer/src/ThreadView.tsx",
+  "src/renderer/src/ExperimentalTranscriptViewport.tsx",
   "src/renderer/src/bundled-automation-ui.tsx",
   "src/renderer/src/room-header.tsx",
   "src/renderer/src/workspace-browser-panel.tsx",
@@ -74,6 +75,9 @@ const sources = [
   "scripts/fullscreen-primary-chat-preview.tsx",
   "scripts/fullscreen-primary-chat-preview.css",
   "scripts/build-fullscreen-primary-chat-preview.mjs",
+  "scripts/capture-fullscreen-primary-chat-preview.mjs",
+  "scripts/preview-browser.mjs",
+  "scripts/preview-browser-lifecycle.mjs",
 ];
 await writeFile(
   path.join(directory, "source.json"),
