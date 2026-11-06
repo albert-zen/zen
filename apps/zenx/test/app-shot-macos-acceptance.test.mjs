@@ -15,6 +15,7 @@ import {
   fixtureIdentity,
   fixtureSize,
   labelFor,
+  contentLabelFor,
   nonceColor,
   verifyPixels,
   verifyAccessibility,
@@ -123,7 +124,7 @@ test("AX acceptance requires actual nonce label and image-coordinate geometry", 
       bounds: { x: 0, y: 0, ...fixtureSize },
       children: [
         {
-          name: labelFor(nonce),
+          name: contentLabelFor(nonce),
           bounds: { x: 12, y: 284, width: 616, height: 24 },
           children: [],
         },
@@ -138,7 +139,19 @@ test("AX acceptance requires actual nonce label and image-coordinate geometry", 
     () => verifyAccessibility(context(), nonce, fixtureSize),
     /label/,
   );
+  // A window title, even repeated in a child, is not body-content evidence.
   payload.root.children[0].name = labelFor(nonce);
+  assert.throws(
+    () => verifyAccessibility(context(), nonce, fixtureSize),
+    /label/,
+  );
+  payload.root.children[0].name = contentLabelFor(nonce);
+  payload.root.children[0].bounds = null;
+  assert.throws(
+    () => verifyAccessibility(context(), nonce, fixtureSize),
+    /label/,
+  );
+  payload.root.children[0].bounds = { x: 12, y: 284, width: 616, height: 24 };
   payload.root.bounds.width = 1;
   assert.throws(
     () => verifyAccessibility(context(), nonce, fixtureSize),
@@ -207,6 +220,10 @@ test("real harness preserves production worker/service and never requests grants
     new URL("./fixtures/app-shot-macos-owned.swift", import.meta.url),
     "utf8",
   );
+  assert.notEqual(contentLabelFor(nonce), labelFor(nonce));
+  assert.match(swift, /let contentLabel = "App Shot content/);
+  assert.match(swift, /NSTextField\(labelWithString: contentLabel\)/);
+  assert.match(swift, /label\.setAccessibilityLabel\(contentLabel\)/);
   assert.match(main, /createElectronAppShotService\(\)/);
   assert.match(main, /isTrustedAccessibilityClient\(false\)/);
   assert.match(main, /getMediaAccessStatus\("screen"\)/);

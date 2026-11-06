@@ -12,6 +12,8 @@ let snapshot = argument("--snapshot")
 let stop = argument("--stop")
 guard nonce.count == 32 && nonce.allSatisfy({ $0.isHexDigit && !$0.isUppercase }) else { exit(2) }
 let title = "App Shot owned \(nonce)"
+// Keep body text distinct from the title so native chrome filtering retains it.
+let contentLabel = "App Shot content \(nonce)"
 
 final class Pattern: NSView {
   override var isFlipped: Bool { true }
@@ -40,10 +42,10 @@ final class Delegate: NSObject, NSApplicationDelegate {
     window.title = title; window.isOpaque = true; window.backgroundColor = .white
     window.hasShadow = false
     let pattern = Pattern(frame: NSRect(x: 0, y: 0, width: 640, height: 320))
-    let label = NSTextField(labelWithString: title)
+    let label = NSTextField(labelWithString: contentLabel)
     label.frame = NSRect(x: 12, y: 284, width: 616, height: 24)
     label.textColor = .black; label.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
-    label.setAccessibilityLabel(title)
+    label.setAccessibilityLabel(contentLabel)
     pattern.addSubview(label); window.contentView = pattern
     window.makeKeyAndOrderFront(nil)
     // No activate(), input, permission request or repeated foreground acquisition.

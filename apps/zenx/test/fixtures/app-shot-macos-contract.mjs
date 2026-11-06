@@ -1,6 +1,10 @@
 // Test-only receipts. Never serialize native error messages, titles or AX payloads.
 export const fixtureSize = { width: 640, height: 320 };
 export const labelFor = (nonce) => `App Shot owned ${nonce}`;
+// xa11y 0.13.0 filters direct static-text children equal to the window title
+// as title-bar chrome (xa11y-macos/src/ax.rs: should_filter_child_with_role).
+// A distinct content marker must be observed; the root title is never enough.
+export const contentLabelFor = (nonce) => `App Shot content ${nonce}`;
 export class AcceptanceError extends Error {
   constructor(code, blocked = false) {
     super(code);
@@ -114,7 +118,9 @@ export function verifyAccessibility(context, nonce, size) {
     const node = stack.pop();
     if (
       node !== tree.root &&
-      [node.name, node.value, node.description].includes(labelFor(nonce)) &&
+      [node.name, node.value, node.description].includes(
+        contentLabelFor(nonce),
+      ) &&
       node.bounds?.width > 0 &&
       node.bounds?.height > 0 &&
       node.bounds.x >= 0 &&
