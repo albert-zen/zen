@@ -3,7 +3,10 @@ import test from "node:test";
 import vm from "node:vm";
 import { instrumentStartup } from "../scripts/prepare-windows-startup-acceptance.mjs";
 
-const source = `const bootstrapFence = { run: async (f) => { calls.push("fence"); await f(); } };
+const source = `function isTrustedImZenXSetupSender(sender, rendererUrl) {
+  return sender.ownedWindow && sender.mainFrame && sender.url === rendererUrl;
+}
+const bootstrapFence = { run: async (f) => { calls.push("fence"); await f(); } };
 const appServerManager = { status: { type: "ready" } };
 async function bootstrapZenX() { calls.push("bootstrap"); }
 (async () => { calls.push("window"); await bootstrapFence.run(bootstrapZenX); })();`;
@@ -64,6 +67,59 @@ test("comments and strings cannot impersonate the awaited lifecycle seam", () =>
     () => instrumentStartup("bootstrapFence.run(bootstrapZenX);"),
     /exactly one/u,
   );
+});
+
+test("trusted sender diagnostics preserve exact arguments and original admission even when observation fails", async () => {
+  const transformed = instrumentStartup(source).replace(/^import[^\n]+\n/u, "");
+  const observations = [];
+  let throwDiagnostic = false;
+  const context = {
+    calls: [],
+    startupAcceptanceFixture: {
+      observe() {},
+      gate: async () => {},
+      completed() {},
+      trustedSenderObserved(sender, expected) {
+        observations.push([sender, expected]);
+        if (throwDiagnostic) throw new Error("diagnostic failed");
+      },
+    },
+  };
+  vm.createContext(context);
+  await vm.runInContext(transformed, context);
+  for (throwDiagnostic of [false, true]) {
+    for (const [ownedWindow, mainFrame, url] of [
+      [true, true, "file:///fixture/index.html"],
+      [false, true, "file:///fixture/index.html"],
+      [true, false, "file:///fixture/index.html"],
+      [true, true, "https://untrusted.example/"],
+    ]) {
+      const sender = Object.freeze({ ownedWindow, mainFrame, url });
+      const expected = "file:///fixture/index.html";
+      assert.equal(
+        context.isTrustedImZenXSetupSender(sender, expected),
+        ownedWindow && mainFrame && url === expected,
+      );
+      assert.equal(observations.at(-1)[0], sender);
+      assert.equal(observations.at(-1)[1], expected);
+    }
+  }
+  assert.equal(observations.length, 8);
+});
+
+test("instrumentation requires one unambiguous trusted sender argument seam", () => {
+  for (const changed of [
+    source.replace("function isTrustedImZenXSetupSender", "function unrelated"),
+    source.replace("sender, rendererUrl)", "sender)"),
+    source.replace("sender, rendererUrl)", "{ ownedWindow }, rendererUrl)"),
+    source.replace("sender, rendererUrl)", "sender, rendererUrl = 'default')"),
+    source + "function isTrustedImZenXSetupSender(a, b) {}",
+    source + "function isTrustedImZenXSetupSender(a) {}",
+  ])
+    assert.throws(
+      () => instrumentStartup(changed),
+      /trusted sender diagnostic seam/u,
+    );
 });
 
 test("private staging preserves the original package and refuses reused destinations", async () => {
@@ -188,6 +244,34 @@ async function loadObserverFixture(windows = [], seed) {
   exports.observe();
   return { app, records, writes, EventEmitter, exports, timers };
 }
+
+test("trusted sender observation is bounded and retains the actual rejected argument pair", async () => {
+  const { exports, records } = await loadObserverFixture();
+  const sender = Object.freeze({
+    ownedWindow: true,
+    mainFrame: false,
+    url: "file:///C:/RUNNER~1/index.html",
+  });
+  const expected = "file:///C:/RUNNER%7E1/index.html";
+  exports.trustedSenderObserved(sender, expected);
+  assert.deepEqual(JSON.parse(JSON.stringify(records.at(-1))), {
+    type: "trusted-sender-observed",
+    pid: process.pid,
+    at: records.at(-1).at,
+    ...sender,
+    rendererUrl: expected,
+  });
+  exports.trustedSenderObserved({ url: "x".repeat(4097) }, undefined);
+  assert.equal(records.at(-1).url, null);
+  assert.equal(records.at(-1).rendererUrl, null);
+  for (let index = 0; index < 40; index++)
+    exports.trustedSenderObserved(sender, expected);
+  assert.equal(
+    records.filter((record) => record.type === "trusted-sender-observed")
+      .length,
+    32,
+  );
+});
 
 test("second-instance receipt is immediate while window identity remains deferred", async () => {
   const windows = [];

@@ -34,6 +34,20 @@ function event(type, details = {}) {
     }) + "\n",
   );
 }
+// Only a disposable synthetic package inserts this observation at guard entry.
+// Bound both event count and strings; never return an admission decision.
+let trustedSenderObservations = 0;
+export function trustedSenderObserved(sender, rendererUrl) {
+  if (trustedSenderObservations++ >= 32) return;
+  const boundedUrl = (value) =>
+    typeof value === "string" && value.length <= 4096 ? value : null;
+  event("trusted-sender-observed", {
+    ownedWindow: sender?.ownedWindow === true,
+    mainFrame: sender?.mainFrame === true,
+    url: boundedUrl(sender?.url),
+    rendererUrl: boundedUrl(rendererUrl),
+  });
+}
 function identity(window) {
   const bytes = window.getNativeWindowHandle();
   return {
