@@ -394,7 +394,15 @@ export function ExperimentalTranscriptViewport({
     <LegendList
       {...attributes}
       className={`${attributes.className ?? ""} experimental-transcript-viewport`}
-      style={{ ...attributes.style, overflowAnchor: "none", padding: 0 }}
+      // Fullscreen resource tabs can collapse the hidden main surface to zero.
+      // Keep the scroll node parent-sized instead of letting Legend's intrinsic
+      // cross-axis measurement latch a narrow inline width when it is revealed.
+      style={{
+        ...attributes.style,
+        width: "100%",
+        overflowAnchor: "none",
+        padding: 0,
+      }}
       ref={attach}
       contentContainerClassName="virtual-transcript-content"
       data={rows}
