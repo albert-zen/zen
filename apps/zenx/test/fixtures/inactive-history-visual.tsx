@@ -1,7 +1,17 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
+import { getAppearanceController } from "../../src/renderer/src/appearance.js";
 import { App } from "../../src/renderer/src/App.js";
+import "../../src/renderer/src/shell-thread-panel.css";
+import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
+import "../../src/renderer/src/agent-readiness-notice.css";
+import "../../src/renderer/src/trigger-ui.css";
+import "../../src/renderer/src/skills.css";
+import "../../src/renderer/src/rooms-layout.css";
+import "../../src/renderer/src/room-message-actions.css";
+import "../../src/renderer/src/room-conversations.css";
+import "../../src/renderer/src/companion-workspace.css";
 import { nativeRecoveryForThread } from "../native-recovery-fixture.js";
 import { encodeModelKey } from "../../../../src/protocol/model-key.js";
 import type { NativeThreadSummary } from "../../../../src/thread-summary.js";
@@ -10,6 +20,8 @@ type AppServerHostStatus = any;
 type ApprovalRequestEvent = any;
 type ApprovalResolvedEvent = any;
 type NotificationListener = any;
+document.documentElement.dataset.platform = "linux";
+getAppearanceController();
 const ids = Array.from({ length: 32 }, (_, i) => `history-${i + 1}`);
 const reads: Record<string, number> = {};
 const recoveryGate: { waiting: boolean; release?: () => void } = {

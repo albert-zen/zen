@@ -134,14 +134,105 @@ try {
     await send("HeapProfiler.collectGarbage");
     return await send("Runtime.getHeapUsage");
   };
-  const capture = async (name) => {
+  const capture = async (name, threadId) => {
+    await evaluate("document.fonts.ready.then(()=>true)");
+    await evaluate(
+      "new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))",
+    );
+    await new Promise((r) => setTimeout(r, 250));
+    // DOM text can exist before the virtual transcript has laid it out on screen.
+    // Inspect text-line rectangles without scrolling or altering the measured UI.
+    const visibleText = (id) => {
+      const root = document.querySelector(".thread-view");
+      if (!root) return null;
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.textContent.includes(`Synthetic ${id} turn`)) continue;
+        const parent = node.parentElement;
+        let clip = { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
+        let hidden = false;
+        for (let element = parent; element; element = element.parentElement) {
+          const style = getComputedStyle(element);
+          if (
+            style.display === "none" ||
+            style.visibility !== "visible" ||
+            Number(style.opacity) === 0
+          ) {
+            hidden = true;
+            break;
+          }
+          const rect = element.getBoundingClientRect();
+          if (/hidden|clip|scroll|auto/.test(style.overflowX)) {
+            clip.left = Math.max(clip.left, rect.left);
+            clip.right = Math.min(clip.right, rect.right);
+          }
+          if (/hidden|clip|scroll|auto/.test(style.overflowY)) {
+            clip.top = Math.max(clip.top, rect.top);
+            clip.bottom = Math.min(clip.bottom, rect.bottom);
+          }
+        }
+        if (hidden) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) {
+          const left = Math.max(rect.left, clip.left);
+          const top = Math.max(rect.top, clip.top);
+          const right = Math.min(rect.right, clip.right);
+          const bottom = Math.min(rect.bottom, clip.bottom);
+          if (right - left < 2 || bottom - top < 2) continue;
+          const hit = document.elementFromPoint(
+            (left + right) / 2,
+            (top + bottom) / 2,
+          );
+          if (!hit || !(hit === parent || parent.contains(hit))) continue;
+          return {
+            text: node.textContent.slice(0, 80),
+            rect: [rect.x, rect.y, rect.width, rect.height],
+            visibleRect: [left, top, right, bottom],
+          };
+        }
+      }
+      return null;
+    };
+    const deadline = performance.now() + 5000;
+    let previous = null;
+    let renderedText = null;
+    while (performance.now() < deadline) {
+      const current = await evaluate(
+        `(${visibleText.toString()})(${JSON.stringify(threadId)})`,
+      );
+      if (
+        current &&
+        previous &&
+        current.text === previous.text &&
+        [...current.rect, ...current.visibleRect].every(
+          (value, index) =>
+            Math.abs(
+              value - [...previous.rect, ...previous.visibleRect][index],
+            ) < 0.5,
+        )
+      ) {
+        renderedText = current;
+        break;
+      }
+      previous = current;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.ok(
+      renderedText,
+      `No stable visible transcript text for ${threadId}`,
+    );
     const image = await send("Page.captureScreenshot", {
       format: "png",
       captureBeyondViewport: false,
     });
     const bytes = Buffer.from(image.data, "base64");
     await writeFile(path.join(directory, name), bytes);
-    return { name, sha256: createHash("sha256").update(bytes).digest("hex") };
+    return {
+      name,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      renderedText,
+    };
   };
   for (const variant of ["before", "after"]) {
     const result = {
@@ -209,7 +300,9 @@ try {
       await choose(n);
       if (n === 8 || n === 32) {
         result.measurements.push({ visited: n, ...(await snapshot()) });
-        result.screenshots.push(await capture(`history-${variant}-${n}.png`));
+        result.screenshots.push(
+          await capture(`history-${variant}-${n}.png`, `history-${n}`),
+        );
       }
     }
     await choose(1, false);
@@ -239,7 +332,7 @@ try {
         "return navigation requests recovery twice including the first visit",
       );
     result.screenshots.push(
-      await capture(`history-${variant}-restored-draft.png`),
+      await capture(`history-${variant}-restored-draft.png`, "history-1"),
     );
     const eight = result.measurements.find((m) => m.visited === 8),
       thirtyTwo = result.measurements.find((m) => m.visited === 32);
