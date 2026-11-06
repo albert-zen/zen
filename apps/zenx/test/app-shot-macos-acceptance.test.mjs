@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
+import { runInNewContext } from "node:vm";
+import ts from "typescript";
 import {
   AcceptanceError,
   preflight,
@@ -242,4 +244,153 @@ test("hosted acceptance admits same-repository PRs or explicit manual runs only"
   assert.match(job, /ZENX_APP_SHOT_MACOS_ACCEPTANCE: "1"/);
   assert.match(job, /\/receipt\.json\n/);
   assert.doesNotMatch(job, /continue-on-error|if:.*success\(\)/);
+});
+
+test(
+  "Electron ESM evaluation finishes before the acceptance task waits for ready",
+  { timeout: 1000 },
+  async () => {
+    const source = await readFile(
+      new URL("./fixtures/app-shot-macos-main.mjs", import.meta.url),
+      "utf8",
+    );
+    const parsed = ts.createSourceFile(
+      "acceptance.mjs",
+      source,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.JS,
+    );
+    const topLevelAwaits = [];
+    function visit(node) {
+      if (ts.isFunctionLike(node)) return;
+      if (
+        ts.isAwaitExpression(node) ||
+        (ts.isForOfStatement(node) && node.awaitModifier)
+      )
+        topLevelAwaits.push(node.pos);
+      ts.forEachChild(node, visit);
+    }
+    visit(parsed);
+    assert.deepEqual(
+      topLevelAwaits,
+      [],
+      "Main-module evaluation must not wait for Electron ready",
+    );
+    const run = parsed.statements.find(
+      (node) =>
+        ts.isFunctionDeclaration(node) && node.name?.text === "runAcceptance",
+    );
+    const launch = parsed.statements.find(
+      (node) =>
+        ts.isExpressionStatement(node) &&
+        node.getText(parsed).startsWith("void runAcceptance()"),
+    );
+    assert.ok(
+      Boolean(run && launch),
+      "Ready-dependent work must be launched without awaiting module evaluation",
+    );
+    let ready;
+    let exited;
+    const readiness = new Promise((resolve) => {
+      ready = resolve;
+    });
+    const completion = new Promise((resolve) => {
+      exited = resolve;
+    });
+    const calls = [];
+    const result = runInNewContext(
+      run.getText(parsed) + "\n" + launch.getText(parsed),
+      {
+        app: {
+          whenReady: () => {
+            calls.push("waiting");
+            return readiness;
+          },
+          getAppPath: () => "/owned",
+          exit: (code) => {
+            calls.push("exit");
+            exited(code);
+          },
+        },
+        process: { versions: { electron: "43.2.0" } },
+        config: {
+          appDirectory: "/owned",
+          userData: "/private",
+          result: "/private/result",
+        },
+        receipt: initialReceipt(),
+        requireAcceptance: () => {
+          throw new Error("synthetic preflight stop");
+        },
+        failedOutcome: () => ({
+          status: "blocked",
+          reason: "synthetic-preflight",
+        }),
+        mkdir: async () => {},
+        writeFile: async () => {
+          calls.push("receipt");
+        },
+      },
+    );
+    assert.equal(result, undefined);
+    assert.deepEqual(calls, ["waiting"]);
+    ready(); // Electron can emit ready only after module evaluation returned.
+    assert.equal(await completion, 0);
+    assert.deepEqual(calls, ["waiting", "receipt", "exit"]);
+  },
+);
+
+test("private session directory exists before Electron path overrides", async () => {
+  const source = await readFile(
+    new URL("./fixtures/app-shot-macos-main.mjs", import.meta.url),
+    "utf8",
+  );
+  const parsed = ts.createSourceFile(
+    "acceptance.mjs",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.JS,
+  );
+  const end = parsed.statements.findIndex(
+    (node) =>
+      ts.isVariableStatement(node) &&
+      node.declarationList.declarations.some(
+        (d) => ts.isIdentifier(d.name) && d.name.text === "receipt",
+      ),
+  );
+  assert.ok(
+    end > 0,
+    "Synchronous private-path setup must precede the acceptance task",
+  );
+  const setup = parsed.statements
+    .slice(0, end)
+    .filter((node) => !ts.isImportDeclaration(node))
+    .map((node) => node.getText(parsed))
+    .join("\n");
+  const directories = new Set(["/private/user"]);
+  const calls = [];
+  runInNewContext(setup, {
+    readFileSync: () => JSON.stringify({ userData: "/private/user" }),
+    process: { argv: ["electron", "package", "private-config"] },
+    join: (...parts) => parts.join("/"),
+    mkdirSync: (path, options) => {
+      assert.equal(options.recursive, true);
+      assert.equal(options.mode, 0o700);
+      directories.add(path);
+      calls.push("mkdir");
+    },
+    app: {
+      setPath: (name, path) => {
+        assert.ok(
+          directories.has(path),
+          "Electron setPath requires an existing directory",
+        );
+        calls.push(name);
+      },
+      disableHardwareAcceleration: () => {},
+    },
+  });
+  assert.deepEqual(calls, ["mkdir", "userData", "sessionData"]);
 });

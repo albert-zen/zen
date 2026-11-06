@@ -1,6 +1,6 @@
 // Built into a disposable Electron package, never loaded by normal ZenX.
 import { app, nativeImage, systemPreferences } from "electron";
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdirSync } from "node:fs";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -24,8 +24,10 @@ import {
 } from "./app-shot-macos-contract.mjs";
 
 const config = JSON.parse(readFileSync(process.argv[2], "utf8"));
+const sessionData = join(config.userData, "session");
+mkdirSync(sessionData, { recursive: true, mode: 0o700 });
 app.setPath("userData", config.userData);
-app.setPath("sessionData", join(config.userData, "session"));
+app.setPath("sessionData", sessionData);
 app.disableHardwareAcceleration();
 const receipt = initialReceipt();
 const service = createElectronAppShotService();
@@ -146,62 +148,70 @@ async function branch(key, operation) {
     receipt[key] = failedOutcome(error);
   }
 }
-try {
-  await app.whenReady();
-  requireAcceptance(
-    Boolean(process.versions.electron) &&
-      app.getAppPath() === config.appDirectory,
-    "electron-package-invalid",
-  );
-  checkPermissions();
-  initial = (await observedFixture()).identity;
-  await branch("pixels", async () =>
-    validateShot(await captureSelected(false), "selected.png"),
-  );
-  if (receipt.pixels.status === "passed") {
-    await branch("accessibility", async () =>
-      validateShot(await captureSelected(true), "accessibility.png", true),
+async function runAcceptance() {
+  try {
+    await app.whenReady();
+    requireAcceptance(
+      Boolean(process.versions.electron) &&
+        app.getAppPath() === config.appDirectory,
+      "electron-package-invalid",
     );
-    await branch("foreground", async () => {
-      checkPermissions();
-      const fresh = await observedFixture();
-      requireAcceptance(fresh.active, "fixture-not-foreground", true);
-      let active;
-      try {
-        active = await readMacActiveWindow();
-      } catch {
-        throw new AcceptanceError("fixture-not-foreground", true);
-      }
-      requireAcceptance(
-        sameObservedWindow(initial, active),
-        "fixture-not-foreground",
-        true,
+    checkPermissions();
+    initial = (await observedFixture()).identity;
+    await branch("pixels", async () =>
+      validateShot(await captureSelected(false), "selected.png"),
+    );
+    if (receipt.pixels.status === "passed") {
+      await branch("accessibility", async () =>
+        validateShot(await captureSelected(true), "accessibility.png", true),
       );
-      return validateShot(
-        await service.captureActive({
-          expectedIdentity: initial,
-          includeAccessibility: false,
-          signal,
-        }),
-        "foreground.png",
-      );
-    });
-  } else {
+      await branch("foreground", async () => {
+        checkPermissions();
+        const fresh = await observedFixture();
+        requireAcceptance(fresh.active, "fixture-not-foreground", true);
+        let active;
+        try {
+          active = await readMacActiveWindow();
+        } catch {
+          throw new AcceptanceError("fixture-not-foreground", true);
+        }
+        requireAcceptance(
+          sameObservedWindow(initial, active),
+          "fixture-not-foreground",
+          true,
+        );
+        return validateShot(
+          await service.captureActive({
+            expectedIdentity: initial,
+            includeAccessibility: false,
+            signal,
+          }),
+          "foreground.png",
+        );
+      });
+    } else {
+      receipt.accessibility = {
+        status: "blocked",
+        reason: "pixels-not-accepted",
+      };
+      receipt.foreground = { status: "blocked", reason: "pixels-not-accepted" };
+    }
+  } catch (error) {
+    receipt.pixels = failedOutcome(error);
     receipt.accessibility = {
       status: "blocked",
-      reason: "pixels-not-accepted",
+      reason: "preflight-not-accepted",
     };
-    receipt.foreground = { status: "blocked", reason: "pixels-not-accepted" };
+    receipt.foreground = {
+      status: "blocked",
+      reason: "preflight-not-accepted",
+    };
+  } finally {
+    await mkdir(config.userData, { recursive: true });
+    await writeFile(config.result, JSON.stringify(receipt), { mode: 0o600 });
+    app.exit(0); // Launcher computes acceptance only after owned fixture close.
   }
-} catch (error) {
-  receipt.pixels = failedOutcome(error);
-  receipt.accessibility = {
-    status: "blocked",
-    reason: "preflight-not-accepted",
-  };
-  receipt.foreground = { status: "blocked", reason: "preflight-not-accepted" };
-} finally {
-  await mkdir(config.userData, { recursive: true });
-  await writeFile(config.result, JSON.stringify(receipt), { mode: 0o600 });
-  app.exit(0); // Launcher computes acceptance only after owned fixture close.
 }
+
+// Electron waits for ESM evaluation before emitting ready. Do not await this task here.
+void runAcceptance().catch(() => app.exit(1));
