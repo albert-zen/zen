@@ -42,6 +42,52 @@ async function setup() {
   const product = new InMemoryThreadMetadataStore();
   return { root, directory, trace, metadata: product };
 }
+test("bounded live history preserves observations whose Trace write degraded", async () => {
+  const options = await setup();
+  const journal = new DomainThreadJournal({
+    ...options,
+    trace: {
+      read: options.trace.read.bind(options.trace),
+      readArtifact: options.trace.readArtifact.bind(options.trace),
+      record: async (event) =>
+        event.type === "runtime_item" &&
+        (event.data as { item: CanonicalItem }).item.type === "model_usage"
+          ? {
+              durability: "degraded" as const,
+              error: "optional observation unavailable",
+            }
+          : options.trace.record(event),
+    },
+  });
+  try {
+    await journal.append(metadata);
+    const usage: CanonicalItem = {
+      id: "volatile",
+      threadId: "t",
+      turnId: "turn",
+      createdAt: "2026-11-05",
+      type: "model_usage",
+      modelResponseId: "r",
+      inputTokens: 1,
+      outputTokens: 1,
+    };
+    await journal.append(usage);
+    for (let index = 0; index < 8; index++)
+      await journal.append({ ...metadata, threadId: `other-${index}` });
+    assert.deepEqual(await journal.read("t"), [metadata, usage]);
+    assert.deepEqual((await journal.readSnapshot("t")).items, [
+      metadata,
+      usage,
+    ]);
+    assert.deepEqual(await journal.read("other-0"), [
+      { ...metadata, threadId: "other-0" },
+    ]);
+    await journal.append(user);
+    assert.deepEqual(await journal.read("t"), [metadata, usage, user]);
+  } finally {
+    await journal.close();
+  }
+});
 test("new writes route semantic-only ItemList and durable operational Trace; restart without snapshot", async () => {
   const options = await setup();
   const journal = new DomainThreadJournal(options);

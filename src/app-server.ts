@@ -17,6 +17,7 @@ import {
   type UserQuestionAnswer,
 } from "./user-question.js";
 import { ThreadRecencyProjection } from "./thread-recency.js";
+import { ReclaimableCache } from "./reclaimable-cache.js";
 import type {
   UserQuestionState,
   UserQuestionPage,
@@ -553,7 +554,7 @@ export class ZenAppServer {
   readonly #skills: SkillInputLoader | undefined;
   readonly #id: () => string;
   readonly #now: () => string;
-  readonly #threads = new Map<string, Thread>();
+  readonly #threads = new ReclaimableCache<string, Thread>(4);
   readonly #threadLoads = new Map<string, Promise<Thread | undefined>>();
   readonly #activeTurns = new Map<
     string,
@@ -6480,9 +6481,13 @@ export class ZenAppServer {
     const loading = this.#threadLoads.get(threadId);
     if (loading !== undefined) return await loading;
     const load = (async () => {
-      const items = await this.#journal.read(threadId);
+      const snapshot = await this.#journal.readSnapshot?.(threadId);
+      const items = snapshot?.items ?? (await this.#journal.read(threadId));
       if (items.length === 0) return undefined;
-      const itemList = await this.#journal.readItemList?.(threadId);
+      const itemList =
+        snapshot === undefined
+          ? await this.#journal.readItemList?.(threadId)
+          : snapshot.itemList;
       const thread = new Thread(threadId, items, itemList);
       this.#threads.set(threadId, thread);
       return thread;
