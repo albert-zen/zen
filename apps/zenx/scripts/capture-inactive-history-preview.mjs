@@ -113,7 +113,7 @@ try {
   };
   const wait = async (expression) => {
     for (let i = 0; i < 200; i++) {
-      if (await evaluate(expression)) return;
+      if (await evaluate(`Boolean(${expression})`)) return;
       await new Promise((r) => setTimeout(r, 50));
     }
     throw Error(`Condition timed out: ${expression}`);
