@@ -9,6 +9,17 @@ import { ThreadView } from "../src/renderer/src/ThreadView.js";
 import { emptyComposerState } from "../src/renderer/src/composer-state.js";
 import { answeredQuestionFixture } from "./fixtures/answered-question-data.js";
 
+test("all width fixtures have valid question templates and renderable replies", () => {
+  for (const example of [
+    "short-answer",
+    "short-prompt",
+    "long-answer",
+    "unbroken-answer",
+  ]) {
+    assert.doesNotThrow(() => answeredQuestionFixture(false, example), example);
+  }
+});
+
 test("question chips separate intrinsic width from responsive containment", () => {
   const css = readFileSync(
     new URL("../src/renderer/src/answered-question.css", import.meta.url),

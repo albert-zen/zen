@@ -34,6 +34,12 @@ await withPreviewBrowser(
             break;
           await delay(50);
         }
+        assert(
+          await evaluate(
+            "!!document.querySelector('.answered-question-trigger')",
+          ),
+          `Question fixture did not mount: ${example} at ${width}; ${JSON.stringify(errors)}`,
+        );
         await evaluate("document.fonts.ready");
         await delay(250);
         const metrics = await evaluate(`(() => {
@@ -42,6 +48,12 @@ await withPreviewBrowser(
         const rect = e => { const r = e.getBoundingClientRect(); return {left:r.left,right:r.right,width:r.width,clientWidth:e.clientWidth,scrollWidth:e.scrollWidth}; };
         return {bubble:rect(bubble), trigger:rect(trigger), row:rect(bubble.parentElement), answer:rect(bubble.querySelector('.answered-question-answer'))};
       })()`);
+        evidence.push({ width, example, metrics });
+        await writeFile(
+          path.join(directory, "question-width-evidence.json"),
+          JSON.stringify(evidence, null, 2),
+        );
+        await screenshot(`question-width-${width}-${example}.png`);
         assert(
           metrics.trigger.width <= 260.1,
           "question chip retains its fixed cap",
@@ -71,8 +83,6 @@ await withPreviewBrowser(
             metrics.bubble.width < 250,
             "short prompt remains content-sized",
           );
-        evidence.push({ width, example, metrics });
-        await screenshot(`question-width-${width}-${example}.png`);
       }
     }
     assert.deepEqual(errors, [], "no browser exceptions");

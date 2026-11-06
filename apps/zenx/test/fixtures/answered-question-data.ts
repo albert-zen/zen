@@ -10,7 +10,7 @@ export function answeredQuestionFixture(
   missing = false,
   widthCase: string | null = null,
 ) {
-  const specification = parseUserQuestionSpecification({
+  let specification = parseUserQuestionSpecification({
     questions: [
       {
         id: "scope",
@@ -56,6 +56,9 @@ export function answeredQuestionFixture(
       widthCase === "short-prompt"
         ? "继续吗？"
         : "合成问题：哪些事项需要确认，下一步应该怎样处理？".repeat(30);
+    specification = parseUserQuestionSpecification({
+      questions: specification.questions,
+    });
     reply.answers = [
       {
         questionId: "scope",
