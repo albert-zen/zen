@@ -1829,3 +1829,5 @@ Question-list read recovery is a disposable mounted-view concern: existing autho
 - **Early CI feedback** — Standalone static checks report errors before full acceptance; the CI-only pinned base/head impact report is shadow observation with conservative full fallback, never an execution selector or authority to omit existing acceptance checks.
 
 - **Transcript reader cancellation** — The exact pinned Legend web adapter cancels initial and delayed imperative positioning when the existing reader takes control, without queuing a replacement offset or changing nested scrolling, follow intent, history or runtime authority.
+
+- **Android-source CI selection** — Only modifications to eleven reviewed, existing ordinary mobile source files may authorize ZenX UI/platform omission after complete pinned diff/checkout proof and matching whole-repository consumer fingerprints at both endpoints; Core/CLI/IMZen, ZenX aggregate, Android and static feedback remain full, and dependency drift disables this rule until a fresh audit. The restored selector is initially unconnected to workflows pending integration with the documentation-only selection gate.
