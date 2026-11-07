@@ -211,6 +211,34 @@ try {
             `(() => { window.__layoutIdentity={primary:document.querySelector('#primary-conversation-content'),editor:document.querySelector('#primary-conversation-content textarea, #primary-conversation-content .cm-content')}; return true; })()`,
           );
           const split = await capture("split-browser");
+          // Below the existing 1100px breakpoint, a resource replaces the
+          // conversation instead of compressing it. Preserve that contract.
+          const overlayMode = scene.width < 1100;
+          assert.equal(
+            split.primary.display === "none",
+            overlayMode,
+            "resource presentation follows the existing 1100px breakpoint",
+          );
+          if (overlayMode)
+            near(
+              split.panel.width,
+              split.workspace.width,
+              "narrow resource fills workspace",
+            );
+          else {
+            assert.ok(
+              split.primary.width > 0,
+              "split conversation remains visible",
+            );
+            near(
+              split.primary.width + split.panel.width,
+              split.workspace.width,
+              "initial split allocation",
+            );
+          }
+          result.presentation = overlayMode
+            ? "narrow-resource-overlay"
+            : "split";
           // Real production layout, synthetic DOM toggle. Retain every sampled
           // frame to distinguish an animated resize from a final-width-only pass.
           await send("Emulation.setEmulatedMedia", {
@@ -315,11 +343,24 @@ try {
               `${phase}: compositor emitted multiple painted frames`,
             );
             const { frames } = trajectory;
-            assert.ok(
-              new Set(frames.map((f) => Math.round(f.primary))).size > 2,
-              `${phase}: conversation width actually animates`,
-            );
             const closing = phase.startsWith("close");
+            assert.ok(
+              new Set(frames.map((f) => Math.round(f.panel))).size > 2,
+              `${phase}: panel width actually animates`,
+            );
+            if (overlayMode && !closing) {
+              for (const f of frames)
+                near(
+                  f.primary,
+                  0,
+                  `${phase}: narrow resource keeps the conversation hidden`,
+                );
+            } else {
+              assert.ok(
+                new Set(frames.map((f) => Math.round(f.primary))).size > 2,
+                `${phase}: conversation width actually animates`,
+              );
+            }
             const last = frames.at(-1);
             near(
               last.panel,
@@ -339,11 +380,18 @@ try {
               `${phase}: intermediate resize deliveries were sampled`,
             );
             for (const f of intermediate) {
-              near(
-                f.primary + f.panel,
-                split.workspace.width,
-                `${phase}: moving conversation allocation`,
-              );
+              if (overlayMode && !closing)
+                near(
+                  f.primary,
+                  0,
+                  `${phase}: narrow resource owns the surface`,
+                );
+              else
+                near(
+                  f.primary + f.panel,
+                  split.workspace.width,
+                  `${phase}: moving conversation allocation`,
+                );
               assert.ok(
                 f.rows.length > 0,
                 `${phase}: moving virtual rows remain mounted`,
