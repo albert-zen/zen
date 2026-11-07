@@ -1829,3 +1829,5 @@ Question-list read recovery is a disposable mounted-view concern: existing autho
 - **Early CI feedback** — Standalone static checks report errors before full acceptance; the CI-only pinned base/head impact report is shadow observation with conservative full fallback, never an execution selector or authority to omit existing acceptance checks.
 
 - **Transcript reader cancellation** — The exact pinned Legend web adapter cancels initial and delayed imperative positioning when the existing reader takes control, without queuing a replacement offset or changing nested scrolling, follow intent, history or runtime authority.
+
+- **Documentation-only CI selection** — A separate conservative selector may replace heavy PR work with explicit named check receipts only for complete pinned ordinary-Markdown changes in the approved documentation allowlist; missing evidence, unknown paths, main pushes and manual dispatch retain full acceptance, and failed selection fails every original heavy check even after its full fallback work.
