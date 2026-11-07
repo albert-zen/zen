@@ -258,23 +258,33 @@ try {
                 everyNthFrame: 1,
               });
               trajectory = await evaluate(`(async () => {
-                const rawFrames = [], frames = [], started = performance.now();
+                const rawFrames = [], frames = [], observerFrames = [], started = performance.now();
                 const read = () => {
                   const panel = document.querySelector('#thread-workspace-panel').getBoundingClientRect();
                   const primary = document.querySelector('#primary-conversation-content').getBoundingClientRect();
                   const rows = [...document.querySelectorAll('#primary-conversation-content .virtual-transcript-row')].map(e => { const r=e.getBoundingClientRect(); return { x:r.x, right:r.right, width:r.width }; });
                   return { elapsed:performance.now()-started, panel:panel.width, primary:primary.width, x:primary.x, right:primary.right, rows };
                 };
-                document.querySelector('#thread-browser-toggle').click();
-                while (performance.now() - started < 450) {
-                  await new Promise(requestAnimationFrame);
-                  rawFrames.push(read());
-                  // Preserve the pre-layout rAF sample as well as the later task
-                  // observation. Neither geometry sequence alone proves paint.
-                  await new Promise(resolve => setTimeout(resolve, 0));
-                  frames.push(read());
+                // This observer is registered after the production observer.
+                // Its callback measures the same resize-delivery boundary after
+                // the product has committed its shared allocation. A normal
+                // deferred React update would still be stale here.
+                const observer = new ResizeObserver(() => observerFrames.push(read()));
+                observer.observe(document.querySelector('#thread-workspace-panel'), { box: 'border-box' });
+                try {
+                  document.querySelector('#thread-browser-toggle').click();
+                  while (performance.now() - started < 450) {
+                    await new Promise(requestAnimationFrame);
+                    rawFrames.push(read());
+                    // A later task can force a newer animation layout before its
+                    // observer delivery; retain it as diagnostics, not paint proof.
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                    frames.push(read());
+                  }
+                } finally {
+                  observer.disconnect();
                 }
-                return { started, timeOrigin:performance.timeOrigin, rawFrames, frames };
+                return { started, timeOrigin:performance.timeOrigin, rawFrames, frames, observerFrames };
               })()`);
             } finally {
               try {
@@ -321,12 +331,12 @@ try {
               split.workspace.width,
               `${phase}: settled conversation allocation`,
             );
-            const intermediate = frames.filter(
+            const intermediate = trajectory.observerFrames.filter(
               (f) => f.panel > 40 && f.panel < split.panel.width - 40,
             );
             assert.ok(
               intermediate.length > 0,
-              `${phase}: intermediate geometry was sampled`,
+              `${phase}: intermediate resize deliveries were sampled`,
             );
             for (const f of intermediate) {
               near(
