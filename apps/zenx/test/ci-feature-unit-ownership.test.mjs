@@ -65,7 +65,7 @@ for (const [file, names] of Object.entries(selected)) {
   });
 }
 
-test("CI owns the full ZenX test set on every PR and main push", () => {
+test("CI owns the full ZenX test set outside verified documentation-only PRs", () => {
   const ci = parse(read(".github/workflows/ci.yml"));
   assert.equal(ci.on.pull_request, null);
   assert.deepEqual(ci.on.push.branches, ["main"]);
@@ -75,7 +75,12 @@ test("CI owns the full ZenX test set on every PR and main push", () => {
     ),
   );
   assert.equal(owners.length, 1);
-  assert.equal(owners[0].if, undefined);
+  assert.equal(owners[0].if, "${{ !cancelled() }}");
+  assert.equal(owners[0].needs, "selection");
+  assert.match(
+    owners[0].env.CI_RUN_FULL,
+    /needs.selection.result != 'success'/,
+  );
   assert.match(owners[0]["runs-on"], /^ubuntu-/);
   const scripts = JSON.parse(read("apps/zenx/package.json")).scripts;
   assert.match(scripts["check:observed"], /npm run test:prepared:observed/);
