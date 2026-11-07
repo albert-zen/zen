@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
+import WebSocket, { WebSocketServer } from "ws";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
@@ -17,19 +18,26 @@ const ast = ts.createSourceFile(
 const rpc = ast.statements.find(
   (n) => ts.isClassDeclaration(n) && n.name.text === "Rpc",
 );
-function fixture() {
+function fixture({ failSink = false } = {}) {
   let timer,
     now = 10;
   const sends = [];
+  const callbacks = [];
+  const logs = [];
   class Socket extends EventEmitter {
     constructor() {
       super();
+      this.readyState = 1;
+      this.bufferedAmount = 0;
       queueMicrotask(() => this.emit("open"));
     }
-    send(value) {
+    send(value, callback) {
       sends.push(JSON.parse(value));
+      callbacks.push(callback);
+      this.bufferedAmount = 42;
     }
     close() {
+      this.readyState = 3;
       this.emit("close");
     }
   }
@@ -40,6 +48,12 @@ function fixture() {
     {
       WebSocket: Socket,
       assert,
+      console: {
+        error: (...args) => {
+          logs.push(args);
+          if (failSink) throw new Error("private-sink-error");
+        },
+      },
       Date: { now: () => now },
       setTimeout: (fn, ms) => {
         assert.equal(ms, 10000);
@@ -52,6 +66,8 @@ function fixture() {
   return {
     Rpc,
     sends,
+    callbacks,
+    logs,
     expire: () => {
       now = 10015;
       timer();
@@ -128,3 +144,248 @@ test("fixture preserves synchronous send failure without retry", async () => {
   );
   assert.equal(f.sends.length, 0);
 });
+
+test("screenshot callback error is diagnostic only and response still resolves", async () => {
+  const f = fixture();
+  const rpc = await f.Rpc.connect("ws://private-url");
+  const pending = rpc.send(
+    "Page.captureScreenshot",
+    { secret: "private-param" },
+    "private-session",
+  );
+  f.callbacks[0](new Error("private-callback-error"));
+  await Promise.resolve();
+  let record = rpc.screenshotTransport().records[0];
+  assert.equal(record.sendCallback, "error");
+  assert.equal(record.outcome, "pending");
+  assert.equal(record.sent.readyState, 1);
+  assert.equal(record.returned.bufferedAmount, 42);
+  assert.equal(record.sendCallbackState.pendingCount, 1);
+  rpc.socket.emit(
+    "message",
+    JSON.stringify({ id: 1, result: { data: "private-pixels" } }),
+  );
+  assert.equal((await pending).data, "private-pixels");
+  record = rpc.screenshotTransport().records[0];
+  assert.equal(record.outcome, "success");
+  assert.equal(record.settled.pendingCount, 0);
+  record.returned.bufferedAmount = -1;
+  assert.equal(
+    rpc.screenshotTransport().records[0].returned.bufferedAmount,
+    42,
+  );
+  rpc.close();
+  assert.equal(f.logs.length, 2);
+  assert.equal(
+    JSON.stringify([rpc.screenshotTransport(), f.logs]).includes("private-"),
+    false,
+  );
+});
+
+test("timeout receipt is detached; late reply and callback cannot repair failed promise", async () => {
+  const f = fixture();
+  const rpc = await f.Rpc.connect("ws://private-url");
+  const pending = rpc.send("Page.captureScreenshot");
+  f.expire();
+  let failure;
+  await assert.rejects(pending, (error) => {
+    failure = error;
+    return true;
+  });
+  assert.equal(
+    failure.fixtureCdp.screenshotTransport.records[0].sendCallback,
+    "pending",
+  );
+  f.callbacks[0]();
+  rpc.socket.emit(
+    "message",
+    JSON.stringify({ id: 1, error: { message: "private-late-error" } }),
+  );
+  rpc.socket.emit(
+    "message",
+    JSON.stringify({ id: 1, result: { data: "private-second-reply" } }),
+  );
+  await assert.rejects(pending, (error) => error === failure);
+  const record = rpc.screenshotTransport().records[0];
+  assert.equal(record.outcome, "timeout");
+  assert.equal(record.sendCallback, "ok");
+  assert.equal(record.lateReply.outcome, "protocol-error");
+  assert.equal(record.lateReply.pendingCount, 0);
+  assert.equal(
+    failure.fixtureCdp.screenshotTransport.records[0].lateReply,
+    undefined,
+  );
+  rpc.close();
+  assert.equal(JSON.stringify(f.logs).includes("private-"), false);
+  assert.equal(f.sends.length, 1);
+});
+
+test("screenshot close rejects pending and cleanup sink cannot change settlement", async () => {
+  const f = fixture({ failSink: true });
+  const rpc = await f.Rpc.connect("ws://owned");
+  const pending = rpc.send("Page.captureScreenshot");
+  rpc.close();
+  await assert.rejects(pending, /Fixture CDP socket closed/);
+  assert.equal(rpc.screenshotTransport().records[0].outcome, "socket-closed");
+  assert.equal(rpc.screenshotTransport().records[0].settled.readyState, 3);
+  rpc.socket.emit("error", new Error("private-socket-error"));
+  assert.equal(f.logs.length, 2);
+  assert.equal(JSON.stringify(f.logs).includes("private-"), false);
+});
+
+test("screenshot protocol and synchronous send errors preserve original rejection", async () => {
+  const f = fixture();
+  const rpc = await f.Rpc.connect("ws://owned");
+  const pending = rpc.send("Page.captureScreenshot");
+  rpc.socket.emit(
+    "message",
+    JSON.stringify({ id: 1, error: { message: "private-protocol-error" } }),
+  );
+  await assert.rejects(pending, /private-protocol-error/);
+  assert.equal(rpc.screenshotTransport().records[0].outcome, "protocol-error");
+  const error = new Error("private-send-error");
+  rpc.socket.send = () => {
+    throw error;
+  };
+  await assert.rejects(rpc.send("Page.captureScreenshot"), (e) => e === error);
+  assert.equal(rpc.screenshotTransport().records[1].outcome, "send-threw");
+  assert.equal(rpc.screenshotTransport().records[1].transportAccepted, false);
+  assert.equal(
+    JSON.stringify(rpc.screenshotTransport()).includes("private-"),
+    false,
+  );
+});
+
+test("screenshot tombstones are bounded; evicted replies and non-screenshot calls add no receipts", async () => {
+  const f = fixture();
+  const rpc = await f.Rpc.connect("ws://owned");
+  for (let i = 0; i < 40; i++) {
+    const pending = rpc.send("Page.captureScreenshot");
+    f.expire();
+    await assert.rejects(pending);
+  }
+  const before = JSON.stringify(rpc.screenshotTransport());
+  f.callbacks[0](new Error("private-evicted-error"));
+  rpc.socket.emit(
+    "message",
+    JSON.stringify({ id: 1, result: { data: "private-evicted-reply" } }),
+  );
+  assert.equal(JSON.stringify(rpc.screenshotTransport()), before);
+  assert.equal(rpc.screenshotTransport().records.length, 16);
+  assert.equal(rpc.screenshotTransport().records[0].id, 25);
+  assert.equal(rpc.screenshotTransport().dropped, 24);
+  const input = rpc.send("Input.dispatchKeyEvent");
+  assert.equal(f.callbacks[40], undefined);
+  rpc.socket.emit("message", JSON.stringify({ id: 41, result: {} }));
+  await input;
+  assert.equal(JSON.stringify(rpc.screenshotTransport()), before);
+});
+
+test("duplicate reply after success or protocol error is not a late timeout reply", async () => {
+  for (const failed of [false, true]) {
+    const f = fixture();
+    const client = await f.Rpc.connect("ws://owned");
+    const pending = client.send("Page.captureScreenshot");
+    const message = JSON.stringify({
+      id: 1,
+      ...(failed
+        ? { error: { message: "private-protocol-error" } }
+        : { result: { data: "private-pixels" } }),
+    });
+    client.socket.emit("message", message);
+    if (failed) await assert.rejects(pending);
+    else await pending;
+    client.socket.emit("message", message);
+    assert.equal(client.screenshotTransport().records[0].lateReply, undefined);
+  }
+});
+
+for (const silent of [false, true]) {
+  test(
+    `real loopback WebSocket screenshot ${silent ? "silence preserves timeout" : "callback and response succeed"}`,
+    { timeout: 5000 },
+    async (t) => {
+      const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+      t.after(async () => {
+        for (const socket of server.clients) socket.terminate();
+        await new Promise((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve())),
+        );
+      });
+      await once(server, "listening");
+      let received;
+      const request = new Promise((resolve) => {
+        server.once("connection", (socket) =>
+          socket.once("message", (raw) => {
+            received = JSON.parse(String(raw));
+            if (!silent)
+              socket.send(
+                JSON.stringify({
+                  id: received.id,
+                  result: { data: "private-loopback-pixels" },
+                }),
+              );
+            resolve();
+          }),
+        );
+      });
+      let expire;
+      const logs = [];
+      const Rpc = runInNewContext(
+        ts.transpileModule(`${rpc.getText(ast)}; Rpc`, {
+          compilerOptions: { target: ts.ScriptTarget.ES2022 },
+        }).outputText,
+        {
+          WebSocket,
+          assert,
+          Date,
+          console: { error: (...args) => logs.push(args) },
+          setTimeout: (fn, ms) => {
+            assert.equal(ms, 10000);
+            if (silent) {
+              expire = fn;
+              return undefined;
+            }
+            return setTimeout(fn, ms);
+          },
+          clearTimeout,
+        },
+      );
+      const client = await Rpc.connect(
+        `ws://127.0.0.1:${server.address().port}`,
+      );
+      t.after(() => client.socket.terminate());
+      const pending = client.send("Page.captureScreenshot", {
+        secret: "private-loopback-param",
+      });
+      await request;
+      assert.equal(received.method, "Page.captureScreenshot");
+      if (silent) {
+        expire();
+        await assert.rejects(pending, (error) => {
+          assert.equal(error.fixtureCdp.timeoutMs, 10000);
+          assert.equal(error.fixtureCdp.transportAccepted, true);
+          return true;
+        });
+        assert.equal(
+          client.screenshotTransport().records[0].outcome,
+          "timeout",
+        );
+      } else {
+        assert.equal((await pending).data, "private-loopback-pixels");
+        const record = client.screenshotTransport().records[0];
+        assert.equal(record.sendCallback, "ok");
+        assert.equal(record.outcome, "success");
+        assert.equal(record.transportAccepted, true);
+        assert.equal(record.settled.pendingCount, 0);
+      }
+      const closed = once(client.socket, "close");
+      client.close();
+      await closed;
+      assert.equal(client.socket.readyState, WebSocket.CLOSED);
+      assert.equal(logs.length, 2);
+      assert.equal(JSON.stringify(logs).includes("private-loopback"), false);
+      assert.equal(JSON.stringify(logs).includes("127.0.0.1"), false);
+    },
+  );
+}
