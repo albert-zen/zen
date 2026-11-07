@@ -11,6 +11,8 @@ import {
  * ZENX_PARALLEL_INPUT_ARTIFACT_DIR optionally retains the JSON evidence report.
  * ZENX_FRESH_NESTED_CAPTURE_ONLY=1 runs only a fresh nested capture diagnostic,
  * before acceptance input, and emits its receipt to stdout (not acceptance).
+ * ZENX_NESTED_CAPTURE_MATRIX_ONLY=1 instead runs three predeclared independent
+ * scenes: fresh early, navigation-only history, and fresh late. Never input.
  * This smoke intentionally activates only its own fixture windows during setup.
  * Protocol-only user input is reported separately from real OS input evidence.
  */
@@ -1841,8 +1843,11 @@ export async function runFreshNestedCaptureSmoke(options: {
   browserRpc: FixtureCdpEndpoint;
   guard(): Promise<void>;
   report(receipt: Record<string, unknown>): void;
+  condition?: "fresh-early" | "navigation-history" | "fresh-late";
 }): Promise<void> {
   const { backend, sessionId, browserRpc, guard } = options;
+  const startedAt = Date.now();
+  const history: { mode: string; elapsedMs: number }[] = [];
   const remoteServer = createServer((request, response) => {
     response.setHeader("content-type", "text/html; charset=utf-8");
     response.setHeader("cache-control", "no-store");
@@ -1866,10 +1871,16 @@ export async function runFreshNestedCaptureSmoke(options: {
   let owned: { tabId: string } | undefined;
   let rpc: Rpc | undefined;
   let removeEvents: (() => void) | undefined;
+  let rootFrameId: string | undefined;
+  let rootLoaderId: string | undefined;
   const lifecycle: Record<string, number> = {};
   let primaryFailed = false;
   const receipt: Record<string, unknown> = {
     scenario: "fresh-nested-oopif-capture",
+    condition: options.condition ?? "fresh-early",
+    history,
+    historyInputDispatches: 0,
+    historyProviderInspections: 0,
     layer: "independent-capture-diagnostic-only",
     providerAcceptance: "not-exercised",
     dispatchAttempts: 0,
@@ -1912,16 +1923,26 @@ export async function runFreshNestedCaptureSmoke(options: {
     });
     const address = remoteServer.address();
     assert.ok(address && typeof address !== "string");
-    const url = new URL("/input-contract", options.origin);
-    for (const [key, value] of Object.entries({
-      mode: "nested-oopif",
-      parentOrigin: options.origin,
-      childOrigin: `http://localhost:${address.port}`,
-      leafOrigin: `http://nested.localhost:${address.port}`,
-      outerAffine: "true",
-      nonce: randomUUID(),
-    }))
-      url.searchParams.set(key, value);
+    const fixtureUrl = (mode: string) => {
+      const url = new URL("/input-contract", options.origin);
+      url.searchParams.set("mode", mode);
+      if (isRemoteFrameMode(mode)) {
+        for (const [key, value] of Object.entries({
+          parentOrigin: options.origin,
+          childOrigin: `http://${mode === "cross-origin-same-process" ? "127.0.0.1" : "localhost"}:${address.port}`,
+          nonce: randomUUID(),
+          ...(mode === "nested-oopif"
+            ? {
+                leafOrigin: `http://nested.localhost:${address.port}`,
+                outerAffine: "true",
+              }
+            : {}),
+        }))
+          url.searchParams.set(key, value);
+      }
+      return url;
+    };
+    const url = fixtureUrl("nested-oopif");
     // Fresh target and fresh document, before any acceptance scenario input.
     receipt.stage = "open-fresh-target";
     owned = await backend.open(sessionId, "about:blank");
@@ -1940,6 +1961,15 @@ export async function runFreshNestedCaptureSmoke(options: {
     removeEvents = fixture.onEvent((event) => {
       // Fixed event vocabulary and counters only. No URLs, frame IDs or payloads.
       let name: string | undefined;
+      if (event.method === "Page.frameNavigated") {
+        const frame = event.params?.frame as
+          { id?: string; loaderId?: string; parentId?: string } | undefined;
+        if (frame && frame.parentId === undefined) {
+          rootFrameId = frame.id;
+          rootLoaderId = frame.loaderId;
+          for (const key of Object.keys(lifecycle)) delete lifecycle[key];
+        }
+      }
       if (
         [
           "Page.frameStartedLoading",
@@ -1952,6 +1982,10 @@ export async function runFreshNestedCaptureSmoke(options: {
         name = event.method;
       if (
         event.method === "Page.lifecycleEvent" &&
+        rootFrameId !== undefined &&
+        rootLoaderId !== undefined &&
+        event.params?.frameId === rootFrameId &&
+        event.params?.loaderId === rootLoaderId &&
         [
           "init",
           "DOMContentLoaded",
@@ -1968,7 +2002,56 @@ export async function runFreshNestedCaptureSmoke(options: {
     await fixture.send("Page.enable");
     await fixture.send("Page.setLifecycleEventsEnabled", { enabled: true });
     await fixture.send("Inspector.enable");
+    const historyStartedAt = Date.now();
+    if (options.condition === "navigation-history") {
+      // Same preceding mode order as normal acceptance, but navigation only.
+      // No provider inspection, placement attachment, extra focus or Input.
+      for (const mode of [
+        "stop-propagation",
+        "stop-immediate",
+        "shadow",
+        "light-native",
+        "same-origin-frame",
+        "affine-frame",
+        "same-origin-closed-shadow",
+        "closed-shadow",
+        "deep-shadow",
+        "ordinary-dom",
+        "cross-origin-same-process",
+        "cross-origin-oopif",
+      ]) {
+        receipt.stage = "navigation-history";
+        await guard();
+        const navigationStarted = Date.now();
+        await backend.navigate(sessionId, owned.tabId, fixtureUrl(mode).href);
+        await poll(async () => {
+          const ready = await fixture.evaluate<boolean>(
+            `window.contract?.mode === ${JSON.stringify(mode)} && ${isRemoteFrameMode(mode) ? "window.contract.ready === true" : "true"}`,
+          );
+          assert.equal(typeof ready, "boolean");
+          return ready ? true : undefined;
+        }, `navigation-only history ${mode}`);
+        const current = await fixture.evaluate<ContractState>(
+          "window.contract.state()",
+        );
+        assert.equal(current.visibility, "hidden");
+        if (isRemoteFrameMode(mode))
+          assert.equal(current.childVisibility, "hidden");
+        assert.equal(
+          current.events.length,
+          0,
+          "Navigation-only history must receive no input",
+        );
+        await guard();
+        history.push({ mode, elapsedMs: Date.now() - navigationStarted });
+      }
+    }
+    receipt.historyElapsedMs = Date.now() - historyStartedAt;
+    // Paint events from predecessor documents must not count as final paint.
+    receipt.predecessorLifecycle = { ...lifecycle };
+    for (const key of Object.keys(lifecycle)) delete lifecycle[key];
     receipt.stage = "navigate-and-readiness";
+    const finalNavigationStarted = Date.now();
     await backend.navigate(sessionId, owned.tabId, url.href);
     await poll(
       async () =>
@@ -2003,6 +2086,10 @@ export async function runFreshNestedCaptureSmoke(options: {
     receipt.stage = "capture-and-heartbeat";
     receipt.beforeCaptureLifecycle = { ...lifecycle };
     receipt.captureAttempts = 1;
+    const captureStartedAt = Date.now();
+    receipt.sceneElapsedAtCaptureMs = captureStartedAt - startedAt;
+    receipt.finalNavigationToCaptureMs =
+      captureStartedAt - finalNavigationStarted;
     const capture = fixture.send("Page.captureScreenshot", {
       format: "png",
       fromSurface: true,
@@ -2016,10 +2103,12 @@ export async function runFreshNestedCaptureSmoke(options: {
     const heartbeat = fixture
       .evaluate<ContractState>("window.contract.state()")
       .then((state) => {
+        receipt.heartbeatElapsedMs = Date.now() - captureStartedAt;
         receipt.heartbeat = summarize(state);
         receipt.heartbeatOutcome = "success";
       })
       .catch((error: unknown) => {
+        receipt.heartbeatElapsedMs = Date.now() - captureStartedAt;
         receipt.heartbeatOutcome = "failed";
         throw error;
       });
@@ -2093,6 +2182,56 @@ export async function runFreshNestedCaptureSmoke(options: {
     }
     if (!primaryFailed && cleanupFailures.length) throw firstCleanupError;
   }
+}
+
+/** Predeclared controls, never selected in response to a previous outcome. */
+export async function runNestedCaptureMatrixSmoke(
+  options: Parameters<typeof runFreshNestedCaptureSmoke>[0],
+): Promise<void> {
+  const plannedConditions = [
+    "fresh-early",
+    "navigation-history",
+    "fresh-late",
+  ] as const;
+  const matrixStartedAt = Date.now();
+  let firstCaptureFailure: unknown;
+  let captureFailed = false;
+  for (const condition of plannedConditions) {
+    let receipt: Record<string, unknown> | undefined;
+    const sceneStartedAfterMatrixMs = Date.now() - matrixStartedAt;
+    try {
+      await runFreshNestedCaptureSmoke({
+        ...options,
+        condition,
+        report: (value) => {
+          receipt = value;
+          options.report({
+            ...value,
+            plannedConditions: [...plannedConditions],
+            sceneStartedAfterMatrixMs,
+          });
+        },
+      });
+    } catch (error) {
+      // A known capture timeout with successful hidden-page heartbeat and full
+      // cleanup may be compared with the remaining predeclared new scenes.
+      // Any safety, readiness, heartbeat or cleanup failure stops the matrix.
+      const timeout =
+        error instanceof Error && "fixtureCdp" in error
+          ? (error.fixtureCdp as { method?: unknown })
+          : undefined;
+      if (
+        timeout?.method !== "Page.captureScreenshot" ||
+        receipt?.stage !== "capture-and-heartbeat" ||
+        receipt?.heartbeatOutcome !== "success" ||
+        receipt?.cleanupStatus !== "completed"
+      )
+        throw error;
+      if (!captureFailed) firstCaptureFailure = error;
+      captureFailed = true;
+    }
+  }
+  if (captureFailed) throw firstCaptureFailure;
 }
 
 /** Real protocol acceptance, shared by both headed smoke entry points. */
@@ -3471,11 +3610,18 @@ async function main(): Promise<void> {
       );
       return ready ? true : undefined;
     }, "agent fixture document");
-    if (process.env.ZENX_FRESH_NESTED_CAPTURE_ONLY === "1") {
+    if (
+      process.env.ZENX_FRESH_NESTED_CAPTURE_ONLY === "1" ||
+      process.env.ZENX_NESTED_CAPTURE_MATRIX_ONLY === "1"
+    ) {
+      const runCaptureDiagnostic =
+        process.env.ZENX_NESTED_CAPTURE_MATRIX_ONLY === "1"
+          ? runNestedCaptureMatrixSmoke
+          : runFreshNestedCaptureSmoke;
       phase = "fresh-nested-capture-only";
       const frontBefore = await native.call("snapshot");
       const userBefore = await userRpc.evaluate<PageState>(stateScript);
-      await runFreshNestedCaptureSmoke({
+      await runCaptureDiagnostic({
         backend: connection.backend,
         sessionId,
         endpoint,

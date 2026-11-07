@@ -32,7 +32,9 @@ function fixture({
   failCleanup,
 } = {}) {
   const calls = [],
-    reports = [];
+    reports = [],
+    navigations = [];
+  let nonceSequence = 0;
   const cleanupFailure = new Error("synthetic cleanup failure");
   const step = (name) => {
     calls.push(name);
@@ -59,8 +61,29 @@ function fixture({
         assert.equal(params.fromSurface, true);
         assert.equal(params.captureBeyondViewport, false);
         listener({
+          method: "Page.frameNavigated",
+          params: { frame: { id: "root", loaderId: "current" } },
+        });
+        listener({
           method: "Page.lifecycleEvent",
-          params: { name: "firstPaint", url: "private-payload" },
+          params: {
+            name: "firstPaint",
+            frameId: "root",
+            loaderId: "current",
+            url: "private-payload",
+          },
+        });
+        listener({
+          method: "Page.lifecycleEvent",
+          params: {
+            name: "firstPaint",
+            frameId: "root",
+            loaderId: "predecessor",
+          },
+        });
+        listener({
+          method: "Page.lifecycleEvent",
+          params: { name: "firstPaint", frameId: "child", loaderId: "current" },
         });
         listener({
           method: "Page.lifecycleEvent",
@@ -102,7 +125,15 @@ function fixture({
     String,
     Math,
     createServer: () => server,
-    randomUUID: () => "12345678-1234-1234-1234-123456789012",
+    randomUUID: () =>
+      `12345678-1234-1234-1234-${String(++nonceSequence).padStart(12, "0")}`,
+    isRemoteFrameMode: (mode) =>
+      [
+        "cross-origin-same-process",
+        "cross-origin-oopif",
+        "nested-oopif",
+        "nested-same-process",
+      ].includes(mode),
     Rpc: { connect: async () => rpc },
     poll: async (fn) => {
       const value = await fn();
@@ -131,7 +162,8 @@ function fixture({
     failure,
     guardFailure,
     cleanupFailure,
-    run: () =>
+    navigations,
+    run: (overrides = {}) =>
       run({
         backend: {
           open: async (_session, url) => {
@@ -141,7 +173,7 @@ function fixture({
           },
           navigate: async (_session, id, url) => {
             assert.equal(id, "owned");
-            assert.equal(new URL(url).searchParams.get("mode"), "nested-oopif");
+            navigations.push(new URL(url));
             calls.push("navigate");
           },
           closeTab: async (_session, id) => {
@@ -173,6 +205,7 @@ function fixture({
           reports.push(receipt);
           if (failSink) throw new Error("synthetic sink failure");
         },
+        ...overrides,
       }),
   };
 }
@@ -214,12 +247,12 @@ test("foreground failure prevents opening a diagnostic target", async () => {
 
 test("fresh-only entry precedes inspection, extensions, and all scenario input, then returns", () => {
   const start = source.indexOf(
-    'if (process.env.ZENX_FRESH_NESTED_CAPTURE_ONLY === "1")',
+    'process.env.ZENX_FRESH_NESTED_CAPTURE_ONLY === "1"',
   );
   const end = source.indexOf('phase = "startup-agent-inspection"', start);
   assert.ok(start > 0 && end > start);
   const branch = source.slice(start, end);
-  assert.match(branch, /await runFreshNestedCaptureSmoke\(/u);
+  assert.match(branch, /await runCaptureDiagnostic\(/u);
   assert.match(branch, /return;/u);
   assert.match(branch, /assert.equal\(front.drift, false\)/u);
   assert.match(branch, /assert.equal\(visibility, "hidden"\)/u);
@@ -262,4 +295,167 @@ test("successful capture reports completed cleanup separately", async () => {
   await f.run();
   assert.equal(f.reports[0].cleanupStatus, "completed");
   assert.equal(f.reports[0].status, "passed");
+});
+
+test("navigation-only history preserves exact preceding mode order with one final capture", async () => {
+  const f = fixture();
+  await f.run({ condition: "navigation-history" });
+  const acceptance = ast.statements.find(
+    (n) =>
+      ts.isFunctionDeclaration(n) &&
+      n.name?.text === "runTargetedInputContractSmoke",
+  );
+  let normalModes;
+  const visit = (node) => {
+    if (
+      ts.isForOfStatement(node) &&
+      ts.isArrayLiteralExpression(node.expression) &&
+      node.expression.elements.some(
+        (e) => ts.isStringLiteral(e) && e.text === "stop-propagation",
+      )
+    )
+      normalModes = node.expression.elements
+        .filter(ts.isStringLiteral)
+        .map((e) => e.text);
+    ts.forEachChild(node, visit);
+  };
+  visit(acceptance);
+  assert.ok(normalModes);
+  const expected = [
+    ...normalModes,
+    "cross-origin-same-process",
+    "cross-origin-oopif",
+    "nested-oopif",
+  ];
+  assert.deepEqual(
+    f.navigations.map((url) => url.searchParams.get("mode")),
+    expected,
+  );
+  const remote = f.navigations.filter((url) => url.searchParams.has("nonce"));
+  assert.equal(
+    new Set(remote.map((url) => url.searchParams.get("nonce"))).size,
+    3,
+  );
+  assert.equal(
+    remote[0].searchParams.get("childOrigin"),
+    "http://127.0.0.1:12345",
+  );
+  assert.equal(f.calls.filter((x) => x === "placement").length, 1);
+  assert.equal(
+    f.calls.filter((x) => x === "window.contract.focus('text-a')").length,
+    1,
+  );
+  assert.equal(f.calls.filter((x) => x === "Page.captureScreenshot").length, 1);
+  assert.equal(f.reports[0].history.length, 12);
+  assert.equal(f.reports[0].historyInputDispatches, 0);
+  assert.equal(f.reports[0].historyProviderInspections, 0);
+  assert.equal(typeof f.reports[0].finalNavigationToCaptureMs, "number");
+  assert.equal(typeof f.reports[0].heartbeatElapsedMs, "number");
+});
+
+function matrix(runScene) {
+  const declaration = ast.statements.find(
+    (n) =>
+      ts.isFunctionDeclaration(n) &&
+      n.name?.text === "runNestedCaptureMatrixSmoke",
+  );
+  return runInNewContext(
+    ts.transpileModule(
+      `${declaration.getText(ast).replace(/^export /u, "")}; runNestedCaptureMatrixSmoke`,
+      { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+    ).outputText,
+    { runFreshNestedCaptureSmoke: runScene, Error, Date },
+  );
+}
+
+test("matrix predeclares three independent scenes and preserves a capture failure", async () => {
+  const conditions = [],
+    receipts = [];
+  const timeout = Object.assign(new Error("synthetic timeout"), {
+    fixtureCdp: { method: "Page.captureScreenshot" },
+  });
+  const run = matrix(async (options) => {
+    conditions.push(options.condition);
+    options.report({
+      stage: "capture-and-heartbeat",
+      heartbeatOutcome: "success",
+      cleanupStatus: "completed",
+      condition: options.condition,
+    });
+    if (options.condition === "navigation-history") throw timeout;
+  });
+  await assert.rejects(
+    run({ report: (r) => receipts.push(r) }),
+    (e) => e === timeout,
+  );
+  assert.deepEqual(conditions, [
+    "fresh-early",
+    "navigation-history",
+    "fresh-late",
+  ]);
+  assert.equal(receipts.length, 3);
+  for (const receipt of receipts) {
+    assert.deepEqual(Array.from(receipt.plannedConditions), conditions);
+    assert.equal(typeof receipt.sceneStartedAfterMatrixMs, "number");
+  }
+});
+
+for (const invalid of ["cleanup", "heartbeat", "stage", "non-timeout"])
+  test(`matrix stops instead of continuing after ${invalid} failure`, async () => {
+    const conditions = [];
+    const failure = Object.assign(
+      new Error("synthetic failure"),
+      invalid === "non-timeout"
+        ? {}
+        : { fixtureCdp: { method: "Page.captureScreenshot" } },
+    );
+    const run = matrix(async (options) => {
+      conditions.push(options.condition);
+      options.report({
+        stage:
+          invalid === "stage" ? "verify-placement" : "capture-and-heartbeat",
+        heartbeatOutcome: invalid === "heartbeat" ? "pending" : "success",
+        cleanupStatus: invalid === "cleanup" ? "failed" : "completed",
+      });
+      throw failure;
+    });
+    await assert.rejects(run({ report: () => {} }), (e) => e === failure);
+    assert.deepEqual(conditions, ["fresh-early"]);
+  });
+
+test("matrix invokes the real scene helper once per condition, each with its own open and physical close", async () => {
+  const scenes = [],
+    receipts = [];
+  const run = matrix(async (options) => {
+    const scene = fixture();
+    scenes.push(scene);
+    await scene.run({ condition: options.condition, report: options.report });
+  });
+  await run({ report: (receipt) => receipts.push(receipt) });
+  assert.equal(scenes.length, 3);
+  assert.deepEqual(
+    scenes.map((scene) => scene.navigations.length),
+    [1, 13, 1],
+  );
+  for (const scene of scenes) {
+    assert.equal(scene.calls.filter((call) => call === "open").length, 1);
+    assert.equal(
+      scene.calls.filter((call) => call === "Page.captureScreenshot").length,
+      1,
+    );
+    assert.equal(
+      scene.calls.filter((call) => call === "physical-close").length,
+      1,
+    );
+  }
+  assert.deepEqual(
+    receipts.map((receipt) => receipt.condition),
+    ["fresh-early", "navigation-history", "fresh-late"],
+  );
+  assert.ok(
+    receipts.every(
+      (receipt) =>
+        receipt.status === "passed" && receipt.cleanupStatus === "completed",
+    ),
+  );
 });
