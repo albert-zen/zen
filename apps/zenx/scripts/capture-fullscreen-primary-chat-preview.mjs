@@ -228,7 +228,10 @@ try {
               const frames = [], started = performance.now();
               document.querySelector('#thread-browser-toggle').click();
               while (performance.now() - started < 450) {
-                await new Promise(requestAnimationFrame);
+                // rAF runs before layout/ResizeObserver delivery. Yield one task
+                // after it so the sample observes the renderer's committed width,
+                // rather than pairing this tick's panel with last tick's primary.
+                await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
                 const panel = document.querySelector('#thread-workspace-panel').getBoundingClientRect();
                 const primary = document.querySelector('#primary-conversation-content').getBoundingClientRect();
                 const rows = [...document.querySelectorAll('#primary-conversation-content .virtual-transcript-row')].map(e => { const r=e.getBoundingClientRect(); return { x:r.x, right:r.right, width:r.width }; });
@@ -236,7 +239,12 @@ try {
               }
               return frames;
             })()`);
-            result.observations.push({ phase: `compression-${phase}`, frames });
+            result.observations.push({
+              phase: `compression-${phase}`,
+              sampling:
+                "animation frame followed by a task (after resize delivery)",
+              frames,
+            });
             assert.ok(
               new Set(frames.map((f) => Math.round(f.primary))).size > 2,
               `${phase}: conversation width actually animates`,
@@ -255,11 +263,17 @@ try {
             );
             for (const f of frames.filter(
               (f) => f.panel > 40 && f.panel < split.panel.width - 40,
-            ))
+            )) {
               assert.ok(
                 f.primary < split.workspace.width - 20,
                 `${phase}: no early jump to full width`,
               );
+              for (const row of f.rows)
+                assert.ok(
+                  row.x >= f.x - 2 && row.right <= f.right + 2,
+                  `${phase}: moving virtual content stays inside conversation`,
+                );
+            }
             assert.ok(
               last.rows.length > 0,
               "actual virtual rows remain mounted",
