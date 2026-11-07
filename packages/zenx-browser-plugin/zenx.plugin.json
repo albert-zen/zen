@@ -493,6 +493,26 @@
       "capabilities": ["dedicated_profile", "session.close"]
     },
     {
+      "name": "browser_input_reset",
+      "description": "Report whether one explicit tab withholds new site input, and make at most one controlled release attempt: the unacknowledged key-up for the key whose press outcome was unknown. Repeats no page action, sends no new input and never retries automatically. Reads and programmatic actions stay available whether or not the release succeeds.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile"]
+    },
+    {
       "name": "browser_evaluate",
       "description": "Evaluate a JavaScript expression in a separate page DOM isolated world. May mutate pages, submit forms or send requests; requires a fresh observation and interaction permission. Defaults to a separate isolated world; world:main selects the pinned page context to access application globals.",
       "inputSchema": {

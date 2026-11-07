@@ -564,6 +564,26 @@
       "capabilities": ["dedicated_profile", "session.close"]
     },
     {
+      "name": "browser_workspace_input_reset",
+      "description": "[Workspace browser] Report whether one explicit tab withholds new site input, and make at most one controlled release attempt: the unacknowledged key-up for the key whose press outcome was unknown. Repeats no page action, sends no new input and never retries automatically. Reads and programmatic actions stay available whether or not the release succeeds.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile"]
+    },
+    {
       "name": "browser_workspace_evaluate",
       "description": "[Workspace browser] Evaluate a JavaScript expression in a separate page DOM isolated world. May mutate pages, submit forms or send requests; requires a fresh observation and interaction permission. Defaults to a separate isolated world; world:main selects the pinned page context to access application globals.",
       "inputSchema": {
@@ -1397,6 +1417,30 @@
         "authenticated_state_in_place",
         "session.close"
       ]
+    },
+    {
+      "name": "browser_connected_input_reset",
+      "description": "[Connected external browser] Report whether one explicit tab withholds new site input, and make at most one controlled release attempt: the unacknowledged key-up for the key whose press outcome was unknown. Repeats no page action, sends no new input and never retries automatically. Reads and programmatic actions stay available whether or not the release succeeds.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "connectionId": {
+            "type": "string",
+            "description": "Exact opaque connectionId from browser_connections. Required even when only one browser is connected."
+          }
+        },
+        "required": ["sessionId", "tabId", "connectionId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.connected.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["user_session", "authenticated_state_in_place"]
     },
     {
       "name": "browser_connected_evaluate",
