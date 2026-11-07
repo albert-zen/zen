@@ -94,6 +94,91 @@ interface FixtureCdpEvent {
 }
 
 class Rpc {
+  // Screenshot-only, payload-free transport evidence. The last 16 calls also
+  // serve as bounded tombstones: late replies never regain a pending promise.
+  #screenshots = new Map<
+    number,
+    {
+      id: number;
+      startedAt: number;
+      sessionScoped: boolean;
+      transportAccepted: boolean;
+      sendCallback: "pending" | "ok" | "error";
+      sendCallbackElapsedMs?: number;
+      sendCallbackState?: {
+        readyState: number;
+        bufferedAmount: number;
+        pendingCount: number;
+      };
+      returned?: {
+        readyState: number;
+        bufferedAmount: number;
+        pendingCount: number;
+      };
+      outcome:
+        | "pending"
+        | "success"
+        | "protocol-error"
+        | "timeout"
+        | "socket-closed"
+        | "send-threw";
+      elapsedMs?: number;
+      sent: {
+        readyState: number;
+        bufferedAmount: number;
+        pendingCount: number;
+      };
+      settled?: {
+        readyState: number;
+        bufferedAmount: number;
+        pendingCount: number;
+      };
+      lateReply?: {
+        outcome: "success" | "protocol-error";
+        elapsedMs: number;
+        readyState: number;
+        bufferedAmount: number;
+        pendingCount: number;
+      };
+    }
+  >();
+  #screenshotDropped = 0;
+  #reportedSocketEnd = false;
+  #socketState() {
+    return {
+      readyState: this.socket.readyState,
+      bufferedAmount: this.socket.bufferedAmount,
+      pendingCount: this.#pending.size,
+    };
+  }
+  screenshotTransport() {
+    // Return detached scalar records, never CDP parameters, results or errors.
+    return {
+      limit: 16,
+      dropped: this.#screenshotDropped,
+      records: Array.from(this.#screenshots.values(), (record) => ({
+        ...record,
+        sent: { ...record.sent },
+        ...(record.returned ? { returned: { ...record.returned } } : {}),
+        ...(record.sendCallbackState
+          ? { sendCallbackState: { ...record.sendCallbackState } }
+          : {}),
+        ...(record.settled ? { settled: { ...record.settled } } : {}),
+        ...(record.lateReply ? { lateReply: { ...record.lateReply } } : {}),
+      })),
+    };
+  }
+  #reportScreenshots(phase: "cleanup" | "socket-end") {
+    if (!this.#screenshots.size) return;
+    try {
+      console.error(
+        "Fixture screenshot transport",
+        JSON.stringify({ phase, ...this.screenshotTransport() }),
+      );
+    } catch {
+      // A diagnostic sink must never change cleanup or promise settlement.
+    }
+  }
   #listeners = new Set<(event: FixtureCdpEvent) => void>();
   onEvent(listener: (event: FixtureCdpEvent) => void): () => void {
     this.#listeners.add(listener);
@@ -119,16 +204,48 @@ class Rpc {
         return;
       }
       const pending = this.#pending.get(message.id);
-      if (!pending) return;
+      const screenshot = this.#screenshots.get(message.id);
+      if (!pending) {
+        if (
+          screenshot &&
+          !screenshot.lateReply &&
+          (screenshot.outcome === "timeout" ||
+            screenshot.outcome === "socket-closed" ||
+            screenshot.outcome === "send-threw")
+        ) {
+          screenshot.lateReply = {
+            outcome: message.error ? "protocol-error" : "success",
+            elapsedMs: Date.now() - screenshot.startedAt,
+            ...this.#socketState(),
+          };
+        }
+        return;
+      }
       this.#pending.delete(message.id);
+      if (screenshot) {
+        screenshot.outcome = message.error ? "protocol-error" : "success";
+        screenshot.elapsedMs = Date.now() - screenshot.startedAt;
+        screenshot.settled = this.#socketState();
+      }
       if (message.error)
         pending.reject(new Error(JSON.stringify(message.error)));
       else pending.resolve(message.result ?? {});
     });
     const fail = () => {
-      for (const pending of this.#pending.values())
+      for (const [id, pending] of this.#pending) {
+        const screenshot = this.#screenshots.get(id);
+        if (screenshot) {
+          screenshot.outcome = "socket-closed";
+          screenshot.elapsedMs = Date.now() - screenshot.startedAt;
+          screenshot.settled = this.#socketState();
+        }
         pending.reject(new Error("Fixture CDP socket closed"));
+      }
       this.#pending.clear();
+      if (!this.#reportedSocketEnd) {
+        this.#reportedSocketEnd = true;
+        this.#reportScreenshots("socket-end");
+      }
     };
     socket.on("close", fail);
     socket.on("error", fail);
@@ -150,9 +267,30 @@ class Rpc {
     const id = ++this.#id;
     const startedAt = Date.now();
     let transportAccepted = false;
+    if (method === "Page.captureScreenshot") {
+      if (this.#screenshots.size === 16) {
+        this.#screenshots.delete(this.#screenshots.keys().next().value!);
+        this.#screenshotDropped++;
+      }
+      this.#screenshots.set(id, {
+        id,
+        startedAt,
+        sessionScoped: sessionId !== undefined,
+        transportAccepted: false,
+        sendCallback: "pending",
+        outcome: "pending",
+        sent: this.#socketState(),
+      });
+    }
     return await new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#pending.delete(id);
+        const screenshot = this.#screenshots.get(id);
+        if (screenshot) {
+          screenshot.outcome = "timeout";
+          screenshot.elapsedMs = Date.now() - startedAt;
+          screenshot.settled = this.#socketState();
+        }
         // A returned socket.send is transport acceptance, not browser execution.
         // In particular a screenshot timeout does not imply an input was sent.
         reject(
@@ -166,6 +304,9 @@ class Rpc {
                 sessionScoped: sessionId !== undefined,
                 elapsedMs: Date.now() - startedAt,
                 timeoutMs: 10_000,
+                ...(method === "Page.captureScreenshot"
+                  ? { screenshotTransport: this.screenshotTransport() }
+                  : {}),
               },
             },
           ),
@@ -189,11 +330,34 @@ class Rpc {
             params,
             ...(sessionId ? { sessionId } : {}),
           }),
+          ...(method === "Page.captureScreenshot"
+            ? [
+                (error?: Error) => {
+                  const screenshot = this.#screenshots.get(id);
+                  if (!screenshot) return;
+                  screenshot.sendCallback = error ? "error" : "ok";
+                  screenshot.sendCallbackElapsedMs = Date.now() - startedAt;
+                  screenshot.sendCallbackState = this.#socketState();
+                  // This callback is evidence only, not a CDP response or failure.
+                },
+              ]
+            : []),
         );
         transportAccepted = true;
+        const screenshot = this.#screenshots.get(id);
+        if (screenshot) {
+          screenshot.transportAccepted = true;
+          screenshot.returned = this.#socketState();
+        }
       } catch (error) {
         clearTimeout(timer);
         this.#pending.delete(id);
+        const screenshot = this.#screenshots.get(id);
+        if (screenshot) {
+          screenshot.outcome = "send-threw";
+          screenshot.elapsedMs = Date.now() - startedAt;
+          screenshot.settled = this.#socketState();
+        }
         reject(error);
       }
     });
@@ -213,6 +377,7 @@ class Rpc {
   }
   close(): void {
     this.socket.close();
+    this.#reportScreenshots("cleanup");
   }
 }
 
