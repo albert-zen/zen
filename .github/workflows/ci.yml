@@ -243,6 +243,22 @@ jobs:
           path: ${{ runner.temp }}/zenx-reference-width
           if-no-files-found: warn
           retention-days: 14
+      - name: Verify pending steer previews against canonical messages
+        if: ${{ matrix.shard == 'conversation' && !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
+        timeout-minutes: 5
+        run: |
+          npx tsc -p apps/zenx/tsconfig.steer-image-preview.json --noEmit
+          node --test apps/zenx/test/steer-image-geometry.test.mjs
+          node apps/zenx/scripts/build-steer-image-preview.mjs "${{ runner.temp }}/zenx-steer-image"
+          node apps/zenx/scripts/capture-steer-image-preview.mjs "${{ runner.temp }}/zenx-steer-image"
+      - name: Retain synthetic steer image evidence
+        if: ${{ matrix.shard == 'conversation' && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-steer-image-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-steer-image
+          if-no-files-found: warn
+          retention-days: 14
       - name: Build and capture approved UI previews
         if: ${{ matrix.shard == 'conversation' && success() && steps.zenx-fonts.outcome == 'success' }}
         timeout-minutes: 4
@@ -591,6 +607,13 @@ jobs:
           node --import tsx --test --test-name-pattern="publishes a complete|publishing retries|exhausted EPERM|non-EPERM publication|missing source|publish rejects|rollback failure|publish preserves backup|Windows publishes|concurrent packaging" apps/zenx/test/package-zenx-portable.test.mjs
       - name: Validate the same-build Windows smoke guard assembly
         run: node --import tsx --test --test-timeout=120000 apps/zenx/test/windows-smoke-guard-build.test.mjs
+      - name: Verify trusted packaged document boundaries on Windows
+        timeout-minutes: 2
+        run: >-
+          node --import tsx --test --test-timeout=30000
+          apps/zenx/test/imzenx-setup-ipc.test.ts
+          apps/zenx/test/model-request-debug-ipc.test.ts
+          apps/zenx/test/native-information-admission.test.ts
       - name: Validate native fixture readiness dispatch ordering
         run: node --test apps/zenx/test/windows-packaged-uia-readiness.test.mjs apps/zenx/test/windows-packaged-uia-diagnostics.test.mjs
       - name: Package and diagnose Windows smoke publication

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { isHostCommand, isHostEvent } from "../src/main/host-messages.js";
 import { validateModelRequestDebugCommand } from "../../cli/src/model-request-debug.js";
 
@@ -56,8 +58,11 @@ test("local debug IPC accepts only bounded known operations, not arbitrary paths
 import { createModelRequestDebugHandler } from "../src/main/model-request-debug-ipc.js";
 test("only owned app main frames read durable local and auxiliary evidence", async () => {
   let calls = 0;
+  const rendererUrl = pathToFileURL(
+    path.resolve("synthetic/RUNNER~1/renderer/index.html"),
+  ).href;
   const handler = createModelRequestDebugHandler({
-    rendererUrl: "file:///app/renderer/index.html",
+    rendererUrl,
     sender: (event: {
       ownedWindow: boolean;
       mainFrame: boolean;
@@ -77,7 +82,7 @@ test("only owned app main frames read durable local and auxiliary evidence", asy
   const trusted = {
     ownedWindow: true,
     mainFrame: true,
-    url: "file:///app/renderer/index.html#auxiliary",
+    url: `${rendererUrl.replace("%7E", "~")}#auxiliary`,
   };
   await handler(trusted, { action: "list", threadId: "" });
   assert.equal(calls, 1);
@@ -85,8 +90,8 @@ test("only owned app main frames read durable local and auxiliary evidence", asy
     { ...trusted, ownedWindow: false },
     { ...trusted, mainFrame: false },
     { ...trusted, url: "https://evil.example/index.html" },
-    { ...trusted, url: "file:///app/renderer/index.html?foreign=1" },
-    { ...trusted, url: "file:///app/renderer/webview.html" },
+    { ...trusted, url: `${rendererUrl}?foreign=1` },
+    { ...trusted, url: new URL("webview.html", rendererUrl).href },
     { ...trusted, url: "" },
   ])
     await assert.rejects(

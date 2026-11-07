@@ -11,7 +11,7 @@ $ast = [Management.Automation.Language.Parser]::ParseFile($HarnessPath, [ref] $t
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
 Write-Phase "ast-load-complete"
 # Load only the real harness helpers. Never execute its package or process launcher.
-foreach ($name in @("Assert-SoleVisibleWindow", "Stop-Fixture", "Stop-OwnedFixtures", "Get-EventUtcTime", "Get-OwnedProcessState", "Assert-RendererPresentation")) {
+foreach ($name in @("Set-FixtureEnvironment", "Assert-SoleVisibleWindow", "Stop-Fixture", "Stop-OwnedFixtures", "Get-EventUtcTime", "Get-OwnedProcessState", "Assert-RendererPresentation")) {
   $functions = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true))
   if ($functions.Count -ne 1) { throw "Missing unique helper $name" }
   . ([scriptblock]::Create($functions[0].Extent.Text))
@@ -33,6 +33,29 @@ function Assert-Throws([scriptblock] $Action, $Pattern) {
   try { & $Action | Out-Null } catch { $caught = $_.Exception.Message }
   if ($null -eq $caught -or $caught -notmatch $Pattern) { throw "Expected $Pattern; received $caught" }
 }
+# The isolated variable covers missing, empty and nonempty inheritance, then
+# restores its original absence. No real app configuration is inspected.
+$environmentProbe = "ZENX_STARTUP_ENV_TEST_" + [guid]::NewGuid().ToString("N")
+try {
+  [Environment]::SetEnvironmentVariable($environmentProbe, $null)
+  Write-Phase ("legacy-null-reset-present=" + (Test-Path -LiteralPath "Env:$environmentProbe"))
+  foreach ($state in @(@{ present = $false }, @{ present = $true; value = "" }, @{ present = $true; value = "synthetic-value" })) {
+    Set-FixtureEnvironment $environmentProbe $state
+    $saved = @{ present = (Test-Path -LiteralPath "Env:$environmentProbe"); value = [Environment]::GetEnvironmentVariable($environmentProbe) }
+    Assert-True ($saved.present -eq $state.present) "Initial environment presence changed"
+    if ($state.present) { Assert-True ($saved.value -ceq $state.value) "Initial environment value changed" }
+    Set-FixtureEnvironment $environmentProbe @{ present = $false }
+    Assert-True (!(Test-Path -LiteralPath "Env:$environmentProbe")) "Clearing must remove the variable, not set it empty"
+    & node -e 'if (Object.hasOwn(process.env, process.argv[1])) process.exit(7)' $environmentProbe
+    Assert-True ($LASTEXITCODE -eq 0) "A child Node process inherited the cleared environment variable"
+    Set-FixtureEnvironment $environmentProbe $saved
+    Assert-True ((Test-Path -LiteralPath "Env:$environmentProbe") -eq $state.present) "Restoration changed absent versus present state"
+    if ($state.present) { Assert-True ([Environment]::GetEnvironmentVariable($environmentProbe) -ceq $state.value) "Restoration changed the exact environment value" }
+  }
+} finally {
+  Set-FixtureEnvironment $environmentProbe @{ present = $false }
+}
+Write-Phase "environment-inheritance-verified"
 $missing = Get-OwnedProcessState $null
 Assert-True (!$missing.started -and $null -eq $missing.hasExited) "An unstarted secondary must not be reported as exited"
 $observed = [pscustomobject]@{ Id = 321; HasExited = $false; Refreshes = 0 }

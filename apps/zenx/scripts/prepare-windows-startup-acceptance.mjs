@@ -16,7 +16,13 @@ export function instrumentStartup(source) {
     ts.ScriptKind.JS,
   );
   const seams = [];
+  const trustSeams = [];
   function visit(node) {
+    if (
+      ts.isFunctionDeclaration(node) &&
+      node.name?.text === "isTrustedImZenXSetupSender"
+    )
+      trustSeams.push(node);
     if (ts.isAwaitExpression(node) && ts.isCallExpression(node.expression)) {
       const call = node.expression;
       if (
@@ -37,13 +43,46 @@ export function instrumentStartup(source) {
     throw new Error(
       `Expected exactly one awaited bootstrap lifecycle seam, found ${seams.length}`,
     );
+  if (
+    trustSeams.length !== 1 ||
+    !trustSeams[0].body ||
+    trustSeams[0].parameters.length !== 2 ||
+    !trustSeams[0].parameters.every(
+      (parameter) =>
+        ts.isIdentifier(parameter.name) &&
+        !parameter.initializer &&
+        !parameter.dotDotDotToken,
+    )
+  )
+    throw new Error(
+      `Expected exactly one trusted sender diagnostic seam, found ${trustSeams.length}`,
+    );
   const seam = seams[0];
+  const trust = trustSeams[0];
+  const edits = [
+    {
+      start: seam.getStart(parsed),
+      end: seam.end,
+      text: "async () => { await startupAcceptanceFixture.gate(); await bootstrapZenX(); startupAcceptanceFixture.completed(appServerManager?.status.type); }",
+    },
+    {
+      start: trust.body.getStart(parsed) + 1,
+      end: trust.body.getStart(parsed) + 1,
+      // Observe the existing arguments without wrapping/replaying the guard.
+      // A diagnostic failure must never alter its original admission result.
+      text: `\ntry { startupAcceptanceFixture.trustedSenderObserved(${trust.parameters[0].name.text}, ${trust.parameters[1].name.text}); } catch {}\n`,
+    },
+  ].sort((a, b) => b.start - a.start);
+  let instrumented = source;
+  for (const edit of edits)
+    instrumented =
+      instrumented.slice(0, edit.start) +
+      edit.text +
+      instrumented.slice(edit.end);
   return (
     'import * as startupAcceptanceFixture from "./startup-acceptance-fixture.mjs";\n' +
     "startupAcceptanceFixture.observe();\n" +
-    source.slice(0, seam.getStart(parsed)) +
-    "async () => { await startupAcceptanceFixture.gate(); await bootstrapZenX(); startupAcceptanceFixture.completed(appServerManager?.status.type); }" +
-    source.slice(seam.end)
+    instrumented
   );
 }
 
@@ -92,7 +131,7 @@ export async function prepareFixture(
           .update(instrumented)
           .digest("hex"),
         scope:
-          "Private portable copy; observe windows and gate the existing awaited bootstrap fence only",
+          "Private portable copy; observe windows and trusted sender arguments without changing admission; gate the existing awaited bootstrap fence only",
       },
       null,
       2,

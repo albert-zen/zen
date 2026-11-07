@@ -808,6 +808,68 @@ for (const [scopeIndex, interruption] of [
   }
 }
 
+test("pending steer uses normal image rows above distinct question bubbles", async () => {
+  await withRuntimeDom(async (h) => {
+    const source = staged(2);
+    const thread = {
+      ...source,
+      canonicalItems: source.canonicalItems!.map((item): CanonicalItem =>
+        item.type === "user_message_queued"
+          ? {
+              ...item,
+              input: [
+                { type: "text", text: "What is **the trigger**?" },
+                ...item.input.filter((part) => part.type === "image"),
+              ],
+            }
+          : item,
+      ),
+    };
+    await h.render(thread, {
+      onRestoreRecalled: () => true,
+      onReadAttachment: () => new Promise<Uint8Array>(() => {}),
+    });
+    const row = document.querySelector(".steer-shelf-row")!;
+    assert.ok(row.classList.contains("user-row"));
+    const images = row.querySelector(".message-images.pending-steer-images");
+    const bubble = row.querySelector(".user-bubble");
+    assert.ok(images);
+    assert.ok(bubble);
+    assert.equal(images.parentElement, row);
+    assert.equal(bubble.parentElement, row);
+    assert.ok(
+      images.compareDocumentPosition(bubble) &
+        window.Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    assert.equal(bubble.querySelector("strong")?.textContent, "the trigger");
+    assert.equal(bubble.querySelector("img"), null);
+    assert.equal(
+      row.querySelectorAll(".message-images .image-thumbnail").length,
+      2,
+    );
+    const imageOnly = {
+      ...thread,
+      canonicalItems: thread.canonicalItems.map((item): CanonicalItem =>
+        item.type === "user_message_queued"
+          ? {
+              ...item,
+              input: item.input.filter((part) => part.type === "image"),
+            }
+          : item,
+      ),
+    };
+    await h.render(imageOnly, {
+      onRestoreRecalled: () => true,
+      onReadAttachment: () => new Promise<Uint8Array>(() => {}),
+    });
+    assert.equal(document.querySelector(".steer-shelf-row .user-bubble"), null);
+    assert.equal(
+      document.querySelectorAll(".steer-shelf-row .image-thumbnail").length,
+      3,
+    );
+  });
+});
+
 test("pending images use canonical attachment refs and their preview closes after recall", async () => {
   const { readFile } = await import("node:fs/promises");
   const { queueImageAttachments } =
@@ -901,6 +963,22 @@ test("pending images use canonical attachment refs and their preview closes afte
     assert.equal(document.querySelector(".pending-steer-images"), null);
     assert.equal(reads, before);
   });
+});
+
+test("steer rows preserve shared responsive gutters and thumbnail styling", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const css = await readFile(
+    new URL("../src/renderer/src/queued-messages.css", import.meta.url),
+    "utf8",
+  );
+  const sibling = css.match(
+    /\.steer-shelf-row \+ \.steer-shelf-row\s*\{([^}]+)\}/,
+  )?.[1];
+  assert.ok(sibling);
+  assert.doesNotMatch(sibling, /padding|width|display/);
+  assert.match(sibling, /border:\s*0/);
+  assert.doesNotMatch(css, /\.pending-steer-images\s*\{[^}]*width:/);
+  assert.match(css, /\.steer-shelf button:where\(:not\(\.image-thumbnail\)\)/);
 });
 
 test("shelf read-only recovery and restore actions retain 44px hit targets", async () => {
