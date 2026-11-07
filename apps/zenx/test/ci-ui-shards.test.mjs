@@ -18,7 +18,7 @@ test("UI shards keep all cases, isolate runners and never fail-fast sibling evid
   assert.equal(job.strategy["fail-fast"], false);
   assert.equal(job.strategy["max-parallel"], 3);
   const captures = job.steps.filter((step) => step.run?.includes("capture-"));
-  assert.equal(captures.length, 18);
+  assert.equal(captures.length, 19);
   for (const capture of captures) {
     const owners = job.strategy.matrix.shard.filter((shard) =>
       capture.if.includes(`matrix.shard == '${shard}'`),
