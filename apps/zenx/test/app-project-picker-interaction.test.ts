@@ -11009,320 +11009,402 @@ for (const burst of [false, true]) {
   });
 }
 
-test("real Host questions render in full App information panel with independent drafts and explicit native answer/cancel", async () => {
-  const { questionNativeFixture } =
-    await import("./user-question-native-fixture.js");
-  const f = await questionNativeFixture();
-  const sidebar = new ThreadSidebarStore(
-    join(f.directory, "information-layout"),
-  );
-  const information = new NativeInformationService({
-    sidebar,
-    rooms: () => [],
-    assertThreadExists: async (id) => {
-      await f.host.readThread(id);
-    },
-  });
-  const documentAdmission = () => {};
-  let harness: AppHarness | undefined;
-  let statusListener: ((status: AppServerHostStatus) => void) | undefined;
-  try {
-    const thread = await f.host.startThread();
-    const first = await f.publish(thread.id);
-    const second = await f.publish(thread.id, {
-      questions: [{ id: "next", prompt: "Any additional constraint?" }],
-      answerTemplate: "Constraint: {{next}}",
+test(
+  "real Host questions render in full App information panel with independent drafts and explicit native answer/cancel",
+  { timeout: 15_000 },
+  async () => {
+    const { questionNativeFixture } =
+      await import("./user-question-native-fixture.js");
+    const f = await questionNativeFixture();
+    const sidebar = new ThreadSidebarStore(
+      join(f.directory, "information-layout"),
+    );
+    const information = new NativeInformationService({
+      sidebar,
+      rooms: () => [],
+      assertThreadExists: async (id) => {
+        await f.host.readThread(id);
+      },
     });
-    let completedWrites = 0;
-    const writes: import("../../../src/protocol/native/wire.js").NativeQuestionRespondParams[] =
-      [];
-    harness = await mountApp(
-      {
-        projects: [
-          {
-            key: f.directory,
-            workspace: f.directory,
-            configured: true,
-            isDefault: true,
-            threadIds: [thread.id],
+    const documentAdmission = () => {};
+    let harness: AppHarness | undefined;
+    let statusListener: ((status: AppServerHostStatus) => void) | undefined;
+    const releaseCancel = deferred<void>();
+    const writeCompletions: Promise<unknown>[] = [];
+    try {
+      const thread = await f.host.startThread();
+      const first = await f.publish(thread.id);
+      const second = await f.publish(thread.id, {
+        questions: [{ id: "next", prompt: "Any additional constraint?" }],
+        answerTemplate: "Constraint: {{next}}",
+      });
+      let completedWrites = 0;
+      const cancelAdmitted = deferred<void>();
+      const writes: import("../../../src/protocol/native/wire.js").NativeQuestionRespondParams[] =
+        [];
+      harness = await mountApp(
+        {
+          projects: [
+            {
+              key: f.directory,
+              workspace: f.directory,
+              configured: true,
+              isDefault: true,
+              threadIds: [thread.id],
+            },
+          ],
+          unavailableThreadIds: [],
+          lastUsedWorkspace: f.directory,
+        },
+        {
+          information: {
+            read: (owner) => information.read(owner, documentAdmission),
+            update: (request) => information.update(request, documentAdmission),
           },
-        ],
-        unavailableThreadIds: [],
-        lastUsedWorkspace: f.directory,
-      },
-      {
-        information: {
-          read: (owner) => information.read(owner, documentAdmission),
-          update: (request) => information.update(request, documentAdmission),
+          threadSidebar: {
+            read: (owner) => information.readSidebar(owner, documentAdmission),
+            update: (request) =>
+              information.updateSidebar(request, documentAdmission),
+            onChanged: (listener) => sidebar.onChanged(listener),
+          },
+          onStatus: (listener) => {
+            statusListener = listener;
+            return () => {
+              statusListener = undefined;
+            };
+          },
+          threads: (archived) => f.host.listThreadSummaries({ archived }),
+          request: (method, params) => {
+            if (method !== "zen/thread/questions/respond")
+              return f.request(method, params);
+            const input = params as (typeof writes)[number];
+            writes.push(input);
+            const completion = (async () => {
+              // Synthetic transport gate: dispatch and native completion are
+              // separate observations, even when the question card is writable.
+              const result = await f.request(method, params);
+              if (input.outcome === "cancel") {
+                cancelAdmitted.resolve();
+                await releaseCancel.promise;
+              }
+              completedWrites++;
+              return result;
+            })();
+            writeCompletions.push(completion);
+            return completion;
+          },
+          plugins: {
+            get: async () => ({
+              ...workspaceLauncherSnapshot,
+              plugins: [],
+              panels: [],
+              information: [],
+              commands: [],
+            }),
+          },
+          onNotification: (listener) =>
+            f.onNotification((method, params) =>
+              listener(method as never, params as never),
+            ),
         },
-        threadSidebar: {
-          read: (owner) => information.readSidebar(owner, documentAdmission),
-          update: (request) =>
-            information.updateSidebar(request, documentAdmission),
-          onChanged: (listener) => sidebar.onChanged(listener),
-        },
-        onStatus: (listener) => {
-          statusListener = listener;
-          return () => {
-            statusListener = undefined;
-          };
-        },
-        threads: (archived) => f.host.listThreadSummaries({ archived }),
-        request: async (method, params) => {
-          if (method === "zen/thread/questions/respond")
-            writes.push(params as (typeof writes)[number]);
-          const result = await f.request(method, params);
-          if (method === "zen/thread/questions/respond") completedWrites++;
-          return result;
-        },
-        plugins: {
-          get: async () => ({
-            ...workspaceLauncherSnapshot,
-            plugins: [],
-            panels: [],
-            information: [],
-            commands: [],
-          }),
-        },
-        onNotification: (listener) =>
-          f.onNotification((method, params) =>
-            listener(method as never, params as never),
-          ),
-      },
-    );
-    const composer = await selectedComposer();
-    await setTextareaValue(composer, "Ordinary composer draft stays here");
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>(".information-toolbar button")!
-        .click(),
-    );
-    const firstCard = await waitFor(() =>
-      document.querySelector<HTMLElement>(
-        `[data-question-call-id="${first.request.callItemId}"]`,
-      ),
-    );
-    const secondCard = await waitFor(() =>
-      document.querySelector<HTMLElement>(
-        `[data-question-call-id="${second.request.callItemId}"]`,
-      ),
-    );
-    await invokeButtonClick(
-      document.querySelector<HTMLButtonElement>(
-        '[aria-label="Customize information"]',
-      )!,
-    );
-    const widgetIds = [
-      "default:lineage",
-      "default:triggers",
-      "default:shell",
-      "default:board",
-    ];
-    await waitFor(
-      () =>
-        document.querySelectorAll('.information-widget[data-visible="true"]')
-          .length === widgetIds.length,
-    );
-    assert.deepEqual(
-      [...document.querySelectorAll<HTMLElement>(".information-widget")].map(
-        (widget) => widget.dataset.widgetId,
-      ),
-      widgetIds,
-      "Manage exposes every implemented default without unavailable PR/artifact placeholders",
-    );
-    for (const id of widgetIds) {
-      const widget = document.querySelector<HTMLElement>(
-        `[data-widget-id="${id}"]`,
-      )!;
-      const hide = [
-        ...widget.querySelectorAll<HTMLButtonElement>(
-          ".information-widget-actions button",
+      );
+      const composer = await selectedComposer();
+      await setTextareaValue(composer, "Ordinary composer draft stays here");
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>(".information-toolbar button")!
+          .click(),
+      );
+      const firstCard = await waitFor(() =>
+        document.querySelector<HTMLElement>(
+          `[data-question-call-id="${first.request.callItemId}"]`,
         ),
-      ].find((button) => button.textContent?.trim() === "Hide");
-      assert.ok(hide && !hide.disabled, `Hide is available for ${id}`);
-      await invokeButtonClick(hide);
+      );
+      const secondCard = await waitFor(() =>
+        document.querySelector<HTMLElement>(
+          `[data-question-call-id="${second.request.callItemId}"]`,
+        ),
+      );
+      await invokeButtonClick(
+        document.querySelector<HTMLButtonElement>(
+          '[aria-label="Customize information"]',
+        )!,
+      );
+      const widgetIds = [
+        "default:lineage",
+        "default:triggers",
+        "default:shell",
+        "default:board",
+      ];
       await waitFor(
         () =>
-          widget.dataset.visible === "false" &&
-          document.querySelector<HTMLElement>(".editable-information-panel")
-            ?.dataset.busy === "false",
+          document.querySelectorAll('.information-widget[data-visible="true"]')
+            .length === widgetIds.length,
       );
-    }
-    await invokeButtonClick(
-      document.querySelector<HTMLButtonElement>('[aria-label="Done"]')!,
-    );
-    assert.equal(
-      document.querySelectorAll(".information-widget-body").length,
-      0,
-    );
-    assert.equal(
-      document.querySelectorAll(".user-question-card").length,
-      2,
-      "real Host question cards remain outside every hidden native widget",
-    );
-    const savedLayout = (await sidebar.read({ kind: "thread", id: thread.id }))
-      .informationLayout!;
-    assert.deepEqual(
-      savedLayout.widgets.map((widget) => widget.id),
-      widgetIds,
-    );
-    assert.ok(savedLayout.widgets.every((widget) => !widget.visible));
-    assert.equal(firstCard.querySelectorAll("input:checked").length, 0);
-    const answerButton =
-      firstCard.querySelector<HTMLButtonElement>(".primary-button")!;
-    assert.equal(answerButton.disabled, true);
-    await act(async () =>
-      firstCard.querySelector<HTMLInputElement>('input[type="radio"]')!.click(),
-    );
-    const freeText = firstCard.querySelector<HTMLTextAreaElement>("textarea")!;
-    await setTextareaValue(freeText, "Also preserve keyboard focus");
-    await act(async () => freeText.focus());
-    let additional!: import("../../../src/user-question-state.js").UserQuestionState;
-    await act(async () => {
-      additional = await f.publish(thread.id);
-    });
-    await waitFor(() =>
-      document.querySelector(
-        `[data-question-call-id="${additional.request.callItemId}"]`,
-      ),
-    );
-    assert.ok(
-      document.activeElement === freeText,
-      "a new accepted question never steals existing input focus",
-    );
-
-    await setTextareaValue(
-      secondCard.querySelector<HTMLTextAreaElement>("textarea")!,
-      "Independent second draft",
-    );
-    assert.equal(composer.value, "Ordinary composer draft stays here");
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>(".information-toolbar button")!
-        .click(),
-    );
-    assert.equal(writes.length, 0, "hiding is not cancellation");
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>(".information-toolbar button")!
-        .click(),
-    );
-    const reopened = await waitFor(() =>
-      document.querySelector<HTMLElement>(
-        `[data-question-call-id="${first.request.callItemId}"]`,
-      ),
-    );
-    assert.equal(
-      reopened.querySelector<HTMLTextAreaElement>("textarea")!.value,
-      "Also preserve keyboard focus",
-    );
-    assert.equal(
-      document
-        .querySelector<HTMLElement>(
-          `[data-question-call-id="${second.request.callItemId}"]`,
-        )!
-        .querySelector<HTMLTextAreaElement>("textarea")!.value,
-      "Independent second draft",
-    );
-    const retainedSend = reactProps<{ onClick(): void }>(
-      reopened.querySelector(".primary-button")!,
-    ).onClick;
-    const retainedCancel = reactProps<{ onClick(): void }>(
-      reopened.querySelector(".user-question-actions button")!,
-    ).onClick;
-    const retainedEdit = reactProps<{
-      onChange(event: { target: { value: string } }): void;
-    }>(reopened.querySelector("textarea")!).onChange;
-    const invokeRetained = async () => {
+      assert.deepEqual(
+        [...document.querySelectorAll<HTMLElement>(".information-widget")].map(
+          (widget) => widget.dataset.widgetId,
+        ),
+        widgetIds,
+        "Manage exposes every implemented default without unavailable PR/artifact placeholders",
+      );
+      for (const id of widgetIds) {
+        const widget = document.querySelector<HTMLElement>(
+          `[data-widget-id="${id}"]`,
+        )!;
+        const hide = [
+          ...widget.querySelectorAll<HTMLButtonElement>(
+            ".information-widget-actions button",
+          ),
+        ].find((button) => button.textContent?.trim() === "Hide");
+        assert.ok(hide && !hide.disabled, `Hide is available for ${id}`);
+        await invokeButtonClick(hide);
+        await waitFor(
+          () =>
+            widget.dataset.visible === "false" &&
+            document.querySelector<HTMLElement>(".editable-information-panel")
+              ?.dataset.busy === "false",
+        );
+      }
+      await invokeButtonClick(
+        document.querySelector<HTMLButtonElement>('[aria-label="Done"]')!,
+      );
+      assert.equal(
+        document.querySelectorAll(".information-widget-body").length,
+        0,
+      );
+      assert.equal(
+        document.querySelectorAll(".user-question-card").length,
+        2,
+        "real Host question cards remain outside every hidden native widget",
+      );
+      const savedLayout = (
+        await sidebar.read({ kind: "thread", id: thread.id })
+      ).informationLayout!;
+      assert.deepEqual(
+        savedLayout.widgets.map((widget) => widget.id),
+        widgetIds,
+      );
+      assert.ok(savedLayout.widgets.every((widget) => !widget.visible));
+      assert.equal(firstCard.querySelectorAll("input:checked").length, 0);
+      const answerButton =
+        firstCard.querySelector<HTMLButtonElement>(".primary-button")!;
+      assert.equal(answerButton.disabled, true);
+      await act(async () =>
+        firstCard
+          .querySelector<HTMLInputElement>('input[type="radio"]')!
+          .click(),
+      );
+      const freeText =
+        firstCard.querySelector<HTMLTextAreaElement>("textarea")!;
+      await setTextareaValue(freeText, "Also preserve keyboard focus");
+      await act(async () => freeText.focus());
+      let additional!: import("../../../src/user-question-state.js").UserQuestionState;
       await act(async () => {
-        retainedEdit({ target: { value: "stale owner edit" } });
-        retainedSend();
-        retainedCancel();
+        additional = await f.publish(thread.id);
       });
-      assert.equal(writes.length, 0);
+      await waitFor(() =>
+        document.querySelector(
+          `[data-question-call-id="${additional.request.callItemId}"]`,
+        ),
+      );
+      assert.ok(
+        document.activeElement === freeText,
+        "a new accepted question never steals existing input focus",
+      );
+
+      await setTextareaValue(
+        secondCard.querySelector<HTMLTextAreaElement>("textarea")!,
+        "Independent second draft",
+      );
+      assert.equal(composer.value, "Ordinary composer draft stays here");
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>(".information-toolbar button")!
+          .click(),
+      );
+      assert.equal(writes.length, 0, "hiding is not cancellation");
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>(".information-toolbar button")!
+          .click(),
+      );
+      const reopened = await waitFor(() =>
+        document.querySelector<HTMLElement>(
+          `[data-question-call-id="${first.request.callItemId}"]`,
+        ),
+      );
       assert.equal(
         reopened.querySelector<HTMLTextAreaElement>("textarea")!.value,
         "Also preserve keyboard focus",
       );
-    };
-    await act(async () =>
-      statusListener?.({ type: "error", message: "synthetic disconnection" }),
-    );
-    await invokeRetained();
-    await act(async () =>
-      statusListener?.({ type: "ready", reconnected: true }),
-    );
-    await waitFor(
-      () =>
-        !reopened.querySelector<HTMLButtonElement>(".primary-button")!.disabled,
-    );
-    await act(async () => {
-      await f.host.setThreadArchived(thread.id, true);
-    });
-    await waitFor(
-      () =>
-        reopened.querySelector<HTMLButtonElement>(".primary-button")!.disabled,
-    );
-    await invokeRetained();
-    await act(async () => {
-      await f.host.setThreadArchived(thread.id, false);
-    });
-    await waitFor(
-      () =>
-        !reopened.querySelector<HTMLButtonElement>(".primary-button")!.disabled,
-    );
-    await invokeButtonClick(
-      reopened.querySelector<HTMLButtonElement>(".primary-button")!,
-      2,
-    );
-    await waitFor(() => completedWrites === 1);
-    const sent = await f.host.readUserQuestion(
-      thread.id,
-      first.request.callItemId,
-      writes[0]!.clientUserMessageId,
-    );
-    assert.ok(
-      sent.response.status === "claimed" || sent.response.status === "pending",
-    );
-    assert.equal(sent.response.reply?.outcome, "answer");
-    if (sent.response.reply?.outcome === "answer")
-      assert.deepEqual(sent.response.reply.answers, [
-        {
-          questionId: "scope",
-          optionIds: ["small"],
-          text: "Also preserve keyboard focus",
-        },
-      ]);
-    const currentSecond = await waitFor(() =>
-      document.querySelector<HTMLElement>(
-        `[data-question-call-id="${second.request.callItemId}"]`,
-      ),
-    );
-    const cancel = [
-      ...currentSecond.querySelectorAll<HTMLButtonElement>("button"),
-    ].find((button) => button.textContent === "Cancel request")!;
-    await invokeButtonClick(cancel, 2);
-    await waitFor(() => completedWrites === 2);
-    assert.equal(writes[1]!.outcome, "cancel");
-    assert.equal("answers" in writes[1]!, false);
-    assert.equal(composer.value, "Ordinary composer draft stays here");
-    const snapshot = await f.host.readThread(thread.id);
-    const bound = snapshot.items.filter(
-      (item) =>
-        (item.type === "user_message" || item.type === "user_message_queued") &&
-        item.questionReply !== undefined,
-    );
-    assert.equal(
-      bound.length,
-      2,
-      "only two explicit human response intents were admitted",
-    );
-  } finally {
-    if (harness) await unmountApp(harness);
-    await sidebar.close();
-    await f.close();
-  }
-});
+      assert.equal(
+        document
+          .querySelector<HTMLElement>(
+            `[data-question-call-id="${second.request.callItemId}"]`,
+          )!
+          .querySelector<HTMLTextAreaElement>("textarea")!.value,
+        "Independent second draft",
+      );
+      const retainedSend = reactProps<{ onClick(): void }>(
+        reopened.querySelector(".primary-button")!,
+      ).onClick;
+      const retainedCancel = reactProps<{ onClick(): void }>(
+        reopened.querySelector(".user-question-actions button")!,
+      ).onClick;
+      const retainedEdit = reactProps<{
+        onChange(event: { target: { value: string } }): void;
+      }>(reopened.querySelector("textarea")!).onChange;
+      const invokeRetained = async () => {
+        await act(async () => {
+          retainedEdit({ target: { value: "stale owner edit" } });
+          retainedSend();
+          retainedCancel();
+        });
+        assert.equal(writes.length, 0);
+        assert.equal(
+          reopened.querySelector<HTMLTextAreaElement>("textarea")!.value,
+          "Also preserve keyboard focus",
+        );
+      };
+      await act(async () =>
+        statusListener?.({ type: "error", message: "synthetic disconnection" }),
+      );
+      await invokeRetained();
+      await act(async () =>
+        statusListener?.({ type: "ready", reconnected: true }),
+      );
+      await waitFor(
+        () =>
+          !reopened.querySelector<HTMLButtonElement>(".primary-button")!
+            .disabled,
+      );
+      await act(async () => {
+        await f.host.setThreadArchived(thread.id, true);
+      });
+      await waitFor(
+        () =>
+          reopened.querySelector<HTMLButtonElement>(".primary-button")!
+            .disabled,
+      );
+      await invokeRetained();
+      await act(async () => {
+        await f.host.setThreadArchived(thread.id, false);
+      });
+      await waitFor(
+        () =>
+          !reopened.querySelector<HTMLButtonElement>(".primary-button")!
+            .disabled,
+      );
+      await invokeButtonClick(
+        reopened.querySelector<HTMLButtonElement>(".primary-button")!,
+        2,
+      );
+      assert.equal(
+        writes.length,
+        1,
+        "double Send dispatches one native intent",
+      );
+      await act(async () => {
+        await writeCompletions[0];
+      });
+      assert.equal(completedWrites, 1);
+      const sent = await f.host.readUserQuestion(
+        thread.id,
+        first.request.callItemId,
+        writes[0]!.clientUserMessageId,
+      );
+      assert.ok(
+        sent.response.status === "claimed" ||
+          sent.response.status === "pending",
+      );
+      assert.equal(sent.response.reply?.outcome, "answer");
+      if (sent.response.reply?.outcome === "answer")
+        assert.deepEqual(sent.response.reply.answers, [
+          {
+            questionId: "scope",
+            optionIds: ["small"],
+            text: "Also preserve keyboard focus",
+          },
+        ]);
+      const currentSecond = await waitFor(() =>
+        document.querySelector<HTMLElement>(
+          `[data-question-call-id="${second.request.callItemId}"]`,
+        ),
+      );
+      const cancel = [
+        ...currentSecond.querySelectorAll<HTMLButtonElement>("button"),
+      ].find((button) => button.textContent === "Cancel request")!;
+      assert.equal(cancel.isConnected, true, "Cancel belongs to the live card");
+      assert.equal(
+        cancel.disabled,
+        false,
+        "the independent question is writable",
+      );
+      const retainedPendingCancel = reactProps<{ onClick(): void }>(
+        cancel,
+      ).onClick;
+      await invokeButtonClick(cancel, 2);
+      assert.equal(
+        writes.length,
+        2,
+        "double Cancel dispatches one native intent",
+      );
+      await act(async () => {
+        await cancelAdmitted.promise;
+      });
+      assert.equal(
+        completedWrites,
+        1,
+        "native admission is not transport completion",
+      );
+      assert.equal(
+        document.querySelector(
+          `[data-question-call-id="${second.request.callItemId}"] .user-question-status`,
+        )?.textContent,
+        "Sending response…",
+        "the admitted response remains sending until its receipt arrives",
+      );
+      await act(async () => {
+        retainedPendingCancel();
+        retainedPendingCancel();
+      });
+      assert.equal(
+        writes.length,
+        2,
+        "a pending receipt never resends cancellation",
+      );
+      await act(async () => {
+        releaseCancel.resolve();
+        await writeCompletions[1];
+      });
+      assert.equal(completedWrites, 2);
+      assert.equal(writes[1]!.outcome, "cancel");
+      assert.equal("answers" in writes[1]!, false);
+      assert.equal(composer.value, "Ordinary composer draft stays here");
+      const snapshot = await f.host.readThread(thread.id);
+      const bound = snapshot.items.filter(
+        (item) =>
+          (item.type === "user_message" ||
+            item.type === "user_message_queued") &&
+          item.questionReply !== undefined,
+      );
+      assert.equal(
+        bound.length,
+        2,
+        "only two explicit human response intents were admitted",
+      );
+    } finally {
+      await act(async () => {
+        releaseCancel.resolve();
+        await Promise.allSettled(writeCompletions);
+      });
+      if (harness) await unmountApp(harness);
+      await sidebar.close();
+      await f.close();
+    }
+  },
+);
 
 for (const outcome of [
   "restored",
