@@ -762,9 +762,10 @@ button:disabled {
   gap: 3px;
 }
 .sidebar-density-toggle {
+  width: 28px;
   min-height: 28px;
-  gap: 5px;
-  padding: 0 7px;
+  justify-content: center;
+  padding: 0;
   border: 0;
   border-radius: 7px;
   background: transparent;
@@ -804,11 +805,57 @@ button:disabled {
   display: grid;
   place-items: center;
   padding: 0;
-  border: 1px solid var(--border-soft);
-  border-radius: 7px;
-  background: var(--surface-wash);
-  color: var(--text-2);
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
   font-size: var(--font-size-caption);
+}
+.sidebar-inline-action:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.sidebar-inline-action:focus-visible,
+.sidebar-density-toggle:focus-visible,
+.projects-section-toggle:focus-visible,
+.sidebar-section-toggle:focus-visible,
+.project-actions button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Hide only on precise hover devices; retain layout and keyboard tab stops. */
+@media (hover: hover) and (pointer: fine) {
+  .sidebar-view-head .sidebar-inline-action,
+  .sidebar-view-head .sidebar-density-toggle,
+  .project-actions {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .sidebar-view-head:hover .sidebar-inline-action,
+  .sidebar-view-head:hover .sidebar-density-toggle,
+  .sidebar-view-head:focus-within .sidebar-inline-action,
+  .sidebar-view-head:focus-within .sidebar-density-toggle,
+  .project-header:hover .project-actions,
+  .project-header:focus-within .project-actions,
+  .project-actions:has([aria-expanded="true"]) {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+/* Hybrid devices must remain usable when the user switches to touch. */
+@media (any-pointer: coarse) {
+  .sidebar-view-head .sidebar-inline-action,
+  .sidebar-view-head .sidebar-density-toggle,
+  .project-header .project-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .sidebar-inline-action,
+  .sidebar-density-toggle,
+  .project-actions button {
+    min-width: 44px;
+    min-height: 44px;
+  }
 }
 .sidebar-scroll {
   min-height: 0;
@@ -959,12 +1006,6 @@ button:disabled {
   position: relative;
   display: flex;
   align-items: center;
-  opacity: 0;
-  transition: opacity 140ms ease;
-}
-.project-header:hover .project-actions,
-.project-header:has(:focus-visible) .project-actions {
-  opacity: 1;
 }
 .project-actions button {
   width: 26px;
@@ -5308,9 +5349,6 @@ button:disabled {
   .app-shell.sidebar-collapsed {
     --titlebar-brand-track: min(232px, calc(100% - 138px));
   }
-  .project-actions {
-    opacity: 1;
-  }
   .thread-row {
     padding: 10px;
   }
@@ -8292,7 +8330,7 @@ button:disabled {
    a dedicated OS row and a separate conversation/workspace row below. */
 @media (min-width: 721px) {
   :root[data-platform="darwin"]
-    .app-shell:has(.auxiliary-panel[data-open="true"])
+    .app-shell:has(.auxiliary-panel)
     > .window-titlebar {
     width: calc(100% - var(--workspace-panel-width, 0px));
     min-width: var(--native-leading-safe-area);
@@ -12744,6 +12782,14 @@ button:disabled {
 }
 
 /* WIP virtual viewport: no outer .messages padding or inherited history grid. */
+/* Legend's vertical row container carries a measured inline min-width. That
+   stale cross-axis floor must not keep history wide while its parent shrinks.
+   Scope this override to our pinned vertical viewport's immediate containers;
+   do not override row heights, positions, or horizontal code scrolling. */
+.experimental-transcript-viewport > .virtual-transcript-content > div {
+  min-width: 0 !important;
+  max-width: 100%;
+}
 .experimental-transcript-viewport .virtual-transcript-row,
 .experimental-transcript-viewport .virtual-transcript-header,
 .experimental-transcript-viewport .virtual-transcript-footer {

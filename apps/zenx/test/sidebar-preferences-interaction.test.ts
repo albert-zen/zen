@@ -629,3 +629,36 @@ test("Show more keeps keyboard focus on the newly revealed Recent row, including
     70,
   );
 });
+
+test("quiet section controls retain names and creation callbacks without text badges", async () => {
+  await harness(async ({ created }) => {
+    const density = button(".sidebar-density-toggle");
+    assert.ok(density.getAttribute("aria-label"));
+    assert.equal(density.textContent, "");
+    assert.ok(button('.sidebar-inline-action[aria-label="Add project"]').title);
+    await click(".recent-new-thread");
+    await click(".project-actions button");
+    assert.deepEqual(created, [undefined, "/a"]);
+    await click(".project-more-trigger");
+    assert.equal(
+      button(".project-more-trigger").getAttribute("aria-expanded"),
+      "true",
+    );
+    assert.ok(document.querySelector('[role="menu"]'));
+  });
+});
+
+test("quiet sidebar action CSS preserves focus, open menus and coarse-pointer access", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(styles, /@media \(hover: hover\) and \(pointer: fine\)/);
+  assert.match(
+    styles,
+    /\.sidebar-view-head:focus-within \.sidebar-inline-action/,
+  );
+  assert.match(styles, /\.project-actions:has\(\[aria-expanded="true"\]\)/);
+  assert.match(styles, /@media \(any-pointer: coarse\)/);
+  assert.match(styles, /\.sidebar-inline-action:focus-visible/);
+});

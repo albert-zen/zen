@@ -73,3 +73,13 @@ test("empty virtual footer compensates only the final row gap at each breakpoint
     }
   }
 });
+
+// The pinned Legend web component adds inline minWidth to its vertical row
+// container. This narrow CSS override permits cross-axis shrink without
+// changing height/offset authority; real Chromium geometry is checked separately.
+test("vertical row containers can shrink below Legend's previous measured width", () => {
+  assert.match(
+    css,
+    /\.experimental-transcript-viewport > \.virtual-transcript-content > div\s*\{\s*min-width: 0 !important;\s*max-width: 100%;/,
+  );
+});

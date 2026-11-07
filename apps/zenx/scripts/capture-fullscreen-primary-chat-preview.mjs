@@ -211,6 +211,71 @@ try {
             `(() => { window.__layoutIdentity={primary:document.querySelector('#primary-conversation-content'),editor:document.querySelector('#primary-conversation-content textarea, #primary-conversation-content .cm-content')}; return true; })()`,
           );
           const split = await capture("split-browser");
+          // Real production layout, synthetic DOM toggle. Retain every sampled
+          // frame to distinguish an animated resize from a final-width-only pass.
+          await send("Emulation.setEmulatedMedia", {
+            features: [
+              { name: "prefers-reduced-motion", value: "no-preference" },
+            ],
+          });
+          for (const phase of [
+            "close",
+            "reopen",
+            "close-again",
+            "reopen-again",
+          ]) {
+            const frames = await evaluate(`(async () => {
+              const frames = [], started = performance.now();
+              document.querySelector('#thread-browser-toggle').click();
+              while (performance.now() - started < 450) {
+                await new Promise(requestAnimationFrame);
+                const panel = document.querySelector('#thread-workspace-panel').getBoundingClientRect();
+                const primary = document.querySelector('#primary-conversation-content').getBoundingClientRect();
+                const rows = [...document.querySelectorAll('#primary-conversation-content .virtual-transcript-row')].map(e => { const r=e.getBoundingClientRect(); return { x:r.x, right:r.right, width:r.width }; });
+                frames.push({ elapsed:performance.now()-started, panel:panel.width, primary:primary.width, x:primary.x, right:primary.right, rows });
+              }
+              return frames;
+            })()`);
+            result.observations.push({ phase: `compression-${phase}`, frames });
+            assert.ok(
+              new Set(frames.map((f) => Math.round(f.primary))).size > 2,
+              `${phase}: conversation width actually animates`,
+            );
+            const closing = phase.startsWith("close");
+            const last = frames.at(-1);
+            near(
+              last.panel,
+              closing ? 0 : split.panel.width,
+              `${phase}: settled panel width`,
+            );
+            near(
+              last.primary + last.panel,
+              split.workspace.width,
+              `${phase}: settled conversation allocation`,
+            );
+            for (const f of frames.filter(
+              (f) => f.panel > 40 && f.panel < split.panel.width - 40,
+            ))
+              assert.ok(
+                f.primary < split.workspace.width - 20,
+                `${phase}: no early jump to full width`,
+              );
+            assert.ok(
+              last.rows.length > 0,
+              "actual virtual rows remain mounted",
+            );
+            for (const row of last.rows)
+              assert.ok(
+                row.x >= last.x - 2 && row.right <= last.right + 2,
+                `${phase}: virtual content shrinks inside conversation`,
+              );
+            const settled = await capture(`compression-${phase}`);
+            assert.ok(
+              settled.samePrimary && settled.sameEditor,
+              "resize never remounts conversation or draft",
+            );
+            assert.equal(settled.draft, split.draft, "resize preserves draft");
+          }
           const browserTab = `[id="aux-tab-browser:page-${scene.owner}"]`;
           await click(expand);
           const expanded = await capture("expanded-browser");

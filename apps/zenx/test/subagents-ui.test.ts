@@ -16,6 +16,7 @@ import {
 } from "../src/renderer/src/plugin-ui-host.js";
 import {
   ChildThreadSidebarContext,
+  SubagentsInformationVisibilityContext,
   SubagentCreationModelsContext,
   SideChatDraftContext,
   PluginThreadHeaders,
@@ -73,6 +74,9 @@ async function fixture(
     threads: [],
   }),
   sidebar?: React.ContextType<typeof ChildThreadSidebarContext>,
+  information: React.ContextType<
+    typeof SubagentsInformationVisibilityContext
+  > = null,
 ) {
   const dom = new JSDOM('<div id="root"></div>', {
     url: "https://zenx.local/",
@@ -129,54 +133,58 @@ async function fixture(
     await act(async () => {
       root.render(
         React.createElement(
-          SideChatDraftContext.Provider,
-          {
-            value: async (input) => {
-              const call = {
-                pluginId: "zenx-app",
-                commandId: "open-draft",
-                input,
-              };
-              calls.push(call);
-              await execute(call);
-            },
-          },
+          SubagentsInformationVisibilityContext.Provider,
+          { value: information },
           React.createElement(
-            ChildThreadSidebarContext.Provider,
-            { value: sidebar ?? null },
+            SideChatDraftContext.Provider,
+            {
+              value: async (input) => {
+                const call = {
+                  pluginId: "zenx-app",
+                  commandId: "open-draft",
+                  input,
+                };
+                calls.push(call);
+                await execute(call);
+              },
+            },
             React.createElement(
-              SubagentCreationModelsContext.Provider,
-              { value: { ...modelCatalog } },
-              surface === "header"
-                ? React.createElement(PluginThreadHeaders, {
-                    snapshot,
-                    threadId: parent,
-                    threads,
-                    navigate,
-                    registry,
-                  })
-                : surface === "breadcrumb"
-                  ? React.createElement(ThreadBreadcrumbAncestors, {
+              ChildThreadSidebarContext.Provider,
+              { value: sidebar ?? null },
+              React.createElement(
+                SubagentCreationModelsContext.Provider,
+                { value: { ...modelCatalog } },
+                surface === "header"
+                  ? React.createElement(PluginThreadHeaders, {
+                      snapshot,
                       threadId: parent,
                       threads,
                       navigate,
-                    })
-                  : React.createElement(GenericPluginUiHost, {
                       registry,
-                      snapshot,
-                      pluginId: "zenx-subagents",
-                      surfaceId: "subagents-panel",
-                      context: {
+                    })
+                  : surface === "breadcrumb"
+                    ? React.createElement(ThreadBreadcrumbAncestors, {
                         threadId: parent,
-                        quickCreate: surface === "quick-create",
                         threads,
-                        ...(active === undefined ? {} : { active }),
-                      },
-                      theme: "light",
-                      navigate,
-                      executeCommand,
-                      readHandle,
-                    }),
+                        navigate,
+                      })
+                    : React.createElement(GenericPluginUiHost, {
+                        registry,
+                        snapshot,
+                        pluginId: "zenx-subagents",
+                        surfaceId: "subagents-panel",
+                        context: {
+                          threadId: parent,
+                          quickCreate: surface === "quick-create",
+                          threads,
+                          ...(active === undefined ? {} : { active }),
+                        },
+                        theme: "light",
+                        navigate,
+                        executeCommand,
+                        readHandle,
+                      }),
+              ),
             ),
           ),
         ),
@@ -984,6 +992,36 @@ test("child visibility retry preserves same-panel model and effort creation choi
     assert.deepEqual(f.routes, []);
     assert.deepEqual(sidebar.visibleSubagentThreadIds, ["child-a"]);
     assert.equal(attempts, 2);
+  } finally {
+    await f.close();
+  }
+});
+
+test("embedded lineage keeps its creation action but leaves the heading to the outer card", async () => {
+  const f = await fixture(
+    async () => ({ threads: [summary("child", "parent")] }),
+    undefined,
+    { report() {}, manageMode: false, embedded: true },
+  );
+  try {
+    await f.render("parent");
+    assert.equal(
+      f.dom.window.document.querySelector(
+        ".subagents-panel > header > strong",
+      ) === null,
+      true,
+    );
+    assert.ok(f.button("New side chat"));
+    assert.match(
+      f.dom.window.document.querySelector(".subagents-panel")!.textContent!,
+      /child/,
+    );
+    assert.equal(
+      f.dom.window.document
+        .querySelector(".subagents-panel")!
+        .getAttribute("aria-label"),
+      "Subagent conversations",
+    );
   } finally {
     await f.close();
   }

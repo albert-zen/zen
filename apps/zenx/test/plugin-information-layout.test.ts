@@ -554,3 +554,197 @@ test("Chinese information lineage consistently names child conversations", async
   assert.equal(zhCN.subagents, "子对话");
   assert.equal(zhCN.noSubagentsYet, "尚无子对话。");
 });
+
+test("information follows late and replaced workspace panels without a width change", async () => {
+  const dom = new JSDOM(
+    '<main class="workspace"><div id="root"></div></main>',
+    { url: "https://zenx.local/" },
+  );
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const workspace = document.querySelector<HTMLElement>(".workspace")!;
+  workspace.getBoundingClientRect = () => ({ top: 0, width: 1400 }) as DOMRect;
+  const observed = new Set<Element>();
+  const previous = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class {
+    observe(element: Element) {
+      observed.add(element);
+    }
+    unobserve(element: Element) {
+      observed.delete(element);
+    }
+    disconnect() {
+      observed.clear();
+    }
+  } as unknown as typeof ResizeObserver;
+  const root = createRoot(document.getElementById("root")!);
+  const toolbar = () =>
+    document.querySelector<HTMLElement>(".information-toolbar")!;
+  const button = () => toolbar().querySelector<HTMLButtonElement>("button")!;
+  const toggle = () => act(async () => button().click());
+  const panel = () => {
+    const element = document.createElement("aside");
+    element.className = "auxiliary-panel";
+    element.dataset.open = "true";
+    element.dataset.expanded = "true";
+    element.dataset.primaryActive = "false";
+    element.innerHTML = '<header class="auxiliary-heading"></header>';
+    return element;
+  };
+  try {
+    await act(async () =>
+      root.render(
+        React.createElement(PluginInformationHost, {
+          snapshot: { ...snapshot, information: [] },
+          registry: createPluginUiRegistry(),
+          owner: { kind: "thread", threadId: "late-panel" },
+          theme: "light",
+          resourcePanelWidth: 480,
+          contextContent: React.createElement("p", {}, "Information"),
+          navigate() {},
+          executeCommand: async () => null,
+          readHandle: async () => null,
+        }),
+      ),
+    );
+    await toggle();
+    const first = panel();
+    await act(async () => workspace.append(first));
+    assert.equal(
+      toolbar().hidden,
+      true,
+      "late maximized resource hides the conversation entry",
+    );
+    assert.equal(button().getAttribute("aria-expanded"), "false");
+    await act(async () => {
+      first.dataset.primaryActive = "true";
+    });
+    assert.equal(
+      toolbar().hidden,
+      false,
+      "late panel's main tab restores the entry",
+    );
+    await toggle();
+    assert.ok(document.querySelector(".information-dock"));
+    const second = panel();
+    await act(async () => first.replaceWith(second));
+    assert.equal(
+      toolbar().hidden,
+      true,
+      "replacement resource owns current visibility",
+    );
+    assert.equal(
+      observed.has(first.firstElementChild!),
+      false,
+      "detached heading is retired",
+    );
+    assert.equal(
+      observed.has(second.firstElementChild!),
+      true,
+      "replacement heading is measured",
+    );
+    await act(async () => {
+      first.dataset.primaryActive = "false";
+      first.dataset.open = "false";
+    });
+    assert.equal(
+      toolbar().hidden,
+      true,
+      "detached panel cannot override the current tab",
+    );
+    for (let repeat = 0; repeat < 3; repeat++) {
+      await act(async () => {
+        second.dataset.primaryActive = "true";
+      });
+      assert.equal(toolbar().hidden, false);
+      await toggle();
+      assert.equal(button().getAttribute("aria-expanded"), "true");
+      await toggle();
+      assert.equal(button().getAttribute("aria-expanded"), "false");
+      await act(async () => {
+        second.dataset.primaryActive = "false";
+      });
+      assert.equal(toolbar().hidden, true);
+    }
+    await act(async () => {
+      second.dataset.primaryActive = "true";
+      second.dataset.primaryActive = "false";
+      second.dataset.expanded = "false";
+    });
+    assert.equal(
+      toolbar().hidden,
+      false,
+      "split resource keeps the conversation entry reachable",
+    );
+    await toggle();
+    assert.equal(button().getAttribute("aria-expanded"), "true");
+    const replacementHeading = document.createElement("header");
+    replacementHeading.className = "auxiliary-heading";
+    const oldHeading = second.firstElementChild!;
+    await act(async () => oldHeading.replaceWith(replacementHeading));
+    assert.equal(observed.has(oldHeading), false);
+    assert.equal(observed.has(replacementHeading), true);
+    await act(async () => second.remove());
+    assert.equal(toolbar().hidden, false);
+    assert.equal(observed.has(replacementHeading), false);
+  } finally {
+    await act(async () => root.unmount());
+    globalThis.ResizeObserver = previous;
+    dom.window.close();
+  }
+});
+
+test("late native-only information starts observing the current panel", async () => {
+  const dom = new JSDOM(
+    '<main class="workspace"><aside class="auxiliary-panel" data-open="true" data-expanded="true" data-primary-active="false"></aside><div id="root"></div></main>',
+    { url: "https://zenx.local/" },
+  );
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const root = createRoot(document.getElementById("root")!);
+  const registry = createPluginUiRegistry();
+  const render = (content: boolean) =>
+    act(async () =>
+      root.render(
+        React.createElement(PluginInformationHost, {
+          snapshot: { ...snapshot, information: [] },
+          registry,
+          owner: { kind: "thread", threadId: "late-native-information" },
+          theme: "light",
+          contextContent: content
+            ? React.createElement("p", {}, "Native content")
+            : null,
+          navigate() {},
+          executeCommand: async () => null,
+          readHandle: async () => null,
+        }),
+      ),
+    );
+  try {
+    await render(false);
+    assert.equal(document.querySelector(".information-toolbar"), null);
+    await render(true);
+    assert.equal(
+      document.querySelector<HTMLElement>(".information-toolbar")!.hidden,
+      true,
+    );
+    await act(async () => {
+      document.querySelector<HTMLElement>(
+        ".auxiliary-panel",
+      )!.dataset.primaryActive = "true";
+    });
+    assert.equal(
+      document.querySelector<HTMLElement>(".information-toolbar")!.hidden,
+      false,
+    );
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
