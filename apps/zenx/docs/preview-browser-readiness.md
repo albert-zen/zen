@@ -12,14 +12,33 @@ startup failed after approximately 10 seconds with empty stderr; the one allowed
 rerun failed at the same phase with one D-Bus warning. This establishes a premature
 readiness decision and inadequate diagnostics, not a proven D-Bus/OS root cause.
 
-A single monotonic 30-second cold-start budget replaces the implicit 10-second
-port-only loop. It covers port discovery, HTTP target-list readiness, and the
-WebSocket handshake together; it is not 30 seconds per phase. HTTP attempts have
-at most 2 seconds including body decoding and are aborted within the remaining overall budget. Port-file reads are also bounded by the remaining deadline, even if an I/O promise never settles. Only
-read-only readiness observations repeat. Chrome is spawned once; captures and
-mutating CDP commands are never retried. CI's existing job deadline stays intact.
-Thirty seconds is a bounded allowance for observed late readiness, not a measured
-startup percentile or a guarantee that every future CI host starts successfully.
+Main run [42243745815](https://github.com/albert-zen/zen/actions/runs/42243745815)
+at `53c99e24` exposed starvation inside the later shared 30-second budget:
+layout/overflow first Chrome ports appeared at 24.537/29.437 seconds, leaving
+5.463/0.563 seconds for target discovery and handshake. Both captures remained
+`not-started` and cleanup completed. In the same jobs, subsequent file-sidebar
+and foreground captures reached the port in 208/204 ms and connected in
+1421/1275 ms. The conversation runner's first capture connected in 5545 ms.
+Successful captures also logged the same invalid D-Bus address errors. These are
+cold-start correlations, not proof of a D-Bus defect or CPU/IO root cause. The
+three shards used distinct hosted workers and Azure regions, not one shared VM.
+
+Connection readiness now has fixed monotonic phase budgets: port discovery 30
+seconds, target discovery 10 seconds, and one WebSocket handshake 5 seconds,
+with a 45-second overall connection ceiling. Each phase starts once; polling
+never renews it. An explicit `timeoutMs` remains an overall ceiling, including
+for existing callers/tests requesting a shorter bound. Every completed read and
+handshake must still be inside its phase and overall deadlines before advancing.
+Child exit/error interrupts pending readiness I/O; supported I/O is aborted.
+HTTP observations, including response bodies, remain bounded at two seconds or
+the smaller remaining budget. Chrome is spawned once and the socket is connected
+once. Only read-only readiness observations repeat; captures and mutating CDP
+commands never retry. These are reliability bounds, not a speed improvement or
+measured startup percentiles. Existing CI job deadlines remain unchanged.
+
+The 45-second ceiling ends at connection readiness, not completion of the UI
+capture or cleanup. Page setup keeps existing per-command CDP deadlines; artifact
+writes have no new deadline. Do not describe this as a whole-task time guarantee.
 
 ## Receipts
 
@@ -55,3 +74,22 @@ bounded HTTP and WebSocket hangs, phase attribution, and TERM/KILL/unreaped clea
 Tests use synthetic process/CDP fixtures, not a downloaded browser. Real captures
 remain GitHub-Actions-only; their assertions must pass on the new revision before
 merging. A previous branch's failed job is not silently retried by this helper.
+
+## Cold-start measurement plan (not implemented by this patch)
+
+Do not warm up Chrome, rerun failures until green, or discard first samples.
+Before changing launch environment, collect fixed-size numeric observations for
+the first and subsequent fresh-profile launches on each worker: Chrome version,
+runner image, phase durations, process CPU time, CPU quota/count, memory/IO
+pressure and startup ordinal. Record only whether a D-Bus session address is
+absent or its transport type, never its value or arbitrary environment contents.
+Keep instrumentation cost visible and preserve all failed samples.
+
+A controlled D-Bus comparison should use matched fresh workers and fixed Chrome,
+fonts and fixture revisions, comparing inherited environment with a private
+session bus in alternating order. A new profile is not a cold disk/font cache;
+label that difference instead of claiming a warm second launch is equivalent.
+Compare time-to-port and time-to-target distributions and failure rates, not just
+successful total wall time. Do not change sandbox/security flags or lower UI
+coverage. Require evidence of reduced startup time before calling any such
+change a speed improvement; the current phase-budget patch makes no such claim.

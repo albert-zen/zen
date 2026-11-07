@@ -9,6 +9,10 @@ import {
  * ZENX_USER_BROWSER_EXECUTABLE may select an existing Chrome/Chromium binary.
  * ZENX_REQUIRE_OS_INPUT=1 makes missing macOS Accessibility fail acceptance.
  * ZENX_PARALLEL_INPUT_ARTIFACT_DIR optionally retains the JSON evidence report.
+ * ZENX_FRESH_NESTED_CAPTURE_ONLY=1 runs only a fresh nested capture diagnostic,
+ * before acceptance input, and emits its receipt to stdout (not acceptance).
+ * ZENX_NESTED_CAPTURE_MATRIX_ONLY=1 instead runs three predeclared independent
+ * scenes: fresh early, navigation-only history, and fresh late. Never input.
  * This smoke intentionally activates only its own fixture windows during setup.
  * Protocol-only user input is reported separately from real OS input evidence.
  */
@@ -94,6 +98,91 @@ interface FixtureCdpEvent {
 }
 
 class Rpc {
+  // Screenshot-only, payload-free transport evidence. The last 16 calls also
+  // serve as bounded tombstones: late replies never regain a pending promise.
+  #screenshots = new Map<
+    number,
+    {
+      id: number;
+      startedAt: number;
+      sessionScoped: boolean;
+      transportAccepted: boolean;
+      sendCallback: "pending" | "ok" | "error";
+      sendCallbackElapsedMs?: number;
+      sendCallbackState?: {
+        readyState: number;
+        bufferedAmount: number;
+        pendingCount: number;
+      };
+      returned?: {
+        readyState: number;
+        bufferedAmount: number;
+        pendingCount: number;
+      };
+      outcome:
+        | "pending"
+        | "success"
+        | "protocol-error"
+        | "timeout"
+        | "socket-closed"
+        | "send-threw";
+      elapsedMs?: number;
+      sent: {
+        readyState: number;
+        bufferedAmount: number;
+        pendingCount: number;
+      };
+      settled?: {
+        readyState: number;
+        bufferedAmount: number;
+        pendingCount: number;
+      };
+      lateReply?: {
+        outcome: "success" | "protocol-error";
+        elapsedMs: number;
+        readyState: number;
+        bufferedAmount: number;
+        pendingCount: number;
+      };
+    }
+  >();
+  #screenshotDropped = 0;
+  #reportedSocketEnd = false;
+  #socketState() {
+    return {
+      readyState: this.socket.readyState,
+      bufferedAmount: this.socket.bufferedAmount,
+      pendingCount: this.#pending.size,
+    };
+  }
+  screenshotTransport() {
+    // Return detached scalar records, never CDP parameters, results or errors.
+    return {
+      limit: 16,
+      dropped: this.#screenshotDropped,
+      records: Array.from(this.#screenshots.values(), (record) => ({
+        ...record,
+        sent: { ...record.sent },
+        ...(record.returned ? { returned: { ...record.returned } } : {}),
+        ...(record.sendCallbackState
+          ? { sendCallbackState: { ...record.sendCallbackState } }
+          : {}),
+        ...(record.settled ? { settled: { ...record.settled } } : {}),
+        ...(record.lateReply ? { lateReply: { ...record.lateReply } } : {}),
+      })),
+    };
+  }
+  #reportScreenshots(phase: "cleanup" | "socket-end") {
+    if (!this.#screenshots.size) return;
+    try {
+      console.error(
+        "Fixture screenshot transport",
+        JSON.stringify({ phase, ...this.screenshotTransport() }),
+      );
+    } catch {
+      // A diagnostic sink must never change cleanup or promise settlement.
+    }
+  }
   #listeners = new Set<(event: FixtureCdpEvent) => void>();
   onEvent(listener: (event: FixtureCdpEvent) => void): () => void {
     this.#listeners.add(listener);
@@ -119,16 +208,48 @@ class Rpc {
         return;
       }
       const pending = this.#pending.get(message.id);
-      if (!pending) return;
+      const screenshot = this.#screenshots.get(message.id);
+      if (!pending) {
+        if (
+          screenshot &&
+          !screenshot.lateReply &&
+          (screenshot.outcome === "timeout" ||
+            screenshot.outcome === "socket-closed" ||
+            screenshot.outcome === "send-threw")
+        ) {
+          screenshot.lateReply = {
+            outcome: message.error ? "protocol-error" : "success",
+            elapsedMs: Date.now() - screenshot.startedAt,
+            ...this.#socketState(),
+          };
+        }
+        return;
+      }
       this.#pending.delete(message.id);
+      if (screenshot) {
+        screenshot.outcome = message.error ? "protocol-error" : "success";
+        screenshot.elapsedMs = Date.now() - screenshot.startedAt;
+        screenshot.settled = this.#socketState();
+      }
       if (message.error)
         pending.reject(new Error(JSON.stringify(message.error)));
       else pending.resolve(message.result ?? {});
     });
     const fail = () => {
-      for (const pending of this.#pending.values())
+      for (const [id, pending] of this.#pending) {
+        const screenshot = this.#screenshots.get(id);
+        if (screenshot) {
+          screenshot.outcome = "socket-closed";
+          screenshot.elapsedMs = Date.now() - screenshot.startedAt;
+          screenshot.settled = this.#socketState();
+        }
         pending.reject(new Error("Fixture CDP socket closed"));
+      }
       this.#pending.clear();
+      if (!this.#reportedSocketEnd) {
+        this.#reportedSocketEnd = true;
+        this.#reportScreenshots("socket-end");
+      }
     };
     socket.on("close", fail);
     socket.on("error", fail);
@@ -150,9 +271,30 @@ class Rpc {
     const id = ++this.#id;
     const startedAt = Date.now();
     let transportAccepted = false;
+    if (method === "Page.captureScreenshot") {
+      if (this.#screenshots.size === 16) {
+        this.#screenshots.delete(this.#screenshots.keys().next().value!);
+        this.#screenshotDropped++;
+      }
+      this.#screenshots.set(id, {
+        id,
+        startedAt,
+        sessionScoped: sessionId !== undefined,
+        transportAccepted: false,
+        sendCallback: "pending",
+        outcome: "pending",
+        sent: this.#socketState(),
+      });
+    }
     return await new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#pending.delete(id);
+        const screenshot = this.#screenshots.get(id);
+        if (screenshot) {
+          screenshot.outcome = "timeout";
+          screenshot.elapsedMs = Date.now() - startedAt;
+          screenshot.settled = this.#socketState();
+        }
         // A returned socket.send is transport acceptance, not browser execution.
         // In particular a screenshot timeout does not imply an input was sent.
         reject(
@@ -166,6 +308,9 @@ class Rpc {
                 sessionScoped: sessionId !== undefined,
                 elapsedMs: Date.now() - startedAt,
                 timeoutMs: 10_000,
+                ...(method === "Page.captureScreenshot"
+                  ? { screenshotTransport: this.screenshotTransport() }
+                  : {}),
               },
             },
           ),
@@ -189,11 +334,34 @@ class Rpc {
             params,
             ...(sessionId ? { sessionId } : {}),
           }),
+          ...(method === "Page.captureScreenshot"
+            ? [
+                (error?: Error) => {
+                  const screenshot = this.#screenshots.get(id);
+                  if (!screenshot) return;
+                  screenshot.sendCallback = error ? "error" : "ok";
+                  screenshot.sendCallbackElapsedMs = Date.now() - startedAt;
+                  screenshot.sendCallbackState = this.#socketState();
+                  // This callback is evidence only, not a CDP response or failure.
+                },
+              ]
+            : []),
         );
         transportAccepted = true;
+        const screenshot = this.#screenshots.get(id);
+        if (screenshot) {
+          screenshot.transportAccepted = true;
+          screenshot.returned = this.#socketState();
+        }
       } catch (error) {
         clearTimeout(timer);
         this.#pending.delete(id);
+        const screenshot = this.#screenshots.get(id);
+        if (screenshot) {
+          screenshot.outcome = "send-threw";
+          screenshot.elapsedMs = Date.now() - startedAt;
+          screenshot.settled = this.#socketState();
+        }
         reject(error);
       }
     });
@@ -213,6 +381,7 @@ class Rpc {
   }
   close(): void {
     this.socket.close();
+    this.#reportScreenshots("cleanup");
   }
 }
 
@@ -1665,6 +1834,406 @@ async function runInterruptedRemoteFrameSmoke(options: {
   }
 }
 
+/** Opt-in independent scene: one capture, no Input dispatch or fallback. */
+export async function runFreshNestedCaptureSmoke(options: {
+  backend: ZenXBrowserBackend;
+  sessionId: string;
+  endpoint: string;
+  origin: string;
+  browserRpc: FixtureCdpEndpoint;
+  guard(): Promise<void>;
+  report(receipt: Record<string, unknown>): void;
+  condition?: "fresh-early" | "navigation-history" | "fresh-late";
+}): Promise<void> {
+  const { backend, sessionId, browserRpc, guard } = options;
+  const startedAt = Date.now();
+  const history: { mode: string; elapsedMs: number }[] = [];
+  const remoteServer = createServer((request, response) => {
+    response.setHeader("content-type", "text/html; charset=utf-8");
+    response.setHeader("cache-control", "no-store");
+    response.setHeader("Origin-Agent-Cluster", "?0");
+    try {
+      assert.equal(
+        new URL(request.url ?? "", options.origin).pathname,
+        "/remote-frame-child",
+      );
+      response.end(
+        remoteFrameContractPage(
+          "child",
+          remoteFrameFixtureFromUrl(request.url!),
+        ),
+      );
+    } catch {
+      response.statusCode = 400;
+      response.end("Invalid disposable fixture request");
+    }
+  });
+  let owned: { tabId: string } | undefined;
+  let rpc: Rpc | undefined;
+  let removeEvents: (() => void) | undefined;
+  let rootFrameId: string | undefined;
+  let rootLoaderId: string | undefined;
+  const lifecycle: Record<string, number> = {};
+  let primaryFailed = false;
+  const receipt: Record<string, unknown> = {
+    scenario: "fresh-nested-oopif-capture",
+    condition: options.condition ?? "fresh-early",
+    history,
+    historyInputDispatches: 0,
+    historyProviderInspections: 0,
+    layer: "independent-capture-diagnostic-only",
+    providerAcceptance: "not-exercised",
+    dispatchAttempts: 0,
+    captureAttempts: 0,
+    heartbeatAttempts: 0,
+    lifecycle,
+    status: "started",
+    cleanupStatus: "pending",
+    stage: "foreground-guard",
+  };
+  const summarize = (state: ContractState) => {
+    assert.equal(state.visibility, "hidden", "Fresh root must stay hidden");
+    assert.equal(
+      state.childVisibility,
+      "hidden",
+      "Fresh leaf must stay hidden",
+    );
+    assert.equal(
+      state.events.length,
+      0,
+      "Fresh scene must receive no trusted input",
+    );
+    assert.equal(
+      state.rootEvents?.length,
+      0,
+      "Fresh root must receive no input",
+    );
+    return {
+      rootVisibility: state.visibility,
+      leafVisibility: state.childVisibility,
+      trustedEvents: state.events.length,
+      rootEvents: state.rootEvents?.length,
+    };
+  };
+  try {
+    await guard();
+    await new Promise<void>((resolve, reject) => {
+      remoteServer.once("error", reject);
+      remoteServer.listen(0, "127.0.0.1", resolve);
+    });
+    const address = remoteServer.address();
+    assert.ok(address && typeof address !== "string");
+    const fixtureUrl = (mode: string) => {
+      const url = new URL("/input-contract", options.origin);
+      url.searchParams.set("mode", mode);
+      if (isRemoteFrameMode(mode)) {
+        for (const [key, value] of Object.entries({
+          parentOrigin: options.origin,
+          childOrigin: `http://${mode === "cross-origin-same-process" ? "127.0.0.1" : "localhost"}:${address.port}`,
+          nonce: randomUUID(),
+          ...(mode === "nested-oopif"
+            ? {
+                leafOrigin: `http://nested.localhost:${address.port}`,
+                outerAffine: "true",
+              }
+            : {}),
+        }))
+          url.searchParams.set(key, value);
+      }
+      return url;
+    };
+    const url = fixtureUrl("nested-oopif");
+    // Fresh target and fresh document, before any acceptance scenario input.
+    receipt.stage = "open-fresh-target";
+    owned = await backend.open(sessionId, "about:blank");
+    await guard();
+    const target = await poll(async () => {
+      const targets = (await (
+        await fetch(`${options.endpoint}/json/list`, {
+          redirect: "error",
+          signal: AbortSignal.timeout(5_000),
+        })
+      ).json()) as Target[];
+      return targets.find((target) => target.id === owned!.tabId);
+    }, "fresh nested capture target");
+    rpc = await Rpc.connect(target.webSocketDebuggerUrl);
+    const fixture = rpc;
+    removeEvents = fixture.onEvent((event) => {
+      // Fixed event vocabulary and counters only. No URLs, frame IDs or payloads.
+      let name: string | undefined;
+      if (event.method === "Page.frameNavigated") {
+        const frame = event.params?.frame as
+          { id?: string; loaderId?: string; parentId?: string } | undefined;
+        if (frame && frame.parentId === undefined) {
+          rootFrameId = frame.id;
+          rootLoaderId = frame.loaderId;
+          for (const key of Object.keys(lifecycle)) delete lifecycle[key];
+        }
+      }
+      if (
+        [
+          "Page.frameStartedLoading",
+          "Page.frameStoppedLoading",
+          "Page.frameDetached",
+          "Inspector.targetCrashed",
+          "Inspector.detached",
+        ].includes(event.method ?? "")
+      )
+        name = event.method;
+      if (
+        event.method === "Page.lifecycleEvent" &&
+        rootFrameId !== undefined &&
+        rootLoaderId !== undefined &&
+        event.params?.frameId === rootFrameId &&
+        event.params?.loaderId === rootLoaderId &&
+        [
+          "init",
+          "DOMContentLoaded",
+          "load",
+          "firstPaint",
+          "firstContentfulPaint",
+          "networkAlmostIdle",
+          "networkIdle",
+        ].includes(String(event.params?.name))
+      )
+        name = `lifecycle:${String(event.params?.name)}`;
+      if (name) lifecycle[name] = Math.min((lifecycle[name] ?? 0) + 1, 10000);
+    });
+    await fixture.send("Page.enable");
+    await fixture.send("Page.setLifecycleEventsEnabled", { enabled: true });
+    await fixture.send("Inspector.enable");
+    const historyStartedAt = Date.now();
+    if (options.condition === "navigation-history") {
+      // Same preceding mode order as normal acceptance, but navigation only.
+      // No provider inspection, placement attachment, extra focus or Input.
+      for (const mode of [
+        "stop-propagation",
+        "stop-immediate",
+        "shadow",
+        "light-native",
+        "same-origin-frame",
+        "affine-frame",
+        "same-origin-closed-shadow",
+        "closed-shadow",
+        "deep-shadow",
+        "ordinary-dom",
+        "cross-origin-same-process",
+        "cross-origin-oopif",
+      ]) {
+        receipt.stage = "navigation-history";
+        await guard();
+        const navigationStarted = Date.now();
+        await backend.navigate(sessionId, owned.tabId, fixtureUrl(mode).href);
+        await poll(async () => {
+          const ready = await fixture.evaluate<boolean>(
+            `window.contract?.mode === ${JSON.stringify(mode)} && ${isRemoteFrameMode(mode) ? "window.contract.ready === true" : "true"}`,
+          );
+          assert.equal(typeof ready, "boolean");
+          return ready ? true : undefined;
+        }, `navigation-only history ${mode}`);
+        const current = await fixture.evaluate<ContractState>(
+          "window.contract.state()",
+        );
+        assert.equal(current.visibility, "hidden");
+        if (isRemoteFrameMode(mode))
+          assert.equal(current.childVisibility, "hidden");
+        assert.equal(
+          current.events.length,
+          0,
+          "Navigation-only history must receive no input",
+        );
+        await guard();
+        history.push({ mode, elapsedMs: Date.now() - navigationStarted });
+      }
+    }
+    receipt.historyElapsedMs = Date.now() - historyStartedAt;
+    // Paint events from predecessor documents must not count as final paint.
+    receipt.predecessorLifecycle = { ...lifecycle };
+    for (const key of Object.keys(lifecycle)) delete lifecycle[key];
+    receipt.stage = "navigate-and-readiness";
+    const finalNavigationStarted = Date.now();
+    await backend.navigate(sessionId, owned.tabId, url.href);
+    await poll(
+      async () =>
+        (await fixture.evaluate<boolean>(
+          "window.contract?.mode === 'nested-oopif' && window.contract.ready === true",
+        ))
+          ? true
+          : undefined,
+      "fresh nested document",
+    );
+    receipt.stage = "verify-placement";
+    await observeRemoteFramePlacement(
+      fixture,
+      browserRpc,
+      "nested-oopif",
+      url.href,
+    );
+    receipt.placement = "verified-two-oopif-owner-chain";
+    // Match the original pre-key capture's authored DOM focus, not OS activation.
+    assert.equal(
+      (
+        await fixture.evaluate<{ inner: string }>(
+          "window.contract.focus('text-a')",
+        )
+      ).inner,
+      "text-a",
+    );
+    receipt.before = summarize(
+      await fixture.evaluate<ContractState>("window.contract.state()"),
+    );
+    await guard();
+    receipt.stage = "capture-and-heartbeat";
+    receipt.beforeCaptureLifecycle = { ...lifecycle };
+    receipt.captureAttempts = 1;
+    const captureStartedAt = Date.now();
+    receipt.sceneElapsedAtCaptureMs = captureStartedAt - startedAt;
+    receipt.finalNavigationToCaptureMs =
+      captureStartedAt - finalNavigationStarted;
+    const capture = fixture.send("Page.captureScreenshot", {
+      format: "png",
+      fromSurface: true,
+      captureBeyondViewport: false,
+    });
+    // One preplanned read while capture is outstanding. It traverses the same
+    // root/owner/leaf postMessage chain, distinguishing responsive script from
+    // a pending compositor capture. Never retry it or wait after capture failure.
+    receipt.heartbeatAttempts = 1;
+    receipt.heartbeatOutcome = "pending";
+    const heartbeat = fixture
+      .evaluate<ContractState>("window.contract.state()")
+      .then((state) => {
+        receipt.heartbeatElapsedMs = Date.now() - captureStartedAt;
+        receipt.heartbeat = summarize(state);
+        receipt.heartbeatOutcome = "success";
+      })
+      .catch((error: unknown) => {
+        receipt.heartbeatElapsedMs = Date.now() - captureStartedAt;
+        receipt.heartbeatOutcome = "failed";
+        throw error;
+      });
+    const [screenshot] = await Promise.all([capture, heartbeat]);
+    assert.ok(
+      typeof screenshot.data === "string" && screenshot.data.length > 0,
+      "Fresh scene requires a real compositor capture",
+    );
+    receipt.compositorCaptured = true;
+    await guard();
+    receipt.status = "passed";
+  } catch (error) {
+    primaryFailed = true;
+    receipt.primaryFailure = true;
+    receipt.status = "failed";
+    if (error instanceof Error && "fixtureCdp" in error)
+      receipt.fixtureCdp = error.fixtureCdp;
+    throw error;
+  } finally {
+    // Independent bounded cleanup steps always run once. Preserve the original
+    // scenario failure; a cleanup-only failure must still fail the diagnostic.
+    const cleanupFailures: string[] = [];
+    let firstCleanupError: unknown;
+    const cleanup = async (
+      stage: string,
+      action: () => void | Promise<void>,
+    ) => {
+      try {
+        await action();
+      } catch (error) {
+        if (cleanupFailures.length === 0) firstCleanupError = error;
+        cleanupFailures.push(stage);
+      }
+    };
+    await cleanup("remove-listener", () => removeEvents?.());
+    await cleanup("rpc-close", () => rpc?.close());
+    if (owned) {
+      const targetId = owned.tabId;
+      // closeTab detaches provider ownership; it does not close the Chrome tab.
+      await cleanup("provider-detach", () =>
+        backend.closeTab(sessionId, targetId),
+      );
+      await cleanup("physical-target-close", async () => {
+        const closed = await browserRpc.send("Target.closeTarget", {
+          targetId,
+        });
+        assert.equal(
+          closed.success,
+          true,
+          "Physically close only the fresh owned target",
+        );
+      });
+    }
+    await cleanup("foreground-guard", guard);
+    await cleanup("server-close", async () => {
+      if (!remoteServer.listening) return;
+      const closed = new Promise<void>((resolve, reject) =>
+        remoteServer.close((error) => (error ? reject(error) : resolve())),
+      );
+      remoteServer.closeAllConnections();
+      await closed;
+    });
+    receipt.cleanupStatus = cleanupFailures.length ? "failed" : "completed";
+    receipt.cleanupFailures = cleanupFailures;
+    if (cleanupFailures.length) receipt.status = "failed";
+    receipt.screenshotTransport = rpc?.screenshotTransport();
+    try {
+      options.report(receipt);
+    } catch {
+      // Diagnostic delivery cannot replace capture or cleanup outcomes.
+    }
+    if (!primaryFailed && cleanupFailures.length) throw firstCleanupError;
+  }
+}
+
+/** Predeclared controls, never selected in response to a previous outcome. */
+export async function runNestedCaptureMatrixSmoke(
+  options: Parameters<typeof runFreshNestedCaptureSmoke>[0],
+): Promise<void> {
+  const plannedConditions = [
+    "fresh-early",
+    "navigation-history",
+    "fresh-late",
+  ] as const;
+  const matrixStartedAt = Date.now();
+  let firstCaptureFailure: unknown;
+  let captureFailed = false;
+  for (const condition of plannedConditions) {
+    let receipt: Record<string, unknown> | undefined;
+    const sceneStartedAfterMatrixMs = Date.now() - matrixStartedAt;
+    try {
+      await runFreshNestedCaptureSmoke({
+        ...options,
+        condition,
+        report: (value) => {
+          receipt = value;
+          options.report({
+            ...value,
+            plannedConditions: [...plannedConditions],
+            sceneStartedAfterMatrixMs,
+          });
+        },
+      });
+    } catch (error) {
+      // A known capture timeout with successful hidden-page heartbeat and full
+      // cleanup may be compared with the remaining predeclared new scenes.
+      // Any safety, readiness, heartbeat or cleanup failure stops the matrix.
+      const timeout =
+        error instanceof Error && "fixtureCdp" in error
+          ? (error.fixtureCdp as { method?: unknown })
+          : undefined;
+      if (
+        timeout?.method !== "Page.captureScreenshot" ||
+        receipt?.stage !== "capture-and-heartbeat" ||
+        receipt?.heartbeatOutcome !== "success" ||
+        receipt?.cleanupStatus !== "completed"
+      )
+        throw error;
+      if (!captureFailed) firstCaptureFailure = error;
+      captureFailed = true;
+    }
+  }
+  if (captureFailed) throw firstCaptureFailure;
+}
+
 /** Real protocol acceptance, shared by both headed smoke entry points. */
 export async function runTargetedInputContractSmoke(options: {
   backend: ZenXBrowserBackend;
@@ -3041,6 +3610,52 @@ async function main(): Promise<void> {
       );
       return ready ? true : undefined;
     }, "agent fixture document");
+    if (
+      process.env.ZENX_FRESH_NESTED_CAPTURE_ONLY === "1" ||
+      process.env.ZENX_NESTED_CAPTURE_MATRIX_ONLY === "1"
+    ) {
+      const runCaptureDiagnostic =
+        process.env.ZENX_NESTED_CAPTURE_MATRIX_ONLY === "1"
+          ? runNestedCaptureMatrixSmoke
+          : runFreshNestedCaptureSmoke;
+      phase = "fresh-nested-capture-only";
+      const frontBefore = await native.call("snapshot");
+      const userBefore = await userRpc.evaluate<PageState>(stateScript);
+      await runCaptureDiagnostic({
+        backend: connection.backend,
+        sessionId,
+        endpoint,
+        origin,
+        browserRpc,
+        guard: async () => {
+          const [front, userState, visibility] = await Promise.all([
+            native!.call("snapshot"),
+            userRpc!.evaluate<PageState>(stateScript),
+            agentRpc!.evaluate<string>("document.visibilityState"),
+          ]);
+          assert.equal(front.pid, frontBefore.pid);
+          assert.equal(front.hwnd, frontBefore.hwnd);
+          assert.equal(front.drift, false);
+          assert.equal(userState.focus, "user-input");
+          assert.equal(userState.visibility, "visible");
+          assert.equal(userState.value, userBefore.value);
+          assert.deepEqual(
+            userState.visibilityEvents,
+            userBefore.visibilityEvents,
+          );
+          assert.equal(visibility, "hidden");
+        },
+        report: (receipt) => {
+          reports.push(receipt);
+          console.log(
+            "Fresh nested capture diagnostic",
+            JSON.stringify(receipt),
+          );
+        },
+      });
+      diagnosticOutcome = "passed";
+      return;
+    }
     phase = "startup-agent-inspection";
     // The fixture DOM can exist before the provider receives the final initial
     // navigation lifecycle event. Settle only this read, before concurrent input.

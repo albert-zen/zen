@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.web.json",
+  "include": [
+    "src/renderer/src/**/*.ts",
+    "src/renderer/src/**/*.tsx",
+    "test/fixtures/pending-image-visual.tsx"
+  ]
+}
