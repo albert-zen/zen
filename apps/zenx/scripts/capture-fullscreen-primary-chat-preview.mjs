@@ -149,7 +149,7 @@ function checkPrimary(m, draft) {
 try {
   await withPreviewBrowser(
     directory,
-    async ({ send, evaluate, url, screenshot }) => {
+    async ({ send, evaluate, url, screenshot, onEvent }) => {
       report.browserVersion = await send("Browser.getVersion");
       async function until(expression, label) {
         for (let i = 0; i < 120; i++) {
@@ -224,27 +224,87 @@ try {
             "close-again",
             "reopen-again",
           ]) {
-            const frames = await evaluate(`(async () => {
-              const frames = [], started = performance.now();
-              document.querySelector('#thread-browser-toggle').click();
-              while (performance.now() - started < 450) {
-                // rAF runs before layout/ResizeObserver delivery. Yield one task
-                // after it so the sample observes the renderer's committed width,
-                // rather than pairing this tick's panel with last tick's primary.
-                await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
-                const panel = document.querySelector('#thread-workspace-panel').getBoundingClientRect();
-                const primary = document.querySelector('#primary-conversation-content').getBoundingClientRect();
-                const rows = [...document.querySelectorAll('#primary-conversation-content .virtual-transcript-row')].map(e => { const r=e.getBoundingClientRect(); return { x:r.x, right:r.right, width:r.width }; });
-                frames.push({ elapsed:performance.now()-started, panel:panel.width, primary:primary.width, x:primary.x, right:primary.right, rows });
+            // CDP returns a bounded sample of actual compositor frames, not a
+            // promise of every display frame. Keep timestamps/gaps for review.
+            const filmstrip = { frames: [], discarded: 0, errors: [] };
+            const writes = [];
+            const remove = onEvent(
+              "Page.screencastFrame",
+              ({ data, metadata, sessionId }) => {
+                writes.push(
+                  send("Page.screencastFrameAck", { sessionId }).catch(
+                    (error) => filmstrip.errors.push(String(error)),
+                  ),
+                );
+                if (filmstrip.frames.length >= 60) {
+                  filmstrip.discarded++;
+                  return;
+                }
+                const file = `${prefix}-${phase}-paint-${String(filmstrip.frames.length).padStart(3, "0")}.jpg`;
+                filmstrip.frames.push({ file, ...metadata });
+                writes.push(
+                  writeFile(
+                    path.join(directory, file),
+                    Buffer.from(data, "base64"),
+                  ).catch((error) => filmstrip.errors.push(String(error))),
+                );
+              },
+            );
+            let trajectory;
+            try {
+              await send("Page.startScreencast", {
+                format: "jpeg",
+                quality: 85,
+                everyNthFrame: 1,
+              });
+              trajectory = await evaluate(`(async () => {
+                const rawFrames = [], frames = [], started = performance.now();
+                const read = () => {
+                  const panel = document.querySelector('#thread-workspace-panel').getBoundingClientRect();
+                  const primary = document.querySelector('#primary-conversation-content').getBoundingClientRect();
+                  const rows = [...document.querySelectorAll('#primary-conversation-content .virtual-transcript-row')].map(e => { const r=e.getBoundingClientRect(); return { x:r.x, right:r.right, width:r.width }; });
+                  return { elapsed:performance.now()-started, panel:panel.width, primary:primary.width, x:primary.x, right:primary.right, rows };
+                };
+                document.querySelector('#thread-browser-toggle').click();
+                while (performance.now() - started < 450) {
+                  await new Promise(requestAnimationFrame);
+                  rawFrames.push(read());
+                  // Preserve the pre-layout rAF sample as well as the later task
+                  // observation. Neither geometry sequence alone proves paint.
+                  await new Promise(resolve => setTimeout(resolve, 0));
+                  frames.push(read());
+                }
+                return { started, timeOrigin:performance.timeOrigin, rawFrames, frames };
+              })()`);
+            } finally {
+              try {
+                await send("Page.stopScreencast");
+              } catch (error) {
+                filmstrip.errors.push(String(error));
               }
-              return frames;
-            })()`);
-            result.observations.push({
-              phase: `compression-${phase}`,
-              sampling:
-                "animation frame followed by a task (after resize delivery)",
-              frames,
-            });
+              remove();
+              await Promise.all(writes);
+              result.observations.push({
+                phase: `compression-${phase}`,
+                ...trajectory,
+                filmstrip,
+              });
+            }
+            assert.deepEqual(
+              filmstrip.errors,
+              [],
+              "compositor evidence writes and acknowledgments succeed",
+            );
+            assert.equal(
+              filmstrip.discarded,
+              0,
+              "bounded compositor capture did not overflow",
+            );
+            assert.ok(
+              filmstrip.frames.length > 2,
+              `${phase}: compositor emitted multiple painted frames`,
+            );
+            const { frames } = trajectory;
             assert.ok(
               new Set(frames.map((f) => Math.round(f.primary))).size > 2,
               `${phase}: conversation width actually animates`,
@@ -261,9 +321,23 @@ try {
               split.workspace.width,
               `${phase}: settled conversation allocation`,
             );
-            for (const f of frames.filter(
+            const intermediate = frames.filter(
               (f) => f.panel > 40 && f.panel < split.panel.width - 40,
-            )) {
+            );
+            assert.ok(
+              intermediate.length > 0,
+              `${phase}: intermediate geometry was sampled`,
+            );
+            for (const f of intermediate) {
+              near(
+                f.primary + f.panel,
+                split.workspace.width,
+                `${phase}: moving conversation allocation`,
+              );
+              assert.ok(
+                f.rows.length > 0,
+                `${phase}: moving virtual rows remain mounted`,
+              );
               assert.ok(
                 f.primary < split.workspace.width - 20,
                 `${phase}: no early jump to full width`,

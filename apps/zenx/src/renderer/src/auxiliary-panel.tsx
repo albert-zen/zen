@@ -1,3 +1,4 @@
+import { flushSync } from "react-dom";
 import { ShellTargetNavigationContext } from "./shell-target-navigation.js";
 import {
   sidebarTabId,
@@ -268,7 +269,12 @@ export function AuxiliaryPanel({
     const observer =
       typeof ResizeObserver === "undefined"
         ? undefined
-        : new ResizeObserver(measure);
+        : new ResizeObserver(() => {
+            // ResizeObserver runs before paint, but React may defer a normal
+            // state update. Commit the shared conversation/titlebar boundary in
+            // this delivery so it cannot trail the panel's CSS animation.
+            flushSync(measure);
+          });
     observer?.observe(panel.current);
     measure();
     return () => {

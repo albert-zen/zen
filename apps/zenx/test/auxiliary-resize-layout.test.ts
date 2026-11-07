@@ -2,7 +2,7 @@ import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import React, { act } from "react";
+import React, { act, useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { AuxiliaryPanel } from "../src/renderer/src/auxiliary-panel.js";
@@ -78,9 +78,6 @@ test("interactive pane width reports clamped layout before passive observation, 
     }
   } as unknown as typeof ResizeObserver;
   const reports: number[] = [];
-  const report = (width: number) => {
-    reports.push(width);
-  };
   const root = createRoot(document.getElementById("root")!);
   let mounted = true;
   const pointer = async (
@@ -99,29 +96,45 @@ test("interactive pane width reports clamped layout before passive observation, 
       document.querySelector(".browser-panel-resizer")!.dispatchEvent(event),
     );
   };
+  function Fixture({
+    open,
+    fullscreen,
+  }: {
+    open: boolean;
+    fullscreen: boolean;
+  }) {
+    const [reportedWidth, setReportedWidth] = useState(0);
+    const report = useCallback((width: number) => {
+      reports.push(width);
+      setReportedWidth(width);
+    }, []);
+    return React.createElement(
+      "div",
+      { "data-reported-width": reportedWidth },
+      React.createElement(AuxiliaryPanel, {
+        threadId: "resize-test",
+        title: "Resize test",
+        open,
+        onOpenChange() {},
+        snapshot: null,
+        selectedTab: "",
+        onSelectTab() {},
+        onWidthChange: report,
+        presentationState: {
+          owner: { kind: "thread", id: "resize-test" },
+          revision: 0,
+          open,
+          fullscreen,
+          tabs: [],
+          selectedTab: null,
+          resourceThreadId: "resize-test",
+        },
+      }),
+    );
+  }
   const render = async (open = true, fullscreen = false) => {
     await act(async () =>
-      root.render(
-        React.createElement(AuxiliaryPanel, {
-          threadId: "resize-test",
-          title: "Resize test",
-          open,
-          onOpenChange() {},
-          snapshot: null,
-          selectedTab: "",
-          onSelectTab() {},
-          onWidthChange: report,
-          presentationState: {
-            owner: { kind: "thread", id: "resize-test" },
-            revision: 0,
-            open,
-            fullscreen,
-            tabs: [],
-            selectedTab: null,
-            resourceThreadId: "resize-test",
-          },
-        }),
-      ),
+      root.render(React.createElement(Fixture, { open, fullscreen })),
     );
   };
   try {
@@ -195,7 +208,16 @@ test("interactive pane width reports clamped layout before passive observation, 
       "keyboard resizing also measures actual narrower CSS layout",
     );
     cap = 390;
-    await act(async () => observer.callback());
+    await act(async () => {
+      observer.callback();
+      assert.equal(
+        document
+          .querySelector("[data-reported-width]")
+          ?.getAttribute("data-reported-width"),
+        "390",
+        "observer width commits parent layout synchronously before callback returns",
+      );
+    });
     assert.equal(
       reports.at(-1),
       390,
