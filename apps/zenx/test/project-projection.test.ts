@@ -17,6 +17,7 @@ import test from "node:test";
 import {
   projectPathKey,
   resolveProjectPath,
+  resolveProjectGitCommonDirectory,
   startConfiguredProjectThread,
   ZenXProjectProjection,
 } from "../src/main/project-projection.js";
@@ -625,7 +626,7 @@ test("ZenX file presets supply both file scope and approval policy to Thread sta
   }
 });
 
-test("real Git linked worktrees group under configured main without changing thread identity or cwd", async () => {
+test("real Git linked worktrees group under configured main without changing thread identity or cwd", async (t) => {
   const { execFileSync } = await import("node:child_process");
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-project-git-"));
   const main = path.join(root, "main");
@@ -656,7 +657,57 @@ test("real Git linked worktrees group under configured main without changing thr
     git("-C", nested, "init", "-q");
     const alias = path.join(root, "alias");
     await symlink(linked, alias, "dir");
-    const projection = new ZenXProjectProjection();
+    // Native Git correctness is independent of the sidebar's 600ms enrichment
+    // budget. Resolve the real fixture identities first, then exercise grouping
+    // with those exact results rather than requiring a loaded host to finish
+    // every subprocess before a display deadline.
+    const nativeIdentities = new Map<string, string | null>();
+    await t.test(
+      "native Git returns exact canonical common-directory identities",
+      async () => {
+        for (const candidate of [main, linked, alias, clone, nested, root]) {
+          const key = await projectPathKey(candidate);
+          if (nativeIdentities.has(key)) continue;
+          const startedAt = performance.now();
+          nativeIdentities.set(
+            key,
+            await resolveProjectGitCommonDirectory(
+              key,
+              new AbortController().signal,
+            ),
+          );
+          t.diagnostic(
+            `${path.basename(candidate)} native Git probe: ${Math.round(performance.now() - startedAt)}ms`,
+          );
+        }
+        const common = await projectPathKey(path.join(main, ".git"));
+        for (const candidate of [main, linked, alias]) {
+          assert.equal(
+            nativeIdentities.get(await projectPathKey(candidate)),
+            common,
+          );
+        }
+        for (const candidate of [clone, nested]) {
+          assert.equal(
+            nativeIdentities.get(await projectPathKey(candidate)),
+            await projectPathKey(path.join(candidate, ".git")),
+          );
+        }
+        assert.equal(nativeIdentities.get(await projectPathKey(root)), null);
+      },
+    );
+    const verifiedGitIdentity = async (candidate: string) => {
+      assert.ok(
+        nativeIdentities.has(candidate),
+        "projection queried an unknown fixture path",
+      );
+      return nativeIdentities.get(candidate)!;
+    };
+    const projection = new ZenXProjectProjection(
+      process.platform,
+      undefined,
+      verifiedGitIdentity,
+    );
     await projection.updateConfiguration([main], main, main, { [main]: "Zen" });
     const threads = [
       { id: "main-id", cwd: main },
@@ -683,7 +734,11 @@ test("real Git linked worktrees group under configured main without changing thr
     assert.deepEqual(threads, before);
     assert.equal(snapshot.lastUsedWorkspace, main);
     assert.equal(await projection.configuredWorkspace(linked), null);
-    const unconfigured = new ZenXProjectProjection();
+    const unconfigured = new ZenXProjectProjection(
+      process.platform,
+      undefined,
+      verifiedGitIdentity,
+    );
     await unconfigured.updateConfiguration([], null);
     const discovered = await unconfigured.project(threads);
     assert.deepEqual(
@@ -709,6 +764,65 @@ test("real Git linked worktrees group under configured main without changing thr
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("Git deadline aborts shared probes and cannot publish a late identity on any host", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
+  const main = path.resolve(os.tmpdir(), "project-budget-main");
+  const linked = path.resolve(os.tmpdir(), "project-budget-linked");
+  const threads = [
+    { id: "main", cwd: main },
+    { id: "linked", cwd: linked },
+  ];
+  const before = structuredClone(threads);
+  const started = deferred<void>();
+  const release = deferred<string>();
+  const signals: AbortSignal[] = [];
+  const projection = new ZenXProjectProjection(
+    process.platform,
+    async (candidate) => candidate,
+    async (_candidate, signal) => {
+      signals.push(signal);
+      if (signals.length === 2) started.resolve();
+      return await release.promise;
+    },
+  );
+  await projection.updateConfiguration([main], main);
+  const pending = Promise.all([
+    projection.project(threads),
+    projection.project(threads),
+  ]);
+  await started.promise;
+  now = 599;
+  t.mock.timers.tick(599);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.ok(signals.every((signal) => !signal.aborted));
+  now = 600;
+  t.mock.timers.tick(1);
+  const snapshots = await pending;
+  assert.equal(signals.length, 2, "concurrent reads must share one probe");
+  assert.ok(signals.every((signal) => signal.aborted));
+  for (const snapshot of snapshots) {
+    assert.equal(snapshot.projects.length, 2);
+    assert.deepEqual(
+      snapshot.projects.flatMap((project) => project.threadIds).sort(),
+      ["linked", "main"],
+    );
+  }
+  // The dependency can settle after cancellation. Neither a late success nor
+  // another immediate read may replace fallback identity or start a new wave.
+  release.resolve(path.join(main, ".git"));
+  const after = await projection.project(threads);
+  assert.equal(after.projects.length, 2);
+  assert.deepEqual(
+    after.projects.flatMap((project) => project.threadIds).sort(),
+    ["linked", "main"],
+  );
+  assert.equal(signals.length, 2);
+  assert.deepEqual(threads, before);
+  assert.equal(await projection.configuredWorkspace(linked), null);
 });
 
 test(
