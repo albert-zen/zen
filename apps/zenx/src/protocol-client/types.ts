@@ -187,6 +187,7 @@ export interface ClientRequestParams {
   "zen/thread/import": import("../../../../src/protocol/session-import.js").SessionImportCommitParams;
   "zen/turn/wake": import("../../../../src/protocol/native/wire.js").NativeHostWakeupParams;
   "zen/thread/queue/steer": import("../../../../src/protocol/native/wire.js").NativeQueueSteerParams;
+  "zen/thread/queue/reorder": import("../../../../src/protocol/native/wire.js").NativeQueueReorderParams;
   "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditParams;
   "zen/thread/steer/recall": import("../../../../src/protocol/native/wire.js").NativeSteerRecallParams;
   "zen/thread/message": import("../../../../src/protocol/native/wire.js").NativeThreadMessageParams;
@@ -301,6 +302,7 @@ export interface ClientRequestResults {
   };
   "zen/turn/wake": import("../../../../src/protocol/native/wire.js").NativeHostWakeupResult;
   "zen/thread/queue/steer": import("../../../../src/protocol/native/wire.js").NativeQueueSteerResult;
+  "zen/thread/queue/reorder": import("../../../../src/protocol/native/wire.js").NativeQueueReorderResult;
   "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditResult;
   "zen/thread/steer/recall": import("../../../../src/protocol/native/wire.js").NativeSteerRecallResult;
   "zen/thread/message": import("../../../../src/protocol/native/wire.js").NativeThreadMessageResult;

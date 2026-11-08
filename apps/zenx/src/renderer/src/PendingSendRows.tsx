@@ -1,7 +1,7 @@
 import { AttachmentImage } from "./ImagePresentation.js";
 import type { AttachmentRef } from "../../../../../src/attachment.js";
 import { parseSkillDraft } from "./skill-draft.js";
-import { referenceTitle } from "./reference-draft.js";
+import { UserMessageContent } from "./UserMessageContent.js";
 import { memo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { PendingSendPresentation } from "./composer-state.js";
@@ -42,12 +42,6 @@ export const PendingSendRows = memo(function PendingSendRows({
   };
   return messages.map((message) => {
     const draft = parseSkillDraft(message.draft.text);
-    const displayText = [
-      referenceTitle(draft.text, draft.references),
-      ...draft.skills.map((skill) => skill.name),
-    ]
-      .filter(Boolean)
-      .join("\n");
     return (
       <article
         className="user-row pending-send-row"
@@ -68,9 +62,21 @@ export const PendingSendRows = memo(function PendingSendRows({
             ))}
           </div>
         )}
-        {displayText && (
+        {(draft.text.length > 0 ||
+          draft.references.length > 0 ||
+          draft.skills.length > 0) && (
           <div className="user-bubble">
-            <p className="pending-send-content">{displayText}</p>
+            <div className="pending-send-content">
+              <UserMessageContent
+                parts={[
+                  { text: draft.text, references: draft.references },
+                  ...draft.skills.map((skill) => ({
+                    text: skill.name,
+                    references: [],
+                  })),
+                ]}
+              />
+            </div>
           </div>
         )}
         <p className="pending-send-status" role="status">

@@ -49,6 +49,8 @@ export type ItemType =
   | "turn_replacement_requested"
   | "user_message_queued"
   | "user_message_queue_cancelled"
+  | "user_message_queue_promoted"
+  | "user_message_queue_reordered"
   | "user_message_queue_edited"
   | "user_message_steer_recalled"
   | "user_message"
@@ -81,6 +83,8 @@ const CANONICAL_ITEM_TYPES = {
   turn_replacement_requested: true,
   user_message_queued: true,
   user_message_queue_cancelled: true,
+  user_message_queue_promoted: true,
+  user_message_queue_reordered: true,
   user_message_queue_edited: true,
   user_message_steer_recalled: true,
   user_message: true,
@@ -641,6 +645,23 @@ export interface QueuedUserMessageEditedItem extends ItemBase {
   input: UserInput;
 }
 
+/** One exact Queue revision becomes withdrawable Steer, not model input. */
+export interface QueuedUserMessagePromotedItem extends ItemBase {
+  type: "user_message_queue_promoted";
+  queuedItemId: string;
+  clientId: string;
+  expectedRevision: number;
+  expectedTurnId: string;
+}
+
+/** Compare the full current Queue order before applying a complete permutation. */
+export interface QueuedMessagesReorderedItem extends ItemBase {
+  type: "user_message_queue_reordered";
+  reorderId: string;
+  expectedTargets: readonly SteerRecallTarget[];
+  orderedQueuedItemIds: readonly string[];
+}
+
 /** A completed cancellation fact; the original queued input stays in history. */
 export interface QueuedUserMessageCancelledItem extends ItemBase {
   type: "user_message_queue_cancelled";
@@ -681,6 +702,8 @@ export type CanonicalItem =
   | QueuedUserMessageItem
   | QueuedUserMessageCancelledItem
   | QueuedUserMessageEditedItem
+  | QueuedUserMessagePromotedItem
+  | QueuedMessagesReorderedItem
   | SteerRecalledItem
   | ThreadMetadataItem
   | ThreadForkedItem
@@ -1242,6 +1265,55 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
         throw new Error("Only staged steer may bind an expected Turn");
       }
       break;
+    case "user_message_queue_promoted":
+      requireNoTurnId(item);
+      requireNonEmptyString(item.queuedItemId, `${type}.queuedItemId`);
+      requireNonEmptyString(item.clientId, `${type}.clientId`);
+      requireNonEmptyString(item.expectedTurnId, `${type}.expectedTurnId`);
+      requireSafeInteger(item.expectedRevision, `${type}.expectedRevision`);
+      if (
+        (item.expectedRevision as number) < 0 ||
+        item.expectedRevision === Number.MAX_SAFE_INTEGER
+      )
+        throw new Error("Promotion requires an incrementable revision");
+      break;
+    case "user_message_queue_reordered": {
+      requireNoTurnId(item);
+      requireNonEmptyString(item.reorderId, `${type}.reorderId`);
+      if (
+        !Array.isArray(item.expectedTargets) ||
+        item.expectedTargets.length < 1
+      )
+        throw new Error("Reorder requires a nonempty exact snapshot");
+      const ids = new Set<string>();
+      const clients = new Set<string>();
+      for (const value of item.expectedTargets) {
+        const target = requireRecord(value, "reorder target");
+        const id = requireNonEmptyString(target.queuedItemId, "queuedItemId");
+        const client = requireNonEmptyString(target.clientId, "clientId");
+        requireSafeInteger(target.expectedRevision, "expectedRevision");
+        if (
+          (target.expectedRevision as number) < 0 ||
+          ids.has(id) ||
+          clients.has(client)
+        )
+          throw new Error(
+            "Reorder targets require distinct identities and nonnegative revisions",
+          );
+        ids.add(id);
+        clients.add(client);
+      }
+      if (
+        !Array.isArray(item.orderedQueuedItemIds) ||
+        item.orderedQueuedItemIds.length !== ids.size ||
+        new Set(item.orderedQueuedItemIds).size !== ids.size ||
+        item.orderedQueuedItemIds.some(
+          (id: unknown) => typeof id !== "string" || !ids.has(id),
+        )
+      )
+        throw new Error("Reorder must be a complete Queue permutation");
+      break;
+    }
     case "user_message_steer_recalled": {
       requireNoTurnId(item);
       requireNonEmptyString(item.recallId, `${type}.recallId`);

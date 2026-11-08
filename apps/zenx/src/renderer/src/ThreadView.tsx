@@ -5,7 +5,10 @@ import {
 } from "./use-thread-history-pages.js";
 import { flushSync } from "react-dom";
 import { abandonDraftImage } from "./draft-image-lifecycle.js";
-import { AnsweredQuestionBubble } from "./AnsweredQuestionBubble.js";
+import {
+  MessageQuoteSourceContext,
+  UserMessageContent,
+} from "./UserMessageContent.js";
 import {
   indexAnsweredQuestions,
   type AnsweredQuestionPresentation,
@@ -22,6 +25,15 @@ import {
   type VirtualTranscriptHandle,
 } from "./ExperimentalTranscriptViewport.js";
 import { useCommittedCallback } from "./use-committed-callback.js";
+import {
+  createQueueMutationStore,
+  queueMutationObserved,
+  QueueMutationUnknownError,
+  type QueueMutationStore,
+  type QueueMutationSession,
+} from "./queue-mutation-state.js";
+import { checkQueuedSteer } from "./queue-steer-request.js";
+import { checkQueuedReorder } from "./queue-reorder-request.js";
 import { PendingSendRows } from "./PendingSendRows.js";
 import { indexTurnOutcomeItems } from "./turn-outcome-index.js";
 import { PendingSteerPanel } from "./PendingSteerPanel.js";
@@ -115,6 +127,8 @@ import {
 } from "../../../../../src/turn-end.js";
 import { pendingQueuedMessages } from "../../../../../src/input-queue.js";
 import type {
+  NativeQueueReorderParams,
+  NativeQueueReorderResult,
   NativeQueueSteerParams,
   NativeQueueSteerResult,
   NativeQueueEditParams,
@@ -288,10 +302,6 @@ const CanonicalMessageForkContext = createContext<{
   isCurrent(itemId: string): boolean;
 } | null>(null);
 
-const MessageQuoteSourceContext = createContext<
-  ((quote: SentMessageQuote) => boolean) | null
->(null);
-
 const CanonicalQuoteItemsContext = createContext<
   ReadonlyMap<string, readonly CanonicalItem[]>
 >(new Map());
@@ -357,6 +367,11 @@ interface ThreadViewProps {
     message: string;
   } | null;
   onResumeQueue?(): Promise<void>;
+  queueMutationStore?: QueueMutationStore;
+  onReorderQueued?(
+    params: NativeQueueReorderParams,
+  ): Promise<NativeQueueReorderResult>;
+  onQueueMutationRecovered?(threadId: string): void;
   onSteerQueued?(
     params: NativeQueueSteerParams,
   ): Promise<NativeQueueSteerResult>;
@@ -631,6 +646,9 @@ function ThreadViewContent({
   queueFailure: suppliedQueueFailure = null,
   onResumeQueue,
   onSteerQueued,
+  onReorderQueued,
+  onQueueMutationRecovered,
+  queueMutationStore: suppliedQueueMutationStore,
   onCancelQueued,
   onEditQueued,
   queueEditStore,
@@ -716,7 +734,29 @@ function ThreadViewContent({
   currentQueueFailureRef.current = queueFailure;
   const cancelLocks = useRef(new Map<string, Set<string>>());
   const resumeLocks = useRef(new Set<string>());
-  const steerLocks = useRef(new Map<string, Set<string>>());
+  const [localQueueMutationStore] = useState(createQueueMutationStore);
+  const queueMutationStore =
+    suppliedQueueMutationStore ?? localQueueMutationStore;
+  const queueMutations = useSyncExternalStore(
+    queueMutationStore.subscribe,
+    queueMutationStore.getSnapshot,
+    queueMutationStore.getSnapshot,
+  );
+  const queueMutation = thread ? queueMutations[thread.id] : undefined;
+  const queueMutationBusy = (threadId: string) =>
+    queueMutationStore.getSnapshot()[threadId] !== undefined;
+  useEffect(() => {
+    if (
+      thread &&
+      queueMutation &&
+      queueMutationObserved(queueMutation, thread.canonicalItems ?? [])
+    )
+      queueMutationStore.set(thread.id, null);
+  }, [thread?.id, thread?.canonicalItems, queueMutation, queueMutationStore]);
+  const [queueReorderError, setQueueReorderError] = useState<{
+    threadId: string;
+    message: string;
+  } | null>(null);
   const [queueSteerError, setQueueSteerError] = useState<{
     threadId: string;
     queuedItemId: string;
@@ -753,6 +793,10 @@ function ThreadViewContent({
       }
     };
   }, [editStore, thread?.id]);
+  const pendingAnswers = useMemo(
+    () => indexAnsweredQuestions(thread?.canonicalItems ?? []),
+    [thread?.canonicalItems],
+  );
   const nativeQueue = useMemo(
     () => pendingQueuedMessages(thread?.canonicalItems ?? []),
     [thread?.canonicalItems],
@@ -1612,32 +1656,176 @@ function ThreadViewContent({
       resumeLocks.current.has(thread.id) ||
       editLocks.current.has(thread.id) ||
       editStore.isPending(thread.id) ||
-      steerLocks.current.has(thread.id)
+      queueMutationBusy(thread.id)
     )
       return;
     const threadId = thread.id;
-    steerLocks.current.set(threadId, new Set([message.id]));
-    setQueueSteerError(null);
-    invalidateQueue((n) => n + 1);
-    try {
-      await onSteerQueued({
+    const attempt: QueueMutationSession = {
+      kind: "steer",
+      phase: "pending",
+      params: {
         threadId,
         queuedItemId: message.id,
         clientId: message.clientId,
         expectedRevision: message.revision ?? 0,
-      });
+      },
+    };
+    queueMutationStore.set(threadId, attempt);
+    setQueueSteerError(null);
+    try {
+      const result = await onSteerQueued(attempt.params);
+      if (queueMutationStore.getSnapshot()[threadId]?.params === attempt.params)
+        queueMutationStore.set(threadId, {
+          ...attempt,
+          phase: "confirmed",
+          result,
+        });
     } catch (error) {
-      if (currentThreadRef.current === threadId)
-        setQueueSteerError({
-          threadId,
-          queuedItemId: message.id,
-          revision: message.revision ?? 0,
-          message: describeError(error),
+      if (queueMutationStore.getSnapshot()[threadId]?.params !== attempt.params)
+        return;
+      if (error instanceof QueueMutationUnknownError)
+        queueMutationStore.set(threadId, {
+          ...attempt,
+          phase: "unknown",
+          error: describeError(error),
           detail: errorCauseDetail(error),
         });
-    } finally {
-      steerLocks.current.delete(threadId);
-      invalidateQueue((n) => n + 1);
+      else {
+        queueMutationStore.set(threadId, null);
+        if (currentThreadRef.current === threadId)
+          setQueueSteerError({
+            threadId,
+            queuedItemId: message.id,
+            revision: message.revision ?? 0,
+            message: describeError(error),
+            detail: errorCauseDetail(error),
+          });
+      }
+    }
+  };
+  const reorderQueued = async (
+    message: { id: string; clientId: string },
+    direction: -1 | 1,
+  ) => {
+    if (
+      !thread ||
+      !onReorderQueued ||
+      composerDisabled ||
+      currentThreadRef.current !== thread.id ||
+      queueMutationBusy(thread.id) ||
+      cancelLocks.current.has(thread.id) ||
+      resumeLocks.current.has(thread.id) ||
+      editLocks.current.has(thread.id) ||
+      editStore.isPending(thread.id)
+    )
+      return;
+    const queue = nativeQueue.filter(
+      (item) => !pendingSteer.some((steer) => steer.id === item.id),
+    );
+    if (
+      queue.length !== thread.queuedMessages?.length ||
+      !queue.every(
+        (item, index) =>
+          item.id === thread.queuedMessages![index]?.id &&
+          item.clientId === thread.queuedMessages![index]?.clientId,
+      )
+    )
+      return;
+    const index = queue.findIndex(
+      (item) => item.id === message.id && item.clientId === message.clientId,
+    );
+    const destination = index + direction;
+    if (index < 0 || destination < 0 || destination >= queue.length) return;
+    const order = queue.map((item) => item.id);
+    [order[index], order[destination]] = [order[destination]!, order[index]!];
+    const attempt: QueueMutationSession = {
+      kind: "reorder",
+      phase: "pending",
+      params: {
+        threadId: thread.id,
+        reorderId: crypto.randomUUID(),
+        expectedTargets: queue.map((item) => ({
+          queuedItemId: item.id,
+          clientId: item.clientId,
+          expectedRevision: item.revision,
+        })),
+        orderedQueuedItemIds: order,
+      },
+    };
+    const threadId = thread.id;
+    queueMutationStore.set(threadId, attempt);
+    setQueueReorderError(null);
+    try {
+      const result = await onReorderQueued(attempt.params);
+      if (queueMutationStore.getSnapshot()[threadId]?.params === attempt.params)
+        queueMutationStore.set(threadId, {
+          ...attempt,
+          phase: "confirmed",
+          result,
+        });
+    } catch (error) {
+      if (queueMutationStore.getSnapshot()[threadId]?.params !== attempt.params)
+        return;
+      if (error instanceof QueueMutationUnknownError)
+        queueMutationStore.set(threadId, {
+          ...attempt,
+          phase: "unknown",
+          error: describeError(error),
+          detail: errorCauseDetail(error),
+        });
+      else {
+        queueMutationStore.set(threadId, null);
+        if (currentThreadRef.current === threadId)
+          setQueueReorderError({ threadId, message: describeError(error) });
+      }
+    }
+  };
+  const checkQueueMutation = async () => {
+    if (!thread) return;
+    const attempt = queueMutationStore.getSnapshot()[thread.id];
+    if (!attempt || attempt.phase === "pending" || attempt.phase === "checking")
+      return;
+    const recovered = () => onQueueMutationRecovered?.(attempt.params.threadId);
+    queueMutationStore.set(thread.id, { ...attempt, phase: "checking" });
+    try {
+      if (attempt.kind === "steer") {
+        const result = await checkQueuedSteer(attempt.params, recovered);
+        if (
+          queueMutationStore.getSnapshot()[attempt.params.threadId]?.params ===
+          attempt.params
+        )
+          queueMutationStore.set(attempt.params.threadId, {
+            ...attempt,
+            phase: "confirmed",
+            error: undefined,
+            detail: undefined,
+            result,
+          });
+      } else {
+        const result = await checkQueuedReorder(attempt.params, recovered);
+        if (
+          queueMutationStore.getSnapshot()[attempt.params.threadId]?.params ===
+          attempt.params
+        )
+          queueMutationStore.set(attempt.params.threadId, {
+            ...attempt,
+            phase: "confirmed",
+            error: undefined,
+            detail: undefined,
+            result,
+          });
+      }
+    } catch (error) {
+      if (
+        queueMutationStore.getSnapshot()[attempt.params.threadId]?.params ===
+        attempt.params
+      )
+        queueMutationStore.set(attempt.params.threadId, {
+          ...attempt,
+          phase: "unknown",
+          error: describeError(error),
+          detail: errorCauseDetail(error),
+        });
     }
   };
   const cancelQueued = async (targets: readonly QueuedCancellationTarget[]) => {
@@ -1647,7 +1835,7 @@ function ThreadViewContent({
       composerDisabled ||
       currentThreadRef.current !== thread.id ||
       targets.length === 0 ||
-      steerLocks.current.has(thread.id) ||
+      queueMutationBusy(thread.id) ||
       cancelLocks.current.has(thread.id) ||
       resumeLocks.current.has(thread.id) ||
       editLocks.current.has(thread.id) ||
@@ -1689,7 +1877,7 @@ function ThreadViewContent({
       composerDisabled ||
       runningTurn !== null ||
       currentThreadRef.current !== thread.id ||
-      steerLocks.current.has(thread.id) ||
+      queueMutationBusy(thread.id) ||
       resumeLocks.current.has(thread.id) ||
       cancelLocks.current.has(thread.id) ||
       editLocks.current.has(thread.id) ||
@@ -1980,17 +2168,6 @@ function ThreadViewContent({
               }
               footer={
                 <>
-                  {composer.pendingSends && (
-                    <PendingSendRows
-                      key={thread?.id ?? composerId}
-                      messages={composer.pendingSends}
-                      onReadAttachment={onReadAttachment}
-                      onOpenImage={onOpenPendingImage}
-                      onRecover={onRecoverPendingSend}
-                      onDismiss={onDismissPendingSend}
-                      onCheck={onCheckPendingSends}
-                    />
-                  )}
                   {composer.compaction?.status === "pending" ? (
                     <ContextCompactionProgress state={composer.compaction} />
                   ) : null}
@@ -2095,17 +2272,6 @@ function ThreadViewContent({
                     {renderedTranscriptRows}
                   </div>
                 )}
-                {composer.pendingSends && (
-                  <PendingSendRows
-                    key={thread?.id ?? composerId}
-                    messages={composer.pendingSends}
-                    onReadAttachment={onReadAttachment}
-                    onOpenImage={onOpenPendingImage}
-                    onRecover={onRecoverPendingSend}
-                    onDismiss={onDismissPendingSend}
-                    onCheck={onCheckPendingSends}
-                  />
-                )}
                 {composer.compaction?.status === "pending" ? (
                   <ContextCompactionProgress state={composer.compaction} />
                 ) : null}
@@ -2184,168 +2350,252 @@ function ThreadViewContent({
             onRespond={respondToApproval}
           />
         ))}
-        {thread ? (
-          <QueuedMessages
-            threadId={thread.id}
-            messages={thread.queuedMessages ?? []}
-            attachments={queuedImages}
-            onReadAttachment={readQueuedImage}
-            onOpenImage={(message, attachment, name, trigger) => {
-              if (
-                currentThreadRef.current !== thread.id ||
-                !thread.queuedMessages?.some(
-                  (current) =>
-                    current.id === message.id &&
-                    current.clientId === message.clientId,
-                ) ||
-                !queuedImages[message.id]?.some((image) =>
-                  sameImageAttachment(image, attachment),
-                )
-              )
-                return;
-              setPreview({
-                attachment,
-                name,
-                trigger,
-                queueOwner: {
-                  threadId: thread.id,
-                  queuedItemId: message.id,
-                  clientId: message.clientId,
-                },
-              });
-            }}
-            running={runningTurn !== null}
-            waitsForTurnEnd={queueWaitsForTurnEnd}
-            steeringIds={steerLocks.current.get(thread.id)}
-            onSteer={
-              onSteerQueued ? (message) => void steerQueued(message) : undefined
-            }
-            steerError={
-              queueSteerError?.threadId === thread.id ? queueSteerError : null
-            }
-            queueFailure={queueFailure}
-            pendingIds={cancelLocks.current.get(thread.id)}
-            busy={
-              cancelingQueue ||
-              editingQueue ||
-              steerLocks.current.has(thread.id) ||
-              composerDisabled
-            }
-            editableIds={new Set(editableQueue.keys())}
-            editingIds={
-              new Set(
-                Object.values(editSessions)
-                  .filter(
-                    (session) =>
-                      session.threadId === thread.id && session.pending,
-                  )
-                  .map((session) => session.queuedItemId),
-              )
-            }
-            onEdit={
-              onEditQueued
-                ? (target, trigger) => {
-                    const candidate = editableQueue.get(target.id);
-                    const key = JSON.stringify([
-                      thread.id,
-                      target.id,
-                      target.clientId,
-                    ]);
-                    const previous = editSessionsRef.current[key];
-                    const inspectingPending = previous?.pending === true;
+        <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
+          <MessageQuoteSourceContext.Provider value={navigateQuoteSource}>
+            <div
+              className="pending-tray"
+              role="region"
+              aria-label={i18n.t("shell:pendingTray")}
+              key={`pending:${thread?.id ?? composerId}`}
+            >
+              {thread?.canonicalItems ? (
+                <PendingSteerPanel
+                  integrated
+                  key={`steer-recall:${thread.id}`}
+                  threadId={thread.id}
+                  items={thread.canonicalItems}
+                  pending={pendingSteer}
+                  runningTurnId={runningTurn?.id ?? null}
+                  store={steerRecallStore}
+                  onRestore={onRestoreRecalled}
+                  onReadAttachment={onReadAttachment}
+                />
+              ) : null}
+              {composer.pendingSends?.length ? (
+                <PendingSendRows
+                  key={thread?.id ?? composerId}
+                  messages={composer.pendingSends}
+                  onReadAttachment={onReadAttachment}
+                  onOpenImage={onOpenPendingImage}
+                  onRecover={onRecoverPendingSend}
+                  onDismiss={onDismissPendingSend}
+                  onCheck={onCheckPendingSends}
+                />
+              ) : null}
+              {queueMutation ? (
+                <div className="queue-mutation-status" role="status">
+                  <p>
+                    {queueMutation.phase === "checking"
+                      ? i18n.t("shell:queueMutationChecking")
+                      : (queueMutation.error ??
+                        i18n.t(
+                          queueMutation.phase === "pending"
+                            ? "shell:queueMutationPending"
+                            : "shell:queueMutationAwaitingUpdate",
+                        ))}
+                  </p>
+                  {queueMutation.detail ? (
+                    <details>
+                      <summary>{i18n.t("shell:technicalDetails")}</summary>
+                      <pre>{queueMutation.detail}</pre>
+                    </details>
+                  ) : null}
+                  {queueMutation.phase !== "pending" &&
+                  queueMutation.phase !== "checking" ? (
+                    <button
+                      type="button"
+                      className="quiet-button"
+                      onClick={() => void checkQueueMutation()}
+                    >
+                      {i18n.t("shell:queueMutationCheck")}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+              {queueReorderError?.threadId === thread?.id ? (
+                <p className="queue-row-error" role="alert">
+                  {queueReorderError?.message}
+                </p>
+              ) : null}
+              {thread ? (
+                <QueuedMessages
+                  integrated
+                  threadId={thread.id}
+                  messages={(thread.queuedMessages ?? []).map((message) => ({
+                    ...message,
+                    answer: pendingAnswers.get(message.id),
+                  }))}
+                  attachments={queuedImages}
+                  onReadAttachment={readQueuedImage}
+                  onOpenImage={(message, attachment, name, trigger) => {
                     if (
-                      !candidate ||
-                      candidate.item.clientId !== target.clientId ||
                       currentThreadRef.current !== thread.id ||
-                      (!inspectingPending &&
-                        (composerDisabled ||
-                          steerLocks.current.has(thread.id) ||
-                          cancelingQueue ||
-                          resumingQueue ||
-                          editStore.isPending(thread.id))) ||
-                      (previous?.owner !== undefined &&
-                        previous.owner !== editOwner.current)
+                      !thread.queuedMessages?.some(
+                        (current) =>
+                          current.id === message.id &&
+                          current.clientId === message.clientId,
+                      ) ||
+                      !queuedImages[message.id]?.some((image) =>
+                        sameImageAttachment(image, attachment),
+                      )
                     )
                       return;
-                    updateEditSession(
-                      key,
-                      previous && !observedEdit(previous)
-                        ? { ...previous, trigger, owner: editOwner.current }
-                        : {
-                            owner: editOwner.current,
-                            identity: JSON.stringify([
-                              key,
-                              candidate.item.revision,
-                            ]),
-                            threadId: thread.id,
-                            queuedItemId: target.id,
-                            clientId: target.clientId,
-                            expectedRevision: candidate.item.revision,
-                            draft: candidate.draft,
-                            trigger,
-                            pending: false,
-                            error: null,
-                          },
-                    );
-                    setOpenEditKey(key);
-                  }
-                : undefined
-            }
-            resuming={resumingQueue}
-            resumeError={visibleResumeError}
-            compact={pendingApprovals.length > 0}
-            onCancel={
-              onCancelQueued
-                ? (target) => void cancelQueued([target])
-                : undefined
-            }
-            onCancelAll={
-              onCancelQueued
-                ? (trigger) =>
-                    setCancelConfirmation({
-                      threadId: thread.id,
+                    setPreview({
+                      attachment,
+                      name,
                       trigger,
-                      targets: (thread.queuedMessages ?? []).map((message) => ({
+                      queueOwner: {
+                        threadId: thread.id,
                         queuedItemId: message.id,
                         clientId: message.clientId,
-                      })),
-                      previews: (thread.queuedMessages ?? []).map((message) =>
-                        [
-                          message.text,
-                          message.imageCount > 0
-                            ? i18n.t("shell:imageCount", {
-                                count: message.imageCount,
-                              })
-                            : "",
-                        ]
-                          .filter(Boolean)
-                          .join(" · "),
-                      ),
-                    })
-                : undefined
-            }
-            onResume={
-              runningTurn === null && onResumeQueue
-                ? () => void resumeQueue()
-                : undefined
-            }
-            focusComposer={() =>
-              composerTextareaRef.current?.focus({ preventScroll: true })
-            }
-          />
-        ) : null}
-        {thread?.canonicalItems ? (
-          <PendingSteerPanel
-            key={`steer-recall:${thread.id}`}
-            threadId={thread.id}
-            items={thread.canonicalItems}
-            pending={pendingSteer}
-            runningTurnId={runningTurn?.id ?? null}
-            store={steerRecallStore}
-            onRestore={onRestoreRecalled}
-            onReadAttachment={onReadAttachment}
-          />
-        ) : null}
+                      },
+                    });
+                  }}
+                  running={runningTurn !== null}
+                  waitsForTurnEnd={queueWaitsForTurnEnd}
+                  steeringPhase={queueMutation?.phase}
+                  steeringIds={
+                    queueMutation?.kind === "steer"
+                      ? new Set([queueMutation.params.queuedItemId])
+                      : undefined
+                  }
+                  onMove={
+                    onReorderQueued
+                      ? (message, direction) =>
+                          void reorderQueued(message, direction)
+                      : undefined
+                  }
+                  onSteer={
+                    onSteerQueued
+                      ? (message) => void steerQueued(message)
+                      : undefined
+                  }
+                  steerError={
+                    queueSteerError?.threadId === thread.id
+                      ? queueSteerError
+                      : null
+                  }
+                  queueFailure={queueFailure}
+                  pendingIds={cancelLocks.current.get(thread.id)}
+                  busy={
+                    cancelingQueue ||
+                    editingQueue ||
+                    queueMutationBusy(thread.id) ||
+                    composerDisabled
+                  }
+                  editableIds={new Set(editableQueue.keys())}
+                  editingIds={
+                    new Set(
+                      Object.values(editSessions)
+                        .filter(
+                          (session) =>
+                            session.threadId === thread.id && session.pending,
+                        )
+                        .map((session) => session.queuedItemId),
+                    )
+                  }
+                  onEdit={
+                    onEditQueued
+                      ? (target, trigger) => {
+                          const candidate = editableQueue.get(target.id);
+                          const key = JSON.stringify([
+                            thread.id,
+                            target.id,
+                            target.clientId,
+                          ]);
+                          const previous = editSessionsRef.current[key];
+                          const inspectingPending = previous?.pending === true;
+                          if (
+                            !candidate ||
+                            candidate.item.clientId !== target.clientId ||
+                            currentThreadRef.current !== thread.id ||
+                            (!inspectingPending &&
+                              (composerDisabled ||
+                                queueMutationBusy(thread.id) ||
+                                cancelingQueue ||
+                                resumingQueue ||
+                                editStore.isPending(thread.id))) ||
+                            (previous?.owner !== undefined &&
+                              previous.owner !== editOwner.current)
+                          )
+                            return;
+                          updateEditSession(
+                            key,
+                            previous && !observedEdit(previous)
+                              ? {
+                                  ...previous,
+                                  trigger,
+                                  owner: editOwner.current,
+                                }
+                              : {
+                                  owner: editOwner.current,
+                                  identity: JSON.stringify([
+                                    key,
+                                    candidate.item.revision,
+                                  ]),
+                                  threadId: thread.id,
+                                  queuedItemId: target.id,
+                                  clientId: target.clientId,
+                                  expectedRevision: candidate.item.revision,
+                                  draft: candidate.draft,
+                                  trigger,
+                                  pending: false,
+                                  error: null,
+                                },
+                          );
+                          setOpenEditKey(key);
+                        }
+                      : undefined
+                  }
+                  resuming={resumingQueue}
+                  resumeError={visibleResumeError}
+                  compact={pendingApprovals.length > 0}
+                  onCancel={
+                    onCancelQueued
+                      ? (target) => void cancelQueued([target])
+                      : undefined
+                  }
+                  onCancelAll={
+                    onCancelQueued
+                      ? (trigger) =>
+                          setCancelConfirmation({
+                            threadId: thread.id,
+                            trigger,
+                            targets: (thread.queuedMessages ?? []).map(
+                              (message) => ({
+                                queuedItemId: message.id,
+                                clientId: message.clientId,
+                              }),
+                            ),
+                            previews: (thread.queuedMessages ?? []).map(
+                              (message) =>
+                                [
+                                  message.text,
+                                  message.imageCount > 0
+                                    ? i18n.t("shell:imageCount", {
+                                        count: message.imageCount,
+                                      })
+                                    : "",
+                                ]
+                                  .filter(Boolean)
+                                  .join(" · "),
+                            ),
+                          })
+                      : undefined
+                  }
+                  onResume={
+                    runningTurn === null && onResumeQueue
+                      ? () => void resumeQueue()
+                      : undefined
+                  }
+                  focusComposer={() =>
+                    composerTextareaRef.current?.focus({ preventScroll: true })
+                  }
+                />
+              ) : null}
+            </div>
+          </MessageQuoteSourceContext.Provider>
+        </MessageLinkContext.Provider>
         {composer.compaction?.status === "failed" ||
         (composer.compaction?.status === "succeeded" &&
           composer.compaction.detail) ? (
@@ -4572,28 +4822,19 @@ function InputMessage({
       )}
       {(presented.text.length > 0 || presented.references.length > 0) && (
         <div className="user-bubble" data-thread-find-item-id={item.id}>
-          {answeredQuestion ? (
-            <AnsweredQuestionBubble key={item.id} answer={answeredQuestion} />
-          ) : presented.references.length > 0 ? (
-            presentation.map((part, index) => (
-              <InlineReferenceContent
-                key={index}
-                text={part.text}
-                references={part.references}
-                onSource={(reference) =>
-                  reference.kind === "message" &&
-                  (navigateQuoteSource
-                    ? navigateQuoteSource(reference)
-                    : goToMessageQuoteSource(
-                        article.current?.closest(".thread-view") ?? null,
-                        reference,
-                      ))
-                }
-              />
-            ))
-          ) : (
-            <Markdown text={presented.text} />
-          )}
+          <UserMessageContent
+            parts={presentation}
+            answer={answeredQuestion}
+            onSource={(reference) =>
+              reference.kind === "message" &&
+              (navigateQuoteSource
+                ? navigateQuoteSource(reference)
+                : goToMessageQuoteSource(
+                    article.current?.closest(".thread-view") ?? null,
+                    reference,
+                  ))
+            }
+          />
         </div>
       )}
       <MessageActions

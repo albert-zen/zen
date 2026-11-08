@@ -373,6 +373,14 @@ export const en = {
   queueSendMessageNow: "Send queued message {{number}} now",
   queueSteeringMessage: "Sending queued message {{number}}",
   queueSteering: "Sending…",
+  queueSteerUnknown: "Unconfirmed",
+  queueSteerChecking: "Checking…",
+  queueSteerAccepted: "Accepted",
+  queueSteerUnknownMessage: "Queued message {{number}} is unconfirmed",
+  queueSteerCheckingMessage: "Checking queued message {{number}}",
+  queueSteerAcceptedMessage:
+    "Accepted queued message {{number}}, waiting for update",
+  queueMutationChecking: "Checking pending messages…",
   queueSteerHint:
     "Send now; join current work at the next safe point without interrupting",
   queueSendNow: "Send now",
@@ -969,6 +977,18 @@ export const en = {
   imageCount_one: "{{count}} image",
   imageCount_other: "{{count}} images",
   notDelivered: "Not delivered ({{code}}):",
+  pendingTray: "Pending messages",
+  queueMoveUp: "Move queued message {{number}} up",
+  queueMoveDown: "Move queued message {{number}} down",
+  queueReorderUnconfirmed:
+    "Order change is unconfirmed. Actions stay locked until a read confirms the outcome.",
+  queueReorderConflict:
+    "The queue changed or a message is already starting. Refresh the queue before reordering.",
+  queueMutationPending: "Updating pending messages…",
+  queueMutationAwaitingUpdate:
+    "Request accepted. Waiting for the pending messages to update.",
+  queueMutationCheck: "Check pending messages",
+
   cancelTheseQueuedMessages: "Cancel these {{count}} queued messages…",
   continueQueue: "Continue queue",
   cancelQueuedMessagesQuestion: "Cancel {{count}} queued messages?",
@@ -1448,6 +1468,13 @@ export const zhCN = {
   queueSendMessageNow: "立即发送第 {{number}} 条待发送消息",
   queueSteeringMessage: "正在发送第 {{number}} 条待发送消息",
   queueSteering: "正在发送…",
+  queueSteerUnknown: "尚未确认",
+  queueSteerChecking: "正在核实…",
+  queueSteerAccepted: "已接收",
+  queueSteerUnknownMessage: "第 {{number}} 条待发送消息尚未确认",
+  queueSteerCheckingMessage: "正在核实第 {{number}} 条待发送消息",
+  queueSteerAcceptedMessage: "第 {{number}} 条待发送消息已接收，等待列表更新",
+  queueMutationChecking: "正在核实待发送消息…",
   queueSteerHint: "立即发送，在下一个安全节点加入当前执行（不中断）",
   queueSendNow: "立即发送",
   queueSteerUnconfirmed:
@@ -2016,6 +2043,15 @@ export const zhCN = {
   imageCount_one: "{{count}} 张图片",
   imageCount_other: "{{count}} 张图片",
   notDelivered: "未送达（{{code}}）：",
+  pendingTray: "待发送消息",
+  queueMoveUp: "上移第 {{number}} 条排队消息",
+  queueMoveDown: "下移第 {{number}} 条排队消息",
+  queueReorderUnconfirmed: "顺序变更结果未知，读取确认前暂时锁定操作。",
+  queueReorderConflict: "队列已变化，或消息已开始处理。请刷新后再排序。",
+  queueMutationPending: "正在更新待发送消息…",
+  queueMutationAwaitingUpdate: "请求已接收，等待待发送消息更新。",
+  queueMutationCheck: "检查待发送消息",
+
   cancelTheseQueuedMessages: "取消这 {{count}} 条排队消息…",
   continueQueue: "继续队列",
   cancelQueuedMessagesQuestion: "取消 {{count}} 条排队消息？",

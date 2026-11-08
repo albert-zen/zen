@@ -123,6 +123,10 @@ Reconstruction is being landed in independently tested source checkpoints. The d
 
 ## 核心概念
 
+- **Pending input controls** — Host 从原始 queued 输入与精确版本的晋升、重排控制事实派生统一待发送区；用户 Queue 晋升追加到 Steer 尾部，直到同一 mutation boundary 的模型采样接纳前仍可撤回，重排用当前有序快照比较后持久化完整排列，不改变身份、正文或语义 ItemList。
+
+- **Queue mutation feedback** — ZenX 只在 App 内按 Thread 暂存精确晋升/重排请求及传输结果锁，canonical 控制回执仍是顺序与消费的唯一权威；未知结果仅允许读取核对，不乐观改序、重发写入或恢复另一份队列。
+
 - **Image Input Preparation** — Host 在模型采样前将已授权不可变原图按版本化单图尺寸/patch profile 准备为独立附件，并先持久化绑定 sample、selection 与原 occurrence 的视图和明确 notice；唯一 ItemList compiler 在原位置选择已存视图并保留原 occurrence，原始 AttachmentRef 与访问权限不变；只有明确的内存 codec 失败写入稳定类别、无像素的 unavailable 占位，其 notice 由无 codec 依赖的同一安全模板生成并严格解码校验，附件存储/身份故障仍阻断；只读预算估计仅按精确 occurrence、profile/detail 与能力复用已有 codec receipt 的数值成本，不触发隐式解码/存储或替代新 sample 的准备，未知 Provider 限额不推测、不设默认图片数量或总字节删除策略。
 
 - **Bound user MCP adapter** — An explicitly composed stdio MCP server projects a fixed Thread/Room owner's existing Host tools; the exact AgentRuntime ToolEnvironment admission, existing async approval protocol, current membership and CAS remain authoritative, connection revocation is one-way, typed facade references (including layout cursors/widgets) are enveloped per connection without rewriting authored text, and all adapter state is disposable, with no second AppServer, transcript, execution journal or saved connection configuration.

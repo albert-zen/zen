@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Sidebar } from "../../src/renderer/src/Sidebar.js";
 import { MessageSourceNavigationContext } from "../../src/renderer/src/message-source-navigation.js";
@@ -6,6 +6,27 @@ import { ThreadView } from "../../src/renderer/src/ThreadView.js";
 import { ThreadReadingStateProvider } from "../../src/renderer/src/thread-reading-state.js";
 import { Icon } from "../../src/renderer/src/icons.js";
 import { emptyComposerState } from "../../src/renderer/src/composer-state.js";
+import { requestQueuedSteer } from "../../src/renderer/src/queue-steer-request.js";
+import { requestQueuedReorder } from "../../src/renderer/src/queue-reorder-request.js";
+import { createQueueMutationStore } from "../../src/renderer/src/queue-mutation-state.js";
+import {
+  createSteerRecallStore,
+  restoreRecalledComposer,
+} from "../../src/renderer/src/steer-recall-state.js";
+import {
+  pendingSteerMessages,
+  recoverSteerRecall,
+} from "../../../../src/steer-recall.js";
+import {
+  parseUserQuestionSpecification,
+  renderUserQuestionReply,
+} from "../../../../src/user-question.js";
+import { referenceMessage } from "../../src/renderer/src/reference-draft.js";
+import {
+  queueImageAttachments,
+  readQueueFixtureImage,
+} from "./agent-queue-images.js";
+import type { CanonicalItem } from "../../../../src/item.js";
 import {
   runtimeMessage,
   runtimeThread,
@@ -111,18 +132,95 @@ initial = applyQueueItem(initial, {
   deliveryMode: "steer",
   expectedTurnId: "runtime-turn",
 });
-if (params.has("many"))
+if (params.has("many")) {
+  for (let index = 1; index <= 5; index++)
+    initial = applyQueueItem(
+      initial,
+      queueItem(index, [
+        {
+          type: "text",
+          text: zh
+            ? `第 ${index} 项：补齐验证结论，保留草稿，不要发布。`
+            : `Check ${index}: preserve the draft and report the verified results without publishing.`,
+        },
+      ]),
+    );
+}
+if (params.has("rich")) {
+  const specification = parseUserQuestionSpecification({
+    questions: [
+      {
+        id: "scope",
+        prompt: zh
+          ? "这次需要检查哪些部分？"
+          : "Which areas should be checked?",
+        options: [
+          { id: "layout", label: zh ? "窄窗布局" : "Narrow layout" },
+          { id: "delivery", label: zh ? "消息投递" : "Message delivery" },
+        ],
+        multiSelect: true,
+      },
+    ],
+  });
+  const reply = {
+    version: 1 as const,
+    outcome: "answer" as const,
+    request: { threadId: initial.id, callItemId: "synthetic-question" },
+    answers: [
+      {
+        questionId: "scope",
+        optionIds: ["layout", "delivery"],
+        text: zh
+          ? "保留 **原文**，不发布。"
+          : "Keep **literal text**. Do not publish.",
+      },
+    ],
+  };
+  initial = applyQueueItem(initial, {
+    type: "tool_call",
+    id: "synthetic-question",
+    threadId: initial.id,
+    turnId: "runtime-turn",
+    createdAt: "2026-11-08T00:00:00Z",
+    callId: "synthetic-question-rpc",
+    name: "ask_user_question",
+    arguments: specification as unknown as Record<string, unknown>,
+  });
+  initial = applyQueueItem(initial, {
+    ...queueItem(20, [
+      { type: "text", text: renderUserQuestionReply(specification, reply) },
+      { type: "image", attachment: queueImageAttachments[0] },
+    ]),
+    questionReply: reply,
+    deliveryMode: "steer",
+    expectedTurnId: "runtime-turn",
+  });
   initial = applyQueueItem(
     initial,
-    queueItem(1, [
+    queueItem(21, [
       {
         type: "text",
-        text: zh
-          ? "最后补一份简短的验证结论，说明哪些行为已经通过。"
-          : "Finish with a short summary of verified behaviors.",
+        text: referenceMessage(
+          zh
+            ? "对比 **这份结果**，确认图片后再处理。"
+            : "Compare **these findings** and check the images first.",
+          [
+            {
+              kind: "thread",
+              id: "synthetic-planner",
+              name: zh ? "计划助手" : "Planning assistant",
+              cwd: initial.cwd!,
+            },
+          ],
+          "queue-client-21",
+        ),
       },
+      ...queueImageAttachments
+        .slice(1, 3)
+        .map((attachment) => ({ type: "image" as const, attachment })),
     ]),
   );
+}
 const summaries: NativeThreadSummary[] = [
   title,
   zh ? "计划助手" : "Planning assistant",
@@ -153,6 +251,142 @@ const summaries: NativeThreadSummary[] = [
 };
 function Fixture() {
   const [thread, setThread] = useState(initial);
+  const threadRef = useRef(thread);
+  threadRef.current = thread;
+  const [queueMutationStore] = useState(createQueueMutationStore);
+  const [steerRecallStore] = useState(createSteerRecallStore);
+  const append = (item: CanonicalItem) => {
+    const updated = applyQueueItem(threadRef.current, item);
+    threadRef.current = updated;
+    setThread(updated);
+    return updated;
+  };
+  (window as any).zenx.protocol = {
+    request: async (method: string, target: any) => {
+      if (method === "zen/thread/read") {
+        if (params.has("unknown"))
+          throw new Error("Synthetic recovery read unavailable");
+        return {
+          thread: { id: initial.id, items: threadRef.current.canonicalItems },
+        };
+      }
+      if (method === "zen/thread/steer/recall") {
+        const pending = pendingSteerMessages(threadRef.current.canonicalItems!);
+        if (
+          !target.targets.every((expected: any) =>
+            pending.some(
+              (item) =>
+                item.id === expected.queuedItemId &&
+                item.clientId === expected.clientId &&
+                item.revision === expected.expectedRevision,
+            ),
+          )
+        )
+          throw { data: { zenCode: "steer_recall_conflict" } };
+        const receipt = {
+          type: "user_message_steer_recalled" as const,
+          id: crypto.randomUUID(),
+          threadId: initial.id,
+          createdAt: new Date().toISOString(),
+          recallId: target.recallId,
+          targets: target.targets,
+        };
+        const updated = append(receipt);
+        return {
+          ...recoverSteerRecall(
+            updated.canonicalItems!,
+            initial.id,
+            target.recallId,
+          ),
+          status: "recalled",
+        };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      if (params.has("error"))
+        throw {
+          data: {
+            zenCode: method.endsWith("/reorder")
+              ? "queue_reorder_conflict"
+              : "queue_revision_conflict",
+          },
+        };
+      if (params.has("unknown"))
+        throw new Error("Synthetic connection lost; outcome unknown");
+      if (method === "zen/thread/queue/reorder") {
+        const receipt = {
+          type: "user_message_queue_reordered" as const,
+          id: crypto.randomUUID(),
+          threadId: target.threadId,
+          createdAt: new Date().toISOString(),
+          reorderId: target.reorderId,
+          expectedTargets: target.expectedTargets,
+          orderedQueuedItemIds: target.orderedQueuedItemIds,
+        };
+        append(receipt);
+        if (params.has("lostack"))
+          throw new Error("Synthetic ACK lost after canonical reorder");
+        return { status: "reordered", reorderItemId: receipt.id };
+      }
+      if (method === "zen/thread/queue/steer") {
+        const original = threadRef.current.canonicalItems!.find(
+          (item) => item.id === target.queuedItemId,
+        )!;
+        if (original.type === "user_message_queued" && !idle) {
+          const receipt = {
+            type: "user_message_queue_promoted" as const,
+            id: crypto.randomUUID(),
+            threadId: target.threadId,
+            createdAt: new Date().toISOString(),
+            queuedItemId: target.queuedItemId,
+            clientId: target.clientId,
+            expectedRevision: target.expectedRevision,
+            expectedTurnId: "runtime-turn",
+          };
+          append(receipt);
+          if (params.has("lostack"))
+            throw new Error("Synthetic ACK lost after canonical promotion");
+          return {
+            queuedItemId: target.queuedItemId,
+            clientId: target.clientId,
+            status: "staged",
+            turnId: "runtime-turn",
+            revision: target.expectedRevision + 1,
+            promotionItemId: receipt.id,
+          };
+        }
+        if (original.type === "thread_message_queued")
+          append({
+            type: "thread_message",
+            id: crypto.randomUUID(),
+            threadId: target.threadId,
+            turnId: "runtime-turn",
+            createdAt: new Date().toISOString(),
+            clientId: target.clientId,
+            sender: original.sender,
+            messageType: original.messageType,
+            mode: "steer",
+            content: original.input,
+          });
+        else if (original.type === "user_message_queued")
+          append({
+            type: "user_message",
+            id: crypto.randomUUID(),
+            threadId: target.threadId,
+            turnId: "runtime-turn",
+            createdAt: new Date().toISOString(),
+            clientId: target.clientId,
+            content: original.input,
+          });
+        return {
+          queuedItemId: target.queuedItemId,
+          clientId: target.clientId,
+          status: idle ? "started" : "steered",
+          turnId: "runtime-turn",
+        };
+      }
+      return {};
+    },
+  };
   const [selectedThreadId, setSelectedThreadId] = useState(initial.id);
   const sourceThread: Thread = {
     ...runtimeThread(
@@ -171,7 +405,27 @@ function Fixture() {
     cwd: initial.cwd,
   };
   const view = selectedThreadId === initial.id ? thread : sourceThread;
-  const [composer, setComposer] = useState(emptyComposerState());
+  const [composer, setComposer] = useState(() => ({
+    ...emptyComposerState(),
+    ...(params.has("local")
+      ? {
+          pendingSends: [
+            {
+              clientId: "synthetic-local",
+              intent: "start" as const,
+              status: "unconfirmed" as const,
+              error: "Synthetic transport outcome unknown",
+              draft: {
+                text: zh
+                  ? "普通消息尚未确认，检查后再继续。"
+                  : "An ordinary send has not been confirmed.",
+                images: [],
+              },
+            },
+          ],
+        }
+      : {}),
+  }));
   const narrow = params.has("narrow");
   return (
     <div className={`app-shell${narrow ? " sidebar-collapsed" : ""}`}>
@@ -268,50 +522,11 @@ function Fixture() {
                 onInterrupt={async () => {}}
                 onRespondToApproval={async () => {}}
                 onSubmit={async () => {}}
-                onSteerQueued={async (target) => {
-                  await new Promise((resolve) => setTimeout(resolve, 700));
-                  if (params.has("error"))
-                    throw new Error(
-                      zh
-                        ? "尚未确认送达。请检查连接并刷新后重试。"
-                        : "Delivery is unconfirmed. Check the connection and refresh.",
-                    );
-                  const original = thread.canonicalItems!.find(
-                    (item) => item.id === target.queuedItemId,
-                  )!;
-                  if (original.type === "thread_message_queued")
-                    setThread((value) =>
-                      applyQueueItem(value, {
-                        type: "thread_message",
-                        id: "delivered-thread",
-                        threadId: target.threadId,
-                        turnId: "runtime-turn",
-                        createdAt: new Date().toISOString(),
-                        clientId: target.clientId,
-                        sender: original.sender,
-                        messageType: original.messageType,
-                        mode: "steer",
-                        content: original.input,
-                      }),
-                    );
-                  else if (original.type === "user_message_queued")
-                    setThread((value) =>
-                      applyQueueItem(value, {
-                        type: "user_message",
-                        id: "delivered-user",
-                        threadId: target.threadId,
-                        turnId: "runtime-turn",
-                        createdAt: new Date().toISOString(),
-                        clientId: target.clientId,
-                        content: original.input,
-                      }),
-                    );
-                  return {
-                    ...target,
-                    status: "steered",
-                    turnId: "runtime-turn",
-                  };
-                }}
+                queueMutationStore={queueMutationStore}
+                steerRecallStore={steerRecallStore}
+                onSteerQueued={requestQueuedSteer}
+                onReorderQueued={requestQueuedReorder}
+                onReadAttachment={readQueueFixtureImage}
                 onCancelQueued={async (targets) => {
                   setThread((value) =>
                     targets.reduce(
@@ -331,7 +546,14 @@ function Fixture() {
                     })),
                   };
                 }}
-                onRestoreRecalled={async () => true}
+                onRestoreRecalled={async (result) => {
+                  setComposer((current) =>
+                    restoreRecalledComposer(current, result, () =>
+                      crypto.randomUUID(),
+                    ),
+                  );
+                  return true;
+                }}
                 onEditQueued={async (target) => {
                   setThread((value) => editQueueFact(value, target));
                   return {

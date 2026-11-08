@@ -35,6 +35,11 @@ import {
 import { useThreadSidebar } from "./use-thread-sidebar.js";
 import { requestManualTurnRetry } from "./manual-turn-retry.js";
 import { type MessageSourceNavigator } from "./message-source-navigation.js";
+import { requestQueuedReorder } from "./queue-reorder-request.js";
+import {
+  createQueueMutationStore,
+  type QueueMutationStore,
+} from "./queue-mutation-state.js";
 import { requestQueuedSteer } from "./queue-steer-request.js";
 import { sidebarTriggerAdmissionId } from "./sidebar-thread-information.js";
 import { applyThreadTitleReceipt } from "./thread-title-receipt.js";
@@ -579,6 +584,7 @@ function AppContent() {
   const [importSessionOpen, setImportSessionOpen] = useState(false);
   const [queueEditStore] = useState(createQueueEditStore);
   const [steerRecallStore] = useState(createSteerRecallStore);
+  const [queueMutationStore] = useState(createQueueMutationStore);
   const [userQuestionStore] = useState(() =>
     createUserQuestionStore({
       list: (params) =>
@@ -4561,6 +4567,7 @@ function AppContent() {
                   )
                     void resumeThread(threadId, true);
                 }}
+                queueMutationStore={queueMutationStore}
                 queueEditStore={queueEditStore}
                 threadHeader={
                   selectedThreadId !== null &&
@@ -5414,6 +5421,7 @@ function PageTitleBar({
 
 function AgentSurface({
   steerRecallStore,
+  queueMutationStore,
   onRestoreRecalled,
   debugMode,
   onExitDebug,
@@ -5486,6 +5494,7 @@ function AgentSurface({
   onExitDebug(): void;
   onRecoverQueuedEdit(threadId: string): void;
   steerRecallStore: SteerRecallStore;
+  queueMutationStore: QueueMutationStore;
   onRestoreRecalled(
     threadId: string,
     result: RecoveredSteerRecall,
@@ -5761,6 +5770,13 @@ function AgentSurface({
             onOpenMessageLink={openThreadMessageLink}
             onCancelQueued={(targets) =>
               onCancelQueued(threadDetail.id, targets)
+            }
+            queueMutationStore={queueMutationStore}
+            onQueueMutationRecovered={onRecoverQueuedEdit}
+            onReorderQueued={(params) =>
+              requestQueuedReorder(params, () =>
+                onRecoverQueuedEdit(params.threadId),
+              )
             }
             queueEditStore={queueEditStore}
             steerRecallStore={steerRecallStore}

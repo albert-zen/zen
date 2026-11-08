@@ -2,6 +2,7 @@ import type { QuestionIpcError } from "./user-question-ipc.js";
 import { localErrorDetail } from "../local-error-detail.js";
 import type { CompactionIpcReply } from "./compaction-ipc.js";
 import type {
+  NativeQueueReorderResult,
   NativeQueueSteerResult,
   NativeSteerRecallResult,
   NativeQueueEditResult,
@@ -21,6 +22,7 @@ const knownCodes = new Set([
   "queue_cancelled",
   "thread_not_found",
   "queue_revision_conflict",
+  "queue_reorder_conflict",
   "idempotency_conflict",
   "queue_edit_unsupported_input",
   "invalid_request",
@@ -75,7 +77,11 @@ export type ProtocolIpcResult<M extends ClientRequestMethod> =
           ? NativeSteerRecallResult | QueueEditIpcRejection | QueueIpcUnknown
           : M extends "zen/thread/queue/steer"
             ? NativeQueueSteerResult | QueueEditIpcRejection | QueueIpcUnknown
-            : ClientRequestResults[M];
+            : M extends "zen/thread/queue/reorder"
+              ? | NativeQueueReorderResult
+                | QueueEditIpcRejection
+                | QueueIpcUnknown
+              : ClientRequestResults[M];
 
 export function queueEditIpcRejection(
   error: unknown,
@@ -103,7 +109,10 @@ export function unwrapQueueEditIpcReply(
 
 export function unwrapQueueMutationIpcReply<
   T extends
-    NativeQueueEditResult | NativeQueueSteerResult | NativeSteerRecallResult,
+    | NativeQueueEditResult
+    | NativeQueueSteerResult
+    | NativeSteerRecallResult
+    | NativeQueueReorderResult,
 >(reply: T | QueueEditIpcRejection | QueueIpcUnknown): T {
   if (isRecord(reply) && reply.type === unknownType) {
     // No rejection code: callers must retain read-only receipt recovery, never resend.

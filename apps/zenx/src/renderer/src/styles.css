@@ -10281,16 +10281,6 @@ button:disabled {
 .bottom-zone.has-queue:not(.has-approval) > .composer {
   flex: 0 0 auto;
 }
-.bottom-zone.has-queue:not(.has-approval) > .queue-shelf {
-  flex: 0 1 auto;
-  min-height: 44px;
-}
-.bottom-zone.has-queue:not(.has-approval) > .queue-shelf.is-open {
-  min-height: 92px;
-}
-.bottom-zone.has-queue:not(.has-approval) .queue-shelf-details {
-  min-height: 44px;
-}
 .bottom-zone.has-queue:not(.has-approval) > .queued-cancel-notice {
   flex: 0 1 auto;
   min-height: 0;
@@ -10311,23 +10301,6 @@ button:disabled {
 .bottom-zone.has-approval > .approval-request-card {
   flex: 0 1 auto;
   min-height: 0;
-}
-.bottom-zone.has-approval > .queue-shelf {
-  display: flex;
-  flex-direction: column;
-  min-height: 44px;
-  flex: 0 1 auto;
-  margin: 0 0 -9px;
-}
-.bottom-zone.has-approval .queue-shelf.is-open {
-  min-height: 92px;
-}
-.bottom-zone.has-approval .queue-shelf-header {
-  flex: 0 0 44px;
-}
-.bottom-zone.has-approval .queue-shelf-details {
-  max-height: 44px;
-  min-height: 44px;
 }
 .bottom-zone.has-approval .queued-cancel-notice {
   flex: 0 0 auto;
