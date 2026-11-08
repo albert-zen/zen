@@ -3998,8 +3998,12 @@ export class ZenXTriggerService {
             continue;
           throw error;
         }
-        this.#assertMutationGeneration(generation, allowRetiring);
+        // A successful write is already durable. Retirement may reject its
+        // caller, but the same generation's stop mutation must see this commit.
+        // Never install a snapshot into a replaced or inactive generation.
+        this.#assertMutationGeneration(generation, true);
         this.#snapshot = snapshot;
+        this.#assertMutationGeneration(generation, allowRetiring);
         this.#syncRemoteWatches(generation, includeCurrentTerminalTriggerId);
         this.#notify();
         return result;
