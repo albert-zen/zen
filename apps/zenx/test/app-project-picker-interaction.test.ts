@@ -11994,11 +11994,21 @@ for (const mode of ["dock", "popover"] as const) {
           )!
           .click(),
       );
-      const pending = inner.querySelector<HTMLElement>(
+      const tray = document.querySelector<HTMLElement>(".pending-tray")!;
+      assert.ok(tray, "pending input belongs to the unified Composer tray");
+      const pending = tray.querySelector<HTMLElement>(
         '[data-send-state="sending"]',
       );
       assert.equal(Boolean(pending), true);
-      assert.equal(pending!.parentElement === inner, true);
+      assert.equal(pending!.parentElement === tray, true);
+      assert.ok(
+        pending!.closest(".messages") === null,
+        "sending stays outside transcript",
+      );
+      assert.ok(
+        inner.querySelector("[data-send-state]") === null,
+        "history has no pending input",
+      );
       assert.equal(composer.value, "");
       assert.equal(
         inner.querySelector(":scope > .transcript-history") === history,
@@ -12010,9 +12020,17 @@ for (const mode of ["dock", "popover"] as const) {
       );
       assert.equal(rows[0]!.querySelector(".user-bubble") === firstUser, true);
       await act(async () => admission.resolve({ turnId: "next-turn" }));
-      assert.equal(
-        Boolean(inner.querySelector('[data-send-state="admitted"]')),
-        true,
+      assert.equal(document.querySelector(".pending-tray") === tray, true);
+      const admitted = tray.querySelector('[data-send-state="admitted"]');
+      assert.equal(Boolean(admitted), true);
+      assert.equal(admitted!.parentElement === tray, true);
+      assert.ok(
+        admitted!.closest(".messages") === null,
+        "admitted stays outside transcript",
+      );
+      assert.ok(
+        inner.querySelector("[data-send-state]") === null,
+        "history has no pending input",
       );
       assert.equal(
         inner.querySelector(":scope > .transcript-history") === history,

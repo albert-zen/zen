@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-- **Pending steer preview column** — Disposable renderer measurements align the shelf content box with the existing transcript column while leaving native scrollbars in the gutter; this geometry never changes admission, recall, or reader scroll ownership.
+- **Pending steer preview column** — Disposable renderer measurements align the unified pending tray and standalone shelf content boxes with the existing transcript column while leaving their borders and native scrollbars in the gutter; this geometry never changes admission, recall, or reader scroll ownership.
 
 - **Owned App Shot acceptance** — A disposable hosted-only Electron package bundles the real service, stages the pinned runtime and emitted worker, and captures only a freshly identified, launcher-owned opaque nonce fixture through the production exact-window backend; existing OS grants, returned nonce pixels, optional AX image coordinates, foreground identity and confirmed owned-process cleanup are separate fail-closed outcomes, never permission changes or a substitute runtime.
 
@@ -115,7 +115,7 @@ Reconstruction is being landed in independently tested source checkpoints. The d
 - **ZenX semantic trace summaries** — Renderer-only templates summarize existing capability identities and observed phases, prioritize context boundaries and recent meaningful actions, and retain full ordered Items/counts without generating model text or new execution state.
 - **ZenX workflow status presentation** — Running, recovery, terminal outcomes and compaction summaries share renderer-only capsule geometry and theme tokens; native status/alert/disclosure semantics and canonical state remain owned by each existing workflow.
 - **ZenX approval review** — Composer-attached requests and user-opened full details share exact request-scoped transient response/focus ownership and existing Host decisions; presentation never creates or broadens permission.
-- **ZenX pending-message shelf** — A renderer-only view of canonical queued identity, order, revision and input, with local disclosure, transient edit drafts and request feedback; native exact-target edit/cancellation/resume commands remain the authority, without reorder or optimistic removal.
+- **ZenX pending-message shelf** — A renderer-only view of canonical queued identity, order, revision and input, with local disclosure, transient edit drafts and request feedback; native exact-target edit/cancellation/resume commands and atomic complete-snapshot reorder remain the authority, without optimistic reordering/removal or implicit retry.
 
 - **ZenX 界面语言** — Renderer 的本地语言偏好（system/en/zh-CN）只拥有展示选择；集中式 i18next 词条按功能分组，通过 React 订阅即时更新，系统模式按 Electron 返回的有序语言列表解析，原生菜单同步展示语言，不改写 canonical 内容、Host 配置或插件语义。
 

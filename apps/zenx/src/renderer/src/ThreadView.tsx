@@ -36,6 +36,7 @@ import { checkQueuedSteer } from "./queue-steer-request.js";
 import { checkQueuedReorder } from "./queue-reorder-request.js";
 import { PendingSendRows } from "./PendingSendRows.js";
 import { indexTurnOutcomeItems } from "./turn-outcome-index.js";
+import { steerPreviewColumn } from "./steer-preview-column.js";
 import { PendingSteerPanel } from "./PendingSteerPanel.js";
 import type { SteerRecallStore } from "./steer-recall-state.js";
 import {
@@ -1039,6 +1040,51 @@ function ThreadViewContent({
   const observedScrollTop = useRef(0);
   const viewRef = useRef<HTMLDivElement>(null);
   const bottomZoneRef = useRef<HTMLDivElement>(null);
+  const pendingTrayRef = useRef<HTMLDivElement>(null);
+  // Align the shared content box, not its border or native scrollbar, with
+  // the real transcript column. Both groups keep one scrolling owner.
+  useLayoutEffect(() => {
+    const tray = pendingTrayRef.current;
+    const zone = bottomZoneRef.current;
+    const column = zone
+      ?.closest(".thread-view")
+      ?.querySelector<HTMLElement>(
+        ".virtual-transcript-header, .messages-inner",
+      );
+    if (!tray || !zone || !column) return;
+    const measure = () => {
+      const rect = column.getBoundingClientRect();
+      if (rect.width <= 0 || tray.offsetWidth <= 0) return;
+      const origin =
+        zone.getBoundingClientRect().left +
+        zone.clientLeft +
+        parseFloat(getComputedStyle(zone).paddingLeft) +
+        tray.clientLeft;
+      const geometry = steerPreviewColumn(
+        rect,
+        origin,
+        tray.offsetWidth - tray.clientWidth,
+      );
+      for (const [name, value] of Object.entries({
+        ...geometry,
+        gutter: tray.offsetWidth - tray.clientWidth,
+      })) {
+        const pixel = `${value}px`;
+        if (tray.style.getPropertyValue(`--pending-tray-${name}`) !== pixel)
+          tray.style.setProperty(`--pending-tray-${name}`, pixel);
+      }
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(column);
+    // A fixed-width column can move when its scrollport gains a native gutter.
+    const scrollport = column.closest(".messages");
+    if (scrollport) observer.observe(scrollport);
+    observer.observe(zone);
+    observer.observe(tray);
+    return () => observer.disconnect();
+  });
   const composerTextareaRef = useRef<ComposerInput>(null);
   const pastedSelection = useRef<{ scope: string; caret: number } | null>(null);
   useLayoutEffect(() => {
@@ -2354,6 +2400,7 @@ function ThreadViewContent({
           <MessageQuoteSourceContext.Provider value={navigateQuoteSource}>
             <div
               className="pending-tray"
+              ref={pendingTrayRef}
               role="region"
               aria-label={i18n.t("shell:pendingTray")}
               key={`pending:${thread?.id ?? composerId}`}

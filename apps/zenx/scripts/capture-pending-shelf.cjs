@@ -123,10 +123,10 @@ app
       assert.deepEqual(
         countLabels,
         lang === "zh"
-          ? ["等待当前轮次结束 · 1 条", "等待进入模型 · 2 条"]
+          ? ["等待进入模型 · 2 条", "等待当前轮次结束 · 1 条"]
           : [
-              "After this turn · 1 message",
               "Waiting for the model · 2 messages",
+              "After this turn · 1 message",
             ],
       );
       assert.equal(geometry.rows, 2);
