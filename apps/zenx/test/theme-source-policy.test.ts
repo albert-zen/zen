@@ -17,6 +17,10 @@ const consumption = /var\((--[a-z0-9_-]+)/giu;
 const dynamicProductTokens = new Set([
   "--zenx-brand-asset",
   "--bottom-zone-height",
+  // ThreadView owns pending tray alignment with the transcript column.
+  "--pending-tray-gutter",
+  "--pending-tray-left",
+  "--pending-tray-width",
   "--auxiliary-width", // AuxiliaryPanel owns user-resized width.
   "--file-navigation-width", // AuxiliaryPanel owns the user-resized file split.
   "--file-navigation-height", // The same split stacks vertically in narrow panes.

@@ -10302,6 +10302,9 @@ button:disabled {
   flex: 0 1 auto;
   min-height: 0;
 }
+.bottom-zone.has-queue.has-approval > .approval-request-card {
+  flex: 0 0 auto;
+}
 .bottom-zone.has-approval .queued-cancel-notice {
   flex: 0 0 auto;
   margin: 0;

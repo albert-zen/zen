@@ -63,7 +63,29 @@ test("the combined pending tray owns the only pending-list scroll and one total 
   );
   assert.match(
     css,
+    /\.pending-tray\s*\{[^}]*flex:\s*0 0 auto/s,
+    "The bounded tray must not collapse when Composer images and references fill the scrollable bottom zone",
+  );
+  assert.match(
+    css,
     /\.pending-tray \.queue-shelf-details\s*\{[^}]*max-height:\s*none[^}]*overflow:\s*visible/s,
+  );
+});
+
+test("pending and approval share outer scrolling without collapsing approval content", async () => {
+  const css = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    css,
+    /\.bottom-zone\.has-queue\.has-approval > \.approval-request-card\s*\{[^}]*flex:\s*0 0 auto/s,
+    "Pending content must not compress the approval body or decisions",
+  );
+  assert.match(
+    css,
+    /\.bottom-zone\.has-approval > \.approval-request-card\s*\{[^}]*flex:\s*0 1 auto/s,
+    "Approval-only sizing remains unchanged",
   );
 });
 

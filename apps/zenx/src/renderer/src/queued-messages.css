@@ -579,7 +579,7 @@
   position: relative;
   left: var(--pending-tray-left, 0px);
   width: var(--pending-tray-width, 100%);
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
   min-height: 0;
   max-height: min(240px, 30dvh);
