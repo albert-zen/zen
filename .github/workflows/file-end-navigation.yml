@@ -50,7 +50,7 @@ jobs:
       - run: npm ci
       - name: Build production renderer and synthetic fixture
         run: |
-          npm --workspace apps/zenx run build
+          npm --workspace apps/zenx run build:fixtures
           node apps/zenx/scripts/build-file-sidebar-preview.mjs "${{ runner.temp }}/zenx-end-navigation"
       - name: Preserve native navigation, wheel, layout and CSP assertions
         timeout-minutes: 3

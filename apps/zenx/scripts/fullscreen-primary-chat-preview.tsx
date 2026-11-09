@@ -22,6 +22,8 @@ import { ZenXBrand } from "../src/renderer/src/ZenXBrand.js";
 import { i18n } from "../src/renderer/src/i18n.js";
 import type { Thread } from "../src/protocol-client/index.js";
 import type { PluginUiSdkV1 } from "../src/renderer/src/plugin-ui-host.js";
+import type { BrowserThreadEvent } from "../src/main/capabilities/browser-thread-observation.js";
+import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
 import type { WorkspaceBrowserTab } from "../src/main/workspace-browser.js";
 import "../src/renderer/src/theme.css";
 import "../src/renderer/src/styles.css";
@@ -148,12 +150,56 @@ const pageFor = (threadId: string): WorkspaceBrowserTab => ({
   agentActionOutcomeUnknown: false,
   requiresFreshObservation: false,
 });
+const browserListeners = new Set<(event: BrowserThreadEvent) => void>();
 Object.assign(window, {
-  __fullscreenPrimaryPreview: { receipts },
+  __fullscreenPrimaryPreview: {
+    receipts,
+    preview(threadId: string, sequence: number) {
+      for (const listener of browserListeners)
+        listener({
+          type: "targets",
+          targets: [
+            {
+              id: `workspace:page-${threadId}`,
+              backendId: "workspace",
+              sessionId: "synthetic",
+              tabId: `workspace:page-${threadId}`,
+              title: "Synthetic activity preview",
+              url: "https://example.test/reference",
+              mode: "live",
+              loading: false,
+              previewActive: true,
+              previewSequence: sequence,
+              activityCount: 1,
+            },
+          ],
+        });
+    },
+    retire(threadId: string, sequence: number) {
+      for (const listener of browserListeners)
+        listener({
+          type: "turn-ended",
+          threadId,
+          throughSequence: sequence,
+          failed: false,
+        });
+    },
+  },
   zenx: {
     platform: document.documentElement.dataset.platform,
     threads: { list: async () => [] },
     plugins: { executeCommand: async () => null, readHandle: async () => null },
+    browserObservation: {
+      subscribe(
+        _request: unknown,
+        listener: (event: BrowserThreadEvent) => void,
+      ) {
+        browserListeners.add(listener);
+        return () => {
+          browserListeners.delete(listener);
+        };
+      },
+    },
     workspaceBrowser: {
       command: async (threadId: string, operation: string) => {
         receipts.push({ operation, threadId });
@@ -257,6 +303,9 @@ function Preview() {
     "room-a": text("Room draft — keep this text", "Room 草稿——请保留这段文字"),
   });
   const roomRevisions = useRef<Record<string, number>>({});
+  const [primaryOwners, setPrimaryOwners] = useState<Record<string, boolean>>(
+    {},
+  );
   const [selections, setSelections] = useState<Record<string, string>>({});
   const [orders, setOrders] = useState<Record<string, string[]>>({});
   const intent = useRef(0);
@@ -271,12 +320,14 @@ function Preview() {
     () => ({
       title: i18n.t("panels:mainConversation", { title: names[owner] }),
       contentId: "primary-conversation-content",
+      selected: primaryOwners[owner] ?? false,
       onSelect: () => {
+        setPrimaryOwners((current) => ({ ...current, [owner]: true }));
         const token = ++intent.current;
         return () => token === intent.current;
       },
     }),
-    [owner],
+    [owner, primaryOwners],
   );
   const renderThread = (id: string, thread: Thread) => (
     <ThreadView
@@ -367,6 +418,7 @@ function Preview() {
           <button
             onClick={() => {
               intent.current++;
+              setPrimaryOwners((current) => ({ ...current, [owner]: false }));
               setSelections((current) => ({
                 ...current,
                 [owner]: `browser:page-${threadId}`,
@@ -443,10 +495,16 @@ function Preview() {
             open={open}
             onOpenChange={setOpen}
             onWidthChange={setWidth}
-            snapshot={null}
+            snapshot={
+              {
+                plugins: [{ id: "browser", enabled: true, available: true }],
+                panels: [],
+              } as unknown as ZenXPluginSnapshot
+            }
             selectedTab={selected}
             onSelectTab={(tab) => {
               intent.current++;
+              setPrimaryOwners((current) => ({ ...current, [owner]: false }));
               setSelections((current) => ({ ...current, [owner]: tab }));
             }}
             openedTabs={order}

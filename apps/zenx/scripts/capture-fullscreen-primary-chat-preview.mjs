@@ -555,6 +555,52 @@ try {
               );
             }
           }
+          // Activity preview is distinct from an explicit resource-tab selection:
+          // the owner's primary choice must survive while the Browser is displayed.
+          const preview = (sequence) =>
+            evaluate(
+              `window.__fullscreenPrimaryPreview.preview(${JSON.stringify(scene.owner)}, ${sequence})`,
+            );
+          await preview(1);
+          await until(
+            "document.querySelector('#thread-workspace-panel').dataset.primaryActive==='false' && !document.querySelector('.synthetic-native-page').hidden",
+            "activity preview overrides retained primary choice",
+          );
+          const activity = await capture("activity-preview");
+          assert.equal(activity.primary.visibility, "hidden");
+          assert.equal(activity.visiblePrimaryDescendants, 0);
+          assert.equal(
+            await evaluate(
+              "getComputedStyle(document.querySelector('.workspace-browser-address')).visibility",
+            ),
+            "visible",
+          );
+          await click(primaryTab);
+          const returned = await capture("activity-preview-return");
+          checkPrimary(returned, split.draft);
+          checkReading(returned, reading, "activity preview return");
+          await preview(1);
+          await delay(300);
+          assert.equal(
+            (await evaluate(measure)).primaryActive,
+            "true",
+            "dismissed activity stays hidden",
+          );
+          await preview(2);
+          await until(
+            "!document.querySelector('.synthetic-native-page').hidden",
+            "new activity previews",
+          );
+          await evaluate(
+            `window.__fullscreenPrimaryPreview.retire(${JSON.stringify(scene.owner)}, 2)`,
+          );
+          await until(
+            "document.querySelector('#thread-workspace-panel').dataset.primaryActive==='true' && document.querySelector('.synthetic-native-page').hidden",
+            "retired activity restores primary",
+          );
+          const retired = await capture("activity-preview-retired");
+          checkPrimary(retired, split.draft);
+          checkReading(retired, reading, "retired activity return");
           await click('[id="aux-tab-custom:overview"]');
           const overview = await capture("overview-control");
           assert.equal(overview.selected, "aux-tab-custom:overview");
@@ -719,6 +765,37 @@ try {
           assert.equal(shown.draft, saved.draft, "Room draft is retained");
           result.observations.push({ tab, hidden, shown });
         }
+        await evaluate(
+          "window.__fullscreenPrimaryPreview.preview('thread-a', 1)",
+        );
+        await until(
+          "document.querySelector('#thread-workspace-panel').dataset.primaryActive==='false' && !document.querySelector('.synthetic-native-page').hidden",
+          "Room activity preview",
+        );
+        const previewHidden = await evaluate(roomMeasure);
+        assert.equal(previewHidden.visibility, "hidden");
+        near(
+          previewHidden.top,
+          saved.top,
+          "Room preview retains hidden scroll",
+        );
+        await screenshot(`${width}x900-room-activity-preview.png`);
+        await click(primaryTab);
+        const previewReturn = await evaluate(roomMeasure);
+        assert.equal(previewReturn.anchor, saved.anchor);
+        near(previewReturn.offset, saved.offset, "Room preview return offset");
+        assert.equal(previewReturn.draft, saved.draft);
+        assert.equal(
+          await evaluate(
+            "document.querySelector('.synthetic-native-page').hidden",
+          ),
+          true,
+        );
+        result.observations.push({
+          phase: "activity-preview-return",
+          hidden: previewHidden,
+          shown: previewReturn,
+        });
         await screenshot(`${width}x900-room-reading-return.png`);
         result.status = "passed";
       }
