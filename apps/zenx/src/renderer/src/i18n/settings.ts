@@ -858,7 +858,7 @@ export const en = {
   "settingsView.connectAnAccount": "Connect an account",
   "settingsView.openModelSettings": "Open model settings",
   "settingsView.addAnOpenaiSubscriptionInModelsProviderToGet":
-    "Add an OpenAI subscription in Models & provider to get started.",
+    "Add an OpenAI subscription in Models & providers to get started.",
   "settingsView.yourSignInDetailsAreStoredSecurelyOnThis":
     "Your sign-in details are stored securely on this device.",
   "settingsView.signInToConnectYourSubscription":
@@ -1100,7 +1100,7 @@ export const en = {
     "Check application status below before making another change.",
   "rtkSettingsCard.offByDefaultChangesTakeEffectNextLaunchRunning":
     "Off by default. Changes take effect next launch; running tasks keep their current behavior.",
-  "settingsView.modelsProvider": "Models & provider",
+  "settingsView.modelsProvider": "Models & providers",
   "settingsView.contextCompaction": "Context compaction",
   "settingsView.skills": "Skills",
   "settingsView.workflows": "Workflows",

@@ -506,7 +506,7 @@ test("A save completed after leaving its section does not show a stale toast", a
     await changeControl(control, control.options[1]!.value);
     await click(exactButtonRequired("Apply"));
     await click(exactButtonRequired("General"));
-    await click(exactButtonRequired("Models & provider"));
+    await click(exactButtonRequired("Models & providers"));
     await act(async () => finish(settings));
     assert.equal(document.querySelector(".settings-toast"), null);
   } finally {
@@ -1911,7 +1911,7 @@ test("every Settings tab remains keyboard reachable after narrow-screen reflow",
       tabs.map((tab) => tab.textContent?.trim()),
       [
         "Account",
-        "Models & provider",
+        "Models & providers",
         "Plugins",
         "Appearance",
         "General",
@@ -3518,7 +3518,7 @@ for (const navigation of [
       if (navigation === "activity")
         await click(exactButtonRequired("Toggle settings visibility"));
       if (navigation === "page") {
-        const tab = exactButtonRequired("Models & provider");
+        const tab = exactButtonRequired("Models & providers");
         tab.focus();
         await click(tab);
         assert.ok(
@@ -3878,7 +3878,7 @@ for (const completeAfterNavigation of [false, true]) {
       await click(exactButtonRequired("Install from source…"));
       await click(exactButtonRequired("Choose tarball…"));
       if (completeAfterNavigation) {
-        await click(exactButtonRequired("Models & provider"));
+        await click(exactButtonRequired("Models & providers"));
         await click(exactButtonRequired("Apply"));
         await act(async () => finish(result));
         assert.match(
@@ -4106,7 +4106,7 @@ for (const outcome of ["success", "committed-error"] as const) {
         "queue",
       );
       await changeControl(requiredInput("Maximum tool rounds"), "12");
-      await click(exactButtonRequired("Models & provider"));
+      await click(exactButtonRequired("Models & providers"));
       await click(labeledButtonRequired("Edit Local demo"));
       await changeControl(requiredInput("Display name"), "Renamed local demo");
       await click(exactButtonRequired("Save provider"));
@@ -4131,7 +4131,7 @@ for (const outcome of ["success", "committed-error"] as const) {
         0,
         "Saving a provider must not save General drafts",
       );
-      await click(exactButtonRequired("Models & provider"));
+      await click(exactButtonRequired("Models & providers"));
       assert.ok(labeledButtonRequired("Edit Renamed local demo"));
       await click(exactButtonRequired("Apply"));
       assert.equal(saved.length, 1);
@@ -4165,7 +4165,7 @@ test("invalid General maximum blocks Apply when another setting is dirty, includ
     );
     await changeControl(requiredInput("Maximum tool rounds"), "0");
     assert.equal(exactButtonRequired("Apply").disabled, true);
-    await click(exactButtonRequired("Models & provider"));
+    await click(exactButtonRequired("Models & providers"));
     assert.equal(exactButtonRequired("Apply").disabled, true);
     assert.match(
       document.body.textContent ?? "",
@@ -4286,7 +4286,7 @@ for (const mutation of ["add", "delete", "delete-finalization"] as const) {
     });
     try {
       await changeControl(requiredInput("Maximum tool rounds"), "12");
-      await click(exactButtonRequired("Models & provider"));
+      await click(exactButtonRequired("Models & providers"));
       if (mutation === "add") {
         await click(exactButtonRequired("Add provider"));
         await click(labeledButtonRequired("Add Local demo"));
@@ -4418,7 +4418,7 @@ test("invalid General raw input survives a newer Host maximum returned by a pend
       (await labeledSelect("Send while a reply is running"))!,
       "queue",
     );
-    await click(exactButtonRequired("Models & provider"));
+    await click(exactButtonRequired("Models & providers"));
     await click(labeledButtonRequired("Edit Local demo"));
     await click(exactButtonRequired("Save provider"));
     await click(exactButtonRequired("General"));
@@ -4431,7 +4431,7 @@ test("invalid General raw input survives a newer Host maximum returned by a pend
     );
     assert.equal(requiredInput("Maximum tool rounds").value, "0");
     assert.equal(exactButtonRequired("Apply").disabled, true);
-    await click(exactButtonRequired("Models & provider"));
+    await click(exactButtonRequired("Models & providers"));
     await click(exactButtonRequired("General"));
     assert.equal(requiredInput("Maximum tool rounds").value, "0");
     assert.equal(exactButtonRequired("Apply").disabled, true);
@@ -4488,7 +4488,7 @@ test("late provider reply cannot roll back newer settings observed after reopeni
       finish({ ...initial, profile: { ...initial.profile, revision: 2 } }),
     );
     assert.equal(requiredInput("Maximum tool rounds").value, "12");
-    await click(exactButtonRequired("Models & provider"));
+    await click(exactButtonRequired("Models & providers"));
     assert.ok(labeledButtonRequired("Edit New authority"));
     await click(exactButtonRequired("Apply"));
     assert.equal(saved[0]!.baseRevision, 3);
@@ -4596,7 +4596,7 @@ test("activation read rebases only edits made while pending before the next prov
       (await labeledSelect("Send while a reply is running"))!.value,
       "queue",
     );
-    await click(exactButtonRequired("Models & provider"));
+    await click(exactButtonRequired("Models & providers"));
     await click(labeledButtonRequired("Edit Local demo"));
     await click(exactButtonRequired("Save provider"));
     await click(exactButtonRequired("Apply"));
@@ -4677,7 +4677,7 @@ test("late Apply keeps the newest Host revision and only edits newer than its su
       (await labeledSelect("Send while a reply is running"))!.value,
       "queue",
     );
-    await click(exactButtonRequired("Models & provider"));
+    await click(exactButtonRequired("Models & providers"));
     assert.ok(labeledButtonRequired("Edit Newest authority"));
     await click(exactButtonRequired("Apply"));
     assert.equal(saved[1]!.baseRevision, 3);
@@ -4857,7 +4857,7 @@ for (const action of [
         }),
       );
       assert.equal(requiredInput("Maximum tool rounds").value, "18");
-      await click(exactButtonRequired("Models & provider"));
+      await click(exactButtonRequired("Models & providers"));
       assert.equal(
         (await labeledSelect("Default model"))!.value,
         JSON.stringify([
@@ -4953,7 +4953,7 @@ test("provider editing protects the in-memory draft from other card actions and 
         : undefined,
     );
     await click(exactButtonRequired("General"));
-    await click(exactButtonRequired("Models & provider"));
+    await click(exactButtonRequired("Models & providers"));
     await click(exactButtonRequired("Toggle settings visibility"));
     await click(exactButtonRequired("Toggle settings visibility"));
     for (const label of [
@@ -5102,10 +5102,12 @@ test("late provider save does not steal focus from another Settings tab or resto
     destination.focus();
     await act(async () => finish(multiProviderSettings));
     assert.equal(document.activeElement === destination, true);
-    const tab = exactButtonRequired("Models & provider");
+    assert.equal(document.querySelector(".settings-toast"), null);
+    const tab = exactButtonRequired("Models & providers");
     tab.focus();
     await click(tab);
     assert.equal(document.activeElement === tab, true);
+    assert.equal(document.querySelector(".settings-toast"), null);
     assert.equal(!!document.querySelector(".provider-editor"), false);
   } finally {
     await unmount(harness);
@@ -5585,6 +5587,179 @@ test("unconfigured Account offers a focused route to provider setup without sign
     await click(document.getElementById("settings-tab-account")!);
     assert.ok(exactButton("Open model settings"));
     assert.equal(document.querySelector(".provider-editor"), null);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+for (const mutation of ["add", "edit", "delete"] as const) {
+  for (const outcome of [
+    "legacy-success",
+    "applied",
+    "pending-restart",
+    "unconfirmed",
+    "committed-error",
+  ] as const) {
+    test(`provider ${mutation} ${outcome} reports only its save scope while General remains dirty`, async () => {
+      let authoritative = structuredClone(multiProviderSettings);
+      const saved: ZenXSettingsUpdate[] = [];
+      const commit = (profiles: ZenXProviderProfile[]) => {
+        authoritative = {
+          ...authoritative,
+          profile: {
+            ...authoritative.profile,
+            revision: 1,
+            providerProfiles: profiles,
+          },
+          ...(outcome === "legacy-success"
+            ? {}
+            : {
+                configuration: {
+                  status:
+                    outcome === "committed-error"
+                      ? ("applied" as const)
+                      : outcome,
+                  revision: 1,
+                  pendingRestart:
+                    outcome === "pending-restart" ? ["maxToolRounds"] : [],
+                },
+              }),
+        };
+      };
+      const providerResult = (): PublicHostSettings | ProviderReply =>
+        outcome === "committed-error"
+          ? {
+              ok: false,
+              outcome: "committed-error",
+              code: "save-finalization-failed",
+              attemptId: "synthetic-scope-save",
+            }
+          : authoritative;
+      const harness = await mountSettings("general", {
+        initialSettings: authoritative,
+        get: async () => authoritative,
+        addProvider: async (provider) => {
+          commit([...authoritative.profile.providerProfiles, provider]);
+          return providerResult();
+        },
+        editProvider: async (id, provider) => {
+          commit(
+            authoritative.profile.providerProfiles.map((entry) =>
+              entry.providerProfileId === id ? provider : entry,
+            ),
+          );
+          return providerResult();
+        },
+        deleteProvider: async (id) => {
+          commit(
+            authoritative.profile.providerProfiles.filter(
+              (entry) => entry.providerProfileId !== id,
+            ),
+          );
+          if (outcome === "committed-error")
+            throw new Error("Synthetic finalization failure");
+          return authoritative;
+        },
+        save: async (update) => {
+          saved.push(update);
+          return {
+            ...authoritative,
+            profile: { ...authoritative.profile, ...update },
+          };
+        },
+      });
+      try {
+        await changeControl(requiredInput("Maximum tool rounds"), "12");
+        await click(document.getElementById("settings-tab-models")!);
+        if (mutation === "add") {
+          await click(exactButtonRequired("Add provider"));
+          await click(labeledButtonRequired("Add Local demo"));
+          await changeControl(
+            requiredInput("Display name"),
+            "Another local demo",
+          );
+          await click(exactButtonRequired("Add provider"));
+          assert.ok(labeledButton("Edit Another local demo"));
+        } else if (mutation === "edit") {
+          await click(labeledButtonRequired("Edit Local demo"));
+          await changeControl(
+            requiredInput("Display name"),
+            "Renamed local demo",
+          );
+          await click(exactButtonRequired("Save provider"));
+          assert.ok(labeledButton("Edit Renamed local demo"));
+        } else {
+          await click(labeledButtonRequired("Delete Local demo"));
+          await click(exactButtonRequired("Delete provider"));
+          assert.equal(labeledButton("Edit Local demo"), undefined);
+        }
+        const toast = document.querySelector(".settings-toast");
+        if (outcome === "legacy-success" || outcome === "applied") {
+          assert.equal(
+            toast?.textContent,
+            {
+              add: "Provider added",
+              edit: "Provider saved",
+              delete: "Provider deleted",
+            }[mutation],
+          );
+        } else {
+          assert.equal(toast, null);
+          if (outcome === "pending-restart")
+            assert.ok(exactButton("Safe restart"));
+          if (outcome === "unconfirmed")
+            assert.ok(exactButton("Check application status"));
+          if (outcome === "committed-error")
+            assert.match(
+              document.body.textContent ?? "",
+              /saved.*finalization/iu,
+            );
+        }
+        assert.equal(saved.length, 0);
+        assert.equal(authoritative.profile.maxToolRounds, undefined);
+        assert.equal(
+          exactButtonRequired("Apply").disabled,
+          outcome === "unconfirmed",
+        );
+        assert.ok(document.querySelector(".settings-apply-bar.dirty"));
+        await click(exactButtonRequired("General"));
+        assert.equal(requiredInput("Maximum tool rounds").value, "12");
+        if (outcome !== "unconfirmed") {
+          await click(exactButtonRequired("Apply"));
+          assert.equal(saved[0]?.baseRevision, 1);
+          assert.equal(saved[0]?.maxToolRounds, 12);
+        }
+      } finally {
+        await unmount(harness);
+      }
+    });
+  }
+}
+
+test("Models navigation and Account setup guidance use the same plural label", async () => {
+  const harness = await mountSettings("account");
+  try {
+    await waitFor(() => exactButton("Open model settings"));
+    assert.equal(
+      document.getElementById("settings-tab-models")?.textContent,
+      "Models & providers",
+    );
+    assert.match(
+      document.body.textContent ?? "",
+      /Add an OpenAI subscription in Models & providers to get started\./u,
+    );
+    await click(exactButtonRequired("Open model settings"));
+    assert.equal(
+      document
+        .getElementById("settings-tab-models")
+        ?.getAttribute("aria-selected"),
+      "true",
+    );
+    assert.ok(
+      [...document.querySelectorAll(".settings-panel header h2")].some(
+        (heading) => heading.textContent === "Models & providers",
+      ),
+    );
   } finally {
     await unmount(harness);
   }

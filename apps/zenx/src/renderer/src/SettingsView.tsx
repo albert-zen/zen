@@ -1394,7 +1394,7 @@ function ModelsPanel({
     observedSettings.current = value;
     acceptHostSettings(value);
     setError(null);
-    setStatus(configurationSaveToast(value));
+    setStatus(configurationSaveToast(value, message));
   };
 
   const runMutation = async (
@@ -4576,10 +4576,13 @@ export function configurationSaveMessage(value: PublicHostSettings): string {
 }
 
 // Actionable configuration states already have persistent notices and controls.
-function configurationSaveToast(value: PublicHostSettings): string | null {
+function configurationSaveToast(
+  value: PublicHostSettings,
+  message = i18n.t("settings:settingsView.settingsSaved"),
+): string | null {
   if (value.configuration && value.configuration.status !== "applied")
     return null;
-  return i18n.t("settings:settingsView.settingsSaved");
+  return message;
 }
 
 function LocalSettingsDiagnostic({ detail }: { detail?: string }) {
