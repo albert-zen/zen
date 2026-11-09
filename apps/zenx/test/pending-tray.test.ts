@@ -5,6 +5,40 @@ import { withRuntimeDom } from "./agent-runtime-dom.js";
 import { queueScenario } from "./fixtures/agent-queue-data.js";
 import { emptyComposerState } from "../src/renderer/src/composer-state.js";
 
+test("a new-thread Composer has no queue reorder alert without a failed operation", async () => {
+  await withRuntimeDom(async (h) => {
+    await h.render(queueScenario(0), {
+      thread: null,
+      composer: emptyComposerState(),
+    });
+    const alert = document.querySelector(".pending-tray [role=alert]");
+    assert.equal(alert?.outerHTML ?? null, null);
+  });
+});
+
+test("a real queue reorder failure remains visible only on its owning Thread", async () => {
+  await withRuntimeDom(async (h) => {
+    const owner = queueScenario(0);
+    let calls = 0;
+    await h.render(owner, {
+      onReorderQueued: async () => {
+        calls++;
+        throw new Error("Synthetic reorder rejected");
+      },
+    });
+    await h.click('[data-queue-id="queue-1"] [data-queue-control="move-up"]');
+    const error = () => document.querySelector(".pending-tray > [role=alert]");
+    assert.equal(error()?.textContent, "Synthetic reorder rejected");
+    await h.render(owner, { thread: null });
+    assert.equal(error(), null);
+    await h.render({ ...owner, id: "other-thread" });
+    assert.equal(error(), null);
+    await h.render(owner);
+    assert.equal(error()?.textContent, "Synthetic reorder rejected");
+    assert.equal(calls, 1, "navigation never repeats the rejected mutation");
+  });
+});
+
 test("one composer tray contains Steer above Queue and local sending, with no pending echo in transcript", async () => {
   await withRuntimeDom(async (h) => {
     const scene = queueScenario(3);

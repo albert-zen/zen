@@ -2459,9 +2459,10 @@ function ThreadViewContent({
                   ) : null}
                 </div>
               ) : null}
-              {queueReorderError?.threadId === thread?.id ? (
+              {queueReorderError !== null &&
+              queueReorderError.threadId === thread?.id ? (
                 <p className="queue-row-error" role="alert">
-                  {queueReorderError?.message}
+                  {queueReorderError.message}
                 </p>
               ) : null}
               {thread ? (
