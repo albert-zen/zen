@@ -318,3 +318,243 @@ for (const source of ["rename", "settings"]) {
     }
   });
 }
+
+for (const primaryNavigation of [true, false]) {
+  test(`healthy empty Rooms offers explicit creation and restores focus (primary=${primaryNavigation})`, async () => {
+    const dom = new JSDOM('<div id="root"></div>', {
+      url: "http://localhost",
+      pretendToBeVisual: true,
+    });
+    Object.assign(globalThis, {
+      window: dom.window,
+      document: dom.window.document,
+      React,
+      IS_REACT_ACT_ENVIRONMENT: true,
+      requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+    });
+    Object.assign(window, { zenx: { threads: { list: async () => [] } } });
+    const calls: string[] = [];
+    const sdk = {
+      context: { route: "/plugins/zenx-rooms/rooms", primaryNavigation },
+      navigation: {
+        navigate: () => assert.fail("opening a local form must not navigate"),
+      },
+      commands: {
+        execute: async (command: string) => {
+          calls.push(command);
+          if (command === "list") return { rooms: [] };
+          throw Error(command);
+        },
+      },
+    } as unknown as PluginUiSdkV1;
+    const root = createRoot(document.getElementById("root")!);
+    try {
+      await act(async () =>
+        root.render(React.createElement(RoomsPage, { sdk })),
+      );
+      const entry = document.querySelector<HTMLButtonElement>(
+        ".rooms-chat-empty button",
+      )!;
+      assert.ok(entry, "empty Rooms needs a visible creation entry");
+      assert.equal(entry.textContent?.trim(), "New Room");
+      assert.equal(entry.tabIndex, 0);
+      assert.equal(entry.disabled, false);
+      assert.equal(
+        Boolean(document.querySelector(".rooms-chat-list")),
+        !primaryNavigation,
+      );
+      for (const dismissal of ["Escape", "Close"]) {
+        entry.focus();
+        await act(async () => {
+          entry.click();
+          entry.click();
+        });
+        assert.equal(document.querySelectorAll('[role="dialog"]').length, 1);
+        assert.match(
+          document.querySelector('[role="dialog"]')!.textContent!,
+          /Room name/,
+        );
+        assert.doesNotMatch(
+          document.querySelector('[role="dialog"]')!.textContent!,
+          /Create and say hello/,
+        );
+        assert.ok(calls.every((command) => command === "list"));
+        const close = [
+          ...document.querySelectorAll<HTMLButtonElement>("button"),
+        ].find(
+          (button) =>
+            button.textContent === dismissal ||
+            button.getAttribute("aria-label") === dismissal,
+        )!;
+        if (dismissal === "Escape") {
+          await act(async () =>
+            document.querySelector('[role="dialog"]')!.dispatchEvent(
+              new dom.window.KeyboardEvent("keydown", {
+                key: "Escape",
+                bubbles: true,
+              }),
+            ),
+          );
+        } else {
+          assert.ok(close);
+          await act(async () => close.click());
+        }
+        await new Promise((resolve) =>
+          dom.window.requestAnimationFrame(resolve),
+        );
+        assert.equal(document.querySelector('[role="dialog"]'), null);
+        assert.equal(document.activeElement, entry);
+      }
+      if (!primaryNavigation) {
+        const headerNew = [
+          ...document.querySelectorAll<HTMLButtonElement>(
+            ".rooms-chat-list-head button",
+          ),
+        ].find((button) => button.textContent?.trim() === "New")!;
+        await act(async () => headerNew.click());
+        assert.match(
+          document.querySelector('[role="dialog"]')!.textContent!,
+          /Room name/,
+        );
+      }
+      assert.ok(
+        calls.every((command) => command === "list"),
+        "no create, Turn or message before explicit submission",
+      );
+    } finally {
+      await act(async () => root.unmount());
+      dom.window.close();
+    }
+  });
+}
+
+test("loading and failed Rooms reads do not masquerade as healthy empty Rooms", async () => {
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "http://localhost",
+    pretendToBeVisual: true,
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    React,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.assign(window, { zenx: { threads: { list: async () => [] } } });
+  let reject!: (reason: Error) => void;
+  const reading = new Promise((_, fail) => {
+    reject = fail;
+  });
+  const sdk = {
+    context: { route: "/plugins/zenx-rooms/rooms", primaryNavigation: true },
+    commands: {
+      execute: async (command: string) => {
+        assert.equal(command, "list");
+        return reading;
+      },
+    },
+  } as unknown as PluginUiSdkV1;
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    await act(async () => root.render(React.createElement(RoomsPage, { sdk })));
+    assert.match(
+      document.querySelector('[role="status"]')!.textContent!,
+      /Loading rooms/,
+    );
+    assert.equal(document.querySelector(".rooms-chat-empty button"), null);
+    await act(async () => reject(Error("Room source unavailable")));
+    assert.equal(document.querySelector(".rooms-chat-empty button"), null);
+    assert.doesNotMatch(
+      document.querySelector("main")!.textContent!,
+      /Create a room/,
+    );
+    assert.match(
+      document.querySelector('[role="alert"]')!.textContent!,
+      /Room source unavailable/,
+    );
+    const recoveredSdk = {
+      ...sdk,
+      commands: {
+        ...sdk.commands,
+        execute: async (command: string) => {
+          assert.equal(command, "list");
+          return { rooms: [] };
+        },
+      },
+    } as unknown as PluginUiSdkV1;
+    await act(async () =>
+      root.render(React.createElement(RoomsPage, { sdk: recoveredSdk })),
+    );
+    assert.equal(document.querySelector('[role="alert"]'), null);
+    assert.equal(
+      document.querySelector(".rooms-chat-empty button")?.textContent,
+      "New Room",
+    );
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
+
+for (const scenario of [
+  "missing requested Room",
+  "existing Rooms without selection",
+] as const) {
+  test(`${scenario} is not an empty creation state`, async () => {
+    const dom = new JSDOM('<div id="root"></div>', {
+      url: "http://localhost",
+      pretendToBeVisual: true,
+    });
+    Object.assign(globalThis, {
+      window: dom.window,
+      document: dom.window.document,
+      React,
+      IS_REACT_ACT_ENVIRONMENT: true,
+    });
+    Object.assign(window, { zenx: { threads: { list: async () => [] } } });
+    const sdk = {
+      context: {
+        route: `/plugins/zenx-rooms/rooms${scenario === "missing requested Room" ? "?roomId=missing" : ""}`,
+        primaryNavigation: true,
+      },
+      commands: {
+        execute: async (command: string) => {
+          assert.equal(command, "list");
+          return {
+            rooms:
+              scenario === "missing requested Room"
+                ? []
+                : [
+                    {
+                      id: "existing",
+                      name: "Existing Room",
+                      members: [],
+                      messages: [],
+                      createdAt: 0,
+                    },
+                  ],
+          };
+        },
+      },
+    } as unknown as PluginUiSdkV1;
+    const root = createRoot(document.getElementById("root")!);
+    try {
+      await act(async () =>
+        root.render(React.createElement(RoomsPage, { sdk })),
+      );
+      assert.equal(document.querySelector(".rooms-chat-empty button"), null);
+      assert.doesNotMatch(
+        document.querySelector("main")!.textContent!,
+        /Create a room/,
+      );
+      assert.match(
+        document.querySelector("main")!.textContent!,
+        scenario === "missing requested Room"
+          ? /Rooms are unavailable/
+          : /Select a room/,
+      );
+    } finally {
+      await act(async () => root.unmount());
+      dom.window.close();
+    }
+  });
+}

@@ -1836,6 +1836,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const dialogInvoker = useRef<HTMLElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [roomsReadError, setRoomsReadError] = useState<string | null>(null);
   useEffect(() => {
     if (!primaryNavigation) return;
     selectedRef.current = initialRoomId;
@@ -2184,6 +2185,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
         }),
       );
     }
+    setRoomsReadError(null);
     setLoading(false);
   };
   useEffect(() => {
@@ -2197,12 +2199,12 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       .catch((reason: unknown) => setError(describeError(reason)));
     void refresh().catch((reason: unknown) => {
       setLoading(false);
-      setError(describeError(reason));
+      setRoomsReadError(describeError(reason));
     });
     const timer = setInterval(
       () =>
         void refresh().catch((reason: unknown) =>
-          setError(describeError(reason)),
+          setRoomsReadError(describeError(reason)),
         ),
       3000,
     );
@@ -2212,6 +2214,14 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     if (panel === "rename") dialog.current?.querySelector("input")?.focus();
     else if (panel !== null) dialogClose.current?.focus();
   }, [panel, assistantMode, assistantProjectPicker]);
+  const openRoomCreation = (event: React.MouseEvent<HTMLButtonElement>) => {
+    dialogInvoker.current = event.currentTarget;
+    setAssistantMode(false);
+    setName("");
+    setMemberName("");
+    setThreadId("");
+    setPanel("create");
+  };
   const closeDialog = () => {
     if (panel === "create" && assistantMode && greetingAdmission.current)
       greetingAdmission.current.cancelled = true;
@@ -2887,17 +2897,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
         <nav className="rooms-chat-list" aria-label={i18n.t("panels:rooms")}>
           <div className="rooms-chat-list-head">
             <strong>{i18n.t("panels:rooms")}</strong>
-            <button
-              type="button"
-              onClick={(event) => {
-                dialogInvoker.current = event.currentTarget;
-                setAssistantMode(false);
-                setName("");
-                setMemberName("");
-                setThreadId("");
-                setPanel("create");
-              }}
-            >
+            <button type="button" onClick={openRoomCreation}>
               <Icon name="plus" size={15} /> {i18n.t("panels:new")}
             </button>
             <button
@@ -2946,10 +2946,30 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           <p className="rooms-chat-empty" role="status">
             {i18n.t("panels:loadingRooms")}
           </p>
+        ) : room === undefined && (roomsReadError || error || initialRoomId) ? (
+          <div className="rooms-chat-empty" role="alert">
+            <h3>{i18n.t("panels:roomsAreUnavailable")}</h3>
+            {roomsReadError || error ? <p>{roomsReadError || error}</p> : null}
+          </div>
         ) : room === undefined ? (
           <div className="rooms-chat-empty">
             <h3>{i18n.t("panels:aPlaceToWorkTogether")}</h3>
-            <p>{i18n.t("panels:createARoomToBringYourAgents")}</p>
+            <p>
+              {i18n.t(
+                data.rooms.length === 0
+                  ? "panels:createARoomToBringYourAgents"
+                  : "panels:selectARoomToContinue",
+              )}
+            </p>
+            {data.rooms.length === 0 ? (
+              <button
+                type="button"
+                className="primary-button"
+                onClick={openRoomCreation}
+              >
+                {i18n.t("panels:newRoom")}
+              </button>
+            ) : null}
           </div>
         ) : (
           <>
@@ -4191,7 +4211,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 ) : null}
               </details>
             ) : null}
-            {error ? <p role="alert">{error}</p> : null}
+            {error || roomsReadError ? (
+              <p role="alert">{error || roomsReadError}</p>
+            ) : null}
           </section>
         </div>
       ) : null}
