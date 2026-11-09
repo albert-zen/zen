@@ -383,7 +383,7 @@ test("every preset, accent, and contrast combination preserves readable semantic
   dom.window.close();
 });
 
-test("Appearance separates choice labels from supporting copy without competing selection outlines", async () => {
+test("Appearance separates choice labels from supporting copy while preserving selected and focus cues", async () => {
   const styles = await readFile(
     new URL("../src/renderer/src/styles.css", import.meta.url),
     "utf8",
@@ -410,7 +410,7 @@ test("Appearance separates choice labels from supporting copy without competing 
   }
   assert.match(
     styles,
-    /\.appearance-preset-options input:checked \+ span,\s*\.appearance-accent-options input:checked \+ span,\s*\.appearance-inline-options input:checked \+ span\s*\{[^}]*border-color:\s*var\(--color-border-subtle\);[^}]*background:\s*var\(--color-accent-soft\);[^}]*color:\s*var\(--color-text-primary\)/u,
+    /\.appearance-preset-options input:checked \+ span,\s*\.appearance-accent-options input:checked \+ span,\s*\.appearance-inline-options input:checked \+ span\s*\{[^}]*border-color:\s*var\(--color-border-accent\);[^}]*background:\s*var\(--color-accent-soft\);[^}]*color:\s*var\(--color-text-primary\)/u,
   );
   assert.match(
     styles,

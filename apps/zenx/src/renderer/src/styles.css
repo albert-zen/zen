@@ -4312,7 +4312,7 @@ button:disabled {
 .appearance-preset-options input:checked + span,
 .appearance-accent-options input:checked + span,
 .appearance-inline-options input:checked + span {
-  border-color: var(--color-border-subtle);
+  border-color: var(--color-border-accent);
   background: var(--color-accent-soft);
   color: var(--color-text-primary);
 }
