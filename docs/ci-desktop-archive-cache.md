@@ -35,14 +35,26 @@ unsupported by this cache helper, rather than being reported as verified hits.
 
 ## Workflow coverage and costs
 
+Electron 43.2.0 has no npm `postinstall`: its `index.js` lazily invokes
+`install.js` on first `require("electron")` when the executable is missing.
+Installing its npm package does not mean a ZIP was downloaded. The 32 wired jobs
+are possible entry points, not 32 proven archive consumers. For example, PR quick
+units and the WinApp adapter smoke can finish without using Electron. A cold
+restore followed by `save: miss` in those jobs is expected and creates no cache;
+it is not evidence of a verified hit, download failure or path mismatch.
+No eager Electron download is added merely to manufacture a save. A real consumer
+that fails its cold download also has nothing valid to save; partial bytes remain
+ineligible. Cache usefulness must be established from a real consumer's verified
+archive save and subsequent restored-byte verification, not job success alone.
+
 The composite action restores before each normal root `npm ci` and independently
-validates/saves after consumers in all 32 existing job definitions across 20
+validates/saves after work in all 32 existing root-install job definitions across 20
 workflows (matrix executions add more jobs). This includes the nine main CI
-consumers, including Android's root install, plus app-shot, native information,
+potential consumers, including Android's root install, plus app-shot, native information,
 file navigation, user questions and Windows diagnostics. The contract discovers
-all ordinary root installers so adding one without cache wiring fails. The
+all ordinary root install entries so adding one without cache wiring fails. The
 existing `--ignore-scripts` selection/fast-feedback installs and the mobile-only
-install do not consume Electron and are not changed. RTK restoration is enabled
+install are not changed. RTK restoration is enabled
 only on darwin-arm64, matching the existing preparation script. Other targets
 save no RTK archive. Provider archives retain their separate existing cache.
 
@@ -69,3 +81,18 @@ This change adds no HTTP retries. A narrowly bounded archive GET retry could be
 implemented separately, but Electron's installer and packager need one consistent
 downloader policy; retrying the entire `npm ci`, build or smoke command would also
 repeat unrelated work or effects and is not used here.
+
+## Local installer validation and test isolation
+
+In addition to synthetic downloader tests, the locked Linux x64 `install.js` was
+run against the official 43.2.0 archive in an isolated package copy. It created
+the planned 124,904,101-byte ZIP and passed the pinned SHA256. A second fresh
+installer with `fetch` disabled succeeded from that cache, and the packager's
+actual `downloadArtifact` call reused it without a network request. No Electron
+application was launched. This is local Linux installer evidence, not a hosted
+Actions warm-hit or cross-platform claim.
+
+Temporary CLI fixtures explicitly remove inherited `electron_config_cache`,
+`GITHUB_ENV`, `GITHUB_OUTPUT` and `GITHUB_STEP_SUMMARY`. Their regression supplies
+hosted-like values and verifies that the real runner files are not changed.
+Production cache-root validation remains fail-closed.

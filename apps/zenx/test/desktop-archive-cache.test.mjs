@@ -21,7 +21,7 @@ const rootInstall = (step, job) =>
     job.defaults?.run?.["working-directory"] ??
     ".") === ".";
 
-test("every ordinary root npm ci consumer restores before installation and verifies before saving", () => {
+test("every root npm ci entry prepares potential archive consumers and verifies before saving", () => {
   let count = 0;
   let main = 0;
   for (const file of workflows) {

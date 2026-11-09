@@ -20,6 +20,20 @@ import {
 const source = path.resolve(import.meta.dirname, "..");
 const bytes = Buffer.from("synthetic archive; never extracted or executed");
 const sha = createHash("sha256").update(bytes).digest("hex");
+// Fixtures must never inherit a hosted job's cache root or append temporary
+// paths/outputs into the real runner's environment, output or summary files.
+function fixtureEnvironment(inherited = process.env) {
+  const env = { ...inherited };
+  for (const key of [
+    "electron_config_cache",
+    "GITHUB_ENV",
+    "GITHUB_OUTPUT",
+    "GITHUB_STEP_SUMMARY",
+  ])
+    delete env[key];
+  return env;
+}
+
 async function fixture(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), "desktop-archives-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -231,12 +245,29 @@ test("digest change cannot hit an earlier key; malformed RTK authority is reject
 test("preinstall CLI requires no installed modules and rejects all upstream mirror override spellings", async (t) => {
   const f = await fixture(t);
   const { spawnSync } = await import("node:child_process");
+  const hostedFile = path.join(f.root, "hosted-env-sentinel");
+  await writeFile(hostedFile, "hosted runner state must stay unchanged\n");
+  const inherited = {
+    ...process.env,
+    electron_config_cache: path.join(
+      f.root,
+      "different-hosted-checkout",
+      "cache",
+    ),
+    GITHUB_ENV: hostedFile,
+    GITHUB_OUTPUT: hostedFile,
+    GITHUB_STEP_SUMMARY: hostedFile,
+  };
   const cli = spawnSync(
     process.execPath,
     [path.join(source, "scripts/desktop-archive-cache.mjs"), "plan"],
-    { cwd: f.root, encoding: "utf8" },
+    { cwd: f.root, encoding: "utf8", env: fixtureEnvironment(inherited) },
   );
   assert.equal(cli.status, 0, cli.stderr);
+  assert.equal(
+    await readFile(hostedFile, "utf8"),
+    "hosted runner state must stay unchanged\n",
+  );
   for (const key of [
     "ELECTRON_CUSTOM_VERSION",
     "NPM_CONFIG_ELECTRON_MIRROR",
@@ -257,4 +288,33 @@ test("preinstall CLI requires no installed modules and rejects all upstream mirr
     }),
     /cache root differs/,
   );
+});
+
+test("the locked Electron package installs lazily and absence is not a verified cache save", async (t) => {
+  const manifest = JSON.parse(
+    await readFile(
+      path.join(source, "node_modules/electron/package.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(manifest.version, "43.2.0");
+  assert.equal(manifest.scripts?.postinstall, undefined);
+  const entry = await readFile(
+    path.join(source, "node_modules/electron/index.js"),
+    "utf8",
+  );
+  assert.match(
+    entry,
+    /spawnSync\(process\.execPath, \[path\.join\(__dirname, 'install\.js'\)\]/u,
+  );
+  const f = await fixture(t);
+  const logs = [];
+  const output = await runArchiveCache("save", {
+    root: f.root,
+    env: {},
+    log: (line) => logs.push(line),
+  });
+  assert.equal(output["electron-verified"], "false");
+  assert.match(logs[0], /archive save: miss/u);
+  await assert.rejects(readFile(output["electron-path"]), /ENOENT/u);
 });
