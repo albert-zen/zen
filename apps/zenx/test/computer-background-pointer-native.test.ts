@@ -12,7 +12,9 @@ test(
   "production background mouse pairs preserve button identity and fail closed",
   { skip: process.platform !== "darwin", timeout: 90000 },
   async (t) => {
-    const start = MAC_BOUND_TARGET_SOURCE.indexOf("func backgroundClickPair("),
+    const start = MAC_BOUND_TARGET_SOURCE.indexOf(
+        "func requireUnchangedDesktop(",
+      ),
       end = MAC_BOUND_TARGET_SOURCE.indexOf(
         "func backgroundAppKeyboard(",
         start,
@@ -62,6 +64,7 @@ var events: [CGEvent] = [], phases: [[String: Any]] = []
 struct DesktopFence: Equatable {
   let foreground: Int32 = 1; let windows = [17]; let version: Int
   init() throws { version = generation }
+  func changedFields(from baseline: DesktopFence) -> [String] { version == baseline.version ? [] : ["fixture_generation"] }
 }
 func lockedSession() throws -> Bool { false }
 func windowInputPermission() throws { if cancelled || mode == "permission" { try refuse("permission/cancel") } }

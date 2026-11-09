@@ -653,7 +653,7 @@ jobs:
         if: ${{ env.CI_RUN_FULL == 'true' }}
         env:
           ZENX_COMPUTER_CONSTRUCTION_EVIDENCE: ${{ runner.temp }}/computer-event-construction.json
-        run: node --import tsx --test apps/zenx/test/computer-native-dispatch.test.ts apps/zenx/test/computer-native-construction.test.ts apps/zenx/test/computer-bound-native.test.ts apps/zenx/test/computer-app-keyboard-native.test.ts apps/zenx/test/computer-background-pointer-native.test.ts
+        run: node --import tsx --test apps/zenx/test/computer-native-dispatch.test.ts apps/zenx/test/computer-native-construction.test.ts apps/zenx/test/computer-bound-native.test.ts apps/zenx/test/computer-app-keyboard-native.test.ts apps/zenx/test/computer-background-pointer-native.test.ts apps/zenx/test/computer-app-desktop-fence.test.ts
       - name: Retain construction-only CoreGraphics metadata
         if: ${{ env.CI_RUN_FULL == 'true' && (always()) }}
         uses: actions/upload-artifact@v4
