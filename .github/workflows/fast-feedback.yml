@@ -2,6 +2,7 @@ name: Fast feedback (not full acceptance)
 
 on:
   pull_request:
+  workflow_dispatch:
   push:
     branches: [main]
 
@@ -33,20 +34,28 @@ jobs:
           CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node scripts/ci-impact-shadow.mjs "${{ runner.temp }}/impact-shadow.json"
+      - name: Select conservative documentation-only feedback
+        id: selection
+        env:
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          CI_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node scripts/ci-docs-selection.mjs "${{ runner.temp }}/docs-selection.json"
       - name: Verify shadow planner contracts
-        run: node --test scripts/test/ci-impact-shadow.test.mjs
+        run: node --test scripts/test/ci-impact-shadow.test.mjs scripts/test/ci-docs-selection.test.mjs
       - name: Install static-check dependencies without native lifecycle work
         id: dependencies
         timeout-minutes: 4
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Build SDK declarations for standalone typechecks
+        if: ${{ steps.selection.outputs.docs-only != 'true' }}
         id: sdk
         run: npm run build --workspace @zenx/plugin-sdk
       - name: Core and CLI typecheck
-        if: ${{ !cancelled() && steps.sdk.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.selection.outputs.docs-only != 'true' && steps.sdk.outcome == 'success' }}
         run: npm run typecheck
       - name: ZenX main and renderer typecheck
-        if: ${{ !cancelled() && steps.sdk.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.selection.outputs.docs-only != 'true' && steps.sdk.outcome == 'success' }}
         run: npm --workspace apps/zenx run typecheck:prepared
       - name: Repository Prettier check (Python lint remains in full CI)
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
@@ -56,9 +65,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: impact-shadow-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/impact-shadow.json
+          path: |
+            ${{ runner.temp }}/impact-shadow.json
+            ${{ runner.temp }}/docs-selection.json
           if-no-files-found: error
           retention-days: 14
       - name: Clarify feedback boundary
         if: ${{ always() }}
-        run: echo 'Early static feedback only. Shadow impact candidates never skip tests. All existing full CI, native, build, integration and UI acceptance checks remain required.' >> "$GITHUB_STEP_SUMMARY"
+        run: echo 'Early static feedback only. Shadow candidates remain advisory. Verified documentation-only PRs retain format checks and named CI receipts; all other changes, main pushes and manual dispatch run full acceptance.' >> "$GITHUB_STEP_SUMMARY"

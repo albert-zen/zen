@@ -31,6 +31,10 @@ export interface ZenXProjectProjectionSnapshot {
 }
 
 export type ProjectRealpath = (candidate: string) => Promise<string>;
+export type ProjectGitCommonDirectory = (
+  candidate: string,
+  signal: AbortSignal,
+) => Promise<string | null>;
 
 export interface ProjectThreadStartOptions {
   model?: string;
@@ -92,6 +96,7 @@ const lexicalProjectRealpath: ProjectRealpath = async (candidate) => candidate;
 export class ZenXProjectProjection {
   readonly #platform: NodeJS.Platform;
   readonly #realpath: ProjectRealpath;
+  readonly #gitCommonDirectory: ProjectGitCommonDirectory;
   readonly #gitIdentities = new Map<
     string,
     { until: number; result: string | null; verified: boolean }
@@ -114,10 +119,15 @@ export class ZenXProjectProjection {
   constructor(
     platform: NodeJS.Platform = process.platform,
     resolveRealpath?: ProjectRealpath,
+    resolveGitCommonDirectory?: ProjectGitCommonDirectory,
   ) {
     this.#platform = platform;
     this.#realpath =
       resolveRealpath ?? defaultProjectRealpath(platform, process.platform);
+    this.#gitCommonDirectory =
+      resolveGitCommonDirectory ??
+      ((candidate, signal) =>
+        resolveProjectGitCommonDirectory(candidate, signal, platform));
   }
 
   async updateConfiguration(
@@ -499,46 +509,46 @@ export class ZenXProjectProjection {
     }
     return attempted;
   }
-
-  async #gitCommonDirectory(
-    candidate: string,
-    signal: AbortSignal,
-  ): Promise<string | null> {
-    try {
-      // Git environment overrides can redirect -C to a different repository.
-      const env = Object.fromEntries(
-        Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
-      );
-      const { stdout } = await execFileAsync(
-        "git",
-        [
-          "-C",
-          candidate,
-          "rev-parse",
-          "--is-inside-work-tree",
-          "--path-format=absolute",
-          "--git-common-dir",
-        ],
-        { env, signal, timeout: 1200, maxBuffer: 4096, encoding: "utf8" },
-      );
-      const [inside, common, ...extra] = stdout.trim().split(/\r?\n/u);
-      if (
-        inside !== "true" ||
-        extra.length > 0 ||
-        !common ||
-        !path.isAbsolute(common)
-      )
-        return null;
-      const physical = await realpath(common);
-      return this.#platform === "win32"
-        ? physical.toLocaleLowerCase("en-US")
-        : physical;
-    } catch {
-      return null;
-    }
-  }
 }
 
+export async function resolveProjectGitCommonDirectory(
+  candidate: string,
+  signal: AbortSignal,
+  platform: NodeJS.Platform = process.platform,
+): Promise<string | null> {
+  try {
+    // Git environment overrides can redirect -C to a different repository.
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
+    );
+    const { stdout } = await execFileAsync(
+      "git",
+      [
+        "-C",
+        candidate,
+        "rev-parse",
+        "--is-inside-work-tree",
+        "--path-format=absolute",
+        "--git-common-dir",
+      ],
+      { env, signal, timeout: 1200, maxBuffer: 4096, encoding: "utf8" },
+    );
+    const [inside, common, ...extra] = stdout.trim().split(/\r?\n/u);
+    if (
+      inside !== "true" ||
+      extra.length > 0 ||
+      !common ||
+      !path.isAbsolute(common)
+    )
+      return null;
+    const physical = await realpath(common);
+    return platform === "win32"
+      ? physical.toLocaleLowerCase("en-US")
+      : physical;
+  } catch {
+    return null;
+  }
+}
 async function withinGitBudget(
   work: Promise<unknown>,
   deadline: number,

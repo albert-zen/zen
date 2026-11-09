@@ -495,7 +495,7 @@ test("CI uploads only failure JSON from the dedicated same-step diagnostic direc
   const directory =
     "${{ runner.temp }}/zenx-native-guard-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}";
   assert.equal(smoke.env?.ZENX_NATIVE_GUARD_DIAGNOSTICS_DIR, directory);
-  assert.equal(artifact.if, "${{ failure() }}");
+  assert.equal(artifact.if, "${{ env.CI_RUN_FULL == 'true' && (failure()) }}");
   assert.equal(artifact.with?.path, `${directory}/*.json`);
   assert.equal(artifact.with?.["if-no-files-found"], "ignore");
   assert.equal(artifact.with?.["retention-days"], 14);

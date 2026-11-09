@@ -108,7 +108,7 @@ test("native startup CI reuses the single downstream portable package and retain
   const upload = owner.steps.find(
     (step) => step.with?.name === "zenx-windows-startup-evidence",
   );
-  assert.equal(upload?.if, "${{ always() }}");
+  assert.equal(upload?.if, "${{ env.CI_RUN_FULL == 'true' && (always()) }}");
   assert.equal(upload.with.path, "apps/zenx/.packaged/startup-evidence");
   assert.equal(
     workflow.jobs["zenx-windows-project-workspace-smoke"],
