@@ -637,7 +637,7 @@ function PawWelcome({ onOpen }: { onOpen(route: string): void }) {
     <div className="paw-welcome">
       <strong>{i18n.t("panels:meetYourPaw")}</strong>
       <p>{i18n.t("panels:pawWelcomeDescription")}</p>
-      <button type="button" className="primary-button" onClick={start}>
+      <button type="button" className="secondary-button" onClick={start}>
         {i18n.t("panels:setUpPaw")}
       </button>
       <button

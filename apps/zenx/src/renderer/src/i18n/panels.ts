@@ -2,6 +2,8 @@ export const en = {
   informationSaving:
     "Saving the retained edit. Closing this panel will not repeat it.",
   informationComponents: "Information",
+  informationEmptyHint:
+    "Information appears here when available. Use Customize to show or add components.",
   informationRefresh: "Refresh information",
   informationCustomize: "Customize information",
   informationManage: "Customize",
@@ -1154,6 +1156,7 @@ export const en = {
 export const zhCN = {
   informationSaving: "正在保存保留的修改，关闭面板不会重复提交。",
   informationComponents: "资料",
+  informationEmptyHint: "可用资料会显示在这里。可通过管理显示或添加组件。",
   informationRefresh: "刷新资料",
   informationCustomize: "自定义资料",
   informationManage: "管理",

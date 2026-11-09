@@ -143,6 +143,7 @@ async function fixture(kind: "thread" | "room" = "thread") {
     { id: "asking-attention" },
     "Unanswered question remains available",
   );
+  let threadId = "member";
   const render = async (extra = 0) =>
     act(async () => {
       root.render(
@@ -152,9 +153,7 @@ async function fixture(kind: "thread" | "room" = "thread") {
           React.createElement("p", null, `Synthetic transcript delta ${extra}`),
           React.createElement(EditableInformationPanel, {
             owner:
-              kind === "thread"
-                ? { kind, threadId: "member" }
-                : { kind, roomId: "room" },
+              kind === "thread" ? { kind, threadId } : { kind, roomId: "room" },
             threads,
             snapshot,
             registry,
@@ -229,6 +228,10 @@ async function fixture(kind: "thread" | "room" = "thread") {
         await new Promise((resolve) => setTimeout(resolve, 30));
       }),
     render,
+    switchThread: async (id: string) => {
+      threadId = id;
+      await render();
+    },
     hide: () =>
       act(async () =>
         root.render(React.createElement("div", null, "Panel closed")),
@@ -374,6 +377,13 @@ test("conflicts retain exact edit and require explicit reapply; unknown writes a
     );
     f.fail("unknown");
     await f.click("Hide", f.row("shell"));
+    assert.match(document.body.textContent!, /write outcome is unknown/);
+    await f.click("Done");
+    assert.equal(
+      emptyExplanation(),
+      null,
+      "an unknown edit is not an empty state",
+    );
     assert.match(document.body.textContent!, /write outcome is unknown/);
     const reapply = [
       ...document.querySelectorAll<HTMLButtonElement>("button"),
@@ -675,6 +685,88 @@ test("saved placeholder-only layouts are quiet without migration and remain remo
     );
     await f.click("Done");
     assert.doesNotMatch(document.body.textContent!, /no admitted/);
+  } finally {
+    await f.close();
+  }
+});
+
+const emptyExplanation = () => document.querySelector(".information-empty");
+const informationHeading = () =>
+  document.querySelector('[role="heading"][aria-level="2"]');
+
+test("information heading and guidance orient empty views without hiding attention or stopping providers", async () => {
+  const f = await fixture();
+  try {
+    assert.equal(informationHeading()?.textContent, "Information");
+    assert.equal(emptyExplanation(), null);
+    f.setHasTriggers(false);
+    await f.focus();
+    assert.match(emptyExplanation()?.textContent ?? "", /Use Customize/);
+    assert.ok(document.querySelector("#asking-attention"));
+    assert.ok(f.row("triggers"), "empty providers remain mounted");
+    await f.click("Customize information");
+    assert.equal(emptyExplanation(), null, "editing keeps its own diagnostics");
+    assert.equal(informationHeading()?.textContent, "Information");
+    await f.click("Done");
+    assert.ok(emptyExplanation());
+    f.setHasTriggers(true);
+    await f.focus();
+    assert.equal(emptyExplanation(), null, "content arrival removes guidance");
+    await f.click("Hide · Thread triggers");
+    assert.ok(emptyExplanation(), "explicitly hidden content offers Customize");
+    assert.equal(f.updates.length, 1);
+    await act(async () => {
+      await i18n.changeLanguage("zh");
+    });
+    assert.equal(informationHeading()?.textContent, "资料");
+    assert.match(
+      emptyExplanation()?.textContent ?? "",
+      /通过管理显示或添加组件/,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("empty guidance waits for the current owner's layout and never replaces read errors", async () => {
+  const f = await fixture();
+  try {
+    f.setHasTriggers(false);
+    await f.focus();
+    assert.ok(emptyExplanation());
+    const release = f.holdRead();
+    await f.switchThread("next-owner");
+    assert.equal(informationHeading()?.textContent, "Information");
+    assert.equal(
+      emptyExplanation(),
+      null,
+      "old owner's layout is not empty-state evidence",
+    );
+    await act(async () => {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+    assert.ok(emptyExplanation());
+    const originalRead = f.api.read;
+    f.api.read = async () => {
+      throw Error("Synthetic layout read failed");
+    };
+    await f.focus();
+    assert.equal(emptyExplanation(), null);
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /Synthetic layout read failed/,
+    );
+    await f.hide();
+    const releaseInitial = f.holdRead();
+    f.api.read = originalRead;
+    await f.render();
+    assert.equal(emptyExplanation(), null);
+    assert.equal(informationHeading()?.textContent, "Information");
+    await act(async () => {
+      releaseInitial();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
   } finally {
     await f.close();
   }

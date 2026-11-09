@@ -480,6 +480,12 @@ export function SettingsView({
             <Activity mode={active && tab === "account" ? "visible" : "hidden"}>
               <AccountPanel
                 settings={settings}
+                onOpenModels={() => {
+                  onTabChange("models");
+                  navRef.current
+                    ?.querySelector<HTMLButtonElement>('[data-tab="models"]')
+                    ?.focus();
+                }}
                 busy={busy}
                 manualCode={manualCode}
                 setBusy={setBusy}
@@ -1093,6 +1099,7 @@ export function ArchivedThreadsPanel({
 
 function AccountPanel({
   settings,
+  onOpenModels,
   busy,
   manualCode,
   setBusy,
@@ -1101,6 +1108,7 @@ function AccountPanel({
   setSettings,
 }: {
   settings: PublicHostSettings;
+  onOpenModels(): void;
   busy: string | null;
   manualCode: boolean;
   setBusy(value: string | null): void;
@@ -1167,8 +1175,15 @@ function AccountPanel({
                   : t("settingsView.signInToConnectYourSubscription")}
             </span>
           </div>
-          {!subscriptionConfigured ? null : settings.subscription
-              .authenticated ? (
+          {!subscriptionConfigured ? (
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={onOpenModels}
+            >
+              {t("settingsView.openModelSettings")}
+            </button>
+          ) : settings.subscription.authenticated ? (
             <button
               className="danger-button"
               type="button"
@@ -3834,6 +3849,13 @@ function AppearancePanel() {
                     <strong>{appearanceLabel(option)}</strong>
                     <small>{t(appearanceAccentIntent[option])}</small>
                   </span>
+                  {appearance.accent === option ? (
+                    <Icon
+                      name="check"
+                      size={14}
+                      className="appearance-choice-check"
+                    />
+                  ) : null}
                 </span>
               </label>
             ))}
@@ -4201,7 +4223,16 @@ function PresetFieldset({
               onChange={() => onChange(option)}
             />
             <span>
-              <strong>{appearanceLabel(option)}</strong>
+              <span className="appearance-choice-title">
+                <strong>{appearanceLabel(option)}</strong>
+                {value === option ? (
+                  <Icon
+                    name="check"
+                    size={14}
+                    className="appearance-choice-check"
+                  />
+                ) : null}
+              </span>
               <small>{t(appearancePresetIntent[option])}</small>
             </span>
           </label>

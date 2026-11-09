@@ -4203,9 +4203,22 @@ button:disabled {
   font-size: var(--font-size-caption);
   font-weight: 600;
 }
+.appearance-choice-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+}
+.appearance-choice-check {
+  flex: none;
+  margin-left: auto;
+  color: var(--color-text-primary);
+}
 .appearance-preset-options small {
   color: var(--color-text-muted);
-  font-size: 8px;
+  font-size: var(--font-size-caption);
+  line-height: 1.4;
 }
 .appearance-preset-options input:checked + span,
 .appearance-accent-options input:checked + span,
@@ -4252,7 +4265,8 @@ button:disabled {
 }
 .appearance-accent-options small {
   color: var(--color-text-muted);
-  font-size: 8px;
+  font-size: var(--font-size-caption);
+  line-height: 1.4;
 }
 .appearance-control-list {
   display: grid;

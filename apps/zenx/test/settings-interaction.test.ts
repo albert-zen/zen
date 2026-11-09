@@ -1801,6 +1801,18 @@ test("Appearance is an independent Settings section and persists the complete pr
     await act(async () => emberDark.click());
     await act(async () => jade.click());
     await act(async () => highContrast.click());
+    for (const choice of [cobaltLight, emberDark, jade]) {
+      assert.ok(
+        choice.closest("label")?.querySelector(".appearance-choice-check"),
+        "selected color choices have a visible non-color check marker",
+      );
+    }
+    assert.equal(
+      appearanceChoice("appearance-accent", "azure")
+        ?.closest("label")
+        ?.querySelector(".appearance-choice-check"),
+      null,
+    );
     assert.equal(document.documentElement.dataset.themePreset, "cobalt");
     assert.equal(document.documentElement.dataset.accent, "jade");
     assert.equal(document.documentElement.dataset.contrast, "high");
@@ -4691,6 +4703,25 @@ test("committed Provider save failure keeps local diagnostic after editor closes
     assert.equal(detail.open, false);
     assert.match(detail.textContent ?? "", /worker unavailable after save/);
     assert.match(document.body.textContent ?? "", /saved.*finalization/iu);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("unconfigured Account offers a focused route to provider setup without signing in", async () => {
+  const harness = await mountSettings("account", {
+    initialSettings: { ...settings, subscriptionProviderProfileId: null },
+  });
+  try {
+    await waitFor(() => exactButton("Open model settings"));
+    await click(exactButtonRequired("Open model settings"));
+    const modelsTab = document.getElementById("settings-tab-models");
+    assert.equal(modelsTab?.getAttribute("aria-selected"), "true");
+    assert.equal(document.activeElement, modelsTab);
+    assert.ok(exactButton("Add provider"));
+    await click(document.getElementById("settings-tab-account")!);
+    assert.ok(exactButton("Open model settings"));
+    assert.equal(document.querySelector(".provider-editor"), null);
   } finally {
     await unmount(harness);
   }

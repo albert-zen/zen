@@ -521,8 +521,8 @@ function InformationPanel({
         </div>
       ) : null}
       <div className="information-settings-toolbar">
-        <span>
-          {editing || hasVisibleContent ? t("informationComponents") : null}
+        <span role="heading" aria-level={2}>
+          {t("informationComponents")}
         </span>
         <button
           type="button"
@@ -597,6 +597,14 @@ function InformationPanel({
             </button>
           </div>
         </div>
+      ) : null}
+      {!editing &&
+      receipt?.owner.kind === owner.kind &&
+      receipt.owner.id === ownerId &&
+      !error &&
+      !pending &&
+      !hasVisibleContent ? (
+        <p className="information-empty">{t("informationEmptyHint")}</p>
       ) : null}
       {!receipt ? (
         editing ? (

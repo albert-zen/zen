@@ -856,6 +856,7 @@ export const en = {
   "settingsView.notSignedIn": "Not signed in",
   "settingsView.accountConnected": "Account connected",
   "settingsView.connectAnAccount": "Connect an account",
+  "settingsView.openModelSettings": "Open model settings",
   "settingsView.addAnOpenaiSubscriptionInModelsProviderToGet":
     "Add an OpenAI subscription in Models & provider to get started.",
   "settingsView.yourSignInDetailsAreStoredSecurelyOnThis":
@@ -2172,6 +2173,7 @@ export const zhCN: Record<keyof typeof en, string> = {
   "settingsView.notSignedIn": "未登录",
   "settingsView.accountConnected": "账号已关联",
   "settingsView.connectAnAccount": "关联账号",
+  "settingsView.openModelSettings": "打开模型设置",
   "settingsView.addAnOpenaiSubscriptionInModelsProviderToGet":
     "在模型和服务商中添加OpenAI 订阅以开始使用。",
   "settingsView.yourSignInDetailsAreStoredSecurelyOnThis":
