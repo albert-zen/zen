@@ -68,6 +68,10 @@ independent and tie it to an immutable commit/evidence manifest.
 
 ## Checkpoints and evidence
 
+Start with [`checkpoints/implementation-summary.md`](checkpoints/implementation-summary.md)
+for implemented changes, final code identity, evidence navigation and remaining
+verification limits. Historical checkpoint source identities remain unchanged.
+
 - First implementation: `checkpoints/first-slice.md`, with native manifests and
   independent baseline Sol/Terra reviews.
 - Independent paired challenge: `reviews/paired-astra.md` and
