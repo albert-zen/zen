@@ -980,13 +980,16 @@ button:disabled {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 5px;
   padding: 0 3px;
   border: 0;
   background: transparent;
   color: inherit;
   font-size: 12px;
   text-align: left;
+}
+.project-disclosure-icon {
+  flex: 0 0 auto;
 }
 .project-toggle span {
   min-width: 0;
@@ -9615,6 +9618,9 @@ button:disabled {
 .project-disclosure > div {
   min-height: 0;
   overflow: hidden;
+  margin-left: 10px;
+  padding-left: 3px;
+  border-left: 1px solid var(--border-soft);
 }
 .project-disclosure[data-open="false"] {
   grid-template-rows: 0fr;

@@ -270,3 +270,39 @@
 .paw-start-content > .quiet-button {
   align-self: flex-start;
 }
+
+/* Middle ellipsis preserves exact name edges without expanding navigation rows. */
+.room-conversation-label .room-conversation-name {
+  display: flex;
+  min-width: 0;
+}
+.room-conversation-name-start {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+.room-conversation-name-end {
+  display: flex;
+  justify-content: flex-end;
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+.room-conversation-name-end > span {
+  flex: 0 0 auto;
+}
+.room-conversation-name-preview {
+  width: max-content;
+  max-width: min(360px, calc(100vw - 24px));
+  max-height: min(240px, var(--radix-popover-content-available-height));
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-1);
+  font-size: 12px;
+  line-height: 1.6;
+}

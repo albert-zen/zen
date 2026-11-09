@@ -1751,6 +1751,15 @@ function ProjectRows({
           onClick={toggleOpen}
           onKeyDown={projectReorder?.onKeyDown}
         >
+          <Icon
+            className="project-disclosure-icon"
+            name={
+              open && !projectReorder?.dragging
+                ? "chevron-down"
+                : "chevron-right"
+            }
+            size={10}
+          />
           <Icon name="folder" size={14} />
           <span>{group.label}</span>
           {pinnedProject ? (

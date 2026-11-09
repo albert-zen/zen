@@ -6,7 +6,12 @@ import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Icon } from "./icons.js";
-import { ActionMenu } from "./ui/controls.js";
+import {
+  ActionMenu,
+  Popover,
+  PopoverAnchor,
+  PopoverContent,
+} from "./ui/controls.js";
 import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
 import { useSidebarExpansion } from "./sidebar-expansion.js";
 
@@ -428,6 +433,7 @@ function ConversationGroup({
   selectedPage: string;
   onOpen(route: string): void;
 }) {
+  const [previewRoomId, setPreviewRoomId] = useState<string | null>(null);
   const identity = group.kind === "companion" ? "paw" : "rooms";
   const [expanded, toggle, expansionError] = useSidebarExpansion(identity);
   const contentId = `sidebar-${group.kind === "companion" ? "paw" : "room"}-conversations`;
@@ -471,6 +477,12 @@ function ConversationGroup({
                 key={room.id}
                 room={room}
                 group={group}
+                nameOpen={previewRoomId === room.id}
+                setNameOpen={(open) =>
+                  setPreviewRoomId((current) =>
+                    open ? room.id : current === room.id ? null : current,
+                  )
+                }
                 selected={
                   selectedRoomId === room.id &&
                   selectedPage.split(/[?#]/u, 1)[0] === ROOM_ROUTE
@@ -497,15 +509,50 @@ function ConversationGroup({
 function ConversationRow({
   room,
   group,
+  nameOpen,
+  setNameOpen,
   selected,
   onOpen,
 }: {
   room: RoomConversation;
   group: { displayKind: string; icon: "conversation" | "users" };
+  nameOpen: boolean;
+  setNameOpen(open: boolean): void;
   selected: boolean;
   onOpen(route: string): void;
 }) {
   const row = useRef<HTMLDivElement>(null);
+  const closeNameTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearNameTimer = () => {
+    if (closeNameTimer.current !== null) clearTimeout(closeNameTimer.current);
+    closeNameTimer.current = null;
+  };
+  const showName = () => {
+    clearNameTimer();
+    setNameOpen(true);
+  };
+  const hideName = () => {
+    clearNameTimer();
+    setNameOpen(false);
+  };
+  const leaveName = () => {
+    clearNameTimer();
+    closeNameTimer.current = setTimeout(() => setNameOpen(false), 160);
+  };
+  useEffect(() => clearNameTimer, []);
+  // Keep the original text intact, exposing both ends without guessing which
+  // words distinguish Rooms. The full name remains available without navigation.
+  const characters = Array.from(
+    new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(
+      room.name,
+    ),
+    ({ segment }) => segment,
+  );
+  const tailLength = Math.min(16, Math.floor(characters.length / 2));
+  const nameStart = characters
+    .slice(0, characters.length - tailLength)
+    .join("");
+  const nameEnd = characters.slice(characters.length - tailLength).join("");
   const openMenu = () =>
     row.current
       ?.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')
@@ -533,58 +580,98 @@ function ConversationRow({
         }
       }}
     >
-      <button
-        type="button"
-        className="room-conversation-row"
-        data-room-id={room.id}
-        aria-label={`Open ${group.displayKind} ${room.name}`}
-        aria-current={selected ? "page" : undefined}
-        title={
-          room.lastMessage
-            ? `${room.name} · ${new Date(room.lastMessage.createdAt).toLocaleString(i18n.resolvedLanguage)}`
-            : room.name
-        }
-        onClick={() => onOpen(roomConversationRoute(room.id))}
-      >
-        <Icon name={group.icon} size={14} />
-        <span className="room-conversation-label">
-          <strong>{room.name}</strong>
-          <small>
-            {room.messagePreview ||
-              (room.assistant
-                ? i18n.t("panels:personalConversation")
-                : i18n.t("panels:memberCount", { count: room.memberCount }))}
-          </small>
-        </span>
-        {room.questionSummary && room.questionSummary.openCount > 0 ? (
-          <span
-            className="thread-asking-badge room-asking-badge"
-            aria-label={i18n.t("shell:threadAskingCount", {
-              count: room.questionSummary.openCount,
-            })}
-            title={i18n.t("shell:threadAskingCount", {
-              count: room.questionSummary.openCount,
-            })}
-            data-question-revision={room.questionSummary.revision}
+      <Popover open={nameOpen} onOpenChange={setNameOpen}>
+        <PopoverAnchor asChild>
+          <button
+            type="button"
+            className="room-conversation-row"
+            data-room-id={room.id}
+            aria-label={`Open ${group.displayKind} ${room.name}`}
+            aria-current={selected ? "page" : undefined}
+            title={
+              room.lastMessage
+                ? `${room.name} · ${new Date(room.lastMessage.createdAt).toLocaleString(i18n.resolvedLanguage)}`
+                : room.name
+            }
+            onFocus={showName}
+            onBlur={hideName}
+            onPointerEnter={(event) => {
+              if (event.pointerType !== "touch") showName();
+            }}
+            onPointerLeave={leaveName}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && nameOpen) {
+                event.preventDefault();
+                setNameOpen(false);
+              }
+            }}
+            onClick={() => {
+              setNameOpen(false);
+              onOpen(roomConversationRoute(room.id));
+            }}
           >
-            {i18n.t("shell:threadAsking")}
-          </span>
-        ) : null}
-        {room.unreadCount !== undefined && room.unreadCount > 0 ? (
-          <span
-            className="room-unread-count"
-            aria-label={i18n.t("panels:unreadMessages", {
-              count: room.unreadCount,
-            })}
-          >
-            <span className="room-unread-value">
-              {room.unreadCount > 99 ? "99+" : room.unreadCount}
+            <Icon name={group.icon} size={14} />
+            <span className="room-conversation-label">
+              <strong className="room-conversation-name">
+                <span className="room-conversation-name-start">
+                  {nameStart}
+                </span>
+                <span className="room-conversation-name-end">
+                  <span>{nameEnd}</span>
+                </span>
+              </strong>
+              <small>
+                {room.messagePreview ||
+                  (room.assistant
+                    ? i18n.t("panels:personalConversation")
+                    : i18n.t("panels:memberCount", {
+                        count: room.memberCount,
+                      }))}
+              </small>
             </span>
-          </span>
-        ) : null}
-      </button>
+            {room.questionSummary && room.questionSummary.openCount > 0 ? (
+              <span
+                className="thread-asking-badge room-asking-badge"
+                aria-label={i18n.t("shell:threadAskingCount", {
+                  count: room.questionSummary.openCount,
+                })}
+                title={i18n.t("shell:threadAskingCount", {
+                  count: room.questionSummary.openCount,
+                })}
+                data-question-revision={room.questionSummary.revision}
+              >
+                {i18n.t("shell:threadAsking")}
+              </span>
+            ) : null}
+            {room.unreadCount !== undefined && room.unreadCount > 0 ? (
+              <span
+                className="room-unread-count"
+                aria-label={i18n.t("panels:unreadMessages", {
+                  count: room.unreadCount,
+                })}
+              >
+                <span className="room-unread-value">
+                  {room.unreadCount > 99 ? "99+" : room.unreadCount}
+                </span>
+              </span>
+            ) : null}
+          </button>
+        </PopoverAnchor>
+        <PopoverContent
+          className="room-conversation-name-preview"
+          side="right"
+          role="tooltip"
+          onOpenAutoFocus={(event) => event.preventDefault()}
+          onCloseAutoFocus={(event) => event.preventDefault()}
+          onPointerEnter={showName}
+          onPointerLeave={leaveName}
+        >
+          {room.name}
+        </PopoverContent>
+      </Popover>
       <ActionMenu
         compact
+        onOpen={hideName}
         label={i18n.t("panels:manageNamedConversation", { name: room.name })}
         items={[
           {
