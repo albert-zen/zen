@@ -2378,7 +2378,7 @@ function ThreadViewContent({
           });
         }}
       />
-      {atLive ? null : (
+      {atLive || transcriptRows.length === 0 ? null : (
         <button
           className="back-live"
           type="button"

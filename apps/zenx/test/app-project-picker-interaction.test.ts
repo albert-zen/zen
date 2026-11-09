@@ -4673,6 +4673,104 @@ async function chooseDraftProject(name: string): Promise<void> {
   await act(async () => option.click());
 }
 
+test("empty welcome Project switching never offers Back to live", async () => {
+  const projects = twoProjectSnapshot();
+  projects.lastUsedWorkspace = "/work/documents";
+  let starts = 0;
+  let sends = 0;
+  const harness = await mountApp(projects, {
+    threads: async (archived) =>
+      archived
+        ? []
+        : [
+            summary(
+              false,
+              "existing-thread",
+              "Existing thread",
+              "/work/documents",
+            ),
+          ],
+    startProjectThread: async (workspace) => {
+      starts++;
+      return started(liveThread(), workspace);
+    },
+    request: async (method) => {
+      if (method === "zen/turn/send" || method === "turn/start") sends++;
+      return {};
+    },
+  });
+  const composer = () =>
+    document.querySelector<HTMLTextAreaElement>("#thread-composer");
+  const assertEmptyWelcome = () => {
+    assert.ok(document.querySelector(".transcript-history") === null);
+    assert.ok(document.querySelector(".back-live") === null);
+    assert.equal(starts, 0);
+    assert.equal(sends, 0);
+  };
+  try {
+    const initialComposer = await waitFor(composer);
+    await setTextareaValue(initialComposer, "Keep the documents draft");
+    const heading = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        ".new-thread-draft-heading .new-thread-project-trigger",
+      ),
+    );
+    const viewport = document.querySelector<HTMLElement>(".messages")!;
+    // JSDOM has no layout. Model the empty welcome's scrollable overlay inset,
+    // then exercise the actual pointer/focus handlers used by the native chooser.
+    Object.defineProperties(viewport, {
+      clientHeight: { configurable: true, get: () => 400 },
+      scrollHeight: { configurable: true, get: () => 600 },
+    });
+    viewport.scrollTop = 0;
+    assertEmptyWelcome();
+    await act(async () => {
+      heading.dispatchEvent(new window.Event("pointerdown", { bubbles: true }));
+      heading.focus();
+      heading.click();
+    });
+    assertEmptyWelcome();
+    const search = await waitFor(() =>
+      document.querySelector<HTMLInputElement>(
+        '.new-thread-project-popover input[type="search"]',
+      ),
+    );
+    await setInputValue(search, "zen");
+    await act(async () => {
+      search.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "ArrowDown",
+          bubbles: true,
+        }),
+      );
+    });
+    const option = document.activeElement as HTMLButtonElement;
+    assert.equal(option.getAttribute("role"), "menuitemradio");
+    assert.match(option.textContent ?? "", /zen/u);
+    // JSDOM does not synthesize Enter's native button click.
+    await act(async () => option.click());
+    assert.match(
+      document.querySelector(".new-thread-draft-heading")?.textContent ?? "",
+      /What should we build in zen\?/u,
+    );
+    assert.equal(composer()?.value, "");
+    assertEmptyWelcome();
+    await setTextareaValue(composer()!, "Keep the separate zen draft");
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(".new-thread-project-trigger-chip")
+        ?.click(),
+    );
+    await waitFor(() =>
+      document.querySelector(".new-thread-project-popover-portal"),
+    );
+    assert.equal(composer()?.value, "Keep the separate zen draft");
+    assertEmptyWelcome();
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 test("the Composer-context Project chip opens the searchable switcher", async () => {
   const projects = twoProjectSnapshot();
   let projectReads = 0;
