@@ -12,6 +12,8 @@ import {
   type SidebarOwner,
 } from "../src/thread-sidebar-state.js";
 import { i18n } from "../src/renderer/src/i18n.js";
+import type { BrowserThreadEvent } from "../src/main/capabilities/browser-thread-observation.js";
+import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
 
 const primary = "primary-conversation";
 
@@ -41,6 +43,7 @@ test("fullscreen primary tab reuses main DOM, preserves resources and exact Thre
   (dom.window.HTMLElement.prototype as any).detachEvent = () => {};
   await i18n.changeLanguage("en");
   const mounts: { threadId: string; tabId?: string; lease: string }[] = [];
+  const browserListeners = new Set<(event: BrowserThreadEvent) => void>();
   dom.window.HTMLElement.prototype.getBoundingClientRect = () => ({
     x: 0,
     y: 0,
@@ -92,6 +95,15 @@ test("fullscreen primary tab reuses main DOM, preserves resources and exact Thre
       },
     },
     plugins: {},
+    browserObservation: {
+      subscribe(
+        _request: unknown,
+        listener: (event: BrowserThreadEvent) => void,
+      ) {
+        browserListeners.add(listener);
+        return () => browserListeners.delete(listener);
+      },
+    },
   };
   const controller = new ThreadSidebarController();
   const threadOwner: SidebarOwner = { kind: "thread", id: "same-id" };
@@ -174,7 +186,10 @@ test("fullscreen primary tab reuses main DOM, preserves resources and exact Thre
         onOpenChange: (open) => {
           void controller.edit(owner, () => ({ open }));
         },
-        snapshot: null,
+        snapshot: {
+          plugins: [{ id: "browser", enabled: true, available: true }],
+          panels: [],
+        } as unknown as ZenXPluginSnapshot,
         presentationState: state,
         selectedTab: state.selectedTab ?? "",
         onSelectTab: (id) => {
@@ -233,6 +248,99 @@ test("fullscreen primary tab reuses main DOM, preserves resources and exact Thre
     document.querySelector('[role="tab"][aria-selected="true"]')?.id;
   const expand = () => click(element('[aria-label="Expand side panel"]'));
   const restore = () => click(element('[aria-label="Restore side panel"]'));
+  const previewFromPrimary = async (threadId: string) => {
+    const owner = selectedOwner;
+    const previewId = sidebarTabId({
+      kind: "browser",
+      id: "web",
+      ...(owner.kind === "room" ? { resourceThreadId: threadId } : {}),
+    });
+    const target = {
+      id: "workspace:web",
+      backendId: "workspace" as const,
+      sessionId: "synthetic",
+      tabId: "workspace:web",
+      title: "Existing webpage",
+      url: "https://example.test/synthetic",
+      mode: "live" as const,
+      loading: false,
+      previewActive: true,
+      previewSequence: 1,
+      activityCount: 1,
+    };
+    const operate = async () => {
+      await act(async () => {
+        for (const listener of [...browserListeners])
+          listener({ type: "targets", targets: [target] });
+      });
+    };
+    const composer = element("textarea");
+    composer.focus();
+    const primaryContent = element("#primary-conversation-content");
+    const originalScroll = element("#transcript").scrollTop;
+    assert.equal(controller.isPrimaryConversationSelected(owner), true);
+    await operate();
+    assert.equal(selected(), `aux-tab-${previewId}`);
+    assert.equal(
+      element(".auxiliary-panel").dataset.primaryActive,
+      "false",
+      "A Browser preview cannot mount its native view while primary-chat CSS hides its address row",
+    );
+    assert.equal(mounts.at(-1)?.threadId, threadId);
+    assert.equal(mounts.at(-1)?.tabId, "web");
+    element(".workspace-browser-address");
+    assert.equal(document.activeElement, composer, "Preview never takes focus");
+    assert.equal(
+      controller.isPrimaryConversationSelected(owner),
+      true,
+      "A temporary preview does not discard the owner's primary selection",
+    );
+    const lease = mounts.at(-1)!.lease;
+    await click(tab(primary));
+    assert.equal(selected(), `aux-tab-${primary}`);
+    assert.equal(element(".auxiliary-panel").dataset.primaryActive, "true");
+    assert.equal(mounts.at(-1)?.lease, lease);
+    assert.equal(
+      mounts.at(-1)?.tabId,
+      undefined,
+      "Return detaches native view",
+    );
+    assert.equal(element("#primary-conversation-content"), primaryContent);
+    assert.equal(element("#transcript").scrollTop, originalScroll);
+    const releasedCount = mounts.length;
+    await operate();
+    assert.equal(selected(), `aux-tab-${primary}`);
+    assert.equal(
+      mounts.length,
+      releasedCount,
+      "Dismissed operation stays hidden",
+    );
+    target.previewSequence++;
+    await operate();
+    assert.equal(
+      selected(),
+      `aux-tab-${previewId}`,
+      "A new operation may preview",
+    );
+    assert.equal(element(".auxiliary-panel").dataset.primaryActive, "false");
+    await act(async () => {
+      for (const listener of [...browserListeners])
+        listener({
+          type: "turn-ended",
+          threadId,
+          throughSequence: 2,
+          failed: false,
+        });
+    });
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 1250)));
+    assert.equal(
+      selected(),
+      `aux-tab-${primary}`,
+      "Retirement restores primary",
+    );
+    assert.equal(element(".auxiliary-panel").dataset.primaryActive, "true");
+    assert.equal(mounts.at(-1)?.tabId, undefined);
+  };
   try {
     await act(async () => root.render(React.createElement(Harness)));
     assert.ok(
@@ -344,6 +452,7 @@ test("fullscreen primary tab reuses main DOM, preserves resources and exact Thre
       `aux-tab-${primary}`,
       "Background Host receipts never steal primary selection",
     );
+    await previewFromPrimary(threadOwner.id);
     await act(async () => {
       controller.beginPresentationIntent(threadOwner);
     });
@@ -443,6 +552,7 @@ test("fullscreen primary tab reuses main DOM, preserves resources and exact Thre
     );
     await click(tab(primary));
     assert.equal(tab(primary).textContent, "Main Room conversation");
+    await previewFromPrimary("member");
     await act(async () => navigateOwner(false));
     assert.equal(
       selected(),
