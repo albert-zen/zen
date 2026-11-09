@@ -1,3 +1,4 @@
+import { projectForkBoundary } from "./thread-fork-boundary.js";
 import { AppShotButton } from "./AppShotButton.js";
 import {
   ThreadHistoryContext,
@@ -1205,9 +1206,19 @@ function ThreadViewContent({
     () => indexTranscriptOrder(displayedThread?.canonicalItems),
     [displayedThread?.canonicalItems],
   );
+  const forkBoundary = useMemo(
+    () => projectForkBoundary(displayedThread),
+    [displayedThread],
+  );
   const transcriptRows = useMemo(
-    () => buildTranscriptRows(turns, transcriptOrder, contextCompactions),
-    [contextCompactions, transcriptOrder, turns],
+    () =>
+      buildTranscriptRows(
+        turns,
+        transcriptOrder,
+        contextCompactions,
+        forkBoundary,
+      ),
+    [contextCompactions, transcriptOrder, turns, forkBoundary],
   );
   const pendingApprovals = useMemo(
     () =>
@@ -2094,6 +2105,10 @@ function ThreadViewContent({
             pluginSnapshot={pluginSnapshot}
             pluginUiRegistry={pluginUiRegistry}
           />
+        ) : row.type === "fork" ? (
+          <ForkHistoryBoundary
+            key={JSON.stringify([displayedThread?.id, row.itemId])}
+          />
         ) : (
           <ContextCompactionEvent
             key={row.compaction.item.id}
@@ -2131,7 +2146,11 @@ function ThreadViewContent({
             key: JSON.stringify([
               displayedThread?.id,
               row.type,
-              row.type === "turn" ? row.turn.id : row.compaction.item.id,
+              row.type === "turn"
+                ? row.turn.id
+                : row.type === "fork"
+                  ? row.itemId
+                  : row.compaction.item.id,
             ]),
             content: renderedTranscriptRows[index],
           }))
@@ -3284,7 +3303,21 @@ function ThreadViewContent({
   );
 }
 
+function ForkHistoryBoundary() {
+  const { t } = useTranslation("shell");
+  return (
+    <div
+      className="fork-history-boundary"
+      role="separator"
+      aria-label={t("copiedHistoryEndsHere")}
+    >
+      <span aria-hidden="true">{t("copiedHistoryEndsHere")}</span>
+    </div>
+  );
+}
+
 type TranscriptRow =
+  | { type: "fork"; itemId: string; order: number }
   | { type: "turn"; turn: Turn; index: number; order: number }
   | {
       type: "compaction";
@@ -3307,6 +3340,7 @@ function buildTranscriptRows(
   turns: readonly Turn[],
   { fallbackStart, turnEnds }: ReturnType<typeof indexTranscriptOrder>,
   compactions: readonly ContextCompactionProjection[],
+  forkBoundary: ReturnType<typeof projectForkBoundary>,
 ): TranscriptRow[] {
   const rows: TranscriptRow[] = turns.map((turn, index) => ({
     type: "turn",
@@ -3328,7 +3362,31 @@ function buildTranscriptRows(
           : Math.max(compaction.canonicalIndex, turnEnd) + 0.25,
     });
   }
-  return rows.sort((left, right) => left.order - right.order);
+  rows.sort((left, right) => left.order - right.order);
+  if (forkBoundary) {
+    // Snapshot closures can move ANY copied Turn after the final inherited
+    // start, so place the boundary after all inherited rendered rows.
+    const inherited = (row: TranscriptRow) =>
+      row.type === "turn"
+        ? forkBoundary.inheritedTurnIds.has(row.turn.id)
+        : row.type === "compaction" &&
+          (row.compaction.canonicalIndex < forkBoundary.canonicalIndex ||
+            (row.compaction.item.provenance === "agentic" &&
+              forkBoundary.inheritedTurnIds.has(row.compaction.item.turnId)));
+    const boundaryIndex = rows.findLastIndex(inherited);
+    // Never label mixed/unknown history as a clean branch boundary.
+    if (
+      boundaryIndex >= 0 &&
+      rows.slice(0, boundaryIndex + 1).every(inherited)
+    ) {
+      rows.splice(boundaryIndex + 1, 0, {
+        type: "fork",
+        itemId: forkBoundary.item.id,
+        order: rows[boundaryIndex]!.order,
+      });
+    }
+  }
+  return rows;
 }
 
 function ContextCompactionProgress({

@@ -1764,6 +1764,35 @@ test("Appearance is an independent Settings section and persists the complete pr
     assert.equal(system.name, "appearance-mode");
     assert.equal(light.name, system.name);
     assert.equal(dark.name, system.name);
+    const assertSelectedMarkers = () => {
+      for (const name of [
+        "appearance-mode",
+        "light-preset",
+        "dark-preset",
+        "appearance-accent",
+        "appearance-contrast",
+      ]) {
+        const choices = document.querySelectorAll<HTMLInputElement>(
+          `input[name="${name}"]`,
+        );
+        assert.equal(
+          Array.from(choices).filter((choice) => choice.checked).length,
+          1,
+        );
+        for (const choice of choices) {
+          assert.equal(
+            Boolean(
+              choice
+                .closest("label")
+                ?.querySelector(".appearance-choice-check"),
+            ),
+            choice.checked,
+            `${name} ${choice.value} has a visible marker only when checked`,
+          );
+        }
+      }
+    };
+    assertSelectedMarkers();
     assert.ok(exactButton("Appearance"));
     assert.match(document.body.textContent ?? "", /Soft violet/u);
     assert.match(document.body.textContent ?? "", /Fresh green/u);
@@ -1786,8 +1815,15 @@ test("Appearance is an independent Settings section and persists the complete pr
     assert.equal(light.checked, true);
     assert.equal(system.checked, false);
     assert.equal(dark.checked, false);
+    assertSelectedMarkers();
     assert.equal(saved.length, 0);
     assert.equal(exactButton("Apply"), undefined);
+
+    await act(async () => dark.click());
+    assert.equal(dark.checked, true);
+    assertSelectedMarkers();
+    await act(async () => light.click());
+    assertSelectedMarkers();
 
     const cobaltLight = appearanceChoice("light-preset", "cobalt");
     const emberDark = appearanceChoice("dark-preset", "ember");
@@ -1813,6 +1849,7 @@ test("Appearance is an independent Settings section and persists the complete pr
         ?.querySelector(".appearance-choice-check"),
       null,
     );
+    assertSelectedMarkers();
     assert.equal(document.documentElement.dataset.themePreset, "cobalt");
     assert.equal(document.documentElement.dataset.accent, "jade");
     assert.equal(document.documentElement.dataset.contrast, "high");
@@ -1841,6 +1878,7 @@ test("Appearance is an independent Settings section and persists the complete pr
     assert.equal(document.documentElement.dataset.accent, "azure");
     assert.equal(document.documentElement.dataset.contrast, "standard");
     assert.equal(appearanceModeRadio("system")?.checked, true);
+    assertSelectedMarkers();
   } finally {
     await unmount(harness);
   }

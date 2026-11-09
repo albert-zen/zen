@@ -594,6 +594,7 @@ export const en = {
   forkFromMessage: "Fork thread from this message",
   forkingMessage: "Forking / copying this thread…",
   messageForkFailed: "Could not fork: {{error}}",
+  copiedHistoryEndsHere: "Copied history ends here",
   forkThread: "Fork thread",
   copyUserMessage: "Copy user message",
   couldNotCopySelectTheSummaryTextToCopyIt:
@@ -1672,6 +1673,7 @@ export const zhCN = {
   forkFromMessage: "从此消息分叉线程",
   forkingMessage: "正在 Fork，为你复制这个线程…",
   messageForkFailed: "分叉失败：{{error}}",
+  copiedHistoryEndsHere: "复制的历史到此结束",
   forkThread: "分叉线程",
   copyUserMessage: "复制用户消息",
   couldNotCopySelectTheSummaryTextToCopyIt:

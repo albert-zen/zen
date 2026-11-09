@@ -3794,7 +3794,18 @@ function AppearancePanel() {
                 checked={appearance.mode === option}
                 onChange={() => updateAppearance({ mode: option })}
               />
-              <span>{option[0]?.toUpperCase() + option.slice(1)}</span>
+              <span>
+                {option[0]?.toUpperCase() + option.slice(1)}
+                <span className="appearance-choice-marker" aria-hidden="true">
+                  {appearance.mode === option ? (
+                    <Icon
+                      name="check"
+                      size={14}
+                      className="appearance-choice-check"
+                    />
+                  ) : null}
+                </span>
+              </span>
             </label>
           ))}
         </fieldset>
@@ -3874,7 +3885,21 @@ function AppearancePanel() {
                     checked={appearance.contrast === option}
                     onChange={() => updateAppearance({ contrast: option })}
                   />
-                  <span>{appearanceLabel(option)}</span>
+                  <span>
+                    {appearanceLabel(option)}
+                    <span
+                      className="appearance-choice-marker"
+                      aria-hidden="true"
+                    >
+                      {appearance.contrast === option ? (
+                        <Icon
+                          name="check"
+                          size={14}
+                          className="appearance-choice-check"
+                        />
+                      ) : null}
+                    </span>
+                  </span>
                 </label>
               ))}
             </div>
