@@ -82,8 +82,10 @@ function witness(mode, kind, fault) {
         }),
         send: async (method, params) => {
           sends.push({ method, params });
-          if (method === "Page.captureScreenshot")
-            throw new Error("unnecessary compositor prerequisite");
+          if (method === "Page.captureScreenshot") {
+            if (fault === "capture-timeout") throw new Error("surface timeout");
+            return { data: fault === "capture-empty" ? "" : "synthetic-image" };
+          }
           if (fault === "unknown") throw new Error("unknown dispatched input");
           return {};
         },
@@ -105,20 +107,25 @@ for (const mode of [
   for (const kind of mode === "cross-origin-same-process"
     ? ["click", "key"]
     : ["key"])
-    test(`${mode} ${kind} witnesses exact trusted effect without a second image`, async () => {
+    test(`${mode} ${kind} retains exact trusted effect with kind-specific preparation`, async () => {
       const f = witness(mode, kind);
       const r = await f.result;
       assert.equal(r.remoteWitness.status, "passed");
-      assert.equal(r.remoteWitness.compositorCaptured, undefined);
+      assert.equal(
+        r.remoteWitness.surfacePreparation,
+        kind === "click" ? "captured" : undefined,
+      );
       assert.deepEqual(
         f.sends.map((s) => s.method),
-        Array(2).fill(
-          kind === "click"
-            ? "Input.dispatchMouseEvent"
-            : "Input.dispatchKeyEvent",
-        ),
+        kind === "click"
+          ? [
+              "Page.captureScreenshot",
+              "Input.dispatchMouseEvent",
+              "Input.dispatchMouseEvent",
+            ]
+          : ["Input.dispatchKeyEvent", "Input.dispatchKeyEvent"],
       );
-      assert.equal(f.guards(), 3);
+      assert.equal(f.guards(), 4);
       assert.equal(r.cases[0].trustedPair, true);
       assert.equal(r.cases[0].effect, true);
     });
@@ -143,5 +150,36 @@ test("unknown direct input never sends release or retries", async () => {
 test("direct mouse geometry must belong to the same document", async () => {
   const f = witness("cross-origin-same-process", "click", "document");
   await assert.rejects(f.result);
+  assert.equal(f.sends.length, 1);
+});
+
+for (const fault of ["capture-timeout", "capture-empty"]) {
+  test(`mouse preparation ${fault} rejects before any input`, async () => {
+    const f = witness("cross-origin-same-process", "click", fault);
+    await assert.rejects(f.result);
+    assert.deepEqual(
+      f.sends.map((s) => s.method),
+      ["Page.captureScreenshot"],
+    );
+  });
+}
+test("unknown mouse dispatch never sends release or retries preparation", async () => {
+  const f = witness("cross-origin-same-process", "click", "unknown");
+  await assert.rejects(f.result, /unknown dispatched input/);
+  assert.deepEqual(
+    f.sends.map((s) => s.method),
+    ["Page.captureScreenshot", "Input.dispatchMouseEvent"],
+  );
+});
+for (const fault of ["untrusted", "wrong-target", "wrong-effect", "visible"]) {
+  test(`surface capture does not waive mouse ${fault} assertions`, async () => {
+    const f = witness("cross-origin-same-process", "click", fault);
+    await assert.rejects(f.result);
+    assert.equal(f.sends.length, 3);
+  });
+}
+test("foreground drift prevents mouse surface preparation and input", async () => {
+  const f = witness("cross-origin-same-process", "click", "foreground");
+  await assert.rejects(f.result, /foreground drift/);
   assert.equal(f.sends.length, 0);
 });
