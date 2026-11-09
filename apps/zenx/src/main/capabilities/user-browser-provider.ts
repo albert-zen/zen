@@ -1110,6 +1110,9 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
           ...(fingerprint.value === undefined
             ? {}
             : { value: fingerprint.value }),
+          ...(fingerprint.documentFocused === undefined
+            ? {}
+            : { documentFocused: fingerprint.documentFocused }),
           ...(fingerprint.checked === undefined
             ? {}
             : { checked: fingerprint.checked }),
@@ -5853,6 +5856,8 @@ function requireFingerprint(value: unknown): BrowserTargetFingerprint {
     (target.nodeIdentity !== undefined &&
       !isCaptureIdentity(target.nodeIdentity, 256)) ||
     (target.value !== undefined && typeof target.value !== "string") ||
+    (target.documentFocused !== undefined &&
+      typeof target.documentFocused !== "boolean") ||
     (target.checked !== undefined && typeof target.checked !== "boolean") ||
     (target.selected !== undefined && typeof target.selected !== "boolean") ||
     (target.optionsTruncated !== undefined &&
@@ -5891,6 +5896,9 @@ function requireFingerprint(value: unknown): BrowserTargetFingerprint {
     href: target.href as string,
     actions: [...actions],
     ...(target.value === undefined ? {} : { value: target.value }),
+    ...(target.documentFocused === undefined
+      ? {}
+      : { documentFocused: target.documentFocused }),
     ...(target.checked === undefined ? {} : { checked: target.checked }),
     ...(target.selected === undefined ? {} : { selected: target.selected }),
     ...(target.optionsTruncated === undefined

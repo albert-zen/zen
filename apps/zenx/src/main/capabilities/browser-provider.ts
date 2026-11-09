@@ -122,6 +122,8 @@ export interface BrowserInspection extends BrowserTabSummary {
     name: string;
     actions: BrowserTargetAction[];
     value?: string;
+    /** document.activeElement at capture; iframe/shadow hosts do not prove deep focus. */
+    documentFocused?: boolean;
     checked?: boolean;
     selected?: boolean;
     options?: BrowserSelectOption[];
@@ -592,7 +594,7 @@ function browserTargetedInputTools(): ZenXPluginManifestV2["tools"] {
     {
       name: "browser_key_press",
       description:
-        "Press one named unmodified key in the exact browser tab's already-focused observed element, without requesting window activation. Requires focusedInputAvailable and a fresh inspection; never selects a current tab or focuses an element implicitly. Focus resolves through complete observed HTML iframe owner/context chains, including cross-origin/out-of-process frames when exact child routing is available, and bounded author shadow roots. Verified static invertible 2D geometry is required; unresolved ancestry, geometry or focus is unavailable. Newly discovered geometry or closed roots require re-inspection. Extension child sessions require Chrome 125+ and the current root lease; unavailable routing never falls back. Detected frame lifecycle changes reject. Ordinary focused contenteditable containers remain supported after exact-node metadata checks. Ordinary tab input stays targeted without selecting an active tab. Trusted input can trigger site dialogs or popups; HTML select and file/date/color controls are supported; an OS dialog needs an appropriate provider capability, never implicit global input or forced activation. Unknown input is never replayed.",
+        "Press one named unmodified key in the exact browser tab's already-focused observed element, without requesting window activation. Requires focusedInputAvailable and a fresh inspection; inspect target documentFocused to see which listed node is document.activeElement (iframe/shadow hosts do not identify deep focus), never infer focus merely from a written value; never selects a current tab or focuses an element implicitly. Focus resolves through complete observed HTML iframe owner/context chains, including cross-origin/out-of-process frames when exact child routing is available, and bounded author shadow roots. Verified static invertible 2D geometry is required; unresolved ancestry, geometry or focus is unavailable. Newly discovered geometry or closed roots require re-inspection. Extension child sessions require Chrome 125+ and the current root lease; unavailable routing never falls back. Detected frame lifecycle changes reject. Ordinary focused contenteditable containers remain supported after exact-node metadata checks. Ordinary tab input stays targeted without selecting an active tab. Trusted input can trigger site dialogs or popups; HTML select and file/date/color controls are supported; an OS dialog needs an appropriate provider capability, never implicit global input or forced activation. Unknown input is never replayed.",
       inputSchema: browserTargetSchema(
         { ...common(), key: { type: "string", enum: [...browserInputKeys] } },
         ["observationId", "key"],
@@ -1383,6 +1385,7 @@ export interface BrowserTargetFingerprint {
   href: string;
   actions: BrowserTargetAction[];
   value?: string;
+  documentFocused?: boolean;
   checked?: boolean;
   selected?: boolean;
   options?: BrowserSelectOption[];
@@ -2027,6 +2030,9 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
           name: target.name,
           actions: [...target.actions],
           ...(target.value === undefined ? {} : { value: target.value }),
+          ...(target.documentFocused === undefined
+            ? {}
+            : { documentFocused: target.documentFocused }),
           ...(target.checked === undefined ? {} : { checked: target.checked }),
           ...(target.selected === undefined
             ? {}
@@ -2757,6 +2763,7 @@ export const browserInspectScript = `(() => {
       const selected = element.getAttribute("aria-selected") === "true" ? true : element.getAttribute("aria-selected") === "false" ? false : element instanceof HTMLOptionElement ? element.selected : undefined;
       return {
         documentIdentity,
+        documentFocused: document.activeElement === element,
         nodeIdentity: nodeIdentity(element),
         selector: selector(element),
         tag: element.tagName.toLowerCase(),

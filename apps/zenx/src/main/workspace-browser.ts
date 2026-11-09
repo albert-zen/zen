@@ -1082,6 +1082,9 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
               name: target.name,
               actions: [...target.actions],
               ...(target.value === undefined ? {} : { value: target.value }),
+              ...(target.documentFocused === undefined
+                ? {}
+                : { documentFocused: target.documentFocused }),
               ...(target.checked === undefined
                 ? {}
                 : { checked: target.checked }),

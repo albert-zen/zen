@@ -3290,3 +3290,26 @@ test("confirmed created-page closure retires its attachment before delayed destr
     await cdp.close();
   }
 });
+
+test("connected browser inspection preserves document focus and rejects malformed focus evidence", async () => {
+  const client = new FakeUserBrowserClient();
+  const backend = new UserBrowserCdpBackend(client);
+  try {
+    await backend.listTabs("work");
+    for (const documentFocused of [true, false]) {
+      client.inspectionTarget.documentFocused = documentFocused;
+      const result = await backend.inspect("work", "target-1");
+      assert.equal(result.targets[0]!.documentFocused, documentFocused);
+    }
+    client.inspectionResult = {
+      visibleText: "",
+      targets: [{ ...client.inspectionTarget, documentFocused: "true" }],
+    };
+    await assert.rejects(
+      backend.inspect("work", "target-1"),
+      /inspection target is invalid/,
+    );
+  } finally {
+    await backend.close();
+  }
+});
