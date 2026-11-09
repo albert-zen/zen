@@ -1,5 +1,9 @@
 # Documentation-only CI workload selection
 
+This page records the original documentation-only rollout. Current PR execution
+follows [the three-tier risk policy](ci-risk-tiers.md); ordinary code PRs no
+longer imply the complete aggregate. Main/manual remain full.
+
 The first activated selection rule removes heavy work for proven documentation-only
 pull requests. It does not classify product code into partial test suites yet.
 The existing shadow impact report remains advisory, not authorization to skip.

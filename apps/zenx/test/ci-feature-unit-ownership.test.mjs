@@ -65,9 +65,9 @@ for (const [file, names] of Object.entries(selected)) {
   });
 }
 
-test("CI owns the full ZenX test set outside verified documentation-only PRs", () => {
+test("CI preserves the full ZenX suite on main/manual and explicit PR unit policy", () => {
   const ci = parse(read(".github/workflows/ci.yml"));
-  assert.equal(ci.on.pull_request, null);
+  assert.ok(ci.on.pull_request.types.includes("ready_for_review"));
   assert.deepEqual(ci.on.push.branches, ["main"]);
   const owners = Object.values(ci.jobs).filter((job) =>
     job.steps?.some(
@@ -75,6 +75,18 @@ test("CI owns the full ZenX test set outside verified documentation-only PRs", (
     ),
   );
   assert.equal(owners.length, 1);
+  assert.ok(
+    owners[0].steps.some(
+      (step) =>
+        step.run === "npm --workspace apps/zenx run check:observed" &&
+        step.if.includes("CI_FULL_AGGREGATE"),
+    ),
+  );
+  assert.ok(
+    owners[0].steps.some((step) =>
+      step.run?.includes("run-ci-quick-tests.mjs"),
+    ),
+  );
   assert.equal(owners[0].if, "${{ !cancelled() }}");
   assert.equal(owners[0].needs, "selection");
   assert.match(
