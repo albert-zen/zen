@@ -2,7 +2,7 @@ import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import React, { act } from "react";
+import React, { act, useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { AuxiliaryPanel } from "../src/renderer/src/auxiliary-panel.js";
@@ -78,9 +78,6 @@ test("interactive pane width reports clamped layout before passive observation, 
     }
   } as unknown as typeof ResizeObserver;
   const reports: number[] = [];
-  const report = (width: number) => {
-    reports.push(width);
-  };
   const root = createRoot(document.getElementById("root")!);
   let mounted = true;
   const pointer = async (
@@ -99,29 +96,45 @@ test("interactive pane width reports clamped layout before passive observation, 
       document.querySelector(".browser-panel-resizer")!.dispatchEvent(event),
     );
   };
+  function Fixture({
+    open,
+    fullscreen,
+  }: {
+    open: boolean;
+    fullscreen: boolean;
+  }) {
+    const [reportedWidth, setReportedWidth] = useState(0);
+    const report = useCallback((width: number) => {
+      reports.push(width);
+      setReportedWidth(width);
+    }, []);
+    return React.createElement(
+      "div",
+      { "data-reported-width": reportedWidth },
+      React.createElement(AuxiliaryPanel, {
+        threadId: "resize-test",
+        title: "Resize test",
+        open,
+        onOpenChange() {},
+        snapshot: null,
+        selectedTab: "",
+        onSelectTab() {},
+        onWidthChange: report,
+        presentationState: {
+          owner: { kind: "thread", id: "resize-test" },
+          revision: 0,
+          open,
+          fullscreen,
+          tabs: [],
+          selectedTab: null,
+          resourceThreadId: "resize-test",
+        },
+      }),
+    );
+  }
   const render = async (open = true, fullscreen = false) => {
     await act(async () =>
-      root.render(
-        React.createElement(AuxiliaryPanel, {
-          threadId: "resize-test",
-          title: "Resize test",
-          open,
-          onOpenChange() {},
-          snapshot: null,
-          selectedTab: "",
-          onSelectTab() {},
-          onWidthChange: report,
-          presentationState: {
-            owner: { kind: "thread", id: "resize-test" },
-            revision: 0,
-            open,
-            fullscreen,
-            tabs: [],
-            selectedTab: null,
-            resourceThreadId: "resize-test",
-          },
-        }),
-      ),
+      root.render(React.createElement(Fixture, { open, fullscreen })),
     );
   };
   try {
@@ -195,12 +208,55 @@ test("interactive pane width reports clamped layout before passive observation, 
       "keyboard resizing also measures actual narrower CSS layout",
     );
     cap = 390;
-    await act(async () => observer.callback());
+    await act(async () => {
+      observer.callback();
+      assert.equal(
+        document
+          .querySelector("[data-reported-width]")
+          ?.getAttribute("data-reported-width"),
+        "390",
+        "observer width commits parent layout synchronously before callback returns",
+      );
+    });
     assert.equal(
       reports.at(-1),
       390,
       "passive container changes retain ResizeObserver reporting",
     );
+    reports.length = 0;
+    await render(false);
+    assert.equal(
+      reports.at(-1),
+      390,
+      "close begins at the actual visible width",
+    );
+    assert.equal(
+      observer.disconnects,
+      0,
+      "open/close keeps one width observer",
+    );
+    cap = 220;
+    await act(async () => observer.callback());
+    assert.equal(reports.at(-1), 220, "closing frames keep compressing chat");
+    await render();
+    assert.equal(
+      reports.at(-1),
+      220,
+      "reopening reverses at the current width",
+    );
+    cap = 300;
+    await act(async () => observer.callback());
+    assert.equal(reports.at(-1), 300);
+    await render(false);
+    cap = 0;
+    await act(async () => observer.callback());
+    assert.equal(
+      reports.at(-1),
+      0,
+      "only the settled closed pane reports zero",
+    );
+    cap = 390;
+    await render();
     for (const [open, fullscreen] of [
       [false, false],
       [true, true],
@@ -241,7 +297,7 @@ test("only active resize geometry skips its tween; the macOS following titlebar 
   );
   assert.match(
     css,
-    /:root\[data-platform="darwin"\]\s*\.app-shell:has\(\.auxiliary-panel\[data-open="true"\]\)\s*> \.window-titlebar\s*\{[^}]*transition: none;/,
+    /:root\[data-platform="darwin"\]\s*\.app-shell:has\(\.auxiliary-panel\)\s*> \.window-titlebar\s*\{[^}]*transition: none;/,
   );
   assert.match(
     css,

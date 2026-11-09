@@ -100,12 +100,8 @@ export function PluginInformationHost({
   useLayoutEffect(() => {
     const workspace = toolbar.current?.closest(".workspace");
     if (!workspace) return;
-    const panel = workspace.querySelector<HTMLElement>(
-      ":scope > .auxiliary-panel",
-    );
-    const heading = panel?.querySelector<HTMLElement>(
-      ":scope > .auxiliary-heading",
-    );
+    let panel: HTMLElement | null = null;
+    let heading: HTMLElement | null = null;
     const titlebar = workspace
       .closest(".app-shell")
       ?.querySelector<HTMLElement>(
@@ -178,31 +174,66 @@ export function PluginInformationHost({
           : next,
       );
     };
-    measure();
     const observer =
       typeof ResizeObserver === "undefined"
         ? undefined
         : new ResizeObserver(measure);
     observer?.observe(workspace);
     if (trigger.current) observer?.observe(trigger.current);
-    if (heading) observer?.observe(heading);
     if (titlebar) observer?.observe(titlebar);
-    // The primary conversation stays mounted in place while a workspace tab is
-    // selected. Observe only its presentation attributes, never transcript DOM.
+    // Watch only the workspace's direct children and the current panel's own
+    // presentation/heading. A late or replaced panel must own the observers;
+    // transcript and resource-content mutations must never trigger measurement.
     const presentation =
       typeof MutationObserver === "undefined"
         ? undefined
-        : new MutationObserver(measure);
-    if (panel)
-      presentation?.observe(panel, {
-        attributes: true,
-        attributeFilter: ["data-open", "data-expanded", "data-primary-active"],
-      });
+        : new MutationObserver(() => {
+            bindPanel();
+            measure();
+          });
+    const bindPanel = () => {
+      const nextPanel = workspace.querySelector<HTMLElement>(
+        ":scope > .auxiliary-panel",
+      );
+      const nextHeading =
+        nextPanel?.querySelector<HTMLElement>(":scope > .auxiliary-heading") ??
+        null;
+      if (nextPanel !== panel) {
+        presentation?.disconnect();
+        panel = nextPanel;
+        if (panel)
+          presentation?.observe(panel, {
+            attributes: true,
+            attributeFilter: [
+              "data-open",
+              "data-expanded",
+              "data-primary-active",
+            ],
+            childList: true,
+          });
+      }
+      if (nextHeading !== heading) {
+        if (heading) observer?.unobserve(heading);
+        heading = nextHeading;
+        if (heading) observer?.observe(heading);
+      }
+    };
+    const children =
+      typeof MutationObserver === "undefined"
+        ? undefined
+        : new MutationObserver(() => {
+            bindPanel();
+            measure();
+          });
+    children?.observe(workspace, { childList: true });
+    bindPanel();
+    measure();
     return () => {
       observer?.disconnect();
       presentation?.disconnect();
+      children?.disconnect();
     };
-  }, [resourcePanelWidth, contributions.length, setOpen]);
+  }, [resourcePanelWidth, contributions.length, !!contextContent, setOpen]);
   useEffect(() => {
     if (!open || !layout.dock) return;
     const escape = (event: KeyboardEvent) => {

@@ -111,8 +111,8 @@ function ConversationInformationContent({
   const [lineageVisible, setLineageVisible] = useState(false);
   const [shellVisible, setShellVisible] = useState(false);
   const lineageVisibility = useMemo(
-    () => ({ report: setLineageVisible, manageMode }),
-    [manageMode],
+    () => ({ report: setLineageVisible, manageMode, embedded }),
+    [manageMode, embedded],
   );
   // Keep providers mounted even when their empty presentation is hidden.
   // New observations can then reveal content without changing saved placement.

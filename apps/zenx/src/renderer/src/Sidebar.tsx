@@ -696,11 +696,6 @@ export function Sidebar({
                 }}
               >
                 <Icon name="list-detail" size={13} />
-                <span>
-                  {threadDensity === "detailed"
-                    ? i18n.t("shell:detailed")
-                    : i18n.t("shell:compact")}
-                </span>
               </button>
               {mode === "projects" ? (
                 <button
@@ -710,7 +705,7 @@ export function Sidebar({
                   title={i18n.t("shell:addProject")}
                   onClick={onAddProject}
                 >
-                  <Icon name="folder-plus" size={14} />
+                  <Icon name="plus" size={14} />
                 </button>
               ) : null}
             </span>

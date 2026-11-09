@@ -71,6 +71,7 @@ export async function withPreviewBrowser(directory, run) {
   const lifecycle = observePreviewChrome(child, profile);
   let socket;
   const pending = new Map();
+  const events = new Map();
   const errors = [];
   try {
     socket = await lifecycle.connect();
@@ -79,6 +80,8 @@ export async function withPreviewBrowser(directory, run) {
       const message = JSON.parse(String(data));
       if (message.method === "Runtime.exceptionThrown")
         errors.push(message.params.exceptionDetails);
+      for (const listener of events.get(message.method) ?? [])
+        listener(message.params);
       const request = pending.get(message.id);
       if (!request) return;
       pending.delete(message.id);
@@ -116,6 +119,12 @@ export async function withPreviewBrowser(directory, run) {
       evaluate,
       url,
       errors,
+      onEvent(method, listener) {
+        const listeners = events.get(method) ?? new Set();
+        events.set(method, listeners);
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
       screenshot: async (name) => {
         const result = await send("Page.captureScreenshot", {
           format: "png",
@@ -139,6 +148,7 @@ export async function withPreviewBrowser(directory, run) {
     );
     throw error;
   } finally {
+    events.clear();
     for (const request of pending.values()) {
       clearTimeout(request.timeout);
       request.reject(new Error("Browser closed"));

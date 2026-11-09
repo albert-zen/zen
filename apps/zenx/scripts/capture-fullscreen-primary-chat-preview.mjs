@@ -149,7 +149,7 @@ function checkPrimary(m, draft) {
 try {
   await withPreviewBrowser(
     directory,
-    async ({ send, evaluate, url, screenshot }) => {
+    async ({ send, evaluate, url, screenshot, onEvent }) => {
       report.browserVersion = await send("Browser.getVersion");
       async function until(expression, label) {
         for (let i = 0; i < 120; i++) {
@@ -211,6 +211,217 @@ try {
             `(() => { window.__layoutIdentity={primary:document.querySelector('#primary-conversation-content'),editor:document.querySelector('#primary-conversation-content textarea, #primary-conversation-content .cm-content')}; return true; })()`,
           );
           const split = await capture("split-browser");
+          // Below the existing 1100px breakpoint, a resource replaces the
+          // conversation instead of compressing it. Preserve that contract.
+          const overlayMode = scene.width < 1100;
+          assert.equal(
+            split.primary.display === "none",
+            overlayMode,
+            "resource presentation follows the existing 1100px breakpoint",
+          );
+          if (overlayMode)
+            near(
+              split.panel.width,
+              split.workspace.width,
+              "narrow resource fills workspace",
+            );
+          else {
+            assert.ok(
+              split.primary.width > 0,
+              "split conversation remains visible",
+            );
+            near(
+              split.primary.width + split.panel.width,
+              split.workspace.width,
+              "initial split allocation",
+            );
+          }
+          result.presentation = overlayMode
+            ? "narrow-resource-overlay"
+            : "split";
+          // Real production layout, synthetic DOM toggle. Retain every sampled
+          // frame to distinguish an animated resize from a final-width-only pass.
+          await send("Emulation.setEmulatedMedia", {
+            features: [
+              { name: "prefers-reduced-motion", value: "no-preference" },
+            ],
+          });
+          for (const phase of [
+            "close",
+            "reopen",
+            "close-again",
+            "reopen-again",
+          ]) {
+            // CDP returns a bounded sample of actual compositor frames, not a
+            // promise of every display frame. Keep timestamps/gaps for review.
+            const filmstrip = { frames: [], discarded: 0, errors: [] };
+            const writes = [];
+            const remove = onEvent(
+              "Page.screencastFrame",
+              ({ data, metadata, sessionId }) => {
+                writes.push(
+                  send("Page.screencastFrameAck", { sessionId }).catch(
+                    (error) => filmstrip.errors.push(String(error)),
+                  ),
+                );
+                if (filmstrip.frames.length >= 60) {
+                  filmstrip.discarded++;
+                  return;
+                }
+                const file = `${prefix}-${phase}-paint-${String(filmstrip.frames.length).padStart(3, "0")}.jpg`;
+                filmstrip.frames.push({ file, ...metadata });
+                writes.push(
+                  writeFile(
+                    path.join(directory, file),
+                    Buffer.from(data, "base64"),
+                  ).catch((error) => filmstrip.errors.push(String(error))),
+                );
+              },
+            );
+            let trajectory;
+            try {
+              await send("Page.startScreencast", {
+                format: "jpeg",
+                quality: 85,
+                everyNthFrame: 1,
+              });
+              trajectory = await evaluate(`(async () => {
+                const rawFrames = [], frames = [], observerFrames = [], started = performance.now();
+                const read = () => {
+                  const panel = document.querySelector('#thread-workspace-panel').getBoundingClientRect();
+                  const primary = document.querySelector('#primary-conversation-content').getBoundingClientRect();
+                  const rows = [...document.querySelectorAll('#primary-conversation-content .virtual-transcript-row')].map(e => { const r=e.getBoundingClientRect(); return { x:r.x, right:r.right, width:r.width }; });
+                  return { elapsed:performance.now()-started, panel:panel.width, primary:primary.width, x:primary.x, right:primary.right, rows };
+                };
+                // This observer is registered after the production observer.
+                // Its callback measures the same resize-delivery boundary after
+                // the product has committed its shared allocation. A normal
+                // deferred React update would still be stale here.
+                const observer = new ResizeObserver(() => observerFrames.push(read()));
+                observer.observe(document.querySelector('#thread-workspace-panel'), { box: 'border-box' });
+                try {
+                  document.querySelector('#thread-browser-toggle').click();
+                  while (performance.now() - started < 450) {
+                    await new Promise(requestAnimationFrame);
+                    rawFrames.push(read());
+                    // A later task can force a newer animation layout before its
+                    // observer delivery; retain it as diagnostics, not paint proof.
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                    frames.push(read());
+                  }
+                } finally {
+                  observer.disconnect();
+                }
+                return { started, timeOrigin:performance.timeOrigin, rawFrames, frames, observerFrames };
+              })()`);
+            } finally {
+              try {
+                await send("Page.stopScreencast");
+              } catch (error) {
+                filmstrip.errors.push(String(error));
+              }
+              remove();
+              await Promise.all(writes);
+              result.observations.push({
+                phase: `compression-${phase}`,
+                ...trajectory,
+                filmstrip,
+              });
+            }
+            assert.deepEqual(
+              filmstrip.errors,
+              [],
+              "compositor evidence writes and acknowledgments succeed",
+            );
+            assert.equal(
+              filmstrip.discarded,
+              0,
+              "bounded compositor capture did not overflow",
+            );
+            assert.ok(
+              filmstrip.frames.length > 2,
+              `${phase}: compositor emitted multiple painted frames`,
+            );
+            const { frames } = trajectory;
+            const closing = phase.startsWith("close");
+            assert.ok(
+              new Set(frames.map((f) => Math.round(f.panel))).size > 2,
+              `${phase}: panel width actually animates`,
+            );
+            if (overlayMode && !closing) {
+              for (const f of frames)
+                near(
+                  f.primary,
+                  0,
+                  `${phase}: narrow resource keeps the conversation hidden`,
+                );
+            } else {
+              assert.ok(
+                new Set(frames.map((f) => Math.round(f.primary))).size > 2,
+                `${phase}: conversation width actually animates`,
+              );
+            }
+            const last = frames.at(-1);
+            near(
+              last.panel,
+              closing ? 0 : split.panel.width,
+              `${phase}: settled panel width`,
+            );
+            near(
+              last.primary + last.panel,
+              split.workspace.width,
+              `${phase}: settled conversation allocation`,
+            );
+            const intermediate = trajectory.observerFrames.filter(
+              (f) => f.panel > 40 && f.panel < split.panel.width - 40,
+            );
+            assert.ok(
+              intermediate.length > 0,
+              `${phase}: intermediate resize deliveries were sampled`,
+            );
+            for (const f of intermediate) {
+              if (overlayMode && !closing)
+                near(
+                  f.primary,
+                  0,
+                  `${phase}: narrow resource owns the surface`,
+                );
+              else
+                near(
+                  f.primary + f.panel,
+                  split.workspace.width,
+                  `${phase}: moving conversation allocation`,
+                );
+              assert.ok(
+                f.rows.length > 0,
+                `${phase}: moving virtual rows remain mounted`,
+              );
+              assert.ok(
+                f.primary < split.workspace.width - 20,
+                `${phase}: no early jump to full width`,
+              );
+              for (const row of f.rows)
+                assert.ok(
+                  row.x >= f.x - 2 && row.right <= f.right + 2,
+                  `${phase}: moving virtual content stays inside conversation`,
+                );
+            }
+            assert.ok(
+              last.rows.length > 0,
+              "actual virtual rows remain mounted",
+            );
+            for (const row of last.rows)
+              assert.ok(
+                row.x >= last.x - 2 && row.right <= last.right + 2,
+                `${phase}: virtual content shrinks inside conversation`,
+              );
+            const settled = await capture(`compression-${phase}`);
+            assert.ok(
+              settled.samePrimary && settled.sameEditor,
+              "resize never remounts conversation or draft",
+            );
+            assert.equal(settled.draft, split.draft, "resize preserves draft");
+          }
           const browserTab = `[id="aux-tab-browser:page-${scene.owner}"]`;
           await click(expand);
           const expanded = await capture("expanded-browser");

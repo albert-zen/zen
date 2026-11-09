@@ -488,6 +488,7 @@ function SubagentSidebarVisibility({
 export const SubagentsInformationVisibilityContext = createContext<{
   report(visible: boolean): void;
   manageMode: boolean;
+  embedded?: boolean;
 } | null>(null);
 
 function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
@@ -564,7 +565,9 @@ function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
       aria-label={i18n.t("panels:subagentConversations")}
     >
       <header>
-        <strong>{i18n.t("panels:subagents")}</strong>
+        {!information?.embedded && (
+          <strong>{i18n.t("panels:subagents")}</strong>
+        )}
         <CreateSideChat
           key={parent}
           sdk={sdk}

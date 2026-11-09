@@ -1,3 +1,4 @@
+import { flushSync } from "react-dom";
 import { ShellTargetNavigationContext } from "./shell-target-navigation.js";
 import {
   sidebarTabId,
@@ -260,19 +261,27 @@ export function AuxiliaryPanel({
   const [fileSplit, setFileSplit] = useState({ stacked: false, max: 360 });
   useLayoutEffect(() => {
     if (!panel.current || !onWidthChange) return;
-    const measure = () =>
-      onWidthChange(open ? panel.current!.getBoundingClientRect().width : 0);
+    const element = panel.current;
+    // Closed is a target, not the rendered width during the exit transition.
+    // Keep observing that boundary through close/reopen without publishing a
+    // cleanup zero that makes the conversation jump to full width.
+    const measure = () => onWidthChange(element.getBoundingClientRect().width);
     const observer =
       typeof ResizeObserver === "undefined"
         ? undefined
-        : new ResizeObserver(measure);
+        : new ResizeObserver(() => {
+            // ResizeObserver runs before paint, but React may defer a normal
+            // state update. Commit the shared conversation/titlebar boundary in
+            // this delivery so it cannot trail the panel's CSS animation.
+            flushSync(measure);
+          });
     observer?.observe(panel.current);
     measure();
     return () => {
       observer?.disconnect();
       onWidthChange(0);
     };
-  }, [open, onWidthChange]);
+  }, [onWidthChange]);
   const expandedKey = roomContext
     ? `room:${roomContext.roomId}`
     : `thread:${threadId}`;
@@ -288,7 +297,7 @@ export function AuxiliaryPanel({
   // cleanup (which publishes zero), and report the real boundary before paint.
   useLayoutEffect(() => {
     if (panel.current && onWidthChange)
-      onWidthChange(open ? panel.current.getBoundingClientRect().width : 0);
+      onWidthChange(panel.current.getBoundingClientRect().width);
   }, [open, width, resizing, expanded, onWidthChange]);
   useEffect(() => {
     if (!open || expanded) finishResize();
