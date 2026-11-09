@@ -43,8 +43,7 @@ jobs:
       - run: npm ci
       - run: npm run build --workspace @zenx/plugin-sdk
       - name: Content visibility, draft hints and control interactions
-        # Every PR runs these files in CI / ZenX; keep standalone manual coverage.
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+        # PR aggregate is tiered; this path-triggered workflow owns these unit regressions.
         run: >-
           node --import tsx --test
           apps/zenx/test/editable-information-panel.test.ts

@@ -58,8 +58,7 @@ jobs:
       - run: npm ci
       - run: npm run build --workspace @zenx/plugin-sdk
       - name: Native answer provenance and real renderer interactions
-        # Every PR runs these files in CI / ZenX; keep standalone manual coverage.
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+        # PR aggregate is tiered; this path-triggered workflow owns these unit regressions.
         run: node --import tsx --test apps/zenx/test/answered-question-presentation.test.ts apps/zenx/test/answered-question-interaction.test.ts apps/zenx/test/turn-canonical-presentation.test.ts apps/zenx/test/user-question-cards-interaction.test.ts apps/zenx/test/question-read-recovery.test.ts
       - name: Build production renderer with synthetic question history
         run: node apps/zenx/scripts/build-quote-preview.mjs "${{ runner.temp }}/answered-question"

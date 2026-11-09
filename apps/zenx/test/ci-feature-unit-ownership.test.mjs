@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
 
@@ -21,7 +21,7 @@ const selected = {
 };
 
 for (const [file, names] of Object.entries(selected)) {
-  test(`${file}: only duplicate Linux unit tests defer to aggregate on PRs`, () => {
+  test(`${file}: path-triggered PR workflow owns its feature unit regressions`, () => {
     const workflow = parse(read(`.github/workflows/${file}`));
     assert.ok(Object.hasOwn(workflow.on, "workflow_dispatch"));
     assert.ok(Object.hasOwn(workflow.on, "pull_request"));
@@ -33,12 +33,12 @@ for (const [file, names] of Object.entries(selected)) {
       const matches = steps.filter((step) => step.name === name);
       assert.equal(matches.length, 1);
       const step = matches[0];
-      assert.equal(step.if, "${{ github.event_name == 'workflow_dispatch' }}");
+      assert.equal(step.if, undefined);
       assert.equal(step.env, undefined);
       assert.equal(step["continue-on-error"], undefined);
       assert.match(step.run, /^node --import tsx --test /);
-      // These are explicit top-level files in ZenX's always-on aggregate glob,
-      // not platform-native scripts or a filtered replacement for a full suite.
+      // These units stay in their feature workflow on PRs after full aggregate
+      // moves to main/manual. They are not replacements for native captures.
       const files = step.run.match(
         /apps\/zenx\/test\/[\w-]+\.test\.(?:ts|mjs)/g,
       );
@@ -65,9 +65,9 @@ for (const [file, names] of Object.entries(selected)) {
   });
 }
 
-test("CI owns the full ZenX test set outside verified documentation-only PRs", () => {
+test("CI preserves the full ZenX suite on main/manual and explicit PR unit policy", () => {
   const ci = parse(read(".github/workflows/ci.yml"));
-  assert.equal(ci.on.pull_request, null);
+  assert.ok(ci.on.pull_request.types.includes("ready_for_review"));
   assert.deepEqual(ci.on.push.branches, ["main"]);
   const owners = Object.values(ci.jobs).filter((job) =>
     job.steps?.some(
@@ -75,6 +75,18 @@ test("CI owns the full ZenX test set outside verified documentation-only PRs", (
     ),
   );
   assert.equal(owners.length, 1);
+  assert.ok(
+    owners[0].steps.some(
+      (step) =>
+        step.run === "npm --workspace apps/zenx run check:observed" &&
+        step.if.includes("CI_FULL_AGGREGATE"),
+    ),
+  );
+  assert.ok(
+    owners[0].steps.some((step) =>
+      step.run?.includes("run-ci-quick-tests.mjs"),
+    ),
+  );
   assert.equal(owners[0].if, "${{ !cancelled() }}");
   assert.equal(owners[0].needs, "selection");
   assert.match(
@@ -104,4 +116,30 @@ test("focused real Host integration remains independent of the aggregate", () =>
     step.run,
     /--test-name-pattern='real Host questions render in full App information panel'/,
   );
+});
+
+test("every PR-triggered workflow retains ownership of formerly dispatch-only unit steps", () => {
+  for (const file of readdirSync(new URL(".github/workflows/", root))) {
+    const workflow = parse(read(`.github/workflows/${file}`));
+    if (!Object.hasOwn(workflow.on, "pull_request")) continue;
+    for (const [id, job] of Object.entries(workflow.jobs)) {
+      for (const step of job.steps || []) {
+        if (
+          !/(?:--test|\bnpm\b[^\n]*(?:test|check)|\bpytest\b)/.test(
+            step.run || "",
+          )
+        )
+          continue;
+        for (const condition of [job.if || "", step.if || ""]) {
+          // Some native jobs explicitly allow trusted PRs OR an opted-in manual
+          // run. That is not dispatch-only and must keep its security scope.
+          assert.ok(
+            !condition.includes("workflow_dispatch") ||
+              condition.includes("pull_request"),
+            `${file}/${id}/${step.name || step.run}: unit ownership needs explicit PR coverage`,
+          );
+        }
+      }
+    }
+  }
 });

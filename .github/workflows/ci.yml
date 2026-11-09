@@ -2,6 +2,7 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
   push:
     branches:
@@ -21,6 +22,19 @@ jobs:
     timeout-minutes: 8
     outputs:
       docs-only: ${{ steps.select.outputs.docs-only }}
+      policy-version: ${{ steps.select.outputs.policy-version }}
+      tier: ${{ steps.select.outputs.tier }}
+      plan-digest: ${{ steps.select.outputs.plan-digest }}
+      quick-mode: ${{ steps.select.outputs.quick-mode }}
+      aggregate-mode: ${{ steps.select.outputs.aggregate-mode }}
+      core-mode: ${{ steps.select.outputs.core-mode }}
+      ui-mode: ${{ steps.select.outputs.ui-mode }}
+      capability-mode: ${{ steps.select.outputs.capability-mode }}
+      windows-computer-mode: ${{ steps.select.outputs.windows-computer-mode }}
+      windows-packaged-mode: ${{ steps.select.outputs.windows-packaged-mode }}
+      windows-browser-mode: ${{ steps.select.outputs.windows-browser-mode }}
+      playwright-mode: ${{ steps.select.outputs.playwright-mode }}
+      android-mode: ${{ steps.select.outputs.android-mode }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,14 +44,14 @@ jobs:
         with:
           node-version: 22
       - name: Verify conservative selector contracts
-        run: node --test scripts/test/ci-impact-shadow.test.mjs scripts/test/ci-docs-selection.test.mjs
-      - name: Select only proven documentation work
+        run: node --test scripts/test/ci-impact-shadow.test.mjs scripts/test/ci-docs-selection.test.mjs scripts/test/ci-risk-selection.test.mjs
+      - name: Select PR risk work or full main acceptance
         id: select
         env:
           CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           CI_CHECKOUT_SHA: ${{ github.sha }}
-        run: node scripts/ci-docs-selection.mjs "${{ runner.temp }}/ci-selection.json"
+        run: node scripts/ci-risk-selection.mjs "${{ runner.temp }}/ci-selection.json"
       - name: Install documentation validation dependencies without native lifecycle work
         if: ${{ steps.select.outputs.docs-only == 'true' }}
         timeout-minutes: 4
@@ -58,7 +72,7 @@ jobs:
     needs: selection
     if: ${{ !cancelled() }}
     env:
-      CI_RUN_FULL: ${{ github.event_name != 'pull_request' || needs.selection.result != 'success' || needs.selection.outputs.docs-only != 'true' }}
+      CI_RUN_FULL: ${{ github.event_name != 'pull_request' || needs.selection.result != 'success' || needs.selection.outputs.policy-version != '1' || !((needs.selection.outputs.tier == 'documentation' && needs.selection.outputs.core-mode == 'omit-docs') || (needs.selection.outputs.tier == 'pr-risk' && needs.selection.outputs.core-mode == 'omit-pr-risk')) }}
     name: Core, CLI, and IMZen
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -100,23 +114,27 @@ jobs:
         env:
           SELECTION_RESULT: ${{ needs.selection.result }}
         run: test "$SELECTION_RESULT" = success
-      - name: Record deliberate documentation-only omission
+      - name: Record deliberate selected-tier omission
         working-directory: ${{ runner.temp }}
         if: ${{ env.CI_RUN_FULL != 'true' }}
         shell: bash
-        run: echo 'Documentation-only PR. This named check is retained; no product, native, browser or build acceptance was executed.' >> "$GITHUB_STEP_SUMMARY"
+        run: echo 'PR risk policy omitted this lane; no product, native, browser or build acceptance was executed in this job. This is not full acceptance.' >> "$GITHUB_STEP_SUMMARY"
 
   zenx-check:
     needs: selection
     if: ${{ !cancelled() }}
     env:
-      CI_RUN_FULL: ${{ github.event_name != 'pull_request' || needs.selection.result != 'success' || needs.selection.outputs.docs-only != 'true' }}
+      CI_RUN_FULL: ${{ github.event_name != 'pull_request' || needs.selection.result != 'success' || needs.selection.outputs.policy-version != '1' || !((needs.selection.outputs.tier == 'documentation' && needs.selection.outputs.quick-mode == 'omit-docs') || (needs.selection.outputs.tier == 'pr-risk' && needs.selection.outputs.quick-mode == 'omit-pr-risk')) }}
+      CI_FULL_AGGREGATE: ${{ github.event_name != 'pull_request' || needs.selection.result != 'success' || needs.selection.outputs.policy-version != '1' || !((needs.selection.outputs.tier == 'documentation' && needs.selection.outputs.aggregate-mode == 'omit-docs') || (needs.selection.outputs.tier == 'pr-risk' && needs.selection.outputs.aggregate-mode == 'omit-pr-risk')) }}
     name: ZenX aggregate checks
     runs-on: ubuntu-24.04
     # Aggregate gets its own budget, independent of fonts and browser captures.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
         if: ${{ env.CI_RUN_FULL == 'true' }}
       - uses: actions/setup-node@v4
         if: ${{ env.CI_RUN_FULL == 'true' }}
@@ -144,13 +162,33 @@ jobs:
         timeout-minutes: 5
         id: zenx-dependencies
       - name: Check ZenX with bounded execution-order evidence
-        if: ${{ env.CI_RUN_FULL == 'true' && (!cancelled() && steps.zenx-dependencies.outcome == 'success') }}
+        if: ${{ env.CI_RUN_FULL == 'true' && env.CI_FULL_AGGREGATE == 'true' && (!cancelled() && steps.zenx-dependencies.outcome == 'success') }}
         env:
           ZENX_TEST_EXECUTION_TRACE_FILE: ${{ runner.temp }}/zenx-test-execution.ndjson
         timeout-minutes: 20
         run: npm --workspace apps/zenx run check:observed
+      - name: Prepare SDK and first-party plugin fixtures for PR unit checks
+        if: ${{ env.CI_RUN_FULL == 'true' && env.CI_FULL_AGGREGATE != 'true' && !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
+        run: npm --workspace apps/zenx run prepare:first-party-plugins
+      - name: Run explicit PR risk unit files, not the full aggregate
+        if: ${{ env.CI_RUN_FULL == 'true' && env.CI_FULL_AGGREGATE != 'true' }}
+        timeout-minutes: 10
+        env:
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          CI_CHECKOUT_SHA: ${{ github.sha }}
+          CI_PLAN_DIGEST: ${{ needs.selection.outputs.plan-digest }}
+        run: node scripts/run-ci-quick-tests.mjs "${{ runner.temp }}/zenx-pr-unit-receipt.json"
+      - name: Retain current-run PR unit receipt
+        if: ${{ env.CI_RUN_FULL == 'true' && env.CI_FULL_AGGREGATE != 'true' && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-pr-units-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/zenx-pr-unit-receipt.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Retain partial ZenX execution-order evidence
-        if: ${{ env.CI_RUN_FULL == 'true' && (always()) }}
+        if: ${{ env.CI_RUN_FULL == 'true' && env.CI_FULL_AGGREGATE == 'true' && (always()) }}
         timeout-minutes: 2
         uses: actions/upload-artifact@v4
         with:
@@ -158,6 +196,14 @@ jobs:
           path: ${{ runner.temp }}/zenx-test-execution.ndjson
           if-no-files-found: warn
           retention-days: 14
+      - name: State the selected acceptance boundary
+        if: ${{ env.CI_RUN_FULL == 'true' && always() }}
+        run: |
+          if [ "$CI_FULL_AGGREGATE" = true ]; then
+            echo 'Full aggregate command requested in this run; see its result.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'PR risk unit checks only. This stable check name does not mean the full aggregate, all tests or product build ran.' >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Require successful workload selection
         if: ${{ always() }}
         working-directory: ${{ runner.temp }}
@@ -165,17 +211,17 @@ jobs:
         env:
           SELECTION_RESULT: ${{ needs.selection.result }}
         run: test "$SELECTION_RESULT" = success
-      - name: Record deliberate documentation-only omission
+      - name: Record deliberate selected-tier omission
         working-directory: ${{ runner.temp }}
         if: ${{ env.CI_RUN_FULL != 'true' }}
         shell: bash
-        run: echo 'Documentation-only PR. This named check is retained; no product, native, browser or build acceptance was executed.' >> "$GITHUB_STEP_SUMMARY"
+        run: echo 'PR risk policy omitted this lane; no product, native, browser or build acceptance was executed in this job. This is not full acceptance.' >> "$GITHUB_STEP_SUMMARY"
 
   zenx-ui:
     needs: selection
     if: ${{ !cancelled() }}
     env:
-      CI_RUN_FULL: ${{ github.event_name != 'pull_request' || needs.selection.result != 'success' || needs.selection.outputs.docs-only != 'true' }}
+      CI_RUN_FULL: ${{ github.event_name != 'pull_request' || needs.selection.result != 'success' || needs.selection.outputs.policy-version != '1' || !((needs.selection.outputs.tier == 'documentation' && needs.selection.outputs.ui-mode == 'omit-docs') || (needs.selection.outputs.tier == 'pr-risk' && needs.selection.outputs.ui-mode == 'omit-pr-risk')) }}
     name: ZenX synthetic UI evidence (${{ matrix.shard }})
     strategy:
       fail-fast: false
@@ -529,11 +575,11 @@ jobs:
         env:
           SELECTION_RESULT: ${{ needs.selection.result }}
         run: test "$SELECTION_RESULT" = success
-      - name: Record deliberate documentation-only omission
+      - name: Record deliberate selected-tier omission
         working-directory: ${{ runner.temp }}
         if: ${{ env.CI_RUN_FULL != 'true' }}
         shell: bash
-        run: echo 'Documentation-only PR. This named check is retained; no product, native, browser or build acceptance was executed.' >> "$GITHUB_STEP_SUMMARY"
+        run: echo 'PR risk policy omitted this lane; no product, native, browser or build acceptance was executed in this job. This is not full acceptance.' >> "$GITHUB_STEP_SUMMARY"
 
   zenx:
     name: ZenX typecheck, tests, and build
@@ -549,12 +595,22 @@ jobs:
         run: |
           test "$CHECK_RESULT" = success
           test "$UI_RESULT" = success
+      - name: Clarify compatibility gate scope
+        if: ${{ always() }}
+        env:
+          CI_EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$CI_EVENT" = pull_request ]; then
+            echo 'PR compatibility gate covers selected-risk jobs, not full aggregate or all product builds. Fast static feedback is separate.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Full tier requested on main/manual; this gate still rejects failed or missing dependencies.' >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   zenx-capability-smoke:
     needs: selection
     if: ${{ !cancelled() }}
     env:
-      CI_RUN_FULL: ${{ github.event_name != 'pull_request' || needs.selection.result != 'success' || needs.selection.outputs.docs-only != 'true' }}
+      CI_RUN_FULL: ${{ github.event_name != 'pull_request' || needs.selection.result != 'success' || needs.selection.outputs.policy-version != '1' || !((needs.selection.outputs.tier == 'documentation' && needs.selection.outputs.capability-mode == 'omit-docs') || (needs.selection.outputs.tier == 'pr-risk' && needs.selection.outputs.capability-mode == 'omit-pr-risk')) }}
     name: ZenX packaged capability smoke
     runs-on: macos-latest
     timeout-minutes: 20
@@ -669,11 +725,11 @@ jobs:
         env:
           SELECTION_RESULT: ${{ needs.selection.result }}
         run: test "$SELECTION_RESULT" = success
-      - name: Record deliberate documentation-only omission
+      - name: Record deliberate selected-tier omission
         working-directory: ${{ runner.temp }}
         if: ${{ env.CI_RUN_FULL != 'true' }}
         shell: bash
-        run: echo 'Documentation-only PR. This named check is retained; no product, native, browser or build acceptance was executed.' >> "$GITHUB_STEP_SUMMARY"
+        run: echo 'PR risk policy omitted this lane; no product, native, browser or build acceptance was executed in this job. This is not full acceptance.' >> "$GITHUB_STEP_SUMMARY"
 
   zenx-windows-computer-smoke:
     needs: selection
@@ -682,7 +738,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 20
     env:
-      CI_RUN_FULL: ${{ github.event_name != 'pull_request' || needs.selection.result != 'success' || needs.selection.outputs.docs-only != 'true' }}
+      CI_RUN_FULL: ${{ github.event_name != 'pull_request' || needs.selection.result != 'success' || needs.selection.outputs.policy-version != '1' || !((needs.selection.outputs.tier == 'documentation' && needs.selection.outputs.windows-computer-mode == 'omit-docs') || (needs.selection.outputs.tier == 'pr-risk' && needs.selection.outputs.windows-computer-mode == 'omit-pr-risk')) }}
       WINAPP_CLI_UPDATE_CHECK: "0"
       WINAPP_CLI_TELEMETRY_OPTOUT: "1"
     steps:
@@ -739,11 +795,11 @@ jobs:
         env:
           SELECTION_RESULT: ${{ needs.selection.result }}
         run: test "$SELECTION_RESULT" = success
-      - name: Record deliberate documentation-only omission
+      - name: Record deliberate selected-tier omission
         working-directory: ${{ runner.temp }}
         if: ${{ env.CI_RUN_FULL != 'true' }}
         shell: bash
-        run: echo 'Documentation-only PR. This named check is retained; no product, native, browser or build acceptance was executed.' >> "$GITHUB_STEP_SUMMARY"
+        run: echo 'PR risk policy omitted this lane; no product, native, browser or build acceptance was executed in this job. This is not full acceptance.' >> "$GITHUB_STEP_SUMMARY"
 
   zenx-windows-packaged-provider-smoke:
     needs: selection
@@ -752,7 +808,7 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 90
     env:
-      CI_RUN_FULL: ${{ github.event_name != 'pull_request' || needs.selection.result != 'success' || needs.selection.outputs.docs-only != 'true' }}
+      CI_RUN_FULL: ${{ github.event_name != 'pull_request' || needs.selection.result != 'success' || needs.selection.outputs.policy-version != '1' || !((needs.selection.outputs.tier == 'documentation' && needs.selection.outputs.windows-packaged-mode == 'omit-docs') || (needs.selection.outputs.tier == 'pr-risk' && needs.selection.outputs.windows-packaged-mode == 'omit-pr-risk')) }}
       WINAPP_CLI_UPDATE_CHECK: "0"
       WINAPP_CLI_TELEMETRY_OPTOUT: "1"
       DOTNET_MULTILEVEL_LOOKUP: "0"
@@ -1028,17 +1084,17 @@ jobs:
         env:
           SELECTION_RESULT: ${{ needs.selection.result }}
         run: test "$SELECTION_RESULT" = success
-      - name: Record deliberate documentation-only omission
+      - name: Record deliberate selected-tier omission
         working-directory: ${{ runner.temp }}
         if: ${{ env.CI_RUN_FULL != 'true' }}
         shell: bash
-        run: echo 'Documentation-only PR. This named check is retained; no product, native, browser or build acceptance was executed.' >> "$GITHUB_STEP_SUMMARY"
+        run: echo 'PR risk policy omitted this lane; no product, native, browser or build acceptance was executed in this job. This is not full acceptance.' >> "$GITHUB_STEP_SUMMARY"
 
   zenx-windows-user-browser-smoke:
     needs: selection
     if: ${{ !cancelled() }}
     env:
-      CI_RUN_FULL: ${{ github.event_name != 'pull_request' || needs.selection.result != 'success' || needs.selection.outputs.docs-only != 'true' }}
+      CI_RUN_FULL: ${{ github.event_name != 'pull_request' || needs.selection.result != 'success' || needs.selection.outputs.policy-version != '1' || !((needs.selection.outputs.tier == 'documentation' && needs.selection.outputs.windows-browser-mode == 'omit-docs') || (needs.selection.outputs.tier == 'pr-risk' && needs.selection.outputs.windows-browser-mode == 'omit-pr-risk')) }}
     name: ZenX Windows attached user-browser smoke
     runs-on: windows-latest
     timeout-minutes: 20
@@ -1097,17 +1153,17 @@ jobs:
         env:
           SELECTION_RESULT: ${{ needs.selection.result }}
         run: test "$SELECTION_RESULT" = success
-      - name: Record deliberate documentation-only omission
+      - name: Record deliberate selected-tier omission
         working-directory: ${{ runner.temp }}
         if: ${{ env.CI_RUN_FULL != 'true' }}
         shell: bash
-        run: echo 'Documentation-only PR. This named check is retained; no product, native, browser or build acceptance was executed.' >> "$GITHUB_STEP_SUMMARY"
+        run: echo 'PR risk policy omitted this lane; no product, native, browser or build acceptance was executed in this job. This is not full acceptance.' >> "$GITHUB_STEP_SUMMARY"
 
   zenx-playwright-provider-smoke:
     needs: selection
     if: ${{ !cancelled() }}
     env:
-      CI_RUN_FULL: ${{ github.event_name != 'pull_request' || needs.selection.result != 'success' || needs.selection.outputs.docs-only != 'true' }}
+      CI_RUN_FULL: ${{ github.event_name != 'pull_request' || needs.selection.result != 'success' || needs.selection.outputs.policy-version != '1' || !((needs.selection.outputs.tier == 'documentation' && needs.selection.outputs.playwright-mode == 'omit-docs') || (needs.selection.outputs.tier == 'pr-risk' && needs.selection.outputs.playwright-mode == 'omit-pr-risk')) }}
     name: ZenX real Playwright provider smoke
     runs-on: macos-latest
     timeout-minutes: 20
@@ -1220,17 +1276,17 @@ jobs:
         env:
           SELECTION_RESULT: ${{ needs.selection.result }}
         run: test "$SELECTION_RESULT" = success
-      - name: Record deliberate documentation-only omission
+      - name: Record deliberate selected-tier omission
         working-directory: ${{ runner.temp }}
         if: ${{ env.CI_RUN_FULL != 'true' }}
         shell: bash
-        run: echo 'Documentation-only PR. This named check is retained; no product, native, browser or build acceptance was executed.' >> "$GITHUB_STEP_SUMMARY"
+        run: echo 'PR risk policy omitted this lane; no product, native, browser or build acceptance was executed in this job. This is not full acceptance.' >> "$GITHUB_STEP_SUMMARY"
 
   android-mobile:
     needs: selection
     if: ${{ !cancelled() }}
     env:
-      CI_RUN_FULL: ${{ github.event_name != 'pull_request' || needs.selection.result != 'success' || needs.selection.outputs.docs-only != 'true' }}
+      CI_RUN_FULL: ${{ github.event_name != 'pull_request' || needs.selection.result != 'success' || needs.selection.outputs.policy-version != '1' || !((needs.selection.outputs.tier == 'documentation' && needs.selection.outputs.android-mode == 'omit-docs') || (needs.selection.outputs.tier == 'pr-risk' && needs.selection.outputs.android-mode == 'omit-pr-risk')) }}
     name: Android TLS Host integration and debug APK
     runs-on: ubuntu-latest
     timeout-minutes: 35
@@ -1296,11 +1352,11 @@ jobs:
         env:
           SELECTION_RESULT: ${{ needs.selection.result }}
         run: test "$SELECTION_RESULT" = success
-      - name: Record deliberate documentation-only omission
+      - name: Record deliberate selected-tier omission
         working-directory: ${{ runner.temp }}
         if: ${{ env.CI_RUN_FULL != 'true' }}
         shell: bash
-        run: echo 'Documentation-only PR. This named check is retained; no product, native, browser or build acceptance was executed.' >> "$GITHUB_STEP_SUMMARY"
+        run: echo 'PR risk policy omitted this lane; no product, native, browser or build acceptance was executed in this job. This is not full acceptance.' >> "$GITHUB_STEP_SUMMARY"
 
   coverage:
     name: CI coverage decision
@@ -1325,11 +1381,27 @@ jobs:
       - name: Reject missing, failed, cancelled or accidentally skipped work
         env:
           RESULTS: ${{ toJSON(needs) }}
+          CI_EVENT: ${{ github.event_name }}
           EXPECTED_JOBS: selection,core-cli-imzen,zenx-check,zenx-ui,zenx-capability-smoke,zenx-windows-computer-smoke,zenx-windows-packaged-provider-smoke,zenx-windows-user-browser-smoke,zenx-playwright-provider-smoke,android-mobile,zenx
         run: |
           node --input-type=module <<'NODE'
           const results = JSON.parse(process.env.RESULTS);
           const expected = process.env.EXPECTED_JOBS.split(',');
+          const output = results.selection?.outputs || {};
+          const lanes = ['quick','aggregate','core','ui','capability','windows-computer','windows-packaged','windows-browser','playwright','android'];
+          const tier = output.tier;
+          const valid = output['policy-version'] === '1' && /^[a-f0-9]{64}$/.test(output['plan-digest'] || '') &&
+            (process.env.CI_EVENT === 'pull_request' ? ['full','pr-risk','documentation'].includes(tier) : tier === 'full') &&
+            output['docs-only'] === String(tier === 'documentation') && lanes.every(lane => {
+              const mode = output[lane + '-mode'];
+              if (tier === 'full') return mode === 'run';
+              if (tier === 'documentation') return mode === 'omit-docs';
+              if (lane === 'quick') return mode === 'run';
+              if (lane === 'aggregate') return mode === 'omit-pr-risk';
+              return mode === 'run' || mode === 'omit-pr-risk';
+            });
+          if (!valid) { console.error('Missing or contradictory CI tier policy'); process.exit(1); }
+          console.log(tier === 'full' ? 'Full acceptance requested for this run' : 'PR selected-risk coverage only; full aggregate is deferred to main/manual');
           if (Object.keys(results).length !== expected.length || expected.some(id => results[id]?.result !== 'success')) {
             console.error('CI selection or required work did not complete successfully');
             process.exit(1);

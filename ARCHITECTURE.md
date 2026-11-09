@@ -1833,3 +1833,5 @@ Question-list read recovery is a disposable mounted-view concern: existing autho
 - **Transcript reader cancellation** — The exact pinned Legend web adapter cancels initial and delayed imperative positioning when the existing reader takes control, without queuing a replacement offset or changing nested scrolling, follow intent, history or runtime authority.
 
 - **Documentation-only CI selection** — A separate conservative selector may replace heavy PR work with explicit named check receipts only for complete pinned ordinary-Markdown changes in the approved documentation allowlist; missing evidence, unknown paths, main pushes and manual dispatch retain full acceptance, and failed selection fails every original heavy check even after its full fallback work.
+
+- **Tiered CI risk policy** — Every PR, draft or ready, receives static feedback and an explicit union of path-based risk lanes plus current-run bound unit files, while the complete aggregate remains on main/manual; unknown evidence retains all PR risk lanes, typed omission receipts never claim full acceptance, and existing native work remains mandatory for its selected risk.

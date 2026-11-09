@@ -21,14 +21,21 @@ const heavy = [
 ];
 
 test("selection never prevents named checks or individual UI shards from being emitted", () => {
-  assert.equal(ci.on.pull_request, null);
+  assert.deepEqual(ci.on.pull_request.types, [
+    "opened",
+    "synchronize",
+    "reopened",
+    "ready_for_review",
+  ]);
   assert.equal(ci.on.workflow_dispatch, null);
   assert.deepEqual(ci.on.push.branches, ["main"]);
   for (const id of heavy) {
     const job = ci.jobs[id];
     assert.equal(job.needs, "selection");
     assert.equal(job.if, "${{ !cancelled() }}");
-    assert.equal(job.env.CI_RUN_FULL, full);
+    assert.match(job.env.CI_RUN_FULL, /needs.selection.result != 'success'/);
+    assert.match(job.env.CI_RUN_FULL, /omit-docs/);
+    assert.match(job.env.CI_RUN_FULL, /policy-version/);
     const requiredDecision = job.steps.at(-2);
     assert.equal(
       requiredDecision.name,
@@ -136,11 +143,32 @@ test("coverage gate always reports and rejects every missing/failed/cancelled/sk
         ...process.env,
         RESULTS: JSON.stringify(results),
         EXPECTED_JOBS: gate.steps[0].env.EXPECTED_JOBS,
+        CI_EVENT: "push",
       },
     }).status;
   const success = Object.fromEntries(
     gate.needs.map((id) => [id, { result: "success" }]),
   );
+  success.selection.outputs = {
+    "policy-version": "1",
+    "plan-digest": "a".repeat(64),
+    tier: "full",
+    "docs-only": "false",
+    ...Object.fromEntries(
+      [
+        "quick",
+        "aggregate",
+        "core",
+        "ui",
+        "capability",
+        "windows-computer",
+        "windows-packaged",
+        "windows-browser",
+        "playwright",
+        "android",
+      ].map((lane) => [lane + "-mode", "run"]),
+    ),
+  };
   assert.equal(run(success), 0);
   for (const id of gate.needs)
     for (const result of ["failure", "cancelled", "skipped", ""])
