@@ -1239,6 +1239,13 @@ function ThreadViewContent({
   const submitting =
     composer.submission?.status === "pending" ||
     (compactRequested && composer.compaction?.status === "pending");
+  // A promoted first draft keeps its existing submission until admission.
+  // Do not reuse this cue for local creation or ordinary immediate Send rows.
+  const firstMessageSending =
+    thread !== null &&
+    composer.submission?.status === "pending" &&
+    composer.submission.intent === "start" &&
+    composer.submission.immediateFeedback !== true;
   const hasDraft = composerDraftHasContent(composer.draft);
   const blockedByImageCapability =
     !compactRequested &&
@@ -2327,9 +2334,24 @@ function ThreadViewContent({
                 />
                 {transcriptRows.length === 0 ? (
                   (emptyContent ?? (
-                    <div className="thread-empty">
-                      <h2>{i18n.t("shell:startANewThread")}</h2>
-                      <p>{i18n.t("shell:describeOutcome")}</p>
+                    <div
+                      className="thread-empty"
+                      role={firstMessageSending ? "status" : undefined}
+                    >
+                      <h2>
+                        {i18n.t(
+                          firstMessageSending
+                            ? "shell:pendingSendSending"
+                            : "shell:startANewThread",
+                        )}
+                      </h2>
+                      <p>
+                        {i18n.t(
+                          firstMessageSending
+                            ? "shell:firstSendAwaitingConfirmation"
+                            : "shell:describeOutcome",
+                        )}
+                      </p>
                     </div>
                   ))
                 ) : (

@@ -357,6 +357,116 @@ test("New thread stays local, switches Project, and creates on first Send", asyn
   }
 });
 
+for (const outcome of ["accepted", "rejected", "navigated"] as const) {
+  test(`first Send pending feedback distinguishes creation and ${outcome} admission`, async () => {
+    const creation = deferred<ReturnType<typeof started>>();
+    const admission = deferred<object>();
+    let creates = 0;
+    let sends = 0;
+    const harness = await mountApp(oneProject(), {
+      startProjectThread: async () => {
+        creates++;
+        return creation.promise;
+      },
+      request: async (method) => {
+        if (method === "zen/turn/send") {
+          sends++;
+          return admission.promise;
+        }
+        throw new Error(`Unexpected protocol request: ${method}`);
+      },
+    });
+    try {
+      const composer = await waitFor(() =>
+        document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+      );
+      await setTextareaValue(composer, "Wait for first-message confirmation");
+      await invokeButtonClick(
+        await waitFor(() =>
+          document.querySelector<HTMLButtonElement>('[aria-label="Send"]'),
+        ),
+        2,
+      );
+      await waitFor(() => creates === 1);
+      assert.equal(sends, 0);
+      assert.ok(document.querySelector(".new-thread-draft-heading"));
+      assert.equal(
+        document.querySelector('.thread-empty[role="status"]'),
+        null,
+        "local creation is not message admission",
+      );
+
+      await act(async () =>
+        creation.resolve(started(liveThread(), "/work/zen")),
+      );
+      await waitFor(() => sends === 1);
+      const status = await waitFor(() =>
+        document.querySelector('.thread-empty[role="status"]'),
+      );
+      assert.match(status.textContent ?? "", /Sending…/);
+      assert.match(status.textContent ?? "", /Waiting for confirmation/);
+      assert.doesNotMatch(status.textContent ?? "", /Start a new thread/);
+      assert.equal(document.querySelector(".new-thread-draft-heading"), null);
+      assert.equal(
+        document.querySelector<HTMLTextAreaElement>("#thread-composer")?.value,
+        "Wait for first-message confirmation",
+      );
+      assert.equal(document.querySelector("[data-sent-message-id]"), null);
+      assert.equal(
+        document.querySelector<HTMLButtonElement>('[aria-label="Send"]')
+          ?.disabled,
+        true,
+      );
+
+      if (outcome === "navigated") {
+        await act(async () =>
+          document
+            .querySelector<HTMLButtonElement>(".settings-nav-row")
+            ?.click(),
+        );
+        await waitFor(
+          () => document.getElementById("thread-composer") === null,
+        );
+        assert.equal(
+          document.querySelector('.thread-empty[role="status"]'),
+          null,
+        );
+      }
+      await act(async () => {
+        if (outcome === "rejected")
+          admission.reject(new Error("Admission rejected"));
+        else admission.resolve({});
+      });
+      await waitFor(
+        () => document.querySelector('.thread-empty[role="status"]') === null,
+      );
+      if (outcome === "navigated") {
+        assert.equal(
+          document.getElementById("thread-composer"),
+          null,
+          "late admission must not reopen the Thread",
+        );
+        assert.match(document.body.textContent ?? "", /Settings/);
+      } else {
+        assert.equal(
+          document.querySelector<HTMLTextAreaElement>("#thread-composer")
+            ?.value,
+          outcome === "rejected" ? "Wait for first-message confirmation" : "",
+        );
+        if (outcome === "rejected")
+          assert.match(
+            document.querySelector(".composer-error")?.textContent ?? "",
+            /Admission rejected/,
+          );
+      }
+      assert.equal(creates, 1);
+      assert.equal(sends, 1, "feedback never dispatches or retries input");
+    } finally {
+      await unmountApp(harness);
+    }
+  });
+}
+
 test("fresh Thread establishes native provenance before sending and only durable current-epoch messages can quote or fork", async () => {
   let notify:
     Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;

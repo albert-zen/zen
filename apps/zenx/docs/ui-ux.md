@@ -959,7 +959,14 @@ and attachments into a visibly local **Sending** row and clears the editor. This
 is presentation only, not a canonical user message or proof of delivery. The
 existing pending-admission guard prevents duplicate sends while newer typing
 remains editable. New-thread and side-chat promotion retain their existing draft
-behavior in this initial rollout.
+behavior in this initial rollout. After a new Thread has been created, its empty
+conversation displays localized **Sending** and **Waiting for confirmation**
+feedback while that first draft's existing submission is pending. This is not
+proof of acceptance or agent work. Local creation and side-chat staging keep
+their own presentation; ordinary immediate Send rows are not duplicated. The
+cue follows only the selected Thread's composer and disappears on existing
+admission, failure or transcript projection, without changing draft recovery,
+navigation, request ordering or retry behavior.
 
 The local row has a stable client identity but never a canonical Item ID.
 Admission ACK changes its label to admitted/waiting for conversation projection,

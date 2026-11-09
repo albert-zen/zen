@@ -130,6 +130,8 @@ export const en = {
     "This browser cannot paint search highlights. Your text selection is unchanged.",
 
   pendingSendSending: "Sending…",
+  firstSendAwaitingConfirmation:
+    "Waiting for confirmation. Your draft is preserved.",
   pendingSendAdmitted: "Admitted; waiting for the conversation to update",
   pendingSendNotSent: "Not sent",
   pendingSendUnconfirmed: "Delivery not confirmed",
@@ -1258,6 +1260,7 @@ export const zhCN = {
     "当前浏览器不支持搜索高亮，已有文本选择保持不变。",
 
   pendingSendSending: "正在发送…",
+  firstSendAwaitingConfirmation: "正在等待接纳确认，草稿仍保留在输入框中。",
   pendingSendAdmitted: "已接纳，等待会话更新",
   pendingSendNotSent: "未发送",
   pendingSendUnconfirmed: "未确认是否送达",

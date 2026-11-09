@@ -15,9 +15,12 @@ import { projectCompletedItem } from "../../../src/protocol/codex/mapper.js";
 import type { ApprovalCardState } from "../src/renderer/src/approval-state.js";
 import {
   addComposerImages,
+  beginComposerSubmission,
   beginImmediateComposerSubmission,
+  failComposerSubmission,
   failImmediateComposerSubmission,
   acceptComposerSubmission,
+  reconcileCanonicalAdmission,
   editComposer,
   emptyComposerState,
   type ComposerState,
@@ -152,6 +155,163 @@ test("new-thread execution context can sit beneath input while existing conversa
         : contextIndex > formIndex,
     );
     dom.window.close();
+  }
+});
+
+test("promoted first Send pending feedback is localized and follows existing admission or failure", async () => {
+  const { i18n } = await import("../src/renderer/src/i18n.js");
+  const previousLanguage = i18n.language;
+  const pending = beginComposerSubmission(
+    editComposer(emptyComposerState(), "Keep the first draft"),
+    "start",
+    null,
+    () => "first-send-client",
+  );
+  try {
+    for (const [language, title, detail] of [
+      ["en", "Sending…", "Waiting for confirmation. Your draft is preserved."],
+      ["zh-CN", "正在发送…", "正在等待接纳确认，草稿仍保留在输入框中。"],
+    ] as const) {
+      await i18n.changeLanguage(language);
+      await withDom(async (root) => {
+        const show = (composer: ComposerState) =>
+          root.render(
+            createElement(ThreadView, {
+              thread: thread([]),
+              approvals: [],
+              composer,
+              onDraftChange: () => undefined,
+              onInterrupt: noop,
+              onRespondToApproval: noop,
+              onSubmit: noop,
+            }),
+          );
+        await act(async () => show(pending));
+        const status = requiredElement('.thread-empty[role="status"]');
+        assert.equal(status.querySelector("h2")?.textContent, title);
+        assert.equal(status.querySelector("p")?.textContent, detail);
+        assert.equal(
+          requiredElement<HTMLTextAreaElement>("textarea").value,
+          "Keep the first draft",
+        );
+        assert.equal(document.querySelector("[data-sent-message-id]"), null);
+        assert.equal(document.querySelector(".turn"), null);
+
+        await act(async () =>
+          show(
+            failComposerSubmission(
+              pending,
+              "first-send-client",
+              "Admission rejected",
+            ),
+          ),
+        );
+        assert.equal(
+          document.querySelector('.thread-empty[role="status"]'),
+          null,
+        );
+        assert.match(
+          requiredElement(".composer-error").textContent ?? "",
+          /Admission rejected/,
+        );
+        assert.equal(
+          requiredElement<HTMLTextAreaElement>("textarea").value,
+          "Keep the first draft",
+        );
+
+        await act(async () =>
+          show(acceptComposerSubmission(pending, "first-send-client")),
+        );
+        assert.equal(
+          document.querySelector('.thread-empty[role="status"]'),
+          null,
+        );
+        assert.equal(
+          requiredElement<HTMLTextAreaElement>("textarea").value,
+          "",
+        );
+
+        const canonical = reconcileCanonicalAdmission(pending, [
+          {
+            id: "admitted-first-input",
+            clientId: "first-send-client",
+            type: "user_message",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            createdAt: "2026-11-09T00:00:00.000Z",
+            content: [{ type: "text", text: "Keep the first draft" }],
+          },
+        ]);
+        await act(async () => show(canonical));
+        assert.equal(
+          document.querySelector('.thread-empty[role="status"]'),
+          null,
+        );
+        assert.equal(
+          requiredElement<HTMLTextAreaElement>("textarea").value,
+          "",
+        );
+      });
+    }
+  } finally {
+    await i18n.changeLanguage(previousLanguage);
+  }
+});
+
+test("first Send pending feedback does not replace local creation, side-chat context or ordinary Sending rows", () => {
+  const pending = beginComposerSubmission(
+    editComposer(emptyComposerState(), "First draft"),
+    "start",
+    null,
+    () => "first-send-client",
+  );
+  const immediate = beginImmediateComposerSubmission(
+    editComposer(emptyComposerState(), "Ordinary Send"),
+    "start",
+    null,
+    () => "ordinary-client",
+  );
+  for (const props of [
+    { thread: null, composer: pending },
+    {
+      thread: thread([]),
+      composer: pending,
+      emptyContent: createElement("p", null, "Creating side chat"),
+    },
+    { thread: thread([]), composer: immediate },
+    { thread: thread([turn()]), composer: pending },
+    { thread: thread([]), composer: emptyComposerState() },
+  ]) {
+    const dom = new JSDOM(
+      renderToStaticMarkup(
+        createElement(ThreadView, {
+          ...props,
+          approvals: [],
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      ),
+    );
+    try {
+      const document = dom.window.document;
+      assert.equal(
+        document.querySelector('.thread-empty[role="status"]'),
+        null,
+      );
+      if (props.emptyContent)
+        assert.match(document.body.textContent ?? "", /Creating side chat/);
+      if (props.composer === immediate)
+        assert.equal(
+          document
+            .querySelector('[data-pending-send-client-id="ordinary-client"]')
+            ?.getAttribute("data-send-state"),
+          "sending",
+        );
+    } finally {
+      dom.window.close();
+    }
   }
 });
 
