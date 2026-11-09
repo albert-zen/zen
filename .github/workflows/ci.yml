@@ -769,9 +769,9 @@ jobs:
         if: ${{ env.CI_RUN_FULL == 'true' && (!cancelled()) }}
         timeout-minutes: 1
         run: node --import tsx --test --test-timeout=40000 apps/zenx/test/shell-pty-native-cleanup.test.ts
-      - name: Exercise shell lifecycle observations on Windows
+      - name: Exercise Windows shell environment and lifecycle observations
         if: ${{ env.CI_RUN_FULL == 'true' }}
-        run: npm run build && node --test dist/test/shell-lifecycle.test.js
+        run: npm run build && node --test dist/test/shell-environment.test.js dist/test/shell-lifecycle.test.js
       - name: Verify Room journal persistence and migration
         if: ${{ env.CI_RUN_FULL == 'true' }}
         timeout-minutes: 3

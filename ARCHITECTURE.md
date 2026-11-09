@@ -964,7 +964,7 @@ ItemList 恢复实际选择；旧`turn_started`没有 selection 时仍按它之�
 既有 v1`provider / model`Items 重放为同名 profile、model 与`medium` effort，
 不重写历史 journal。
 宿主也不会把完整进程环境交给 shell tool：工具只继承运行命令所需的最小环境，
-Provider credential 即使来自环境变量也会被显式排除。
+Provider credential 即使来自环境变量也会被显式排除。 Windows 的命令 Shell 与交互 PTY 共用同一份过滤结果：保留用户 profile 变量，按 Windows 路径规则仅补全缺失的 HOME/AppData/临时目录，显式 blocked 变量在补全后仍被排除。
 
 Thread 的用户展示名称、置顶与归档等产品状态不改变 Agent 下一轮上下文，因此
 不进入 canonical ItemList。ZAS 可以知道、持久化并通过 App Server 同步这些
