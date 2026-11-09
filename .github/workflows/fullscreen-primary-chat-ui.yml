@@ -64,6 +64,8 @@ jobs:
           node apps/zenx/scripts/build-fullscreen-primary-native.mjs .fullscreen-primary-native
       - name: Verify native activity preview, wheel, streamed reading and resize
         run: npx --no-install electron .fullscreen-primary-native/native-main.cjs .fullscreen-primary-native
+      - name: Require complete exact-version native evidence
+        run: node apps/zenx/scripts/verify-fullscreen-primary-native.mjs .fullscreen-primary-native
       - name: Preserve native measurements and separate owned-renderer/view captures
         uses: actions/upload-artifact@v4
         if: always()
@@ -72,5 +74,6 @@ jobs:
           path: |
             .fullscreen-primary-native/*.json
             .fullscreen-primary-native/*.png
-          if-no-files-found: warn
+          include-hidden-files: true
+          if-no-files-found: error
           retention-days: 14

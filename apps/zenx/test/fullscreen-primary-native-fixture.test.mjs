@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, mkdtemp, rm } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
+import os from "node:os";
+import path from "node:path";
+import { verifyNativeFullscreen } from "../scripts/verify-fullscreen-primary-native.mjs";
 import { parse } from "yaml";
 const read = (name) =>
   readFile(new URL(`../scripts/${name}`, import.meta.url), "utf8");
@@ -82,5 +85,37 @@ test("hosted native acceptance is independent and does not replace Chromium cove
     job.steps.some(
       (s) => s.if === "always()" && s.uses === "actions/upload-artifact@v4",
     ),
+  );
+});
+
+test("native evidence verifier rejects a successful process with no report", async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "native-fullscreen-empty-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await assert.rejects(verifyNativeFullscreen(dir), { code: "ENOENT" });
+});
+test("native workflow requires receipts and uploads only selected evidence from its hidden directory", async () => {
+  const workflow = parse(
+    await readFile(
+      new URL(
+        "../../../.github/workflows/fullscreen-primary-chat-ui.yml",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  const steps = workflow.jobs["native-macos-fullscreen"].steps;
+  assert.ok(
+    steps.some((s) =>
+      s.run?.startsWith(
+        "node apps/zenx/scripts/verify-fullscreen-primary-native.mjs",
+      ),
+    ),
+  );
+  const upload = steps.find((s) => s.uses === "actions/upload-artifact@v4");
+  assert.equal(upload.with["include-hidden-files"], true);
+  assert.equal(upload.with["if-no-files-found"], "error");
+  assert.equal(
+    upload.with.path,
+    ".fullscreen-primary-native/*.json\n.fullscreen-primary-native/*.png\n",
   );
 });
