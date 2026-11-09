@@ -4554,6 +4554,274 @@ test("activation read rebases only edits made while pending before the next prov
   }
 });
 
+test("late Apply keeps the newest Host revision and only edits newer than its submission", async () => {
+  const initial = {
+    ...settings,
+    profile: {
+      ...settings.profile,
+      revision: 1,
+      maxToolRounds: 4,
+      composerSendMode: "soft" as const,
+    },
+  };
+  let reads = 0;
+  let finishRead!: (value: PublicHostSettings) => void;
+  let finishSave!: (value: PublicHostSettings) => void;
+  const saved: ZenXSettingsUpdate[] = [];
+  const harness = await mountSettings("general", {
+    initialSettings: initial,
+    get: async () =>
+      ++reads === 1
+        ? initial
+        : await new Promise((resolve) => {
+            finishRead = resolve;
+          }),
+    save: async (update) => {
+      saved.push(update);
+      if (saved.length === 1)
+        return await new Promise((resolve) => {
+          finishSave = resolve;
+        });
+      return {
+        ...initial,
+        profile: { ...initial.profile, ...update, revision: 4 },
+      };
+    },
+  });
+  try {
+    await click(exactButtonRequired("Toggle settings visibility"));
+    await click(exactButtonRequired("Toggle settings visibility"));
+    await changeControl(requiredInput("Maximum tool rounds"), "12");
+    await click(exactButtonRequired("Apply"));
+    await changeControl(
+      (await labeledSelect("Send while a reply is running"))!,
+      "queue",
+    );
+    const newer: PublicHostSettings = {
+      ...initial,
+      profile: {
+        ...initial.profile,
+        revision: 3,
+        maxToolRounds: 18,
+        providerProfiles: initial.profile.providerProfiles.map((provider) => ({
+          ...provider,
+          displayName: "Newest authority",
+        })),
+      },
+    };
+    await act(async () => finishRead(newer));
+    await act(async () =>
+      finishSave({
+        ...initial,
+        profile: { ...initial.profile, ...saved[0], revision: 2 },
+      }),
+    );
+    // The submitted 12 is confirmed, so it is no longer an unsaved local edit.
+    // The newer Host's 18 wins; queue, typed after submission, stays pending.
+    assert.equal(requiredInput("Maximum tool rounds").value, "18");
+    assert.equal(
+      (await labeledSelect("Send while a reply is running"))!.value,
+      "queue",
+    );
+    await click(exactButtonRequired("Models & provider"));
+    assert.ok(labeledButtonRequired("Edit Newest authority"));
+    await click(exactButtonRequired("Apply"));
+    assert.equal(saved[1]!.baseRevision, 3);
+    assert.equal(saved[1]!.maxToolRounds, 18);
+    assert.equal(saved[1]!.composerSendMode, "queue");
+    assert.equal(
+      saved[1]!.providerProfiles![0]!.displayName,
+      "Newest authority",
+    );
+  } finally {
+    await unmount(harness);
+  }
+});
+
+for (const reverted of [4, 12]) {
+  test(`a post-submit revert to ${reverted} survives independent Host readback`, async () => {
+    const initial = {
+      ...settings,
+      profile: { ...settings.profile, revision: 1, maxToolRounds: 4 },
+    };
+    let reads = 0;
+    let finishRead!: (value: PublicHostSettings) => void;
+    let finishSave!: (value: PublicHostSettings) => void;
+    const saved: ZenXSettingsUpdate[] = [];
+    const harness = await mountSettings("general", {
+      initialSettings: initial,
+      get: async () =>
+        ++reads === 1
+          ? initial
+          : await new Promise((resolve) => {
+              finishRead = resolve;
+            }),
+      save: async (update) => {
+        saved.push(update);
+        if (saved.length === 1)
+          return await new Promise((resolve) => {
+            finishSave = resolve;
+          });
+        return {
+          ...initial,
+          profile: { ...initial.profile, ...update, revision: 4 },
+        };
+      },
+    });
+    try {
+      await click(exactButtonRequired("Toggle settings visibility"));
+      await click(exactButtonRequired("Toggle settings visibility"));
+      await changeControl(requiredInput("Maximum tool rounds"), "12");
+      await click(exactButtonRequired("Apply"));
+      if (reverted === 12)
+        await changeControl(requiredInput("Maximum tool rounds"), "20");
+      await changeControl(
+        requiredInput("Maximum tool rounds"),
+        String(reverted),
+      );
+      await act(async () =>
+        finishRead({
+          ...initial,
+          profile: { ...initial.profile, revision: 3, maxToolRounds: 18 },
+        }),
+      );
+      assert.equal(
+        requiredInput("Maximum tool rounds").value,
+        String(reverted),
+      );
+      await act(async () =>
+        finishSave({
+          ...initial,
+          profile: { ...initial.profile, ...saved[0], revision: 2 },
+        }),
+      );
+      assert.equal(
+        requiredInput("Maximum tool rounds").value,
+        String(reverted),
+      );
+      assert.equal(exactButtonRequired("Apply").disabled, false);
+      await click(exactButtonRequired("Apply"));
+      assert.equal(saved[1]!.baseRevision, 3);
+      assert.equal(saved[1]!.maxToolRounds, reverted);
+    } finally {
+      await unmount(harness);
+    }
+  });
+}
+
+test("failed Apply retires edit tracking before later reads and the next save", async () => {
+  const initial = {
+    ...settings,
+    profile: { ...settings.profile, revision: 1, maxToolRounds: 4 },
+  };
+  let reads = 0;
+  let fail!: (error: Error) => void;
+  const saved: ZenXSettingsUpdate[] = [];
+  const harness = await mountSettings("general", {
+    initialSettings: initial,
+    get: async () =>
+      ++reads === 1
+        ? initial
+        : {
+            ...initial,
+            profile: { ...initial.profile, revision: 2, maxToolRounds: 8 },
+          },
+    save: async (update) => {
+      saved.push(update);
+      if (saved.length === 1)
+        return await new Promise((_resolve, reject) => {
+          fail = reject;
+        });
+      return {
+        ...initial,
+        profile: { ...initial.profile, ...update, revision: 3 },
+      };
+    },
+  });
+  try {
+    await changeControl(requiredInput("Maximum tool rounds"), "12");
+    await click(exactButtonRequired("Apply"));
+    await changeControl(requiredInput("Maximum tool rounds"), "4");
+    await act(async () => fail(new Error("Synthetic save rejection")));
+    await click(exactButtonRequired("Toggle settings visibility"));
+    await click(exactButtonRequired("Toggle settings visibility"));
+    assert.equal(requiredInput("Maximum tool rounds").value, "8");
+    await changeControl(requiredInput("Maximum tool rounds"), "9");
+    await click(exactButtonRequired("Apply"));
+    assert.equal(saved[1]!.baseRevision, 2);
+    assert.equal(saved[1]!.maxToolRounds, 9);
+    assert.equal(exactButtonRequired("Apply").disabled, true);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+for (const action of [
+  "Safe restart",
+  "Check application status",
+  "Retry applying saved settings",
+] as const) {
+  test(`${action} readback preserves drafts and updates untouched Host fields`, async () => {
+    const initial: PublicHostSettings = {
+      ...settings,
+      profile: { ...settings.profile, revision: 1, maxToolRounds: 4 },
+      configuration: {
+        status: action === "Safe restart" ? "pending-restart" : "unconfirmed",
+        revision: 1,
+        pendingRestart: action === "Safe restart" ? ["maxToolRounds"] : [],
+      },
+    };
+    let finish!: (value: PublicHostSettings) => void;
+    const pending = async () =>
+      await new Promise<PublicHostSettings>((resolve) => {
+        finish = resolve;
+      });
+    const saved: ZenXSettingsUpdate[] = [];
+    const harness = await mountSettings("general", {
+      initialSettings: initial,
+      safeRestart: pending,
+      reconcile: pending,
+      save: async (update) => {
+        saved.push(update);
+        return { ...initial, profile: { ...initial.profile, ...update } };
+      },
+    });
+    try {
+      await changeControl(requiredInput("Maximum tool rounds"), "12");
+      await click(exactButtonRequired(action));
+      await changeControl(requiredInput("Maximum tool rounds"), "18");
+      await act(async () =>
+        finish({
+          ...initial,
+          profile: {
+            ...initial.profile,
+            revision: 2,
+            maxToolRounds: 8,
+            defaultModel: initial.profile.titleModel,
+          },
+          configuration: { status: "applied", revision: 2, pendingRestart: [] },
+        }),
+      );
+      assert.equal(requiredInput("Maximum tool rounds").value, "18");
+      await click(exactButtonRequired("Models & provider"));
+      assert.equal(
+        (await labeledSelect("Default model"))!.value,
+        JSON.stringify([
+          initial.profile.titleModel.providerProfileId,
+          initial.profile.titleModel.modelId,
+        ]),
+      );
+      assert.equal(saved.length, 0);
+      await click(exactButtonRequired("Apply"));
+      assert.equal(saved[0]!.baseRevision, 2);
+      assert.equal(saved[0]!.maxToolRounds, 18);
+      assert.deepEqual(saved[0]!.defaultModel, initial.profile.titleModel);
+    } finally {
+      await unmount(harness);
+    }
+  });
+}
+
 test("changing Settings tabs starts the new panel at its heading", async () => {
   const harness = await mountSettings("general");
   try {

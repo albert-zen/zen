@@ -130,24 +130,27 @@ export function SettingsView({
   const [{ settings, draft }, setSettingsState] = useState<{
     settings: PublicHostSettings | null;
     draft: ZenXHostProfile | null;
-  }>({ settings: null, draft: null });
-  const setSettings: Dispatch<SetStateAction<PublicHostSettings | null>> =
-    useCallback(
-      (value) =>
-        setSettingsState((current) => ({
-          ...current,
-          settings:
-            typeof value === "function" ? value(current.settings) : value,
-        })),
-      [],
-    );
+    editedDuringSave: ReadonlySet<keyof ZenXHostProfile> | null;
+  }>({ settings: null, draft: null, editedDuringSave: null });
   const setDraft: Dispatch<SetStateAction<ZenXHostProfile | null>> =
     useCallback(
       (value) =>
-        setSettingsState((current) => ({
-          ...current,
-          draft: typeof value === "function" ? value(current.draft) : value,
-        })),
+        setSettingsState((current) => {
+          const next =
+            typeof value === "function" ? value(current.draft) : value;
+          const editedDuringSave =
+            current.editedDuringSave === null
+              ? null
+              : new Set(current.editedDuringSave);
+          if (editedDuringSave !== null && next !== null)
+            for (const key of Object.keys(next) as Array<keyof ZenXHostProfile>)
+              if (
+                JSON.stringify(next[key]) !==
+                JSON.stringify(current.draft?.[key])
+              )
+                editedDuringSave.add(key);
+          return { ...current, draft: next, editedDuringSave };
+        }),
       [],
     );
   const acceptHostSettings = useCallback((value: PublicHostSettings) => {
@@ -158,11 +161,13 @@ export function SettingsView({
       )
         return current;
       return {
+        ...current,
         settings: value,
         draft: rebaseSettingsDraft(
           current.draft,
           current.settings?.profile ?? null,
           value.profile,
+          current.editedDuringSave,
         ),
       };
     });
@@ -266,6 +271,10 @@ export function SettingsView({
     setBusy("save");
     setError(null);
     setStatus(null);
+    setSettingsState((current) => ({
+      ...current,
+      editedDuringSave: new Set(),
+    }));
     try {
       normalizeContextCompactionConfig(draft.contextCompaction);
       normalizeWorkflowCommands(draft.workflowCommands);
@@ -293,14 +302,26 @@ export function SettingsView({
         titlePrompt: draft.titlePrompt,
         resetTitlePrompt: draft.titlePrompt === undefined,
       });
-      setSettings(value);
-      setDraft((latest) =>
-        latest === draft
-          ? value.profile
-          : latest === null
-            ? value.profile
-            : { ...latest, revision: value.profile.revision },
-      );
+      setSettingsState((current) => {
+        const authoritative =
+          (current.settings?.profile.revision ?? 0) >
+          (value.profile.revision ?? 0)
+            ? current.settings!
+            : value;
+        return {
+          ...current,
+          settings: authoritative,
+          // This submission is now saved. Preserve only edits made after it,
+          // without rolling back a newer Host read observed while it ran.
+          draft: rebaseSettingsDraft(
+            current.draft,
+            draft,
+            authoritative.profile,
+            current.editedDuringSave,
+          ),
+          editedDuringSave: null,
+        };
+      });
       setStatus(
         draft.experimentalRtkEnabled !==
           settings?.profile.experimentalRtkEnabled
@@ -310,6 +331,11 @@ export function SettingsView({
     } catch (reason) {
       setError(describeError(reason));
     } finally {
+      setSettingsState((current) =>
+        current.editedDuringSave === null
+          ? current
+          : { ...current, editedDuringSave: null },
+      );
       setBusy(null);
     }
   };
@@ -530,7 +556,7 @@ export function SettingsView({
                 setBusy={setBusy}
                 setError={setError}
                 setManualCode={setManualCode}
-                setSettings={setSettings}
+                acceptHostSettings={acceptHostSettings}
               />
             </Activity>
             <Activity mode={active && tab === "models" ? "visible" : "hidden"}>
@@ -687,7 +713,7 @@ export function SettingsView({
                     void window.zenx.settings
                       .reconcile(false)
                       .then((value) => {
-                        setSettings(value);
+                        acceptHostSettings(value);
                         setStatus(configurationSaveToast(value));
                       })
                       .catch((reason) => setError(describeError(reason)))
@@ -707,7 +733,7 @@ export function SettingsView({
                     void window.zenx.settings
                       .reconcile(true)
                       .then((value) => {
-                        setSettings(value);
+                        acceptHostSettings(value);
                         setStatus(configurationSaveToast(value));
                       })
                       .catch((reason) => setError(describeError(reason)))
@@ -742,8 +768,7 @@ export function SettingsView({
                     void window.zenx.settings
                       .safeRestart()
                       .then((value) => {
-                        setSettings(value);
-                        setDraft(value.profile);
+                        acceptHostSettings(value);
                         setStatus(
                           settings.configuration?.pendingRestart.includes(
                             "experimentalRtk",
@@ -1152,7 +1177,7 @@ function AccountPanel({
   setBusy,
   setError,
   setManualCode,
-  setSettings,
+  acceptHostSettings,
 }: {
   settings: PublicHostSettings;
   onOpenModels(): void;
@@ -1161,7 +1186,7 @@ function AccountPanel({
   setBusy(value: string | null): void;
   setError(value: string | null): void;
   setManualCode(value: boolean): void;
-  setSettings(value: PublicHostSettings): void;
+  acceptHostSettings(value: PublicHostSettings): void;
 }) {
   const { t } = useTranslation("settings");
   const subscriptionConfigured =
@@ -1172,7 +1197,7 @@ function AccountPanel({
     void window.zenx.settings
       .loginSubscription()
       .then((value) => {
-        setSettings(value);
+        acceptHostSettings(value);
         setManualCode(false);
       })
       .catch((reason: unknown) => setError(describeError(reason)))
@@ -1237,7 +1262,7 @@ function AccountPanel({
               onClick={() =>
                 void window.zenx.settings
                   .logoutSubscription()
-                  .then(setSettings)
+                  .then(acceptHostSettings)
                   .catch((reason: unknown) => setError(describeError(reason)))
               }
             >
@@ -3766,12 +3791,15 @@ function rebaseSettingsDraft(
   latest: ZenXHostProfile | null,
   baseline: ZenXHostProfile | null,
   saved: ZenXHostProfile,
+  editedDuringSave: ReadonlySet<keyof ZenXHostProfile> | null = null,
 ): ZenXHostProfile {
   if (latest === null || baseline === null) return saved;
   const edits = Object.fromEntries(
     (Object.keys(latest) as Array<keyof ZenXHostProfile>)
       .filter(
-        (key) => JSON.stringify(latest[key]) !== JSON.stringify(baseline[key]),
+        (key) =>
+          editedDuringSave?.has(key) ||
+          JSON.stringify(latest[key]) !== JSON.stringify(baseline[key]),
       )
       .map((key) => [key, latest[key]]),
   );
