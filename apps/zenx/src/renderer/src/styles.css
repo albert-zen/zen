@@ -4268,12 +4268,12 @@ button:disabled {
   border: 1px solid var(--color-border-subtle);
   border-radius: 8px;
   background: var(--color-surface-inset);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   cursor: pointer;
 }
 .appearance-preset-options strong {
   color: inherit;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-label);
   font-weight: 600;
 }
 .appearance-choice-title {
@@ -4293,6 +4293,8 @@ button:disabled {
   align-items: center;
   justify-content: center;
   gap: 6px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-label);
 }
 .appearance-choice-marker {
   display: inline-flex;
@@ -4310,7 +4312,7 @@ button:disabled {
 .appearance-preset-options input:checked + span,
 .appearance-accent-options input:checked + span,
 .appearance-inline-options input:checked + span {
-  border-color: var(--color-border-accent);
+  border-color: var(--color-border-subtle);
   background: var(--color-accent-soft);
   color: var(--color-text-primary);
 }
@@ -4337,7 +4339,7 @@ button:disabled {
   border: 1px solid var(--color-border-subtle);
   border-radius: 9px;
   background: var(--color-surface-inset);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   cursor: pointer;
 }
 .appearance-accent-options .accent-chip > span {
@@ -4347,7 +4349,7 @@ button:disabled {
 }
 .appearance-accent-options strong {
   color: inherit;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-label);
   font-weight: 600;
 }
 .appearance-accent-options small {
@@ -4395,8 +4397,8 @@ button:disabled {
   border: 1px solid var(--color-border-subtle);
   border-radius: 8px;
   background: var(--color-surface-inset);
-  color: var(--color-text-muted);
-  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-label);
   cursor: pointer;
 }
 .accent-chip > i {

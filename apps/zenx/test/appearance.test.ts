@@ -383,6 +383,49 @@ test("every preset, accent, and contrast combination preserves readable semantic
   dom.window.close();
 });
 
+test("Appearance separates choice labels from supporting copy without competing selection outlines", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  for (const selector of [
+    ".appearance-preset-options label > span",
+    ".appearance-accent-options label > span",
+    ".appearance-inline-options label > span",
+    ".appearance-mode-options label > span",
+  ]) {
+    const block = styles
+      .slice(styles.indexOf(selector + " {"))
+      .split("}", 1)[0]!;
+    assert.match(block, /color:\s*var\(--color-text-secondary\)/u, selector);
+  }
+  for (const selector of [
+    ".appearance-preset-options strong",
+    ".appearance-accent-options strong",
+  ]) {
+    const block = styles
+      .slice(styles.indexOf(selector + " {"))
+      .split("}", 1)[0]!;
+    assert.match(block, /font-size:\s*var\(--font-size-label\)/u, selector);
+  }
+  assert.match(
+    styles,
+    /\.appearance-preset-options input:checked \+ span,\s*\.appearance-accent-options input:checked \+ span,\s*\.appearance-inline-options input:checked \+ span\s*\{[^}]*border-color:\s*var\(--color-border-subtle\);[^}]*background:\s*var\(--color-accent-soft\);[^}]*color:\s*var\(--color-text-primary\)/u,
+  );
+  assert.match(
+    styles,
+    /\.appearance-options input:checked \+ span\s*\{[^}]*border-color:\s*var\(--border-accent\)/u,
+  );
+  assert.match(
+    styles,
+    /\.appearance-choice-check\s*\{[^}]*color:\s*var\(--color-text-primary\)/u,
+  );
+  assert.match(
+    styles,
+    /\.appearance-inline-options input:focus-visible \+ span\s*\{[^}]*outline:\s*1px solid var\(--color-focus-ring\)/u,
+  );
+});
+
 test("selected Appearance copy and tinted error copy retain contrast across all themes", async () => {
   const theme = await readFile(
     new URL("../src/renderer/src/theme.css", import.meta.url),
@@ -423,6 +466,13 @@ test("selected Appearance copy and tinted error copy retain contrast across all 
               return alias ? value(alias[1]!) : raw;
             };
             const state = `${mode}/${preset}/${accent}/${contrast}`;
+            assert.ok(
+              contrastRatio(
+                value("--color-text-secondary"),
+                value("--color-surface-inset"),
+              ) >= 4.5,
+              `${state} unselected Appearance labels`,
+            );
             assert.ok(
               tintedBackgroundContrast(
                 value("--color-text-secondary"),
