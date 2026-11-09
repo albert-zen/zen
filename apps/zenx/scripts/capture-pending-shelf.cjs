@@ -123,10 +123,10 @@ app
       assert.deepEqual(
         countLabels,
         lang === "zh"
-          ? ["等待当前轮次结束 · 1 条", "等待进入模型 · 2 条"]
+          ? ["等待进入模型 · 2 条", "等待当前轮次结束 · 1 条"]
           : [
-              "After this turn · 1 message",
               "Waiting for the model · 2 messages",
+              "After this turn · 1 message",
             ],
       );
       assert.equal(geometry.rows, 2);
@@ -166,9 +166,12 @@ app
     await window.loadFile(path.join(temporary, "queue-steer-visual.html"), {
       query: { lang: "zh", theme: "light", narrow: "1", many: "1" },
     });
-    await until("Boolean(document.querySelector('.queue-row-edit'))");
+    const queueEditSelector = '[data-queue-id="queue-1"] .queue-row-edit';
+    await until(
+      `Boolean(document.querySelector(${JSON.stringify(queueEditSelector)}))`,
+    );
     await screenshot("queue-human-edit-entry");
-    await click(".queue-row-edit");
+    await click(queueEditSelector);
     await until(
       "(()=>{const d=document.querySelector('.queued-message-editor[data-state=open]');return !!d&&getComputedStyle(d).opacity==='1'})()",
     );
@@ -176,7 +179,7 @@ app
       "new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))",
     );
     const editor = await evaluate(
-      "(()=>{const d=document.querySelector('.queued-message-editor'),r=d.getBoundingClientRect(),e=d.querySelector('textarea'),save=d.querySelector('.queue-editor-save'),b=save.getBoundingClientRect();return {width:r.width,height:r.height,top:r.top,bottom:r.bottom,text:e.value,saveHit:save.contains(document.elementFromPoint(b.left+b.width/2,b.top+b.height/2)),opacity:getComputedStyle(d).opacity,viewport:innerHeight}})()",
+      "(()=>{const d=document.querySelector('.queued-message-editor'),r=d.getBoundingClientRect(),e=d.querySelector('textarea'),save=d.querySelector('.queue-editor-save'),b=save.getBoundingClientRect();return {width:r.width,height:r.height,top:r.top,bottom:r.bottom,text:e.value,identity:d.dataset.queueEditorIdentity,saveHit:save.contains(document.elementFromPoint(b.left+b.width/2,b.top+b.height/2)),opacity:getComputedStyle(d).opacity,viewport:innerHeight}})()",
     );
     assert.equal(editor.opacity, "1");
     assert.ok(editor.width > 300 && editor.height > 100);
@@ -186,9 +189,13 @@ app
       true,
       "Visible editor save control is not occluded",
     );
+    assert.equal(editor.text, "第 1 项：补齐验证结论，保留草稿，不要发布。");
     assert.equal(
-      editor.text,
-      "最后补一份简短的验证结论，说明哪些行为已经通过。",
+      editor.identity,
+      JSON.stringify([
+        JSON.stringify(["runtime-thread", "queue-1", "queue-client-1"]),
+        0,
+      ]),
     );
     await screenshot("queue-human-edit-open");
     await click(".queue-editor-close");

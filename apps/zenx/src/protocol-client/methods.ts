@@ -33,6 +33,7 @@ export const clientRequestMethods = [
   "zen/thread/queue/cancel",
   "zen/thread/queue/edit",
   "zen/thread/queue/steer",
+  "zen/thread/queue/reorder",
   "zen/thread/steer/recall",
   "thread/read",
   "thread/list",

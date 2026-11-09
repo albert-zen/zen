@@ -380,3 +380,58 @@ test("recovery stays bound to the request identity captured before dispatch", as
     window.zenx = old;
   }
 });
+
+test("staged promotion replies require a revision and receipt identity, and lost ACK recovers the same pending Steer", async () => {
+  const old = window.zenx;
+  const staged = {
+    queuedItemId: target.queuedItemId,
+    clientId: target.clientId,
+    status: "staged",
+    turnId: "turn",
+    revision: 1,
+    promotionItemId: "promotion",
+  };
+  try {
+    for (const reply of [
+      staged,
+      { ...staged, revision: 0 },
+      { ...staged, promotionItemId: "" },
+      null,
+    ]) {
+      const calls: string[] = [];
+      (window as any).zenx = {
+        protocol: {
+          request: async (method: string) => {
+            calls.push(method);
+            if (method.endsWith("/steer")) return reply;
+            return {
+              thread: {
+                id: target.threadId,
+                items: [
+                  {
+                    type: "user_message_queue_promoted",
+                    id: "promotion",
+                    threadId: target.threadId,
+                    queuedItemId: target.queuedItemId,
+                    clientId: target.clientId,
+                    expectedRevision: 0,
+                    expectedTurnId: "turn",
+                  },
+                ],
+              },
+            };
+          },
+        },
+      };
+      assert.deepEqual(await requestQueuedSteer(target), staged);
+      assert.deepEqual(
+        calls,
+        reply === staged
+          ? ["zen/thread/queue/steer"]
+          : ["zen/thread/queue/steer", "zen/thread/read"],
+      );
+    }
+  } finally {
+    window.zenx = old;
+  }
+});

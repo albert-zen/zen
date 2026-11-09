@@ -33,6 +33,7 @@ export function registerProtocolRequestIpc(
         if (
           method !== "zen/thread/queue/edit" &&
           method !== "zen/thread/queue/steer" &&
+          method !== "zen/thread/queue/reorder" &&
           method !== "zen/thread/steer/recall"
         )
           throw error;

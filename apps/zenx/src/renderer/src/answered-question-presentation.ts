@@ -36,7 +36,10 @@ export function indexAnsweredQuestions(
   }
   const result = new Map<string, AnsweredQuestionPresentation>();
   for (const item of items) {
-    if (item.type !== "user_message" || item.questionReply === undefined)
+    if (
+      (item.type !== "user_message" && item.type !== "user_message_queued") ||
+      item.questionReply === undefined
+    )
       continue;
     try {
       const reply = parseUserQuestionReply(item.questionReply);
@@ -46,8 +49,8 @@ export function indexAnsweredQuestions(
       )
         continue;
       const body =
-        item.text ??
-        item.content
+        (item.type === "user_message" ? item.text : undefined) ??
+        (item.type === "user_message" ? (item.content ?? []) : item.input)
           .flatMap((part) => (part.type === "text" ? [part.text] : []))
           .join("\n");
       const prefix = `Reply to question ${reply.request.callItemId}:\n`;

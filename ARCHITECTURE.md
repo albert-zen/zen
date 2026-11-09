@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-- **Pending steer preview column** — Disposable renderer measurements align the shelf content box with the existing transcript column while leaving native scrollbars in the gutter; this geometry never changes admission, recall, or reader scroll ownership.
+- **Pending steer preview column** — Disposable renderer measurements align the unified pending tray and standalone shelf content boxes with the existing transcript column while leaving their borders and native scrollbars in the gutter; this geometry never changes admission, recall, or reader scroll ownership.
 
 - **Owned App Shot acceptance** — A disposable hosted-only Electron package bundles the real service, stages the pinned runtime and emitted worker, and captures only a freshly identified, launcher-owned opaque nonce fixture through the production exact-window backend; existing OS grants, returned nonce pixels, optional AX image coordinates, foreground identity and confirmed owned-process cleanup are separate fail-closed outcomes, never permission changes or a substitute runtime.
 
@@ -115,13 +115,17 @@ Reconstruction is being landed in independently tested source checkpoints. The d
 - **ZenX semantic trace summaries** — Renderer-only templates summarize existing capability identities and observed phases, prioritize context boundaries and recent meaningful actions, and retain full ordered Items/counts without generating model text or new execution state.
 - **ZenX workflow status presentation** — Running, recovery, terminal outcomes and compaction summaries share renderer-only capsule geometry and theme tokens; native status/alert/disclosure semantics and canonical state remain owned by each existing workflow.
 - **ZenX approval review** — Composer-attached requests and user-opened full details share exact request-scoped transient response/focus ownership and existing Host decisions; presentation never creates or broadens permission.
-- **ZenX pending-message shelf** — A renderer-only view of canonical queued identity, order, revision and input, with local disclosure, transient edit drafts and request feedback; native exact-target edit/cancellation/resume commands remain the authority, without reorder or optimistic removal.
+- **ZenX pending-message shelf** — A renderer-only view of canonical queued identity, order, revision and input, with local disclosure, transient edit drafts and request feedback; native exact-target edit/cancellation/resume commands and atomic complete-snapshot reorder remain the authority, without optimistic reordering/removal or implicit retry.
 
 - **ZenX 界面语言** — Renderer 的本地语言偏好（system/en/zh-CN）只拥有展示选择；集中式 i18next 词条按功能分组，通过 React 订阅即时更新，系统模式按 Electron 返回的有序语言列表解析，原生菜单同步展示语言，不改写 canonical 内容、Host 配置或插件语义。
 
 - **ZenX login-shell PATH** — After opening the static startup window, a bounded, cancellable macOS GUI-startup probe captures only the login shell’s framed PATH before Host initialization; a pipe-held supervisor pins the owned process group until cleanup, including helpers surviving login-shell exit, without persistent state. PATH semantics are preserved, failure retains the inherited environment, and the existing tool-environment whitelist remains the disclosure boundary. Native CI observes the same bootstrap and Host tool composition through fail-closed pre-sign instrumentation in an isolated acceptance app; a fixture-only authenticated worker can terminate only its own process when the main loop hangs, while unconfirmed or abnormal shutdown retains evidence and blocks later smoke work. The fixture publishes its complete private ownership receipt atomically without replacing an existing owner. Normal packaging and production runtime gain no observer hook. A fixture-only Host shell observation retains bounded monotonic control-event timing and allowlisted result facts (never output, IPC payloads, or environment), without changing execution, cancellation, or startup deadlines.
 
 ## 核心概念
+
+- **Pending input controls** — Host 从原始 queued 输入与精确版本的晋升、重排控制事实派生统一待发送区；用户 Queue 晋升追加到 Steer 尾部，直到同一 mutation boundary 的模型采样接纳前仍可撤回，重排用当前有序快照比较后持久化完整排列，不改变身份、正文或语义 ItemList。
+
+- **Queue mutation feedback** — ZenX 只在 App 内按 Thread 暂存精确晋升/重排请求及传输结果锁，canonical 控制回执仍是顺序与消费的唯一权威；未知结果仅允许读取核对，不乐观改序、重发写入或恢复另一份队列。
 
 - **Image Input Preparation** — Host 在模型采样前将已授权不可变原图按版本化单图尺寸/patch profile 准备为独立附件，并先持久化绑定 sample、selection 与原 occurrence 的视图和明确 notice；唯一 ItemList compiler 在原位置选择已存视图并保留原 occurrence，原始 AttachmentRef 与访问权限不变；只有明确的内存 codec 失败写入稳定类别、无像素的 unavailable 占位，其 notice 由无 codec 依赖的同一安全模板生成并严格解码校验，附件存储/身份故障仍阻断；只读预算估计仅按精确 occurrence、profile/detail 与能力复用已有 codec receipt 的数值成本，不触发隐式解码/存储或替代新 sample 的准备，未知 Provider 限额不推测、不设默认图片数量或总字节删除策略。
 

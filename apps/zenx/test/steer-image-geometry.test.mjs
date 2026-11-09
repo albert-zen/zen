@@ -271,3 +271,18 @@ test("image acceptance remains visibility-based when layout shifts an idle offse
     }
   }
 });
+
+for (const className of ["bottom-zone", "pending-tray"]) {
+  test(`DOM probe detects horizontal overflow inside ${className}`, () => {
+    const dom = new JSDOM(`<div class="${className}"></div>`);
+    const element = dom.window.document.querySelector("div");
+    Object.defineProperties(element, {
+      clientWidth: { value: 390 },
+      scrollWidth: { value: 402, configurable: true },
+    });
+    assert.equal(measureSteerComparison(dom.window.document).overflow, true);
+    Object.defineProperty(element, "scrollWidth", { value: 390 });
+    assert.equal(measureSteerComparison(dom.window.document).overflow, false);
+    dom.window.close();
+  });
+}

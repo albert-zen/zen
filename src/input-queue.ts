@@ -26,6 +26,54 @@ export function pendingQueuedMessages(
       item.clientId !== undefined
     ) {
       delivered.add(item.clientId);
+    } else if (item.type === "user_message_queue_promoted") {
+      const prior = queued.get(item.queuedItemId);
+      if (
+        prior?.type === "user_message_queued" &&
+        prior.deliveryMode !== "steer" &&
+        prior.threadId === item.threadId &&
+        prior.clientId === item.clientId &&
+        prior.revision === item.expectedRevision &&
+        !delivered.has(prior.clientId) &&
+        !cancelled.has(prior.id)
+      ) {
+        // Promotion time, not the original Queue admission time, orders Steer.
+        queued.delete(prior.id);
+        queued.set(prior.id, {
+          ...prior,
+          deliveryMode: "steer",
+          expectedTurnId: item.expectedTurnId,
+          revision: prior.revision + 1,
+        });
+      }
+    } else if (item.type === "user_message_queue_reordered") {
+      const current = [...queued.values()].filter(
+        (entry) =>
+          !delivered.has(entry.clientId) &&
+          !cancelled.has(entry.id) &&
+          (entry.type !== "user_message_queued" ||
+            entry.deliveryMode !== "steer"),
+      );
+      const currentIds = new Set(current.map((entry) => entry.id));
+      if (
+        current.length === item.expectedTargets.length &&
+        current.every((entry, index) => {
+          const target = item.expectedTargets[index];
+          return (
+            entry.threadId === item.threadId &&
+            target?.queuedItemId === entry.id &&
+            target.clientId === entry.clientId &&
+            target.expectedRevision === entry.revision
+          );
+        }) &&
+        new Set(item.orderedQueuedItemIds).size === current.length &&
+        item.orderedQueuedItemIds.length === current.length &&
+        item.orderedQueuedItemIds.every((id) => currentIds.has(id))
+      ) {
+        const entries = item.orderedQueuedItemIds.map((id) => queued.get(id)!);
+        for (const entry of entries) queued.delete(entry.id);
+        for (const entry of entries) queued.set(entry.id, entry);
+      }
     } else if (item.type === "user_message_steer_recalled") {
       // A malformed/stale batch must never partially hide valid pending input.
       const targets = item.targets.map((target) => {

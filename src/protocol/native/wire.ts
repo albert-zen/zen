@@ -136,6 +136,12 @@ export type NativeQueueSteerParams =
 export type NativeQueueSteerResult =
   import("../../app-server.js").QueuedSteerResult;
 
+export const NATIVE_QUEUE_REORDER_METHOD = "zen/thread/queue/reorder";
+export type NativeQueueReorderParams =
+  import("../../app-server.js").QueuedReorderRequest & { threadId: string };
+export type NativeQueueReorderResult =
+  import("../../app-server.js").QueuedReorderResult;
+
 export const NATIVE_QUEUE_EDIT_METHOD = "zen/thread/queue/edit";
 export interface NativeQueueEditParams {
   threadId: string;

@@ -1,11 +1,11 @@
-/** Align the scroller's content box, leaving its native scrollbar in the gutter. */
+/** Align the content box, leaving native scrollbars and borders in the gutter. */
 export function steerPreviewColumn(
   column: { left: number; width: number },
   shelfLeft: number,
-  scrollbarWidth: number,
+  nonContentWidth: number,
 ) {
   return {
     left: column.left - shelfLeft,
-    width: column.width + Math.max(0, scrollbarWidth),
+    width: column.width + Math.max(0, nonContentWidth),
   };
 }

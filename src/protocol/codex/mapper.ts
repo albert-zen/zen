@@ -346,6 +346,8 @@ export function projectCompletedItem(
     case "turn_completed":
     case "user_message_queued":
     case "user_message_queue_cancelled":
+    case "user_message_queue_promoted":
+    case "user_message_queue_reordered":
     case "user_message_queue_edited":
     case "user_message_steer_recalled":
     case "turn_replacement_requested":

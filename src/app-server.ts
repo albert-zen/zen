@@ -293,8 +293,22 @@ export interface QueuedSteerTarget extends QueuedCancellationTarget {
   expectedRevision: number;
 }
 export interface QueuedSteerResult extends QueuedCancellationTarget {
-  status: "steered" | "started" | "already_started";
+  status: "staged" | "steered" | "started" | "already_started";
+  revision?: number;
+  promotionItemId?: string;
   turnId: string;
+}
+
+export interface QueuedReorderRequest {
+  reorderId: string;
+  /** Full current Queue order and revisions, excluding pending Steer. */
+  expectedTargets: readonly SteerRecallTarget[];
+  /** Complete desired permutation, including User, Agent and Host Queue rows. */
+  orderedQueuedItemIds: readonly string[];
+}
+export interface QueuedReorderResult {
+  status: "reordered" | "already_reordered";
+  reorderItemId: string;
 }
 
 export interface QueuedEditTarget extends QueuedCancellationTarget {
@@ -2755,6 +2769,23 @@ export class ZenAppServer {
             "queue_not_found",
             "Queued message was not found",
           );
+        const promotion = thread.items.find(
+          (item) =>
+            item.type === "user_message_queue_promoted" &&
+            item.queuedItemId === target.queuedItemId &&
+            item.clientId === target.clientId &&
+            item.expectedRevision === target.expectedRevision,
+        );
+        if (promotion?.type === "user_message_queue_promoted")
+          return {
+            result: {
+              ...target,
+              status: "staged" as const,
+              turnId: promotion.expectedTurnId,
+              revision: promotion.expectedRevision + 1,
+              promotionItemId: promotion.id,
+            },
+          };
         const delivered = thread.items.find(
           (item): item is DeliveredInputItem =>
             (item.type === "user_message" ||
@@ -2807,6 +2838,29 @@ export class ZenAppServer {
             return { wait: active.ready };
           await this.#validateInput(pending.input, active.inputModalities);
           if (active.controller.signal.aborted) return { wait: active.done };
+          if (pending.type === "user_message_queued") {
+            const promoted = decodeCanonicalItem({
+              id: this.#id(),
+              type: "user_message_queue_promoted",
+              threadId,
+              createdAt: this.#now(),
+              queuedItemId: pending.id,
+              clientId: pending.clientId,
+              expectedRevision: pending.revision,
+              expectedTurnId: active.turnId,
+            });
+            await this.#commit(thread, promoted);
+            this.#emit({ type: "item_completed", item: promoted });
+            return {
+              result: {
+                ...target,
+                status: "staged" as const,
+                turnId: active.turnId,
+                revision: pending.revision + 1,
+                promotionItemId: promoted.id,
+              },
+            };
+          }
           const base = {
             id: this.#id(),
             threadId,
@@ -2827,26 +2881,17 @@ export class ZenAppServer {
                   mode: "steer",
                   content: pending.input,
                 }
-              : pending.type === "host_message_queued"
-                ? {
-                    ...base,
-                    type: "host_message",
-                    sender: "host",
-                    source: pending.source,
-                    ...(pending.sourceId === undefined
-                      ? {}
-                      : { sourceId: pending.sourceId }),
-                    text: pending.text,
-                    mode: "steer",
-                  }
-                : {
-                    ...base,
-                    type: "user_message",
-                    content: pending.input,
-                    ...(pending.questionReply === undefined
-                      ? {}
-                      : { questionReply: pending.questionReply }),
-                  };
+              : {
+                  ...base,
+                  type: "host_message",
+                  sender: "host",
+                  source: pending.source,
+                  ...(pending.sourceId === undefined
+                    ? {}
+                    : { sourceId: pending.sourceId }),
+                  text: pending.text,
+                  mode: "steer",
+                };
           await this.#commit(thread, item);
           this.#emit({ type: "item_completed", item });
           return {
@@ -2919,6 +2964,89 @@ export class ZenAppServer {
         throw error;
       }
     }
+  }
+
+  /** Compare-and-reorder one canonical Queue snapshot, without scheduling work. */
+  async reorderQueuedMessages(
+    threadId: string,
+    requested: QueuedReorderRequest,
+  ): Promise<QueuedReorderResult> {
+    let receipt: Extract<
+      CanonicalItem,
+      { type: "user_message_queue_reordered" }
+    >;
+    try {
+      const candidate = decodeCanonicalItem({
+        id: this.#id(),
+        type: "user_message_queue_reordered",
+        threadId,
+        createdAt: this.#now(),
+        reorderId: requested.reorderId,
+        expectedTargets: requested.expectedTargets,
+        orderedQueuedItemIds: requested.orderedQueuedItemIds,
+      });
+      if (candidate.type !== "user_message_queue_reordered")
+        throw new Error("Invalid reorder control");
+      receipt = structuredClone(candidate);
+    } catch (error) {
+      throw new AppServerError(
+        "invalid_request",
+        error instanceof Error ? error.message : "Invalid Queue order",
+      );
+    }
+    return await this.#withThreadMutation(threadId, async () => {
+      const thread = await this.#requireThread(threadId);
+      const previous = thread.items.find(
+        (item) =>
+          item.type === "user_message_queue_reordered" &&
+          item.reorderId === receipt.reorderId,
+      );
+      if (previous?.type === "user_message_queue_reordered") {
+        if (
+          JSON.stringify(
+            previous.expectedTargets.map((target) => [
+              target.queuedItemId,
+              target.clientId,
+              target.expectedRevision,
+            ]),
+          ) !==
+            JSON.stringify(
+              receipt.expectedTargets.map((target) => [
+                target.queuedItemId,
+                target.clientId,
+                target.expectedRevision,
+              ]),
+            ) ||
+          JSON.stringify(previous.orderedQueuedItemIds) !==
+            JSON.stringify(receipt.orderedQueuedItemIds)
+        )
+          throw new AppServerError(
+            "idempotency_conflict",
+            "Reorder ID was already used for another exact order change",
+          );
+        return { status: "already_reordered", reorderItemId: previous.id };
+      }
+      const pending = pendingNextTurnMessages(thread.items);
+      if (
+        pending.length !== receipt.expectedTargets.length ||
+        pending.some((item, index) => {
+          const target = receipt.expectedTargets[index];
+          return (
+            item.id !== target?.queuedItemId ||
+            item.clientId !== target.clientId ||
+            item.revision !== target.expectedRevision ||
+            this.#reservedQueuedItems.get(threadId)?.has(item.id)
+          );
+        })
+      )
+        throw new AppServerError(
+          "queue_reorder_conflict",
+          "The Queue snapshot changed or is being admitted; no messages were reordered",
+        );
+      await this.#commit(thread, receipt);
+      this.#emit({ type: "item_completed", item: receipt });
+      return { status: "reordered", reorderItemId: receipt.id };
+    });
   }
 
   /** Edits append a revision without moving, admitting, or resuming the queue. */
@@ -3401,8 +3529,13 @@ export class ZenAppServer {
   #queueBatchCurrent(
     thread: Thread,
     batch: readonly PendingQueuedInput[],
+    ordered = false,
   ): boolean {
-    const pending = pendingQueuedMessages(thread.items);
+    const pending = ordered
+      ? pendingNextTurnMessages(thread.items)
+      : pendingQueuedMessages(thread.items);
+    if (ordered && batch.some((item, index) => pending[index]?.id !== item.id))
+      return false;
     return batch.every((item) =>
       pending.some(
         (current) =>
@@ -3454,11 +3587,11 @@ export class ZenAppServer {
       try {
         await this.#validateInput(item.input, selection.model.inputModalities);
       } catch (error) {
-        if (!this.#queueBatchCurrent(thread, batch))
+        if (!this.#queueBatchCurrent(thread, batch, true))
           throw new QueueBatchChanged();
         throw new QueueAdmissionRejection(item, attemptId, error);
       }
-      if (!this.#queueBatchCurrent(thread, batch))
+      if (!this.#queueBatchCurrent(thread, batch, true))
         throw new QueueBatchChanged();
     }
     return batch;
@@ -3516,7 +3649,7 @@ export class ZenAppServer {
         if (
           nextAttempt !== undefined &&
           nextAttempt.batch[0]?.id === queued.id &&
-          this.#queueBatchCurrent(thread, nextAttempt.batch)
+          this.#queueBatchCurrent(thread, nextAttempt.batch, true)
         ) {
           batch = nextAttempt.batch;
         } else {
@@ -3545,7 +3678,7 @@ export class ZenAppServer {
             },
             {
               preparedInput: true,
-              queuedAdmission: { items: batch, attemptId },
+              queuedAdmission: { items: batch, attemptId, ordered: true },
               initialMessages: batch.map((item) => ({
                 input: item.input,
                 clientId: item.clientId,
@@ -3795,6 +3928,7 @@ export class ZenAppServer {
       replacementClientId?: string;
       initialMessages?: readonly InitialInputMessage[];
       queuedAdmission?: {
+        ordered?: boolean;
         items: readonly PendingQueuedInput[];
         attemptId: string;
       };
@@ -3840,7 +3974,11 @@ export class ZenAppServer {
         await this.#requireUnarchived(threadId);
       if (
         internal.queuedAdmission !== undefined &&
-        !this.#queueBatchCurrent(thread, internal.queuedAdmission.items)
+        !this.#queueBatchCurrent(
+          thread,
+          internal.queuedAdmission.items,
+          internal.queuedAdmission.ordered,
+        )
       )
         throw new QueueBatchChanged();
       if (
@@ -7540,13 +7678,22 @@ function remapForkItems(
         ...target,
         queuedItemId: remap(target.queuedItemId),
       }));
+    if (copied.type === "user_message_queue_reordered") {
+      copied.expectedTargets = copied.expectedTargets.map((target) => ({
+        ...target,
+        queuedItemId: remap(target.queuedItemId),
+      }));
+      copied.orderedQueuedItemIds = copied.orderedQueuedItemIds.map(remap);
+    }
+    // Forks retain Turn identities; only local Item references are remapped.
     if (copied.type === "thread_restored")
       copied.deletionItemId = remap(copied.deletionItemId);
     if (
       copied.type === "host_message_cancelled" ||
       copied.type === "thread_message_cancelled" ||
       copied.type === "user_message_queue_cancelled" ||
-      copied.type === "user_message_queue_edited"
+      copied.type === "user_message_queue_edited" ||
+      copied.type === "user_message_queue_promoted"
     ) {
       copied.queuedItemId = remap(copied.queuedItemId);
     }

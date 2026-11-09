@@ -22,3 +22,23 @@ for (const normalScrollbar of [0, 10]) {
     }
   }
 }
+
+for (const scrollbar of [0, 10, 16]) {
+  test(`unified tray puts borders and ${scrollbar}px gutter outside the message column`, () => {
+    const column = { left: 24, width: 342 };
+    const parentContentLeft = 24;
+    const borderLeft = 1;
+    const borderRight = 1;
+    const nonContentWidth = borderLeft + borderRight + scrollbar;
+    const geometry = steerPreviewColumn(
+      column,
+      parentContentLeft + borderLeft,
+      nonContentWidth,
+    );
+    const contentLeft = parentContentLeft + geometry.left + borderLeft;
+    assert.equal(contentLeft, column.left);
+    assert.equal(contentLeft + geometry.width - nonContentWidth, 366);
+    assert.ok(parentContentLeft + geometry.left >= 0);
+    assert.ok(parentContentLeft + geometry.left + geometry.width <= 390);
+  });
+}

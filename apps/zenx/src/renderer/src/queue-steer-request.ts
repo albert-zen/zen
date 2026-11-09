@@ -3,6 +3,10 @@ import type {
   NativeQueueSteerParams,
   NativeQueueSteerResult,
 } from "../../../../../src/protocol/native/wire.js";
+import {
+  QueueMutationUnknownError,
+  queuedSteerReceipt,
+} from "./queue-mutation-state.js";
 import { i18n } from "./i18n.js";
 
 /** Read a canonical receipt after transport ambiguity. Never cancel or resubmit. */
@@ -20,9 +24,15 @@ export async function requestQueuedSteer(
     if (
       result?.queuedItemId !== params.queuedItemId ||
       result.clientId !== params.clientId ||
-      !["steered", "started", "already_started"].includes(result.status) ||
+      !["staged", "steered", "started", "already_started"].includes(
+        result.status,
+      ) ||
       typeof result.turnId !== "string" ||
-      !result.turnId.trim()
+      !result.turnId.trim() ||
+      (result.status === "staged" &&
+        (result.revision !== params.expectedRevision + 1 ||
+          typeof result.promotionItemId !== "string" ||
+          !result.promotionItemId.trim()))
     )
       throw new Error(i18n.t("shell:queueSteerUnconfirmed"));
     return result;
@@ -41,46 +51,32 @@ export async function requestQueuedSteer(
       throw new Error(i18n.t(key), { cause: error });
     }
     try {
-      const { thread } = await window.zenx.protocol.request("zen/thread/read", {
-        threadId: params.threadId,
-      });
-      if (thread.id !== params.threadId)
-        throw new Error("Mismatched recovery Thread");
-      onRecovered?.();
-      const original = thread.items.find(
-        (item) =>
-          (item.type === "user_message_queued" ||
-            item.type === "thread_message_queued" ||
-            item.type === "host_message_queued") &&
-          item.threadId === params.threadId &&
-          item.id === params.queuedItemId &&
-          item.clientId === params.clientId,
-      );
-      const delivered =
-        original &&
-        thread.items.find(
-          (item) =>
-            (item.type === "user_message" ||
-              item.type === "thread_message" ||
-              item.type === "host_message") &&
-            `${item.type}_queued` === original.type &&
-            item.threadId === params.threadId &&
-            item.clientId === params.clientId,
-        );
-      if (
-        delivered &&
-        typeof delivered.turnId === "string" &&
-        delivered.turnId.trim()
-      )
-        return {
-          queuedItemId: params.queuedItemId,
-          clientId: params.clientId,
-          status: "already_started",
-          turnId: delivered.turnId,
-        };
+      return await checkQueuedSteer(params, onRecovered);
     } catch {
-      /* An unreadable Thread cannot prove delivery. */
+      throw new QueueMutationUnknownError(
+        i18n.t("shell:queueSteerUnconfirmed"),
+        { cause: error },
+      );
     }
-    throw new Error(i18n.t("shell:queueSteerUnconfirmed"), { cause: error });
   }
+}
+
+/** A manual check is read-only, never a second promotion. */
+export async function checkQueuedSteer(
+  params: NativeQueueSteerParams,
+  onRecovered?: () => void,
+): Promise<NativeQueueSteerResult> {
+  try {
+    const { thread } = await window.zenx.protocol.request("zen/thread/read", {
+      threadId: params.threadId,
+    });
+    if (thread.id !== params.threadId)
+      throw new Error("Mismatched recovery Thread");
+    onRecovered?.();
+    const receipt = queuedSteerReceipt(params, thread.items);
+    if (receipt) return receipt;
+  } catch {
+    /* An unreadable Thread cannot prove delivery. */
+  }
+  throw new QueueMutationUnknownError(i18n.t("shell:queueSteerUnconfirmed"));
 }
