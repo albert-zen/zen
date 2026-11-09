@@ -1839,3 +1839,5 @@ Question-list read recovery is a disposable mounted-view concern: existing autho
 - **Documentation-only CI selection** — A separate conservative selector may replace heavy PR work with explicit named check receipts only for complete pinned ordinary-Markdown changes in the approved documentation allowlist; missing evidence, unknown paths, main pushes and manual dispatch retain full acceptance, and failed selection fails every original heavy check even after its full fallback work.
 
 - **Tiered CI risk policy** — Every PR, draft or ready, receives static feedback and an explicit union of path-based risk lanes plus current-run bound unit files, while the complete aggregate remains on main/manual; unknown evidence retains all PR risk lanes, typed omission receipts never claim full acceptance, and existing native work remains mandatory for its selected risk.
+
+CI 桌面归档缓存只持久化按平台、架构、版本和 SHA256 定址且重新核验的 Electron ZIP / RTK tarball；Electron 校验投影绑定 npm lock 的官方包完整性，安装与打包共用显式缓存根，缓存命中不代表产品验收。
