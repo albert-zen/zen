@@ -196,3 +196,101 @@ test("an answer in the visible window retains its exact original question outsid
     "Support facts do not materialize an old transcript Turn",
   );
 });
+
+test("pending promotion and reorder retain exact control dependencies across history windows", () => {
+  const items = fixture(45);
+  const base = { threadId: "thread", createdAt: "2026-01-01T00:00:00Z" };
+  const queued = (id: string): CanonicalItem => ({
+    ...base,
+    id,
+    type: "user_message_queued",
+    clientId: `client-${id}`,
+    input: [{ type: "text", text: id }],
+    deliveryMode: "batch-next",
+  });
+  items.splice(
+    1,
+    0,
+    queued("a"),
+    queued("b"),
+    queued("c"),
+    {
+      ...base,
+      id: "order",
+      type: "user_message_queue_reordered",
+      reorderId: "op",
+      expectedTargets: ["a", "b", "c"].map((id) => ({
+        queuedItemId: id,
+        clientId: `client-${id}`,
+        expectedRevision: 0,
+      })),
+      orderedQueuedItemIds: ["c", "b", "a"],
+    },
+    {
+      ...base,
+      id: "promote",
+      type: "user_message_queue_promoted",
+      queuedItemId: "b",
+      clientId: "client-b",
+      expectedRevision: 0,
+      expectedTurnId: "turn-0",
+    },
+    {
+      ...base,
+      id: "cancel-c",
+      type: "user_message_queue_cancelled",
+      queuedItemId: "c",
+      clientId: "client-c",
+    },
+  );
+  const window = selectThreadHistoryWindow("thread", items);
+  assert.deepEqual(
+    pendingQueuedMessages(window.items),
+    pendingQueuedMessages(items),
+  );
+  assert(window.items.some((item) => item.id === "order"));
+  assert(window.items.some((item) => item.id === "promote"));
+});
+
+test("older pages retain later queue settlement instead of reviving a reordered or promoted input", () => {
+  const items = fixture(45),
+    base = { threadId: "thread", createdAt: "2026-01-01T00:00:00Z" };
+  items.splice(1, 0, {
+    ...base,
+    id: "old-queue",
+    type: "user_message_queued",
+    clientId: "old-client",
+    input: [{ type: "text", text: "do not revive" }],
+    deliveryMode: "batch-next",
+  });
+  items.push({
+    ...base,
+    id: "late-promotion",
+    type: "user_message_queue_promoted",
+    queuedItemId: "old-queue",
+    clientId: "old-client",
+    expectedRevision: 0,
+    expectedTurnId: "turn-44",
+  });
+  items.push({
+    ...base,
+    id: "late-recall",
+    type: "user_message_steer_recalled",
+    recallId: "late",
+    targets: [
+      {
+        queuedItemId: "old-queue",
+        clientId: "old-client",
+        expectedRevision: 1,
+      },
+    ],
+  });
+  const newest = selectThreadHistoryWindow("thread", items);
+  const middle = selectThreadHistoryWindow("thread", items, {
+    before: newest.history.before!,
+  });
+  const oldest = selectThreadHistoryWindow("thread", items, {
+    before: middle.history.before!,
+  });
+  assert.deepEqual(pendingQueuedMessages(oldest.items), []);
+});

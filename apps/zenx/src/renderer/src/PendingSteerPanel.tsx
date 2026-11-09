@@ -30,9 +30,9 @@ import {
 import { queuedInputDraft } from "./queue-edit-draft.js";
 import { parseSkillDraft } from "./skill-draft.js";
 import { referenceTitle } from "./reference-draft.js";
-import { Markdown } from "./Markdown.js";
+import { UserMessageContent } from "./UserMessageContent.js";
+import { indexAnsweredQuestions } from "./answered-question-presentation.js";
 import { steerPreviewColumn } from "./steer-preview-column.js";
-import { InlineReferenceContent } from "./InlineReferenceContent.js";
 import { Icon } from "./icons.js";
 import { localErrorDetail } from "../../local-error-detail.js";
 import type { AttachmentRef } from "../../../../../src/attachment.js";
@@ -41,6 +41,7 @@ import { sameImageAttachment } from "./queued-message-images.js";
 import { useCommittedCallback } from "./use-committed-callback.js";
 
 export interface PendingSteerPanelProps {
+  integrated?: boolean;
   threadId: string;
   items: readonly CanonicalItem[];
   pending: readonly PendingSteerInput[];
@@ -76,6 +77,7 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
   // Match the real transcript column, including independent native scrollbars.
   // Geometry changes never alter admission, recall, or scroll ownership.
   useLayoutEffect(() => {
+    if (props.integrated) return;
     const shelf = shelfRef.current;
     const details = shelf?.querySelector<HTMLElement>(".steer-shelf-details");
     const view = shelf?.closest(".thread-view");
@@ -119,6 +121,10 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
     };
   }, []);
 
+  const answers = useMemo(
+    () => indexAnsweredQuestions(props.items),
+    [props.items],
+  );
   const canonicalReceipts = useMemo(
     () =>
       props.items.filter(
@@ -459,14 +465,10 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
                     t("steerStructuredInput")
                   ) : (
                     <div className="pending-steer-text">
-                      {parsed.references.length > 0 ? (
-                        <InlineReferenceContent
-                          text={parsed.text}
-                          references={parsed.references}
-                        />
-                      ) : (
-                        <Markdown text={parsed.text} />
-                      )}
+                      <UserMessageContent
+                        parts={[parsed]}
+                        answer={answers.get(item.id)}
+                      />
                     </div>
                   );
                 return (
@@ -520,7 +522,7 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
                     ) : null}
                     {parsed === null || text.length > 0 ? (
                       <div className="user-bubble">
-                        {text.length > 240 ? (
+                        {text.length > 240 && !answers.has(item.id) ? (
                           <details className="pending-steer-message">
                             <summary>{text.slice(0, 240)}…</summary>
                             {body}

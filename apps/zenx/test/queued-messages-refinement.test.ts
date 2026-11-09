@@ -11,7 +11,7 @@ import {
 import { i18n } from "../src/renderer/src/i18n.js";
 import { runtimeApproval } from "./fixtures/agent-runtime-data.js";
 const rows = () => [
-  ...document.querySelectorAll<HTMLElement>(".queue-shelf li"),
+  ...document.querySelectorAll<HTMLElement>(".queue-shelf li.queue-row"),
 ];
 const noop = async () => ({ results: [] });
 test("text plus images retain both text and attachment count", async () => {
@@ -22,12 +22,11 @@ test("text plus images retain both text and attachment count", async () => {
     assert.equal(document.querySelector("textarea")?.value, draft.draft.text);
   });
 });
-test("many queue has two visible previews with bounded disclosure", async () => {
+test("many queue shares the one tray scroller without hiding later inputs", async () => {
   await withRuntimeDom(async (h) => {
     await h.render(queueScenario(3), { onCancelQueued: noop });
-    assert.equal(rows().filter((x) => !x.hidden).length, 2);
-    await h.click(".queue-view-all");
     assert.equal(rows().filter((x) => !x.hidden).length, 6);
+    assert.equal(document.querySelector(".queue-view-all"), null);
   });
 });
 test("native cancellation and drain facts retain original queue history", () => {
@@ -69,24 +68,17 @@ test("pending cancellation remains in same action without optimistic removal", a
   });
 });
 
-test("row order and disclosure survive append, hide and authoritative head drain", async () => {
+test("row identity and full content survive append, collapse and authoritative head drain", async () => {
   await withRuntimeDom(async (h) => {
     let thread = queueScenario(3);
     await h.render(thread);
     const original = rows()[0];
-    await h.click(".queue-view-all");
-    await h.click('[data-queue-id="queue-2"] .queue-preview');
-    assert.equal(
-      rows()[2]!.querySelector(".queue-preview")?.getAttribute("aria-expanded"),
-      "true",
-    );
-    await h.click(".queue-view-all");
-    await h.click(".queue-view-all");
+    const body = rows()[2]!.querySelector(".user-bubble")!;
+    assert.match(body.textContent!, /验证结论/u);
+    await h.click(".queue-shelf-toggle");
+    await h.click(".queue-shelf-toggle");
     assert.equal(rows()[0], original);
-    assert.equal(
-      rows()[2]!.querySelector(".queue-preview")?.getAttribute("aria-expanded"),
-      "true",
-    );
+    assert.equal(rows()[2]!.querySelector(".user-bubble"), body);
     thread = drainQueueHead(thread);
     await h.render(thread);
     assert.deepEqual(
@@ -96,8 +88,7 @@ test("row order and disclosure survive append, hide and authoritative head drain
     assert.equal(document.querySelector("textarea")?.value, draft.draft.text);
   });
 });
-
-test("hidden native failure is discoverable and reveals the exact row", async () => {
+test("native failure on a later input stays visible in the combined scroll area", async () => {
   await withRuntimeDom(async (h) => {
     await h.render(queueScenario(3), {
       queueFailure: {
@@ -106,12 +97,6 @@ test("hidden native failure is discoverable and reveals the exact row", async ()
         message: "Exact fifth input rejected",
       },
     });
-    assert.ok(rows()[4]!.hidden);
-    assert.match(
-      document.querySelector(".queue-hidden-failure")!.textContent!,
-      /Exact fifth/u,
-    );
-    await h.click(".queue-hidden-failure");
     assert.equal(rows()[4]!.hidden, false);
     assert.match(
       rows()[4]!.querySelector(".queue-row-error")!.textContent!,
@@ -225,7 +210,8 @@ test("explicit full-text reading survives approval arrival; header collapses in 
   await withRuntimeDom(async (h) => {
     const thread = queueScenario(2);
     await h.render(thread);
-    await h.click('.queue-preview[role="button"]');
+    await h.click(".queue-shelf-toggle");
+    await h.click(".queue-shelf-toggle");
     await h.render(thread, { approvals: [runtimeApproval] });
     assert.equal(
       document
@@ -233,9 +219,9 @@ test("explicit full-text reading survives approval arrival; header collapses in 
         ?.getAttribute("aria-expanded"),
       "true",
     );
-    assert.equal(
-      document.querySelector(".queue-preview")?.getAttribute("aria-expanded"),
-      "true",
+    assert.match(
+      document.querySelector(".queue-message-body")!.textContent!,
+      /验证结论/u,
     );
     await h.click(".queue-shelf-toggle");
     assert.equal(
@@ -250,8 +236,10 @@ test("explicit full-text reading survives approval arrival; header collapses in 
     );
     await h.render({ ...thread, id: "other-thread" }, { approvals: [] });
     assert.equal(
-      document.querySelector(".queue-preview")?.getAttribute("aria-expanded"),
-      "false",
+      document
+        .querySelector(".queue-shelf-toggle")
+        ?.getAttribute("aria-expanded"),
+      "true",
     );
   });
 });
@@ -500,25 +488,24 @@ test("late queue failures stay in their owning thread", async () => {
   });
 });
 
-test("full-text keyboard disclosure works with Enter and Space without mutating Composer", async () => {
+test("queue group disclosure remains keyboard reachable without mutating Composer", async () => {
   await withRuntimeDom(async (h) => {
     await h.render(queueScenario(2));
-    const preview = document.querySelector<HTMLElement>(
-      '.queue-preview[role="button"]',
+    const toggle = document.querySelector<HTMLButtonElement>(
+      ".queue-shelf-toggle",
     )!;
     await act(async () => {
-      preview.focus();
-      preview.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
-      );
+      toggle.focus();
+      toggle.click();
     });
-    assert.equal(preview.getAttribute("aria-expanded"), "true");
-    await act(async () =>
-      preview.dispatchEvent(
-        new KeyboardEvent("keydown", { key: " ", bubbles: true }),
-      ),
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+    assert.equal(document.activeElement, toggle);
+    await act(async () => toggle.click());
+    assert.equal(toggle.getAttribute("aria-expanded"), "true");
+    assert.match(
+      document.querySelector(".queue-message-body")!.textContent!,
+      /验证结论/u,
     );
-    assert.equal(preview.getAttribute("aria-expanded"), "false");
     assert.equal(document.querySelector("textarea")?.value, draft.draft.text);
   });
 });

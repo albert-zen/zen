@@ -1,3 +1,4 @@
+import { finishTestCleanup } from "./test-cleanup.js";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -77,13 +78,26 @@ export async function roomWorkspaceQuestionFixture() {
     readRoomQuestionResponse: service.readRoomQuestionResponse.bind(service),
   };
   const native = new NativeRoomQuestionService(() => port);
+  // Keep the issued requests, including their receipts, until teardown.
+  // Observing their outcome must never replay a potentially committed response.
+  const responses: Promise<PromiseSettledResult<unknown>>[] = [];
   const api: NativeRoomQuestionApi = {
-    request: async <T extends NativeRoomQuestionRequest>(
+    request: <T extends NativeRoomQuestionRequest>(
       input: T,
     ): Promise<NativeRoomQuestionResults[T["method"]]> => {
-      const result = await native.request(input, async () => {});
-      if (input.method === "respond") notify(input.params.roomId);
-      return result as NativeRoomQuestionResults[T["method"]];
+      const pending = (async () => {
+        const result = await native.request(input, async () => {});
+        if (input.method === "respond") notify(input.params.roomId);
+        return result as NativeRoomQuestionResults[T["method"]];
+      })();
+      if (input.method === "respond")
+        responses.push(
+          pending.then(
+            (value) => ({ status: "fulfilled" as const, value }),
+            (reason: unknown) => ({ status: "rejected" as const, reason }),
+          ),
+        );
+      return pending;
     },
     onChanged: (listener) => {
       listeners.add(listener);
@@ -128,10 +142,19 @@ export async function roomWorkspaceQuestionFixture() {
       }));
     },
     async close() {
-      await sidebar.close();
-      await service.close();
-      await journal.close();
-      await rm(directory, { recursive: true, force: true });
+      await finishTestCleanup([
+        async () => {
+          const outcomes = await Promise.all(responses);
+          const failures = outcomes.flatMap((outcome) =>
+            outcome.status === "rejected" ? [outcome.reason] : [],
+          );
+          await finishTestCleanup([], failures);
+        },
+        () => sidebar.close(),
+        () => service.close(),
+        () => journal.close(),
+        () => rm(directory, { recursive: true, force: true }),
+      ]);
     },
   };
 }

@@ -157,7 +157,7 @@ test("many images show three previews and an explicit disclosure preserving nati
   });
 });
 
-test("collapsed approval queue and hidden rows do not read attachments before disclosure", async () => {
+test("collapsed approval queue defers image reads until the group opens", async () => {
   await withRuntimeDom(async (h) => {
     const reads: string[] = [];
     const onReadAttachment = async (ref: { sha256: string }) => {
@@ -172,8 +172,6 @@ test("collapsed approval queue and hidden rows do not read attachments before di
     assert.equal(imageButtons().length, 0);
     assert.deepEqual(reads, []);
     await h.click(".queue-shelf-toggle");
-    assert.deepEqual(reads, []);
-    await h.click(".queue-view-all");
     await flush();
     assert.equal(imageButtons().length, 1);
   });

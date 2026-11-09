@@ -50,6 +50,8 @@ import {
   type NativeSteerRecallParams,
   NATIVE_QUEUE_EDIT_METHOD,
   NATIVE_QUEUE_STEER_METHOD,
+  NATIVE_QUEUE_REORDER_METHOD,
+  type NativeQueueReorderParams,
   NATIVE_THREAD_MESSAGE_METHOD,
   NATIVE_TURN_WAKE_METHOD,
   type NativeQueueEditParams,
@@ -1041,6 +1043,60 @@ export class NativeConnection {
                     code: -32603,
                     message:
                       "Queue steering outcome is unconfirmed. Read the Thread before retrying the same queued identity.",
+                  },
+          });
+      }
+      return;
+    }
+    if (message.method === NATIVE_QUEUE_REORDER_METHOD) {
+      if (!this.#initialized && !this.#isInitialized()) {
+        send({
+          id: message.id,
+          error: { code: -32600, message: "Not initialized" },
+        });
+        return;
+      }
+      try {
+        const params = message.params;
+        if (
+          !isRecord(params) ||
+          typeof params.threadId !== "string" ||
+          !params.threadId.trim() ||
+          typeof params.reorderId !== "string" ||
+          !Array.isArray(params.expectedTargets) ||
+          !Array.isArray(params.orderedQueuedItemIds)
+        )
+          throw new AppServerError(
+            "invalid_request",
+            "Thread, reorder ID, current snapshot and complete desired order are required",
+          );
+        if (this.#appServer === undefined)
+          throw new AppServerError(
+            "unavailable",
+            "Native Queue ordering is unavailable",
+          );
+        const request = params as unknown as NativeQueueReorderParams;
+        this.#subscriptions.add(request.threadId);
+        const result = await this.#appServer.reorderQueuedMessages(
+          request.threadId,
+          request,
+        );
+        if (!this.#closed) send({ id: message.id, result });
+      } catch (error) {
+        if (!this.#closed)
+          send({
+            id: message.id,
+            error:
+              error instanceof AppServerError
+                ? {
+                    code: -32602,
+                    message: error.message,
+                    data: { zenCode: error.code },
+                  }
+                : {
+                    code: -32603,
+                    message:
+                      "Queue reorder outcome is unconfirmed. Read the Thread and exact reorder receipt before retrying.",
                   },
           });
       }

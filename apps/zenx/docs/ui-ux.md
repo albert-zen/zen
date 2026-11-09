@@ -285,6 +285,16 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - Composer（含审批条与上下文行）是浮在满高 transcript 滚动区底部的 overlay：transcript 滚动条贯穿右侧从上到下，列表底部保留与 bottom zone 等高的虚拟留白，Back to live 悬浮在 bottom zone 正上方并随其高度上移。所有可滚动表面使用统一的细滚动条。这是布局与视觉校准，不改变 live following 的交互合同。
 - Tool completion 与 Final Message / Turn completion 的到达顺序可能不同；UI 等到可展示终态后再切换完成态投影。
 
+#### 统一待发送区
+
+- 所有尚未被 Host 纳入本轮输入的普通、Steer、Queue 消息都位于 Composer 上方的同一个待发送区；发送中、已接收待更新、结果未知也留在这里，不提前混入正式 transcript。实际模型输入由 canonical 语义输入 Item 证明；待发送队列、晋升与排序由 Host 持久化的 canonical 控制事实证明，不进入模型语义 ItemList。Renderer 的本地发送提示与请求锁只是瞬态交互反馈。
+- 待发送区是一个统一限高、内部 overflow 的容器。Steer 在上、Queue 在下，组间轻分隔，空组隐藏，不使用两个并列 Tab，也不为两组分别叠加限高或滚动区。Queue 所有行可在同一滚动区访问，不另设“查看全部”层；总高度应克制，保留对话阅读空间。
+- 普通消息、Steer 与 Queue 复用正文展示语义：Markdown、typed 引用胶囊、原生结构化问题回答气泡与独立图片行保持可读，图片预览可以关闭并归还焦点。问题呈现只取可信 questionReply 与原始问题，不从相似文字猜测结构。
+- 活动 Turn 内将用户 Queue 转为 Steer 是 Host 的原子晋升：保留 queued ID、client ID 与完整输入，通过 canonical 晋升事实增加 revision 并移入上层。发送回执不等于模型已消费，晋升后的 pending Steer 仍可通过整批原子撤回恢复输入；消费/撤回竞态拒绝时不得假装撤回成功。
+- Queue 保留编辑、删除、向上/向下排序与转 Steer；排序提交完整且有序的 Queue 身份/revision 快照，Host 持久化顺序事实，包含用户、Agent 与 Host 队列行且排除 Steer。Renderer 等 canonical 更新后改序，不乐观移位。快照变化或消息已保留用于处理时明确报告冲突。
+- 操作发送中、只读核实、回执待投影与结果未知时锁定冲突动作。未知态保留原请求身份，允许只读检查精确 canonical receipt，不以重新发送、取消或重建消息代替核验。锁与反馈按 Thread 隔离，切换 Thread、卸载 viewport 与迟到回执不得影响新 Thread 或新草稿。
+- Interrupt / Interrupt & Send 仍是 Composer 的独立中断操作，不进入待发送区的第三组，也不与转 Steer 混用。
+
 ### 4.5 图片草稿与预览
 
 - 新图片草稿先进入独立暂存区；本机发送或保存队列编辑前按原始 SHA、长度和媒体类型发布到长期附件库。明确移除且没有共享草稿或冻结提交引用的暂存图片，一分钟后复核并回收；切换会话、窗口关闭与重启都不证明放弃。旧会话附件、结果未知的发送及归属不明的暂存图片保持保留，不自动删除。
@@ -619,7 +629,7 @@ Only actual running/model activity has a left-to-right text highlight. Waiting, 
 
 Approvals stay composer-adjacent and name their real once-only or remembered capability scope. A bounded inline preview has a user-opened full-request dialog containing complete code, cwd and arguments. Opening or dismissing review never decides a request; both surfaces share one pending lock and preserve errors. Focus restoration respects the exact request and newer user interaction.
 
-Queued messages form a compact composer-aligned pending-send shelf. Text, real image thumbnails and attachment counts remain visible; genuine truncation has a selectable full-text disclosure. Exact ID/client-ID order is canonical; cancellation or resume acknowledgement does not remove rows. Editing uses the native exact-target expected-revision command and append-only edit fact, retaining original queue position and delivery mode; there is no reorder or implicit retry. Native delivery errors stay on their exact message; a distinct resume transport error belongs beside Continue. Approval + queue + error + draft must preserve reachable decisions, one 44px queue-action lane and Composer in narrow windows.
+Queued messages occupy the lower group of the unified composer-adjacent pending-send area, below Steer. Both groups share one bounded scrolling container. Their message content aligns with the transcript column; tray borders and native scrollbar gutters sit outside that content box. Text, real image thumbnails and attachment counts remain visible; genuine truncation has a selectable full-text disclosure. Exact ID/client-ID order is canonical; cancellation or resume acknowledgement does not remove rows. Editing uses the native exact-target expected-revision command and append-only edit fact, retaining the current queue position and delivery mode. Separate explicit up/down actions reorder the complete exact Queue identity/revision snapshot through the native atomic command, as defined by the unified pending-send contract; there is no implicit retry. Native delivery errors stay on their exact message; a distinct resume transport error belongs beside Continue. Approval + queue + error + draft must preserve reachable decisions, reachable queue actions (44px targets for touch) and Composer in narrow windows.
 
 Queued thumbnails read only validated AttachmentRefs from the exact same-thread pending input. Show a compact first set with an actionable full-gallery disclosure; missing references or failed reads remain explicit and retryable without blocking Edit/Cancel. Opening a full image uses the existing viewer and stops being visible when its exact queue owner disappears or the selected thread changes.
 

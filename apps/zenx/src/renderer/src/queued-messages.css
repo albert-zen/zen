@@ -264,6 +264,7 @@
 
 .queue-row-steer,
 .queue-row-edit,
+.queue-row-move,
 .queue-row-cancel {
   display: inline-flex;
   align-items: center;
@@ -571,4 +572,134 @@
 .steer-shelf > button {
   align-self: flex-start;
   margin: 0 14px 8px;
+}
+
+/* One bounded pending area. The groups below never create their own scrollbars. */
+.pending-tray {
+  position: relative;
+  left: var(--pending-tray-left, 0px);
+  width: var(--pending-tray-width, 100%);
+  flex: 0 0 auto;
+  min-width: 0;
+  min-height: 0;
+  max-height: min(240px, 30dvh);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 12px;
+  background: var(--color-surface-inset);
+  /* The outer gutter uses the existing conversation padding, rather than
+     enlarging the bottom-zone's scrollable margin box. */
+  margin: 6px calc(0px - var(--pending-tray-gutter, 0px)) 6px 0;
+}
+.pending-tray:empty {
+  display: none;
+}
+.pending-tray > .queue-shelf {
+  width: 100%;
+  max-width: none;
+  flex: none;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.pending-tray > .queue-shelf ~ .queue-shelf {
+  border-top: 1px solid var(--color-border-subtle);
+}
+.pending-tray .queue-shelf-details {
+  min-height: 0;
+  max-height: none;
+  overflow: visible;
+  scrollbar-gutter: auto;
+}
+.pending-tray .steer-shelf-details {
+  left: 0;
+  width: 100%;
+}
+.pending-tray .queue-shelf-list {
+  padding: 0 0 6px;
+}
+.pending-tray .queue-shelf-header {
+  min-height: 32px;
+  flex-wrap: wrap;
+}
+.pending-tray .queue-shelf-toggle,
+.pending-tray .queue-header-action {
+  min-height: 32px;
+}
+.pending-tray .pending-send-row {
+  margin: 0;
+  padding: 8px 12px;
+}
+.pending-tray .pending-send-status,
+.pending-tray .pending-send-recovery p {
+  margin: 4px 0;
+}
+.pending-tray .pending-send-recovery,
+.pending-tray .pending-send-recovery pre,
+.pending-tray .queue-resume-error {
+  max-height: none;
+  overflow: visible;
+}
+@media (pointer: coarse) {
+  .pending-tray .queue-shelf-toggle,
+  .pending-tray .queue-header-action {
+    min-height: 44px;
+  }
+}
+.pending-tray .queue-row-main {
+  align-items: flex-start;
+}
+.pending-tray .queue-message-body {
+  margin: 0;
+  padding: 6px 0;
+  gap: 4px;
+}
+.pending-tray .user-bubble {
+  max-width: 100%;
+  font-size: var(--font-size-caption);
+  padding: 7px 10px;
+}
+.pending-tray .queue-image-strip {
+  padding: 0;
+}
+.pending-tray .queue-image-gallery {
+  justify-content: flex-end;
+}
+.pending-tray .queue-row-actions {
+  padding-top: 4px;
+  flex-wrap: wrap;
+  max-width: 152px;
+  justify-content: flex-end;
+}
+@media (max-width: 480px) {
+  .pending-tray .queue-row-actions {
+    max-width: 88px;
+  }
+}
+.queue-move-up {
+  transform: rotate(180deg);
+}
+.pending-tray .queue-mutation-status {
+  padding: 6px 12px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+  overflow-wrap: anywhere;
+}
+.pending-tray .queue-mutation-status p {
+  margin: 0 0 4px;
+}
+.pending-tray .queue-mutation-status pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (pointer: fine) {
+  .pending-tray .queue-row-actions button {
+    min-width: 28px;
+    min-height: 28px;
+    padding: 4px;
+  }
 }

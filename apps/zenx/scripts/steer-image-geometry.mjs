@@ -74,7 +74,11 @@ export function measureSteerComparison(root) {
   return {
     normal: measure(normal, false),
     pending: measure(pending, true),
-    overflow: root.documentElement.scrollWidth > root.defaultView.innerWidth,
+    overflow:
+      root.documentElement.scrollWidth > root.defaultView.innerWidth ||
+      [...root.querySelectorAll(".bottom-zone, .pending-tray")].some(
+        (element) => element.scrollWidth > element.clientWidth,
+      ),
   };
 }
 

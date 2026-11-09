@@ -33,6 +33,7 @@ import { AgentRuntime, type RunTurnOptions } from "../src/runtime.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import { ToolEnvironment } from "../src/tool.js";
 import { png1x1 } from "./fixtures.js";
+import { pendingSteerMessages } from "../src/steer-recall.js";
 
 const text = (value: string): UserInput => [{ type: "text", text: value }];
 function deferred() {
@@ -205,10 +206,10 @@ test("active promotion preserves edited images, original timestamp and client id
       q.threadId,
       steerTarget(queued),
     );
-    assert.equal(result.status, "steered");
+    assert.equal(result.status, "staged");
     assert.equal(result.turnId, q.turn.id);
     const after = await q.read();
-    assert.equal(pendingQueuedMessages(after.items).length, 0);
+    assert.equal(pendingQueuedMessages(after.items).length, 1);
     assert.deepEqual(
       after.items.find((item) => item.id === queued.id),
       original,
@@ -217,9 +218,23 @@ test("active promotion preserves edited images, original timestamp and client id
       (item) =>
         item.type === "user_message" && item.clientId === queued.clientId,
     );
-    assert(delivered?.type === "user_message");
-    assert.deepEqual(delivered.content, content);
-    assert.ok(delivered.deliveryAfter);
+    assert.equal(delivered, undefined);
+    const staged = pendingSteerMessages(after.items)[0]!;
+    assert.deepEqual(staged.input, content);
+    assert.equal(staged.revision, queued.revision + 1);
+    assert.equal(staged.expectedTurnId, q.turn.id);
+    assert.equal(staged.id, queued.id);
+    const retry = await q.server.steerQueuedMessage(
+      q.threadId,
+      steerTarget(queued),
+    );
+    assert.deepEqual(retry, result);
+    const recalled = await q.server.recallSteerMessages(q.threadId, {
+      recallId: "recall-promoted",
+      targets: [steerTarget(staged)],
+    });
+    assert.deepEqual(recalled.messages[0]?.input, content);
+    assert.equal(pendingSteerMessages((await q.read()).items).length, 0);
     assert(
       !after.items.some((item) => item.type === "user_message_queue_cancelled"),
     );
@@ -522,7 +537,7 @@ test("native queue steer validates initialization and identity and publishes can
   }
 });
 
-test("promotion-first excludes a later edit and cancel while image validation holds the mutation fence", async () => {
+test("promotion-first rejects stale edits but still permits cancellation before model claim", async () => {
   const attachments = new InMemoryAttachmentStore();
   const q = await runningQueue({ attachments });
   const entered = deferred(),
@@ -559,15 +574,15 @@ test("promotion-first excludes a later edit and cancel while image validation ho
       steerTarget(queued),
     ]);
     release.resolve();
-    assert.equal((await promoted).status, "steered");
-    await assert.rejects(edit, { code: "queue_already_started" });
-    assert.equal((await cancelled)[0]!.status, "already_started");
+    assert.equal((await promoted).status, "staged");
+    await assert.rejects(edit, { code: "queue_revision_conflict" });
+    assert.equal((await cancelled)[0]!.status, "cancelled");
     assert.equal(
       (await q.read()).items.filter(
         (item) =>
           item.type === "user_message" && item.clientId === queued.clientId,
       ).length,
-      1,
+      0,
     );
   } finally {
     release.resolve();
@@ -750,3 +765,224 @@ test("active Host promotion preserves source and leaves explicitly queued siblin
     await q.turn.done;
   }
 });
+
+for (const recall of [false, true])
+  test(`promoted User Queue remains recallable during a running tool and ${recall ? "withdraws before" : "is claimed only at"} the next model boundary`, async () => {
+    const { testToolBundle, testToolRuntime } =
+      await import("./tool-fixtures.js");
+    const entered = deferred(),
+      release = deferred(),
+      nextSample = deferred(),
+      finishSample = deferred();
+    const requests: import("../src/model.js").ModelRequest[] = [];
+    const model: ModelAdapter = {
+      provider: "promoted-tool",
+      async *stream(request) {
+        requests.push(request);
+        if (requests.length === 1)
+          yield {
+            type: "tool_call",
+            callId: "waiting-call",
+            name: "hold",
+            arguments: {},
+          };
+        else {
+          nextSample.resolve();
+          await finishSample.promise;
+          yield { type: "text_delta", delta: "done" };
+        }
+      },
+    };
+    const tool = testToolRuntime({
+      name: "hold",
+      async execute() {
+        entered.resolve();
+        await release.promise;
+        return { output: "returned", exitCode: 0 };
+      },
+    });
+    const runtime = new AgentRuntime({
+      toolEnvironment: new ToolEnvironment({
+        bundles: [
+          testToolBundle({ kind: "external", id: "held-tool" }, [tool]),
+        ],
+      }),
+    });
+    const server = createServer({
+      journal: new InMemoryThreadJournal(),
+      runtime,
+      model,
+    });
+    const thread = await server.startThread(),
+      turn = await server.startTurn(thread.id, "initial");
+    await entered.promise;
+    try {
+      await server.queueMessage(
+        thread.id,
+        "promoted during tool",
+        "queued-tool",
+      );
+      const queued = pendingQueuedMessages(
+        (await server.readThread(thread.id)).items,
+      )[0]!;
+      const staged = await server.steerQueuedMessage(
+        thread.id,
+        steerTarget(queued),
+      );
+      assert.equal(staged.status, "staged");
+      const before = await server.readThread(thread.id);
+      assert(
+        !before.items.some(
+          (item) =>
+            item.type === "user_message" && item.clientId === queued.clientId,
+        ),
+      );
+      assert(!JSON.stringify(before.itemList).includes("promoted during tool"));
+      const pending = pendingSteerMessages(before.items)[0]!;
+      if (recall)
+        await server.recallSteerMessages(thread.id, {
+          recallId: "before-tool-return",
+          targets: [steerTarget(pending)],
+        });
+      release.resolve();
+      await nextSample.promise;
+      const after = await server.readThread(thread.id);
+      assert.equal(
+        after.items.filter(
+          (item) =>
+            item.type === "user_message" && item.clientId === queued.clientId,
+        ).length,
+        recall ? 0 : 1,
+      );
+      assert.equal(
+        JSON.stringify(requests[1]?.messages).includes("promoted during tool"),
+        !recall,
+      );
+      if (!recall)
+        await assert.rejects(
+          server.recallSteerMessages(thread.id, {
+            recallId: "too-late",
+            targets: [steerTarget(pending)],
+          }),
+          { code: "steer_recall_conflict" },
+        );
+      else
+        assert.deepEqual(
+          await server.steerQueuedMessage(thread.id, steerTarget(queued)),
+          staged,
+        );
+    } finally {
+      release.resolve();
+      finishSample.resolve();
+      await turn.done;
+    }
+  });
+
+for (const persisted of [false, true])
+  test(`promotion append failure ${persisted ? "after" : "before"} persistence leaves a read-recoverable pending identity`, async () => {
+    const q = await runningQueue();
+    try {
+      await q.server.queueMessage(q.threadId, "unknown promotion", "unknown");
+      const queued = pendingQueuedMessages((await q.read()).items)[0]!;
+      const append = q.journal.append.bind(q.journal);
+      let failed = false;
+      q.journal.append = async (item) => {
+        if (item.type === "user_message_queue_promoted" && !failed) {
+          failed = true;
+          if (persisted) await append(item);
+          throw new Error("synthetic unknown promotion");
+        }
+        await append(item);
+      };
+      await assert.rejects(
+        q.server.steerQueuedMessage(q.threadId, steerTarget(queued)),
+        /synthetic unknown promotion/,
+      );
+      const after = await q.read();
+      assert.equal(
+        after.items.filter(
+          (item) => item.type === "user_message_queue_promoted",
+        ).length,
+        persisted ? 1 : 0,
+      );
+      assert.equal(
+        after.items.filter(
+          (item) =>
+            item.type === "user_message" && item.clientId === queued.clientId,
+        ).length,
+        0,
+      );
+      assert.equal(
+        pendingQueuedMessages(after.items)[0]?.revision,
+        persisted ? 1 : 0,
+      );
+      if (persisted) {
+        const receipt = await q.server.steerQueuedMessage(
+          q.threadId,
+          steerTarget(queued),
+        );
+        assert.equal(receipt.status, "staged");
+        assert.equal((await q.read()).items.length, after.items.length);
+      }
+      await q.server.cancelQueuedMessages(q.threadId, [steerTarget(queued)]);
+    } finally {
+      q.release.resolve();
+      await assert.rejects(
+        q.turn.done,
+        /invalidated after a journal append rejection/,
+      );
+    }
+  });
+
+for (const first of ["promote", "reorder"] as const)
+  test(`${first}-first linearizes promotion and Queue reordering without changing identity`, async () => {
+    const { pendingNextTurnMessages } = await import("../src/steer-recall.js");
+    const q = await runningQueue();
+    try {
+      await q.server.queueMessage(q.threadId, "first", "first");
+      await q.server.queueMessage(q.threadId, "second", "second");
+      await q.server.stageSteerMessage(q.threadId, q.turn.id, "prior steer", {
+        clientId: "prior",
+      });
+      const before = await q.read(),
+        queue = pendingNextTurnMessages(before.items);
+      const request = {
+        reorderId: "race-order",
+        expectedTargets: queue.map(steerTarget),
+        orderedQueuedItemIds: queue.map((item) => item.id).reverse(),
+      };
+      const promote = () =>
+        q.server.steerQueuedMessage(q.threadId, steerTarget(queue[0]!));
+      const reorder = () => q.server.reorderQueuedMessages(q.threadId, request);
+      const results = await Promise.allSettled(
+        first === "promote" ? [promote(), reorder()] : [reorder(), promote()],
+      );
+      if (first === "promote") {
+        assert.equal(results[0]?.status, "fulfilled");
+        assert(results[1]?.status === "rejected");
+        assert.equal(results[1].reason.code, "queue_reorder_conflict");
+      } else assert(results.every((result) => result.status === "fulfilled"));
+      const after = await q.read();
+      assert.deepEqual(
+        pendingSteerMessages(after.items).map((item) => item.clientId),
+        ["prior", "first"],
+      );
+      assert.deepEqual(
+        pendingNextTurnMessages(after.items).map((item) => item.clientId),
+        ["second"],
+      );
+      const anchor = after.items.find((item) => item.id === queue[0]!.id);
+      assert.deepEqual(
+        anchor,
+        before.items.find((item) => item.id === queue[0]!.id),
+      );
+      await q.server.recallSteerMessages(q.threadId, {
+        recallId: "cleanup",
+        targets: pendingSteerMessages(after.items).map(steerTarget),
+      });
+      await q.server.cancelQueuedMessages(q.threadId, [steerTarget(queue[1]!)]);
+    } finally {
+      q.release.resolve();
+      await q.turn.done;
+    }
+  });

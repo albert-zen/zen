@@ -462,7 +462,9 @@ test("late approval success also preserves selection in queued text outside the 
     if (toggle.getAttribute("aria-expanded") === "false")
       await press(".queue-shelf-toggle");
     const allow = await press(".approval-request-allow");
-    const preview = document.querySelector(".queue-preview-text");
+    const preview = document.querySelector(
+      ".pending-tray .queue-message-body .user-bubble",
+    );
     assert.ok(preview);
     const text = preview.textContent;
     await act(async () => {

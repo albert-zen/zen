@@ -618,73 +618,92 @@ test("App Shot context opens while pixels load and ordinary failed images stay d
   });
 });
 
-test("direct App Shot attachment focuses Composer only when no modal remains open", async () => {
-  await withDom(async (_dom, root) => {
-    let token = "";
-    let listener: ((event: AppShotEvent) => void) | undefined;
-    let attached = 0;
-    const api: AppShotApi = {
-      configuration: async () => ({ nativeForeground: true }),
-      list: async () => [],
-      capture: async () => assert.fail("shortcut must not recapture"),
-      read: async () => new Uint8Array([1]),
-      attach: async () => appShotImage(),
-      discard: async () => {},
-      arm: async (nextToken) => {
-        token = nextToken;
-        return "Both Shift";
-      },
-      disarm: async () => {},
-      beginRecording: async () => {},
-      endRecording: async () => {},
-      onCapture: (callback) => {
-        listener = callback;
-        return () => {
-          listener = undefined;
-        };
-      },
-    };
-    Object.assign(window, { zenx: { platform: "darwin", appShot: api } });
-    await act(async () =>
-      root.render(
-        attachmentView({
-          onAddAppShot: () => {
-            attached++;
-          },
+for (const thread of [null, emptyThread()]) {
+  test(`direct App Shot attachment focuses ${thread === null ? "new-thread" : "existing-thread"} Composer only when no modal remains open, without a false alert`, async () => {
+    await withDom(async (_dom, root) => {
+      let token = "";
+      let listener: ((event: AppShotEvent) => void) | undefined;
+      let attached = 0;
+      const api: AppShotApi = {
+        configuration: async () => ({ nativeForeground: true }),
+        list: async () => [],
+        capture: async () => assert.fail("shortcut must not recapture"),
+        read: async () => new Uint8Array([1]),
+        attach: async (previewId) => ({
+          ...appShotImage(),
+          id: `draft-${previewId}`,
         }),
-      ),
-    );
-    await act(async () =>
-      required<HTMLButtonElement>('[aria-label="App Shot"]').click(),
-    );
-    await act(async () =>
-      required<HTMLInputElement>(
-        '.app-shot-shortcut input[type="checkbox"]',
-      ).click(),
-    );
-    assert.ok(token);
-    const close = required<HTMLButtonElement>('[aria-label="Close App Shot"]');
-    await act(async () => close.focus());
-    await act(async () =>
-      listener?.({ token, image: { ...appShotImage(), id: "first" } }),
-    );
-    assert.equal(attached, 1);
-    assert.equal(
-      document.activeElement,
-      close,
-      "An open picker retains its focus",
-    );
-    await act(async () => close.click());
-    // Radix dismisses modal presence asynchronously; wait for its DOM removal.
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 30)));
-    assert.equal(document.querySelector('[role="dialog"]'), null);
-    await act(async () =>
-      listener?.({ token, image: { ...appShotImage(), id: "second" } }),
-    );
-    assert.equal(attached, 2);
-    assert.equal(document.activeElement, required("textarea"));
+        discard: async () => {},
+        arm: async (nextToken) => {
+          token = nextToken;
+          return "Both Shift";
+        },
+        disarm: async () => {},
+        beginRecording: async () => {},
+        endRecording: async () => {},
+        onCapture: (callback) => {
+          listener = callback;
+          return () => {
+            listener = undefined;
+          };
+        },
+      };
+      Object.assign(window, { zenx: { platform: "darwin", appShot: api } });
+      let composer = emptyComposerState();
+      const render = () =>
+        root.render(
+          attachmentView({
+            thread,
+            composer,
+            onAddAppShot: (image) => {
+              attached++;
+              composer = addComposerImages(composer, [image]);
+              render();
+            },
+          }),
+        );
+      await act(async () => render());
+      assert.equal(document.querySelector('[role="alert"]'), null);
+      await act(async () =>
+        required<HTMLButtonElement>('[aria-label="App Shot"]').click(),
+      );
+      await act(async () =>
+        required<HTMLInputElement>(
+          '.app-shot-shortcut input[type="checkbox"]',
+        ).click(),
+      );
+      assert.ok(token);
+      const close = required<HTMLButtonElement>(
+        '[aria-label="Close App Shot"]',
+      );
+      await act(async () => close.focus());
+      await act(async () =>
+        listener?.({ token, image: { ...appShotImage(), id: "first" } }),
+      );
+      assert.equal(attached, 1);
+      assert.equal(document.querySelector('[role="alert"]'), null);
+      assert.equal(
+        document.activeElement,
+        close,
+        "An open picker retains its focus",
+      );
+      await act(async () => close.click());
+      // Radix dismisses modal presence asynchronously; wait for its DOM removal.
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 30)));
+      assert.equal(document.querySelector('[role="dialog"]'), null);
+      await act(async () =>
+        listener?.({ token, image: { ...appShotImage(), id: "second" } }),
+      );
+      assert.equal(attached, 2);
+      assert.equal(document.activeElement, required("textarea"));
+      assert.equal(document.querySelector('[role="alert"]'), null);
+      assert.deepEqual(
+        composer.draft.images.map((image) => image.id),
+        ["draft-first", "draft-second"],
+      );
+    });
   });
-});
+}
 
 function appShotImage(
   context = "App: Example\nWindow: Example\nScreenshot only",

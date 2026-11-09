@@ -1,3 +1,7 @@
+import type { QueueMutationPhase } from "./queue-mutation-state.js";
+import { UserMessageContent } from "./UserMessageContent.js";
+import { parseSentReferenceContent } from "./reference-draft.js";
+import type { AnsweredQuestionPresentation } from "./answered-question-presentation.js";
 import { MessageSourceLink } from "./message-source-navigation.js";
 import { HostMessageContent } from "./HostMessageContent.js";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
@@ -13,6 +17,7 @@ export interface QueuedMessagePreview {
   text: string;
   imageCount: number;
   revision?: number;
+  answer?: AnsweredQuestionPresentation;
   sender?: import("../../../../../src/item.js").ThreadMessageSender;
   hostSource?: Pick<
     import("../../../../../src/item.js").HostWakeupInput,
@@ -38,10 +43,15 @@ export interface QueuedMessagesProps {
   } | null;
   pendingIds?: ReadonlySet<string>;
   steeringIds?: ReadonlySet<string>;
+  steeringPhase?: QueueMutationPhase;
   running?: boolean;
   /** True only when every exact pending fact explicitly targets a later Turn. */
   waitsForTurnEnd?: boolean;
   onSteer?(message: QueuedMessagePreview): void;
+  onMove?(
+    message: Pick<QueuedMessagePreview, "id" | "clientId">,
+    direction: -1 | 1,
+  ): void;
   steerError?: {
     queuedItemId: string;
     revision: number;
@@ -53,6 +63,8 @@ export interface QueuedMessagesProps {
   /** Transport failure for the current resume attempt, not a row failure. */
   resumeError?: string | null;
   compact?: boolean;
+  /** Share the Composer tray's one scrolling surface. */
+  integrated?: boolean;
   editableIds?: ReadonlySet<string>;
   /** Saving rows may reopen their existing read-only edit session. */
   editingIds?: ReadonlySet<string>;
@@ -90,14 +102,17 @@ function QueueShelf({
   queueFailure = null,
   pendingIds,
   steeringIds,
+  steeringPhase = "pending",
   running = false,
   waitsForTurnEnd = false,
   onSteer,
+  onMove,
   steerError = null,
   busy = false,
   resuming = false,
   resumeError = null,
   compact = false,
+  integrated = false,
   editableIds,
   editingIds,
   onEdit,
@@ -127,7 +142,8 @@ function QueueShelf({
   );
   const detailsOpen =
     open ?? (!compact || showAll || readingCurrentMessage || interacting);
-  const visibleMessages = showAll ? messages : messages.slice(0, 2);
+  const visibleMessages =
+    integrated || showAll ? messages : messages.slice(0, 2);
   const failureHidden =
     queueFailure !== null &&
     messages.some((message) => message.id === queueFailure.queuedItemId) &&
@@ -179,9 +195,9 @@ function QueueShelf({
       (entry) => entry.dataset.queueId === requested,
     );
     const error = row?.querySelector<HTMLElement>(".queue-row-error");
-    const viewport = rootRef.current?.querySelector<HTMLElement>(
-      ".queue-shelf-details",
-    );
+    const viewport = integrated
+      ? rootRef.current?.closest<HTMLElement>(".pending-tray")
+      : rootRef.current?.querySelector<HTMLElement>(".queue-shelf-details");
     if (!error || !viewport) return;
     error.focus({ preventScroll: true });
     // Scroll only this shelf, never the transcript or the Composer's parent.
@@ -343,15 +359,21 @@ function QueueShelf({
               key={JSON.stringify([message.id, message.clientId])}
               message={message}
               index={index}
-              hidden={!showAll && index >= 2}
-              imagesVisible={detailsOpen && (showAll || index < 2)}
+              hidden={!integrated && !showAll && index >= 2}
+              imagesVisible={
+                detailsOpen && (integrated || showAll || index < 2)
+              }
+              rich={integrated}
               compact={compact}
               attachments={attachments[message.id] ?? []}
               onReadAttachment={onReadAttachment}
               onOpenImage={onOpenImage}
               pending={pendingIds?.has(message.id) ?? false}
               steering={steeringIds?.has(message.id) ?? false}
+              steeringPhase={steeringPhase}
               running={running}
+              onMove={onMove}
+              last={index === messages.length - 1}
               onSteer={onSteer}
               steerError={
                 steerError?.queuedItemId === message.id &&
@@ -378,7 +400,7 @@ function QueueShelf({
             />
           ))}
         </ul>
-        {messages.length > 2 ? (
+        {!integrated && messages.length > 2 ? (
           <button
             type="button"
             className="queue-view-all"
@@ -403,13 +425,17 @@ function QueuedMessageRow({
   hidden,
   imagesVisible,
   compact,
+  rich,
   attachments,
   onReadAttachment,
   onOpenImage,
   pending,
   steering,
+  steeringPhase,
   running,
   onSteer,
+  onMove,
+  last,
   steerError,
   disabled,
   failure,
@@ -424,12 +450,16 @@ function QueuedMessageRow({
   hidden: boolean;
   imagesVisible: boolean;
   compact: boolean;
+  rich: boolean;
   attachments: readonly AttachmentRef[];
   onReadAttachment: QueuedMessagesProps["onReadAttachment"];
   onOpenImage: QueuedMessagesProps["onOpenImage"];
   pending: boolean;
   steering: boolean;
+  steeringPhase: QueueMutationPhase;
   running: boolean;
+  onMove: QueuedMessagesProps["onMove"];
+  last: boolean;
   onSteer: QueuedMessagesProps["onSteer"];
   steerError: { message: string; detail?: string } | null;
   disabled: boolean;
@@ -441,6 +471,22 @@ function QueuedMessageRow({
   onReadingChange(expanded: boolean): void;
 }) {
   const { t } = useTranslation("shell");
+  const steeringStatus =
+    steeringPhase === "unknown"
+      ? "queueSteerUnknown"
+      : steeringPhase === "checking"
+        ? "queueSteerChecking"
+        : steeringPhase === "confirmed"
+          ? "queueSteerAccepted"
+          : "queueSteering";
+  const steeringLabel =
+    steeringPhase === "unknown"
+      ? "queueSteerUnknownMessage"
+      : steeringPhase === "checking"
+        ? "queueSteerCheckingMessage"
+        : steeringPhase === "confirmed"
+          ? "queueSteerAcceptedMessage"
+          : "queueSteeringMessage";
   const textRef = useRef<HTMLSpanElement>(null);
   const textId = useId();
   const imagesId = useId();
@@ -516,7 +562,50 @@ function QueuedMessageRow({
               )}
             />
           )}
-          {message.hostSource !== undefined ? (
+          {rich && message.hostSource === undefined ? (
+            <div className="queue-message-body user-row">
+              {message.imageCount > 0 ? (
+                <span
+                  className={
+                    unavailableImages > 0
+                      ? "queue-image-unavailable"
+                      : "sr-only"
+                  }
+                >
+                  {t("imageCount", { count: message.imageCount })}
+                  {unavailableImages > 0
+                    ? ` · ${t("queueUnavailablePreviews", { count: unavailableImages })}`
+                    : ""}
+                </span>
+              ) : null}
+              {message.imageCount > 0 ? (
+                <QueuedImageStrip
+                  message={message}
+                  attachments={attachments}
+                  visible={imagesVisible}
+                  compact={compact}
+                  hasText={hasText}
+                  onReadAttachment={onReadAttachment}
+                  onOpenImage={onOpenImage}
+                />
+              ) : null}
+              {hasText || message.answer ? (
+                <div className="user-bubble">
+                  <UserMessageContent
+                    parts={[
+                      message.sender
+                        ? { text: message.text, references: [] }
+                        : parseSentReferenceContent(
+                            message.text,
+                            message.clientId,
+                          ),
+                    ]}
+                    answer={message.answer}
+                  />
+                </div>
+              ) : null}
+            </div>
+          ) : message.hostSource !== undefined ? (
             <HostMessageContent
               sourceNavigation
               source={message.hostSource.source}
@@ -616,7 +705,7 @@ function QueuedMessageRow({
               ) : null}
             </div>
           )}
-          {message.imageCount > 0 ? (
+          {!rich && message.imageCount > 0 ? (
             <QueuedImageStrip
               message={message}
               attachments={attachments}
@@ -629,6 +718,36 @@ function QueuedMessageRow({
           ) : null}
         </div>
         <div className="queue-row-actions">
+          {onMove
+            ? ([-1, 1] as const).map((direction) => (
+                <button
+                  type="button"
+                  key={direction}
+                  className="queue-row-move"
+                  data-queue-control={
+                    direction === -1 ? "move-up" : "move-down"
+                  }
+                  disabled={
+                    disabled ||
+                    pending ||
+                    editing ||
+                    steering ||
+                    (direction === -1 ? index === 0 : last)
+                  }
+                  aria-label={t(
+                    direction === -1 ? "queueMoveUp" : "queueMoveDown",
+                    { number: index + 1 },
+                  )}
+                  onClick={() => onMove(message, direction)}
+                >
+                  <Icon
+                    name={direction === -1 ? "chevron-down" : "arrow-down"}
+                    size={14}
+                    className={direction === -1 ? "queue-move-up" : undefined}
+                  />
+                </button>
+              ))
+            : null}
           {onSteer === undefined ? null : (
             <button
               type="button"
@@ -637,7 +756,7 @@ function QueuedMessageRow({
               disabled={disabled || pending || editing || steering}
               aria-label={t(
                 steering
-                  ? "queueSteeringMessage"
+                  ? steeringLabel
                   : running
                     ? "queueSteerMessage"
                     : "queueSendMessageNow",
@@ -645,7 +764,7 @@ function QueuedMessageRow({
               )}
               title={t(
                 steering
-                  ? "queueSteering"
+                  ? steeringStatus
                   : running
                     ? "queueSteerHint"
                     : "queueSendNow",
@@ -653,7 +772,7 @@ function QueuedMessageRow({
               onClick={() => onSteer(message)}
             >
               {steering ? (
-                <span role="status">{t("queueSteering")}</span>
+                <span role="status">{t(steeringStatus)}</span>
               ) : (
                 <Icon name="send" size={15} />
               )}

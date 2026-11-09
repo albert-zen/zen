@@ -591,3 +591,120 @@ test("question native methods preserve rejected versus uncertain outcome through
     );
   }
 });
+
+test("native reorder rejection survives the production main/preload boundaries as a definite conflict", async () => {
+  const { requestQueuedReorder } =
+    await import("../src/renderer/src/queue-reorder-request.js");
+  const target = {
+    threadId: "thread",
+    reorderId: "reorder",
+    expectedTargets: [
+      { queuedItemId: "queue", clientId: "client", expectedRevision: 0 },
+    ],
+    orderedQueuedItemIds: ["queue"],
+  };
+  const calls: string[] = [];
+  const bridge = boundary(async (method) => {
+    calls.push(method);
+    throw Object.assign(new Error("Canonical queue changed"), {
+      data: { zenCode: "queue_reorder_conflict" },
+    });
+  });
+  await withBridge(bridge.request, async () =>
+    assert.rejects(requestQueuedReorder(target), {
+      message: i18n.t("shell:queueReorderConflict"),
+    }),
+  );
+  assert.deepEqual(calls, ["zen/thread/queue/reorder"]);
+});
+
+test("native reorder ambiguity reads the exact canonical receipt through main/preload without repeating the mutation", async () => {
+  const { requestQueuedReorder } =
+    await import("../src/renderer/src/queue-reorder-request.js");
+  const target = {
+    threadId: "thread",
+    reorderId: "reorder",
+    expectedTargets: [
+      { queuedItemId: "queue", clientId: "client", expectedRevision: 0 },
+    ],
+    orderedQueuedItemIds: ["queue"],
+  };
+  for (const match of [false, true]) {
+    const calls: string[] = [];
+    const bridge = boundary(async (method) => {
+      calls.push(method);
+      if (method.endsWith("/reorder"))
+        throw new Error("Connection lost after write");
+      return {
+        thread: {
+          id: "thread",
+          items: [
+            {
+              type: "user_message_queue_reordered",
+              id: "receipt",
+              createdAt: original.createdAt,
+              ...target,
+              expectedTargets: match
+                ? target.expectedTargets
+                : [{ ...target.expectedTargets[0], expectedRevision: 1 }],
+            },
+          ],
+        },
+      };
+    });
+    await withBridge(bridge.request, async () => {
+      if (match)
+        assert.deepEqual(await requestQueuedReorder(target), {
+          status: "already_reordered",
+          reorderItemId: "receipt",
+        });
+      else
+        await assert.rejects(requestQueuedReorder(target), {
+          message: i18n.t("shell:queueReorderUnconfirmed"),
+        });
+    });
+    assert.deepEqual(calls, ["zen/thread/queue/reorder", "zen/thread/read"]);
+  }
+});
+
+test("reorder recovery compares ordered identity fields rather than JSON object property order", async () => {
+  const { requestQueuedReorder } =
+    await import("../src/renderer/src/queue-reorder-request.js");
+  const target = {
+    threadId: "thread",
+    reorderId: "reorder-different-properties",
+    expectedTargets: [
+      { queuedItemId: "queue", clientId: "client", expectedRevision: 0 },
+    ],
+    orderedQueuedItemIds: ["queue"],
+  };
+  const bridge = boundary(async (method) => {
+    if (method.endsWith("/reorder")) throw new Error("ACK lost");
+    return {
+      thread: {
+        id: "thread",
+        items: [
+          {
+            ...target,
+            type: "user_message_queue_reordered",
+            id: "property-order-receipt",
+            createdAt: original.createdAt,
+            expectedTargets: [
+              {
+                expectedRevision: 0,
+                clientId: "client",
+                queuedItemId: "queue",
+              },
+            ],
+          },
+        ],
+      },
+    };
+  });
+  await withBridge(bridge.request, async () =>
+    assert.deepEqual(await requestQueuedReorder(target), {
+      status: "already_reordered",
+      reorderItemId: "property-order-receipt",
+    }),
+  );
+});
