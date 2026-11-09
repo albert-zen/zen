@@ -529,6 +529,14 @@ function ConversationRow({
   };
   const showName = () => {
     clearNameTimer();
+    // ActionMenu owns Escape while open. Read its existing trigger state so
+    // neither this row nor a sibling adds another dismissable Popover layer.
+    if (
+      row.current
+        ?.closest(".room-conversations")
+        ?.querySelector('[aria-haspopup="menu"][aria-expanded="true"]')
+    )
+      return;
     setNameOpen(true);
   };
   const hideName = () => {

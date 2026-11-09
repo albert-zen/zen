@@ -12,6 +12,7 @@ import {
   useEffect,
   useLayoutEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   type Dispatch,
@@ -194,6 +195,75 @@ export function SettingsView({
     setStatusState(message === null ? null : { message });
   };
   const [manualCode, setManualCode] = useState(false);
+  const [accountError, setAccountError] = useState<string | null>(null);
+  const accountApi = window.zenx.settings;
+  const accountProvider = settings?.subscriptionProviderProfileId;
+  const accountId = settings?.subscription.accountId;
+  const accountAuthenticated = settings?.subscription.authenticated;
+  // Owned above Account's Activity: tab navigation must not cancel an accepted
+  // Host operation. Only a different account/API or unmount retires its reply.
+  const accountIdentity = useMemo(
+    () => ({}),
+    [accountApi, accountProvider, accountId, accountAuthenticated],
+  );
+  const accountOwner = useRef<object | null>(null);
+  const accountAction = useRef<object | null>(null);
+  useLayoutEffect(() => {
+    accountOwner.current = accountIdentity;
+    accountAction.current = null;
+    setAccountError(null);
+    setManualCode(false);
+    setBusy((current) =>
+      current === "login" || current === "logout" ? null : current,
+    );
+    return () => {
+      accountOwner.current = null;
+      accountAction.current = null;
+    };
+  }, [accountIdentity]);
+  const accountView = useRef({ active, tab, busy });
+  useLayoutEffect(() => {
+    accountView.current = { active, tab, busy };
+  });
+  const runAccountAction = async (action: "login" | "logout") => {
+    const owner = accountOwner.current;
+    if (
+      owner === null ||
+      // A retained handler must not act for a replacement owner.
+      owner !== accountIdentity ||
+      accountApi !== window.zenx.settings ||
+      !accountView.current.active ||
+      accountView.current.tab !== "account" ||
+      accountView.current.busy !== null ||
+      accountAction.current !== null ||
+      !accountProvider
+    )
+      return;
+    const operation = {};
+    accountAction.current = operation;
+    setBusy(action);
+    setAccountError(null);
+    const isCurrent = () =>
+      accountOwner.current === owner &&
+      accountAction.current === operation &&
+      window.zenx.settings === accountApi;
+    try {
+      const value = await (action === "login"
+        ? accountApi.loginSubscription()
+        : accountApi.logoutSubscription());
+      if (!isCurrent()) return;
+      acceptHostSettings(value);
+      setManualCode(false);
+    } catch (reason: unknown) {
+      if (isCurrent()) setAccountError(describeError(reason));
+    } finally {
+      if (isCurrent()) {
+        accountAction.current = null;
+        setBusy(null);
+      }
+    }
+  };
+
   const [localBrowserFocusRequest, setLocalBrowserFocusRequest] = useState(0);
   const handledBrowserFocusRequest = useRef("0:0");
   const [pluginsVisited, setPluginsVisited] = useState(
@@ -553,10 +623,9 @@ export function SettingsView({
                 }}
                 busy={busy}
                 manualCode={manualCode}
-                setBusy={setBusy}
-                setError={setError}
-                setManualCode={setManualCode}
-                acceptHostSettings={acceptHostSettings}
+                error={accountError}
+                onLogin={() => void runAccountAction("login")}
+                onLogout={() => void runAccountAction("logout")}
               />
             </Activity>
             <Activity mode={active && tab === "models" ? "visible" : "hidden"}>
@@ -1174,35 +1243,21 @@ function AccountPanel({
   onOpenModels,
   busy,
   manualCode,
-  setBusy,
-  setError,
-  setManualCode,
-  acceptHostSettings,
+  error,
+  onLogin,
+  onLogout,
 }: {
   settings: PublicHostSettings;
   onOpenModels(): void;
   busy: string | null;
   manualCode: boolean;
-  setBusy(value: string | null): void;
-  setError(value: string | null): void;
-  setManualCode(value: boolean): void;
-  acceptHostSettings(value: PublicHostSettings): void;
+  error: string | null;
+  onLogin(): void;
+  onLogout(): void;
 }) {
   const { t } = useTranslation("settings");
   const subscriptionConfigured =
     settings.subscriptionProviderProfileId !== null;
-  const login = () => {
-    setBusy("login");
-    setError(null);
-    void window.zenx.settings
-      .loginSubscription()
-      .then((value) => {
-        acceptHostSettings(value);
-        setManualCode(false);
-      })
-      .catch((reason: unknown) => setError(describeError(reason)))
-      .finally(() => setBusy(null));
-  };
   return (
     <>
       <header>
@@ -1259,21 +1314,20 @@ function AccountPanel({
             <button
               className="danger-button"
               type="button"
-              onClick={() =>
-                void window.zenx.settings
-                  .logoutSubscription()
-                  .then(acceptHostSettings)
-                  .catch((reason: unknown) => setError(describeError(reason)))
-              }
+              disabled={busy !== null}
+              aria-busy={busy === "logout"}
+              onClick={onLogout}
             >
-              {t("settingsView.signOut")}
+              {busy === "logout"
+                ? t("settingsView.signingOut")
+                : t("settingsView.signOut")}
             </button>
           ) : (
             <button
               className="primary-button"
               type="button"
               disabled={busy !== null}
-              onClick={login}
+              onClick={onLogin}
             >
               {busy === "login"
                 ? t("settingsView.waitingForBrowser")
@@ -1281,6 +1335,11 @@ function AccountPanel({
             </button>
           )}
         </div>
+        {error ? (
+          <div className="settings-error" role="alert">
+            {error}
+          </div>
+        ) : null}
         {manualCode ? <ManualCode /> : null}
       </div>
       <SubscriptionUsageCard

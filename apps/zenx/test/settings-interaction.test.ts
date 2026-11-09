@@ -1663,8 +1663,13 @@ test("Delete displays a saved but unconfirmed server result", async () => {
 
 test("Validation and mutation failures keep the provider editor recoverable", async () => {
   let attempts = 0;
+  let generalSaves = 0;
   const harness = await mountSettings("models", {
     initialSettings: settings,
+    save: async () => {
+      generalSaves++;
+      return settings;
+    },
     addProvider: async (provider) => {
       attempts += 1;
       if (attempts === 1) throw new Error("Host restart failed");
@@ -1678,6 +1683,11 @@ test("Validation and mutation failures keep the provider editor recoverable", as
     },
   });
   try {
+    await click(exactButtonRequired("General"));
+    const mode = await labeledSelect("Send while a reply is running");
+    assert.ok(mode);
+    await changeControl(mode, "batch");
+    await click(exactButtonRequired("Models & providers"));
     await waitFor(() => exactButton("Add custom provider"));
     await click(exactButtonRequired("Add custom provider"));
     await click(exactButtonRequired("Add provider"));
@@ -1709,7 +1719,14 @@ test("Validation and mutation failures keep the provider editor recoverable", as
     assert.equal(requiredInput("Display name").value, "Recoverable");
     await click(exactButtonRequired("Add provider"));
     await waitFor(() => attempts === 2);
-    assert.match(document.body.textContent ?? "", /Settings saved/u);
+    assert.match(document.body.textContent ?? "", /Provider added/u);
+    assert.equal(generalSaves, 0);
+    await click(exactButtonRequired("General"));
+    assert.equal(
+      (await labeledSelect("Send while a reply is running"))?.value,
+      "batch",
+    );
+    assert.equal(exactButtonRequired("Apply").disabled, false);
   } finally {
     await unmount(harness);
   }
@@ -6011,4 +6028,273 @@ test("provider identity styles wrap readable text and bound expanded model scrol
     rule(".provider-model-summary[open] .provider-model-preview"),
     /display: none/u,
   );
+});
+
+// Account actions use synthetic, explicitly settled replies only. No Host,
+// credentials, browser login, or remote subscription service participates.
+function accountFixture(authenticated = true): PublicHostSettings {
+  return {
+    ...settings,
+    subscriptionProviderProfileId: "synthetic-subscription",
+    subscription: { authenticated, expired: false },
+  };
+}
+function deferredAccountReply() {
+  let resolve!: (value: PublicHostSettings) => void;
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<PublicHostSettings>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
+
+test("Account action blocks same-turn duplicates and unlocks only for explicit retry", async () => {
+  const harness = await mountSettings("account", {
+    initialSettings: accountFixture(),
+  });
+  let reply = deferredAccountReply();
+  let calls = 0;
+  window.zenx.settings.logoutSubscription = () => {
+    calls++;
+    return reply.promise;
+  };
+  try {
+    const button = exactButtonRequired("Sign out");
+    await act(async () => {
+      button.click();
+      button.click();
+    });
+    assert.equal(calls, 1);
+    assert.equal(exactButtonRequired("Signing out…").disabled, true);
+    assert.equal(button.getAttribute("aria-busy"), "true");
+    await act(async () =>
+      reply.reject(new Error("Synthetic sign-out failure")),
+    );
+    assert.match(
+      document.body.textContent ?? "",
+      /Synthetic sign-out failure/u,
+    );
+    assert.equal(exactButtonRequired("Sign out").disabled, false);
+    assert.equal(calls, 1);
+    reply = deferredAccountReply();
+    await click(exactButtonRequired("Sign out"));
+    assert.equal(calls, 2);
+    assert.doesNotMatch(
+      document.body.textContent ?? "",
+      /Synthetic sign-out failure/u,
+    );
+    await act(async () => reply.resolve(accountFixture(false)));
+    assert.equal(exactButtonRequired("Sign in with OpenAI").disabled, false);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Account action excludes duplicate sign-in and new sign-out until reply", async () => {
+  const harness = await mountSettings("account", {
+    initialSettings: accountFixture(false),
+  });
+  const reply = deferredAccountReply();
+  let loginCalls = 0;
+  let logoutCalls = 0;
+  window.zenx.settings.loginSubscription = () => {
+    loginCalls++;
+    return reply.promise;
+  };
+  window.zenx.settings.logoutSubscription = async () => {
+    logoutCalls++;
+    return accountFixture(false);
+  };
+  try {
+    const button = exactButtonRequired("Sign in with OpenAI");
+    await act(async () => {
+      button.click();
+      button.click();
+    });
+    assert.equal(loginCalls, 1);
+    assert.equal(exactButtonRequired("Waiting for browser…").disabled, true);
+    await click(exactButtonRequired("General"));
+    await click(exactButtonRequired("Account"));
+    assert.equal(exactButtonRequired("Waiting for browser…").disabled, true);
+    assert.equal(logoutCalls, 0);
+    await act(async () => reply.resolve(accountFixture()));
+    await click(exactButtonRequired("Sign out"));
+    assert.equal(logoutCalls, 1);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Account action success across navigation preserves General draft and focus", async () => {
+  const harness = await mountSettings("account", {
+    initialSettings: accountFixture(),
+  });
+  const reply = deferredAccountReply();
+  window.zenx.settings.logoutSubscription = () => reply.promise;
+  try {
+    await click(exactButtonRequired("Sign out"));
+    await click(exactButtonRequired("General"));
+    const control = await labeledSelect("Send while a reply is running");
+    assert.ok(control);
+    await changeControl(control, "batch");
+    control.focus();
+    await act(async () => reply.resolve(accountFixture(false)));
+    assert.equal(document.activeElement, control);
+    assert.equal(
+      document
+        .querySelector('[data-tab="general"]')
+        ?.getAttribute("aria-selected"),
+      "true",
+    );
+    assert.equal(control.dataset.value, "batch");
+    await click(exactButtonRequired("Account"));
+    assert.equal(exactButtonRequired("Sign in with OpenAI").disabled, false);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Account action failure stays on its account and returns without focus theft", async () => {
+  const harness = await mountSettings("account", {
+    initialSettings: accountFixture(),
+  });
+  const reply = deferredAccountReply();
+  window.zenx.settings.logoutSubscription = () => reply.promise;
+  try {
+    await click(exactButtonRequired("Sign out"));
+    const general = exactButtonRequired("General");
+    await click(general);
+    general.focus();
+    await act(async () =>
+      reply.reject(new Error("Synthetic account-only error")),
+    );
+    assert.equal(document.activeElement, general);
+    const error = [
+      ...document.querySelectorAll<HTMLElement>('[role="alert"]'),
+    ].find((node) => node.textContent === "Synthetic account-only error");
+    assert.ok(error);
+    assert.ok(
+      error.closest('[style*="display: none"]'),
+      "Account Activity hides its own error on General",
+    );
+    await click(exactButtonRequired("Account"));
+    assert.equal(error.closest('[style*="display: none"]'), null);
+    assert.equal(exactButtonRequired("Sign out").disabled, false);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Account action cannot replace a new provider owner or show its stale failure", async () => {
+  for (const fails of [false, true]) {
+    let current = accountFixture();
+    const harness = await mountSettings("account", {
+      get: async () => current,
+    });
+    const reply = deferredAccountReply();
+    window.zenx.settings.logoutSubscription = () => reply.promise;
+    try {
+      await click(exactButtonRequired("Sign out"));
+      await click(exactButtonRequired("Toggle settings visibility"));
+      current = {
+        ...accountFixture(),
+        subscriptionProviderProfileId: "replacement-subscription",
+      };
+      await click(exactButtonRequired("Toggle settings visibility"));
+      assert.equal(exactButtonRequired("Sign out").disabled, false);
+      await act(async () =>
+        fails
+          ? reply.reject(new Error("Stale owner failure"))
+          : reply.resolve(accountFixture(false)),
+      );
+      assert.equal(exactButtonRequired("Sign out").disabled, false);
+      assert.doesNotMatch(
+        document.body.textContent ?? "",
+        /Stale owner failure/u,
+      );
+    } finally {
+      await unmount(harness);
+    }
+  }
+});
+
+test("Account action retires API replacement and unmounted replies", async () => {
+  const harness = await mountSettings("account", {
+    initialSettings: accountFixture(),
+  });
+  const reply = deferredAccountReply();
+  window.zenx.settings.logoutSubscription = () => reply.promise;
+  try {
+    await click(exactButtonRequired("Sign out"));
+    window.zenx.settings = { ...window.zenx.settings };
+    await click(exactButtonRequired("General"));
+    await act(async () => reply.reject(new Error("Old API failure")));
+    await click(exactButtonRequired("Account"));
+    assert.equal(exactButtonRequired("Sign out").disabled, false);
+    assert.doesNotMatch(document.body.textContent ?? "", /Old API failure/u);
+    const afterUnmount = deferredAccountReply();
+    window.zenx.settings.logoutSubscription = () => afterUnmount.promise;
+    await click(exactButtonRequired("Sign out"));
+    await act(async () => harness.root.unmount());
+    await act(async () => afterUnmount.reject(new Error("Unmounted failure")));
+    assert.equal(document.getElementById("root")?.childElementCount, 0);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Account action fences retained handlers and late replies after account identity changes", async () => {
+  let current = accountFixture();
+  const harness = await mountSettings("account", { get: async () => current });
+  const reply = deferredAccountReply();
+  let calls = 0;
+  window.zenx.settings.logoutSubscription = () => {
+    calls++;
+    return reply.promise;
+  };
+  window.zenx.settings.readSubscriptionUsage = async () => {
+    throw new Error("Synthetic usage unavailable");
+  };
+  try {
+    const button = exactButtonRequired("Sign out");
+    const key = Object.keys(button).find((key) =>
+      key.startsWith("__reactProps$"),
+    );
+    assert.ok(key);
+    const retained = (button as unknown as Record<string, { onClick(): void }>)[
+      key
+    ]!.onClick;
+    await click(button);
+    await click(exactButtonRequired("Toggle settings visibility"));
+    current = {
+      ...accountFixture(),
+      subscription: {
+        authenticated: true,
+        expired: true,
+        accountId: "replacement-account",
+      },
+    };
+    await click(exactButtonRequired("Toggle settings visibility"));
+    // Expired access tokens do not imply absent refresh credentials.
+    assert.equal(exactButtonRequired("Sign out").disabled, false);
+    await act(async () => retained());
+    assert.equal(calls, 1);
+    await act(async () => reply.resolve(accountFixture(false)));
+    assert.equal(exactButtonRequired("Sign out").disabled, false);
+    await click(exactButtonRequired("Toggle settings visibility"));
+    current = accountFixture();
+    await click(exactButtonRequired("Toggle settings visibility"));
+    await act(async () => retained());
+    assert.equal(
+      calls,
+      1,
+      "Returning to the same account does not revive an old handler",
+    );
+    await act(async () => harness.root.unmount());
+    await act(async () => retained());
+    assert.equal(calls, 1);
+  } finally {
+    await unmount(harness);
+  }
 });

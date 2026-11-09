@@ -355,6 +355,7 @@ export const en = {
   "settingsView.connectYourChatgptSubscriptionToUseItsModels":
     "Connect your ChatGPT subscription to use its models.",
   "settingsView.signOut": "Sign out",
+  "settingsView.signingOut": "Signing out…",
   "settingsView.modelsProviders": "Models & providers",
   "settingsView.connectYourProvidersAndChooseTheModelsYouWant":
     "Connect your providers and choose the models you want to work with.",
@@ -1709,6 +1710,7 @@ export const zhCN: Record<keyof typeof en, string> = {
   "settingsView.connectYourChatgptSubscriptionToUseItsModels":
     "连接您的ChatGPT 订阅以使用其模型。",
   "settingsView.signOut": "退出登录",
+  "settingsView.signingOut": "正在退出登录…",
   "settingsView.modelsProviders": "模型与服务商",
   "settingsView.connectYourProvidersAndChooseTheModelsYouWant":
     "连接您的服务商并选择您想要使用的模型。",

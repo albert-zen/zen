@@ -1051,3 +1051,69 @@ test("Project hierarchy stays compact and Room name recovery preserves navigatio
     /\.room-conversation-row:focus-visible,[\s\S]*?outline: 2px solid var\(--accent\);/u,
   );
 });
+
+test("Room management owns dismissal while same-row or sibling name hover is suppressed", async () => {
+  await withDom(async (root) => {
+    await act(async () =>
+      root.render(
+        React.createElement(
+          Sidebar,
+          sidebarProps({
+            roomConversations: {
+              rooms: [room, { ...room, id: "sibling", name: "Sibling room" }],
+              error: null,
+              loading: false,
+            },
+          }),
+        ),
+      ),
+    );
+    const more = button(`Manage ${room.name}`);
+    const rows = [
+      ...document.querySelectorAll<HTMLButtonElement>(".room-conversation-row"),
+    ];
+    for (const hovered of rows) {
+      await act(async () => more.click());
+      const rename =
+        document.querySelector<HTMLButtonElement>('[role="menuitem"]')!;
+      assert.ok(document.activeElement === rename, "Rename has keyboard focus");
+      await act(async () =>
+        hovered.dispatchEvent(
+          new window.MouseEvent("pointerover", { bubbles: true }),
+        ),
+      );
+      assert.equal(
+        Boolean(document.querySelector(".room-conversation-name-preview")),
+        false,
+        "hover must not create a competing dismissal layer",
+      );
+      assert.ok(document.activeElement === rename, "Rename has keyboard focus");
+      await act(async () =>
+        rename.dispatchEvent(
+          new window.KeyboardEvent("keydown", {
+            key: "Escape",
+            bubbles: true,
+            cancelable: true,
+          }),
+        ),
+      );
+      assert.equal(
+        Boolean(document.querySelector('[role="menu"]')),
+        false,
+        "one Escape closes the management menu",
+      );
+      assert.ok(document.activeElement === more, "Escape restores More focus");
+      await act(async () =>
+        hovered.dispatchEvent(
+          new window.MouseEvent("pointerout", { bubbles: true }),
+        ),
+      );
+    }
+    await act(async () => rows[0]!.focus());
+    assert.equal(
+      document.querySelector(".room-conversation-name-preview")?.textContent,
+      room.name,
+      "preview resumes after menu closes",
+    );
+  });
+});
