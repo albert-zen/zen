@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import vm from "node:vm";
 import { parse } from "yaml";
 const read = (relative) => readFile(new URL(relative, import.meta.url), "utf8");
 const capture = await read("../scripts/capture-pending-image-preview.mjs");
@@ -55,12 +56,49 @@ test("CI retains pending-image evidence on failure and bounds browser execution"
   const upload = steps.find(
     (step) => step.with?.name === "zenx-pending-image-${{ github.sha }}",
   );
-  assert.equal(upload.if, "${{ matrix.shard == 'conversation' && always() }}");
+  assert.equal(
+    upload.if,
+    "${{ env.CI_RUN_FULL == 'true' && (matrix.shard == 'conversation' && always()) }}",
+  );
   assert.equal(
     run.if,
-    "${{ matrix.shard == 'conversation' && !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}",
+    "${{ env.CI_RUN_FULL == 'true' && (matrix.shard == 'conversation' && !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success') }}",
   );
   assert.equal(upload.with.path, "${{ runner.temp }}/zenx-pending-image");
+  const evaluate = (expression, full, shard, cancelled, dependencies, fonts) =>
+    vm.runInNewContext(
+      expression
+        .slice(3, -2)
+        .replaceAll("steps.zenx-dependencies", "steps.dependencies")
+        .replaceAll("steps.zenx-fonts", "steps.fonts"),
+      {
+        env: { CI_RUN_FULL: full },
+        matrix: { shard },
+        always: () => true,
+        cancelled: () => cancelled,
+        steps: {
+          dependencies: { outcome: dependencies },
+          fonts: { outcome: fonts },
+        },
+      },
+    );
+  for (const full of ["true", "false", ""])
+    for (const shard of ["conversation", "layout", "overflow"])
+      for (const cancelled of [false, true])
+        for (const outcome of ["success", "failure", "skipped"]) {
+          assert.equal(
+            evaluate(upload.if, full, shard, cancelled, outcome, outcome),
+            full === "true" && shard === "conversation",
+            "full-run evidence survives failure/cancellation; docs-only never uploads",
+          );
+          assert.equal(
+            evaluate(run.if, full, shard, cancelled, outcome, outcome),
+            full === "true" &&
+              shard === "conversation" &&
+              !cancelled &&
+              outcome === "success",
+          );
+        }
 });
 
 test("geometry rejects hidden, clipped, offscreen, zero-size and occluded decoded images", async () => {

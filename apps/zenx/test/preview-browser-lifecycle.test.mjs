@@ -85,7 +85,7 @@ test("slow first launch beyond old 10s budget succeeds once, without restarting 
       return "9222\n";
     },
   });
-  assert.equal(PREVIEW_STARTUP_TIMEOUT_MS, 30_000);
+  assert.equal(PREVIEW_STARTUP_TIMEOUT_MS, 45_000);
   assert.equal(await h.lifecycle.connect(), h.socket);
   assert.ok(h.lifecycle.receipt.readyElapsedMs > 10_000);
   assert.deepEqual(h.child.signals, []);
@@ -202,7 +202,11 @@ test("WebSocket handshake failure terminates socket and preserves its phase", as
 });
 
 test("WebSocket handshake cannot hang indefinitely", async () => {
-  const h = harness({ timeoutMs: 20, createSocket: () => h.socket });
+  const h = harness({
+    timeoutMs: 20,
+    now: () => performance.now(),
+    createSocket: () => h.socket,
+  });
   await assert.rejects(
     h.lifecycle.connect(),
     /websocket-connect failed.*deadline/,
@@ -352,4 +356,431 @@ test("every launcher closes its owned server in finally independent of receipt w
     assert.match(source, /lifecycle\??\.receipt.cleanupComplete/, name);
     assert.match(source, /receipt.artifactErrors.length/, name);
   }
+});
+
+for (const portElapsedMs of [24_537, 29_437]) {
+  test(`port at ${portElapsedMs}ms preserves target and handshake budgets without restarting`, async () => {
+    let targetCalls = 0;
+    let socketCalls = 0;
+    let handshakeTimeout;
+    const h = harness({
+      readPort: async () => {
+        h.advance(portElapsedMs);
+        return "9222\n";
+      },
+      fetchTargets: async () => {
+        targetCalls++;
+        h.advance(1_500);
+        return {
+          ok: true,
+          json: async () =>
+            targetCalls < 4
+              ? []
+              : [{ type: "page", webSocketDebuggerUrl: "ws://fixture/page" }],
+        };
+      },
+      createSocket: (_url, timeout) => {
+        socketCalls++;
+        handshakeTimeout = timeout;
+        queueMicrotask(() => {
+          h.advance(3_000);
+          h.socket.emit("open");
+        });
+        return h.socket;
+      },
+    });
+    assert.equal(await h.lifecycle.connect(), h.socket);
+    assert.equal(targetCalls, 4);
+    assert.equal(socketCalls, 1);
+    assert.equal(handshakeTimeout, 5_000);
+    assert.equal(h.lifecycle.receipt.readyElapsedMs, portElapsedMs + 9_300);
+    assert.deepEqual(h.child.signals, []);
+    assert.equal(h.lifecycle.receipt.captureStatus, "not-started");
+    assert.deepEqual(h.lifecycle.receipt.phaseTimeoutsMs, {
+      "devtools-port": 30_000,
+      "target-list": 10_000,
+      "websocket-connect": 5_000,
+    });
+    assert.deepEqual(
+      h.lifecycle.receipt.events
+        .filter((event) => event.timeoutMs)
+        .map(({ phase, durationMs, outcome, pollCount }) => ({
+          phase,
+          durationMs,
+          outcome,
+          pollCount,
+        })),
+      [
+        {
+          phase: "devtools-port",
+          durationMs: portElapsedMs,
+          outcome: "passed",
+          pollCount: 1,
+        },
+        {
+          phase: "target-list",
+          durationMs: 6_300,
+          outcome: "passed",
+          pollCount: 4,
+        },
+        {
+          phase: "websocket-connect",
+          durationMs: 3_000,
+          outcome: "passed",
+          pollCount: 0,
+        },
+      ],
+    );
+  });
+}
+
+test("invalid startup and poll budgets are rejected", () => {
+  for (const invalid of [0, -1, NaN, Infinity, 2 ** 31, "100"]) {
+    for (const options of [
+      { timeoutMs: invalid },
+      { pollMs: invalid },
+      { phaseTimeoutsMs: { "devtools-port": invalid } },
+      { phaseTimeoutsMs: { "target-list": invalid } },
+      { phaseTimeoutsMs: { "websocket-connect": invalid } },
+    ]) {
+      assert.throws(() => harness(options), /finite positive.*milliseconds/);
+    }
+  }
+});
+
+for (const elapsedMs of [100, 101]) {
+  test(`port completing at ${elapsedMs}ms cannot cross its 100ms phase deadline`, async () => {
+    let fetched = false;
+    const h = harness({
+      timeoutMs: 500,
+      phaseTimeoutsMs: { "devtools-port": 100 },
+      readPort: async () => {
+        h.advance(elapsedMs);
+        return "9222\n";
+      },
+      fetchTargets: async () => {
+        fetched = true;
+        return { ok: true, json: async () => [] };
+      },
+    });
+    await assert.rejects(
+      h.lifecycle.connect(),
+      /devtools-port failed.*deadline/,
+    );
+    assert.equal(fetched, false);
+    assert.equal(h.lifecycle.receipt.captureStatus, "not-started");
+  });
+
+  test(`target completing at ${elapsedMs}ms cannot cross its 100ms phase deadline`, async () => {
+    let connected = false;
+    const h = harness({
+      timeoutMs: 500,
+      phaseTimeoutsMs: { "target-list": 100 },
+      fetchTargets: async () => ({
+        ok: true,
+        json: async () => {
+          h.advance(elapsedMs);
+          return [{ type: "page", webSocketDebuggerUrl: "ws://fixture/page" }];
+        },
+      }),
+      createSocket: () => {
+        connected = true;
+        queueMicrotask(() => h.socket.emit("open"));
+        return h.socket;
+      },
+    });
+    await assert.rejects(h.lifecycle.connect(), /target-list failed.*deadline/);
+    assert.equal(connected, false);
+  });
+
+  test(`WebSocket open at ${elapsedMs}ms is rejected after its 100ms phase deadline`, async () => {
+    const h = harness({
+      timeoutMs: 500,
+      phaseTimeoutsMs: { "websocket-connect": 100 },
+      createSocket: () => {
+        queueMicrotask(() => {
+          h.advance(elapsedMs);
+          h.socket.emit("open");
+        });
+        return h.socket;
+      },
+    });
+    await assert.rejects(
+      h.lifecycle.connect(),
+      /websocket-connect failed.*deadline/,
+    );
+    assert.equal(h.socket.terminated, true);
+    assert.equal(h.lifecycle.receipt.readyElapsedMs, undefined);
+    assert.equal(h.lifecycle.receipt.captureStatus, "not-started");
+  });
+}
+
+test("an explicit total budget still caps all phases together", async () => {
+  let connected = false;
+  const h = harness({
+    timeoutMs: 100,
+    readPort: async () => {
+      h.advance(80);
+      return "9222\n";
+    },
+    fetchTargets: async () => ({
+      ok: true,
+      json: async () => {
+        h.advance(20);
+        return [{ type: "page", webSocketDebuggerUrl: "ws://fixture/page" }];
+      },
+    }),
+    createSocket: () => {
+      connected = true;
+      return h.socket;
+    },
+  });
+  await assert.rejects(
+    h.lifecycle.connect(),
+    /target-list failed.*startup deadline 100ms/,
+  );
+  assert.equal(connected, false);
+});
+
+test("repeated malformed ports cannot reset the port phase deadline", async () => {
+  let reads = 0;
+  const h = harness({
+    timeoutMs: 500,
+    pollMs: 10,
+    phaseTimeoutsMs: { "devtools-port": 50 },
+    readPort: async () => {
+      reads++;
+      return "0\n";
+    },
+  });
+  await assert.rejects(
+    h.lifecycle.connect(),
+    /devtools-port failed.*deadline 50ms/,
+  );
+  assert.equal(reads, 5);
+});
+
+test("transient HTTP failures and empty lists cannot reset the target phase deadline", async () => {
+  let targets = 0;
+  const h = harness({
+    timeoutMs: 500,
+    pollMs: 10,
+    phaseTimeoutsMs: { "target-list": 50 },
+    fetchTargets: async () => {
+      if (++targets % 2) throw new Error("ECONNREFUSED");
+      return { ok: true, json: async () => [] };
+    },
+  });
+  await assert.rejects(
+    h.lifecycle.connect(),
+    /target-list failed.*deadline 50ms/,
+  );
+  assert.equal(targets, 5);
+});
+
+for (const stage of ["port", "response", "body"]) {
+  test(`child exit immediately aborts a stalled ${stage} operation`, async () => {
+    let abortedAtExit = false;
+    const stall = (signal) => {
+      h.child.exitCode = 9;
+      h.child.emit("exit");
+      abortedAtExit = signal.aborted;
+      return new Promise(() => {});
+    };
+    const h = harness({
+      timeoutMs: 80,
+      now: () => performance.now(),
+      delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      ...(stage === "port"
+        ? { readPort: stall }
+        : {
+            fetchTargets: async (_port, signal) =>
+              stage === "response"
+                ? stall(signal)
+                : { ok: true, json: () => stall(signal) },
+          }),
+    });
+    await assert.rejects(h.lifecycle.connect(), /Chrome exited \(code=9/);
+    assert.equal(abortedAtExit, true);
+    assert.equal(h.child.listenerCount("exit"), 1);
+    assert.equal(h.child.listenerCount("error"), 1);
+    assert.equal(h.lifecycle.receipt.captureStatus, "not-started");
+  });
+}
+
+test("child exit during a handshake terminates the sole socket without retrying", async () => {
+  let socketCalls = 0;
+  const h = harness({
+    createSocket: () => {
+      socketCalls++;
+      queueMicrotask(() => {
+        h.child.exitCode = 9;
+        h.child.emit("exit");
+      });
+      return h.socket;
+    },
+  });
+  await assert.rejects(h.lifecycle.connect(), /websocket-connect failed/);
+  assert.equal(socketCalls, 1);
+  assert.equal(h.socket.terminated, true);
+  assert.deepEqual(h.child.signals, []);
+  assert.equal(h.child.listenerCount("exit"), 1);
+  assert.equal(h.child.listenerCount("error"), 1);
+});
+
+test("real subprocess exit aborts a never-settling port read and is reaped", async (t) => {
+  const { spawn } = await import("node:child_process");
+  const child = spawn(
+    process.execPath,
+    ["-e", "process.stderr.write('stalled-read exit\\n'); process.exitCode=9"],
+    { stdio: ["ignore", "ignore", "pipe"] },
+  );
+  let readSignal;
+  let aborted = false;
+  const lifecycle = observePreviewChrome(
+    child,
+    "/unused-stalled-read-profile",
+    {
+      timeoutMs: 2_000,
+      readPort: (signal) => {
+        readSignal = signal;
+        signal.addEventListener(
+          "abort",
+          () => {
+            aborted = true;
+          },
+          { once: true },
+        );
+        return new Promise(() => {});
+      },
+    },
+  );
+  await assert.rejects(lifecycle.connect(), /Chrome exited \(code=9/);
+  assert.equal(readSignal?.aborted, true);
+  assert.equal(aborted, true);
+  const result = await receipt(t, lifecycle);
+  assert.equal(result.stopped, true);
+  assert.equal(result.data.cleanupComplete, true);
+  assert.equal(result.data.profileRetained, false);
+  assert.equal(result.data.captureStatus, "not-started");
+  assert.equal(result.log, "stalled-read exit\n");
+});
+
+for (const stage of ["port", "response", "body", "socket"]) {
+  test(`a stalled ${stage} is limited by its 20ms phase, not the 500ms total`, async () => {
+    const phase =
+      stage === "port"
+        ? "devtools-port"
+        : stage === "socket"
+          ? "websocket-connect"
+          : "target-list";
+    let readSignal;
+    const never = (signal) => {
+      readSignal = signal;
+      return new Promise(() => {});
+    };
+    const h = harness({
+      timeoutMs: 500,
+      phaseTimeoutsMs: { [phase]: 20 },
+      now: () => performance.now(),
+      delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      ...(stage === "port"
+        ? { readPort: never }
+        : stage === "socket"
+          ? { createSocket: () => h.socket }
+          : {
+              fetchTargets: async (_port, signal) =>
+                stage === "response"
+                  ? never(signal)
+                  : { ok: true, json: () => never(signal) },
+            }),
+    });
+    await assert.rejects(
+      h.lifecycle.connect(),
+      new RegExp(`${phase} failed.*${phase} deadline 20ms`),
+    );
+    if (stage === "socket") assert.equal(h.socket.terminated, true);
+    else assert.equal(readSignal?.aborted, true);
+    assert.equal(h.lifecycle.receipt.captureStatus, "not-started");
+    assert.equal(
+      h.lifecycle.receipt.events.find((event) => event.phase === phase).outcome,
+      "failed",
+    );
+    assert.equal(h.child.listenerCount("exit"), 1);
+    assert.equal(h.child.listenerCount("error"), 1);
+  });
+}
+
+test("an early timer cannot abort I/O or misclassify the phase deadline", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let time = 0;
+  let reads = 0;
+  let readSignal;
+  const h = harness({
+    timeoutMs: 500,
+    phaseTimeoutsMs: { "devtools-port": 20 },
+    now: () => time,
+    delay: () => new Promise(() => {}),
+    readPort: (signal) => {
+      reads++;
+      readSignal = signal;
+      return new Promise(() => {});
+    },
+  });
+  t.after(() => {
+    h.child.exitCode = 9;
+    h.child.emit("exit");
+  });
+  const connecting = h.lifecycle.connect();
+  void connecting.catch(() => {});
+  await Promise.resolve();
+  time = 19;
+  t.mock.timers.tick(20);
+  assert.equal(readSignal.aborted, false);
+  time = 20;
+  t.mock.timers.tick(1);
+  await assert.rejects(
+    connecting,
+    /devtools-port failed.*devtools-port deadline 20ms/,
+  );
+  assert.equal(readSignal.aborted, true);
+  assert.equal(reads, 1);
+});
+
+test("an HTTP body after its 2s deadline is discarded within the 10s target phase", async () => {
+  let requests = 0;
+  let lateSignal;
+  let socketUrl;
+  const h = harness({
+    phaseTimeoutsMs: { "target-list": 10_000 },
+    fetchTargets: async (_port, signal) => {
+      const late = ++requests === 1;
+      if (late) lateSignal = signal;
+      return {
+        ok: true,
+        json: async () => {
+          if (late) h.advance(2_001);
+          return [
+            {
+              type: "page",
+              webSocketDebuggerUrl: late
+                ? "ws://late/page"
+                : "ws://timely/page",
+            },
+          ];
+        },
+      };
+    },
+    createSocket: (url) => {
+      socketUrl = url;
+      queueMicrotask(() => h.socket.emit("open"));
+      return h.socket;
+    },
+  });
+  assert.equal(await h.lifecycle.connect(), h.socket);
+  assert.equal(requests, 2);
+  assert.equal(lateSignal.aborted, true);
+  assert.equal(socketUrl, "ws://timely/page");
+  assert.equal(h.lifecycle.receipt.readyElapsedMs, 2_101);
+  assert.deepEqual(h.child.signals, []);
 });
