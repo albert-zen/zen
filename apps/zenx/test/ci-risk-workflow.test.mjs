@@ -160,3 +160,21 @@ test("coverage gate rejects unknown/contradictory outputs and validates the curr
   assert.notEqual(run({ ...outputs, "aggregate-mode": "run" }), 0);
   assert.notEqual(run({ ...outputs, "quick-mode": "omit-pr-risk" }), 0);
 });
+
+test("arbitrary changed tests retain original dependency lifecycle and prepared plugin inputs", () => {
+  const steps = ci.jobs["zenx-check"].steps;
+  assert.equal(
+    steps.find((step) => step.id === "zenx-dependencies").run,
+    "npm ci",
+  );
+  assert.ok(
+    steps.some(
+      (step) =>
+        step.run ===
+          "npm --workspace apps/zenx run prepare:first-party-plugins" &&
+        step.if.includes("CI_FULL_AGGREGATE != 'true'"),
+    ),
+  );
+  const smoke = read("apps/zenx/src/main/workspace-browser-smoke.ts");
+  assert.match(smoke, /renderer\/src\/workspace-browser-panel/);
+});

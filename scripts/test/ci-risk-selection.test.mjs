@@ -15,6 +15,7 @@ import test from "node:test";
 import {
   baselineTests,
   classifyRisk,
+  rendererNativeBridgePaths,
   lanes,
   planDigest,
   selectRisk,
@@ -96,9 +97,9 @@ test("browser/native/packaging policies preserve the relevant actual platforms",
     ],
     [
       "apps/zenx/src/main/capabilities/windows-computer-provider.ts",
-      ["windows-computer", "windows-packaged"],
+      ["windows-computer", "windows-packaged", "windows-browser"],
     ],
-    ["apps/zenx/src/main/app-shot-macos.ts", ["capability"]],
+    ["apps/zenx/src/main/app-shot-macos.ts", ["capability", "playwright"]],
     [
       "apps/zenx/scripts/package-zenx-portable.mjs",
       [
@@ -117,6 +118,8 @@ test("browser/native/packaging policies preserve the relevant actual platforms",
     "apps/zenx/src/main/new-system/unknown.ts",
     "package-lock.json",
     "src/protocol/native/remote-wire.ts",
+    "packages/zenx-plugin-sdk/src/index.ts",
+    "packages/zenx-imzenx-plugin/src/index.ts",
   ])
     assert.equal(classifyRisk(p).lanes.length, lanes.length - 1, p);
 });
@@ -189,7 +192,7 @@ test("changed existing tests are added once, and deleted source paths retain the
   assert.equal(r.quickTests.filter((p) => p === baselineTests[3]).length, 1);
   assert.equal(r.modes.android, "run");
 });
-test("quick runner binds current run/attempt/plan, passes explicit files and preserves failure", (t) => {
+test("quick runner binds source/run plan, supports partial reruns and preserves failure", (t) => {
   const f = fixture(t);
   f.put(baselineTests[3], "// edit\n");
   const head = f.commit(),
@@ -222,11 +225,23 @@ test("quick runner binds current run/attempt/plan, passes explicit files and pre
     assert.deepEqual(args, ["--import", "tsx", "--test", ...report.quickTests]);
     assert.equal(JSON.parse(readFileSync(dest)).exitCode, status);
   }
+  const rerunReceipt = join(tmpdir(), `risk-rerun-${process.pid}.json`);
+  rmSync(rerunReceipt, { force: true });
+  t.after(() => rmSync(rerunReceipt, { force: true }));
+  assert.equal(
+    runQuickTests(rerunReceipt, {
+      cwd: f.cwd,
+      env: { ...env, GITHUB_RUN_ATTEMPT: "3" },
+      spawn: () => ({ status: 0 }),
+    }),
+    0,
+  );
+  assert.equal(JSON.parse(readFileSync(rerunReceipt)).runAttempt, "3");
   assert.throws(
     () =>
       runQuickTests("unused", {
         cwd: f.cwd,
-        env: { ...env, GITHUB_RUN_ATTEMPT: "3" },
+        env: { ...env, GITHUB_RUN_ID: "999" },
       }),
     /current-run/,
   );
@@ -271,4 +286,49 @@ test("CLI emits complete typed mode tokens, never false/unknown omission flags",
   assert.match(s, /aggregate-mode=omit-pr-risk/);
   for (const lane of lanes)
     assert.match(s, new RegExp(`${lane}-mode=(?:run|omit-pr-risk)\\n`));
+});
+
+test("renderer native/browser/shell bridge changes retain native lanes and security units", (t) => {
+  for (const file of rendererNativeBridgePaths) {
+    const result = classifyRisk(file);
+    assert.equal(result.domain, "renderer-native");
+    for (const lane of [
+      "ui",
+      "capability",
+      "windows-computer",
+      "windows-packaged",
+      "windows-browser",
+      "playwright",
+    ])
+      assert.ok(result.lanes.includes(lane), `${file}: ${lane}`);
+  }
+  const f = fixture(t);
+  f.put("apps/zenx/src/renderer/src/shell-terminal-security.ts");
+  const report = f.select(f.commit());
+  assert.ok(
+    report.quickTests.includes("apps/zenx/test/shell-panel-renderer.test.ts"),
+  );
+  assert.ok(
+    report.quickTests.includes("apps/zenx/test/native-view-overlays.test.ts"),
+  );
+});
+
+test("shared/unknown and test inventory changes include every domain quick set", (t) => {
+  for (const path of [
+    "src/new-shared.ts",
+    "unrecognized/new.ts",
+    "apps/zenx/test/new-risk.test.ts",
+  ]) {
+    const f = fixture(t);
+    f.put(path);
+    const report = f.select(f.commit());
+    for (const file of [
+      "apps/mobile/test/session.test.mjs",
+      "apps/zenx/test/browser-targeted-input.test.ts",
+      "apps/zenx/test/shell-panel-renderer.test.ts",
+      "apps/zenx/test/first-party-plugin-packaging.test.mjs",
+      "apps/zenx/test/inline-reference-codec.test.ts",
+    ])
+      assert.ok(report.quickTests.includes(file), `${path}: ${file}`);
+  }
 });

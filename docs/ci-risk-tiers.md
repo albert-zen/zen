@@ -17,24 +17,30 @@ All non-document PRs run the static/type/format checks in Fast feedback plus the
 explicit unit baseline in `scripts/ci-risk-selection.mjs`. Changed existing
 unit files are added without a test-name filter. Domain-specific unit files are
 added to that baseline. The selected lists are deduplicated and retained with
-the exact plan digest, checkout SHA, run ID, run attempt and process exit status.
+the exact plan digest, checkout SHA, run ID, actual execution attempt and process
+exit status. PR units retain normal npm install lifecycle and SDK/plugin
+preparation because newly changed tests may require those fixtures.
 
 - Ordinary documentation-only changes retain formatting and named omission
   receipts, as before.
 - `apps/mobile/**` selects the existing Android TLS Host integration, typechecks,
   tests, Expo generation and debug APK job. No desktop aggregate is required.
-- Renderer source selects all three existing synthetic UI shards.
+- Renderer source selects all three existing synthetic UI shards. The explicit
+  browser/native/shell bridge inventory, shared native overlays and renderer
+  styles additionally retain all platform lanes and bridge/security units.
 - The explicit browser/Chrome/Playwright source, script and unit filename
   families within ZenX select Windows attached-user-browser and macOS real
   Playwright jobs. An unmatched directory/file cannot borrow this small set.
-- Windows native families select Windows computer and packaged-provider work.
-  macOS launch/accessibility families select packaged capability on macOS.
+- Windows native families select all three Windows platform jobs.
+  macOS launch/accessibility families select both macOS platform jobs.
+  Chrome native-host changes also retain packaged-host checks.
   Shared computer/app-shot/shell families retain all five platform jobs.
 - Desktop packaging, staging, preparation, provider resources and plugin package
   changes retain UI and all five platform jobs.
-- Root manifests/lock/config, Core, CLI, IMZen, root test changes and unknown
+- Root manifests/lock/config, plugin SDK/IMZen plugin, Core, CLI, IMZen, root test changes and unknown
   paths conservatively select Core/CLI/IMZen, Android, UI and every platform job.
-  Cross-domain changes take the union. This still omits the full 700-file ZenX
+  Cross-domain changes take the union, and every all-risk decision includes all
+  domain quick-unit sets. This still omits the full 700-file ZenX
   aggregate on PRs; it is all-risk PR acceptance, not full acceptance.
 - New, deleted and renamed unit tests select all PR risk lanes. Deleted files
   are not silently ignored. Existing declared baseline files must still exist
@@ -62,9 +68,11 @@ omission receipt is presented as complete acceptance. Fast feedback is not used 
 native jobs or the full aggregate ran.
 
 Quick units recompute the same immutable plan and require its digest to match
-the selection job. The digest binds run/attempt as well as source identities.
-Receipts have unique SHA/run/attempt artifact names. A prior successful run for
-the same SHA cannot substitute for the current run's dependencies or unit plan.
+the selection job. The digest binds run ID and source identities, but deliberately excludes
+attempt: GitHub can rerun only a failed unit job while retaining a successful
+selection from attempt 1. The new execution records its actual attempt and uses
+a unique SHA/run/attempt artifact name. A different run for the same SHA cannot
+substitute for this run's dependencies or unit plan.
 
 ## Costs and limitations
 
@@ -72,8 +80,11 @@ This removes the ten-minute-class full aggregate from normal PR updates and
 omits unrelated platform work for recognized code domains. Relevant native
 checks can still dominate the critical path, and unknown/shared changes retain
 a broad risk combination. Existing specialized feature workflows keep their
-own positive path triggers; this patch does not claim to eliminate all other
-workflow work. Static/type feedback remains a separate required signal.
+own positive path triggers. The answered-question, quote-bubble, information-
+content and native-history workflows again own their original unit steps on
+PRs, because those units no longer have the full aggregate as a PR owner. A
+repository-wide workflow regression rejects dispatch-only unit ownership in
+PR-triggered workflows. This patch does not claim to eliminate all other work. Static/type feedback remains a separate required signal.
 
 The first local checkpoint is not hosted performance evidence. Actual runner
 minutes, queue time and wall-clock reduction must be measured on the resulting

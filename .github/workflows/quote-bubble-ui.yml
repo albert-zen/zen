@@ -32,8 +32,7 @@ jobs:
       - run: npm ci
       - run: npm run build --workspace @zenx/plugin-sdk
       - name: Exact identity, missing sources and recycled virtual rows
-        # Every PR runs these files in CI / ZenX; keep standalone manual coverage.
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+        # PR aggregate is tiered; this path-triggered workflow owns these unit regressions.
         run: node --import tsx --test apps/zenx/test/quote-source-navigation.test.ts apps/zenx/test/virtual-quote-source-interaction.test.ts apps/zenx/test/message-quote-sent.test.ts apps/zenx/test/queued-edit-interaction.test.ts apps/zenx/test/message-target-retirement.test.ts
       - name: Build production components with synthetic transcript
         run: node apps/zenx/scripts/build-quote-preview.mjs "${{ runner.temp }}/quote-bubble"

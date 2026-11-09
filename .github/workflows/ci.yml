@@ -157,8 +157,7 @@ jobs:
           path: ${{ runner.temp }}/zenx-${{ github.job }}-provenance.json
           if-no-files-found: error
           retention-days: 14
-      - run: |
-          if [ "$CI_FULL_AGGREGATE" = true ]; then npm ci; else npm ci --ignore-scripts --no-audit --no-fund; fi
+      - run: npm ci
         if: ${{ env.CI_RUN_FULL == 'true' }}
         timeout-minutes: 5
         id: zenx-dependencies

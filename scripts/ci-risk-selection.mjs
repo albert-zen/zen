@@ -42,7 +42,30 @@ export const baselineTests = Object.freeze([
   "apps/zenx/test/packaged-provider-smoke-exit.test.ts",
   "test/journal.test.ts",
 ]);
+export const rendererNativeBridgePaths = Object.freeze(
+  [
+    "workspace-browser-panel.tsx",
+    "browser-thread-panel.tsx",
+    "browser-external-open.tsx",
+    "bundled-browser-ui.tsx",
+    "native-view-overlays.ts",
+    "computer-thread-panel.tsx",
+    "shell-thread-panel.tsx",
+    "shell-terminal-security.ts",
+    "shell-target-navigation.tsx",
+    "auxiliary-panel.tsx",
+    "ImagePresentation.tsx",
+    "styles.css",
+  ].map((name) => `apps/zenx/src/renderer/src/${name}`),
+);
 const domainTests = {
+  "renderer-native": [
+    "apps/zenx/test/native-view-overlays.test.ts",
+    "apps/zenx/test/workspace-browser-control-ui.test.ts",
+    "apps/zenx/test/shell-panel-renderer.test.ts",
+    "apps/zenx/test/inline-reference-codec.test.ts",
+    "apps/zenx/test/unified-reference-serialization.test.ts",
+  ],
   renderer: [
     "apps/zenx/test/inline-reference-codec.test.ts",
     "apps/zenx/test/unified-reference-serialization.test.ts",
@@ -74,10 +97,12 @@ export function classifyRisk(path) {
   if (isDocumentationPath(path)) return { domain: "documentation", lanes: [] };
   if (path.startsWith("apps/mobile/"))
     return { domain: "mobile", lanes: ["android"] };
+  if (rendererNativeBridgePaths.includes(path))
+    return { domain: "renderer-native", lanes: ["ui", ...platform] };
   if (path.startsWith("apps/zenx/src/renderer/"))
     return { domain: "renderer", lanes: ["ui"] };
   if (
-    /^(?:src\/|apps\/cli\/|apps\/imzen\/|test\/|package(?:-lock)?\.json$|tsconfig[^/]*\.json$)/.test(
+    /^(?:src\/|apps\/cli\/|apps\/imzen\/|packages\/zenx-(?:plugin-sdk|imzenx-plugin)\/|test\/|package(?:-lock)?\.json$|tsconfig[^/]*\.json$)/.test(
       path,
     )
   )
@@ -98,6 +123,16 @@ export function classifyRisk(path) {
     /^apps\/zenx\/(?:src\/main\/(?:capabilities\/)?|scripts\/|test\/)([^/]+)$/.exec(
       path,
     )?.[1];
+  if (scoped && /^chrome-native-host/.test(scoped))
+    return {
+      domain: "browser",
+      lanes: [
+        "capability",
+        "windows-packaged",
+        "windows-browser",
+        "playwright",
+      ],
+    };
   if (
     scoped &&
     /^(?:browser-|user-browser|workspace-browser|playwright-|chrome-|model-browser)/.test(
@@ -108,10 +143,10 @@ export function classifyRisk(path) {
   if (scoped && /^(?:windows-|winapp-|app-shot-windows)/.test(scoped))
     return {
       domain: "native",
-      lanes: ["windows-computer", "windows-packaged"],
+      lanes: ["windows-computer", "windows-packaged", "windows-browser"],
     };
   if (scoped && /^(?:macos-|app-shot-macos|login-shell-)/.test(scoped))
-    return { domain: "native", lanes: ["capability"] };
+    return { domain: "native", lanes: ["capability", "playwright"] };
   if (
     scoped &&
     /^(?:computer-|model-computer|peekaboo-|app-shot-|shell-)/.test(scoped)
@@ -250,6 +285,10 @@ export function selectRisk({
       `Conservative all-risk fallback: ${error.message.split("\n")[0]}`,
     );
   }
+  if (allRisk.every((lane) => selected.has(lane)))
+    Object.values(domainTests)
+      .flat()
+      .forEach((file) => tests.add(file));
   report.quickTests = [...tests].sort();
   report.modes = Object.fromEntries(
     lanes.map((lane) => [lane, selected.has(lane) ? "run" : "omit-pr-risk"]),
@@ -260,7 +299,10 @@ export function selectRisk({
   return report;
 }
 export function planDigest(report) {
-  return createHash("sha256").update(JSON.stringify(report)).digest("hex");
+  // A partial GitHub rerun can retain the successful selection from attempt 1.
+  // The source/run plan stays immutable; the execution receipt owns its attempt.
+  const { runAttempt: _attempt, ...plan } = report;
+  return createHash("sha256").update(JSON.stringify(plan)).digest("hex");
 }
 export function riskOptions(env = process.env) {
   return {
