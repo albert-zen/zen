@@ -8,11 +8,14 @@ import { SubscriptionUsageCard } from "./SubscriptionUsageCard.js";
 import { RtkSettingsCard } from "./RtkSettingsCard.js";
 import {
   Activity,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useId,
   useRef,
   useState,
+  type Dispatch,
+  type SetStateAction,
 } from "react";
 import { normalizeContextCompactionConfig } from "../../../../../src/context-compaction.js";
 import { ContextCompactionPanel } from "./ContextCompactionPanel.js";
@@ -124,9 +127,48 @@ export function SettingsView({
   browserSettingsFocusRequest?: number;
 }) {
   const { t } = useTranslation("settings");
-  const [settings, setSettings] = useState<PublicHostSettings | null>(null);
+  const [{ settings, draft }, setSettingsState] = useState<{
+    settings: PublicHostSettings | null;
+    draft: ZenXHostProfile | null;
+  }>({ settings: null, draft: null });
+  const setSettings: Dispatch<SetStateAction<PublicHostSettings | null>> =
+    useCallback(
+      (value) =>
+        setSettingsState((current) => ({
+          ...current,
+          settings:
+            typeof value === "function" ? value(current.settings) : value,
+        })),
+      [],
+    );
+  const setDraft: Dispatch<SetStateAction<ZenXHostProfile | null>> =
+    useCallback(
+      (value) =>
+        setSettingsState((current) => ({
+          ...current,
+          draft: typeof value === "function" ? value(current.draft) : value,
+        })),
+      [],
+    );
+  const acceptHostSettings = useCallback((value: PublicHostSettings) => {
+    setSettingsState((current) => {
+      if (
+        (value.profile.revision ?? 0) <
+        (current.settings?.profile.revision ?? 0)
+      )
+        return current;
+      return {
+        settings: value,
+        draft: rebaseSettingsDraft(
+          current.draft,
+          current.settings?.profile ?? null,
+          value.profile,
+        ),
+      };
+    });
+  }, []);
   const [loadAttempt, setLoadAttempt] = useState(0);
-  const [draft, setDraft] = useState<ZenXHostProfile | null>(null);
+  const [maximumInvalid, setMaximumInvalid] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatusState] = useState<{ message: string } | null>(null);
@@ -181,10 +223,7 @@ export function SettingsView({
       .get()
       .then((value) => {
         if (!subscribed) return;
-        setSettings(value);
-        setDraft((latest) =>
-          latest === current.draft ? value.profile : latest,
-        );
+        acceptHostSettings(value);
       })
       .catch(
         (reason: unknown) => subscribed && setError(describeError(reason)),
@@ -193,7 +232,7 @@ export function SettingsView({
       subscribed = false;
       dispose();
     };
-  }, [active, loadAttempt]);
+  }, [active, loadAttempt, acceptHostSettings]);
 
   useEffect(() => {
     if (status === null) return;
@@ -223,7 +262,7 @@ export function SettingsView({
   ]);
 
   const save = async () => {
-    if (draft === null) return;
+    if (draft === null || maximumInvalid) return;
     setBusy("save");
     setError(null);
     setStatus(null);
@@ -496,6 +535,7 @@ export function SettingsView({
             </Activity>
             <Activity mode={active && tab === "models" ? "visible" : "hidden"}>
               <ModelsPanel
+                acceptHostSettings={acceptHostSettings}
                 busy={busy}
                 draft={draft}
                 error={error}
@@ -503,7 +543,6 @@ export function SettingsView({
                 setBusy={setBusy}
                 setDraft={setDraft}
                 setError={setError}
-                setSettings={setSettings}
                 setStatus={setStatus}
               />
             </Activity>
@@ -548,6 +587,7 @@ export function SettingsView({
                 <GeneralPanel
                   draft={draft}
                   setDraft={setDraft}
+                  onMaximumValidityChange={setMaximumInvalid}
                   onImportSession={onImportSession}
                 />
                 <ChromeConnectionSettings draft={draft} setDraft={setDraft} />
@@ -602,6 +642,12 @@ export function SettingsView({
             {compactionError !== null ? (
               <div className="settings-error" role="alert">
                 {compactionError}
+              </div>
+            ) : null}
+            {maximumInvalid && tab !== "general" ? (
+              <div className="settings-error" role="alert">
+                {t("settingsView.maximumToolRounds")}:{" "}
+                {t("settingsView.enterAWholeNumberOf1OrMore")}
               </div>
             ) : null}
             {workflowError !== null && tab === "workflows" ? (
@@ -732,6 +778,7 @@ export function SettingsView({
           busy={busy === "save"}
           disabled={
             busy !== null ||
+            maximumInvalid ||
             compactionError !== null ||
             workflowError !== null ||
             settings.configuration?.status === "unconfirmed"
@@ -1221,6 +1268,7 @@ function AccountPanel({
 }
 
 function ModelsPanel({
+  acceptHostSettings,
   busy,
   draft,
   error,
@@ -1228,17 +1276,16 @@ function ModelsPanel({
   setBusy,
   setDraft,
   setError,
-  setSettings,
   setStatus,
 }: {
+  acceptHostSettings(value: PublicHostSettings): void;
   busy: string | null;
   draft: ZenXHostProfile;
   error: string | null;
   settings: PublicHostSettings;
   setBusy(value: string | null): void;
-  setDraft(value: ZenXHostProfile): void;
+  setDraft: Dispatch<SetStateAction<ZenXHostProfile | null>>;
   setError(value: string | null): void;
-  setSettings(value: PublicHostSettings): void;
   setStatus(value: string | null): void;
 }) {
   const { t } = useTranslation("settings");
@@ -1299,6 +1346,8 @@ function ModelsPanel({
     [],
   );
   const editorNoticeId = useId();
+  const observedSettings = useRef(settings);
+  observedSettings.current = settings;
   useLayoutEffect(() => {
     if (editor !== null || !restoreEditorFocus.current) return;
     restoreEditorFocus.current = false;
@@ -1315,23 +1364,10 @@ function ModelsPanel({
   };
 
   const acceptSettings = (value: PublicHostSettings, message: string) => {
-    setSettings(value);
-    setDraft({
-      ...value.profile,
-      approvalPolicy: draft.approvalPolicy,
-      defaultModel: modelReferenceExists(
-        draft.defaultModel,
-        value.profile.providerProfiles,
-      )
-        ? draft.defaultModel
-        : value.profile.defaultModel,
-      titleModel: modelReferenceExists(
-        draft.titleModel,
-        value.profile.providerProfiles,
-      )
-        ? draft.titleModel
-        : value.profile.titleModel,
-    });
+    const baseline = observedSettings.current.profile;
+    if ((value.profile.revision ?? 0) < (baseline.revision ?? 0)) return;
+    observedSettings.current = value;
+    acceptHostSettings(value);
     setError(null);
     setStatus(configurationSaveToast(value));
   };
@@ -1358,9 +1394,7 @@ function ModelsPanel({
             (settings.profile.revision ?? 0) &&
           committed(authoritative)
         ) {
-          setSettings(authoritative);
-          setDraft(authoritative.profile);
-          setStatus(configurationSaveToast(authoritative));
+          acceptSettings(authoritative, message);
           setError(
             i18n.t("settings:settingsView.settingsFinalizationFailed", {
               error: originalError,
@@ -1409,9 +1443,7 @@ function ModelsPanel({
       if (reply.outcome === "committed-error") {
         try {
           const authoritative = await window.zenx.settings.get();
-          setSettings(authoritative);
-          setDraft(authoritative.profile);
-          setStatus(configurationSaveToast(authoritative));
+          acceptSettings(authoritative, message);
         } catch (reason) {
           setProviderDiagnostic(
             [reply.detail, localErrorDetail(reason)]
@@ -3727,6 +3759,39 @@ function modelReferenceFromValue(
     .find((reference) => modelReferenceValue(reference) === value);
 }
 
+// Keep the saved baseline and draft paired during an independent Host read or
+// provider mutation. Only local differences survive; provider identity and
+// revision remain Host-owned, and removed model references cannot be restored.
+function rebaseSettingsDraft(
+  latest: ZenXHostProfile | null,
+  baseline: ZenXHostProfile | null,
+  saved: ZenXHostProfile,
+): ZenXHostProfile {
+  if (latest === null || baseline === null) return saved;
+  const edits = Object.fromEntries(
+    (Object.keys(latest) as Array<keyof ZenXHostProfile>)
+      .filter(
+        (key) => JSON.stringify(latest[key]) !== JSON.stringify(baseline[key]),
+      )
+      .map((key) => [key, latest[key]]),
+  );
+  const next = { ...saved, ...edits };
+  return {
+    ...next,
+    revision: saved.revision,
+    providerProfiles: saved.providerProfiles,
+    defaultModel: modelReferenceExists(
+      next.defaultModel,
+      saved.providerProfiles,
+    )
+      ? next.defaultModel
+      : saved.defaultModel,
+    titleModel: modelReferenceExists(next.titleModel, saved.providerProfiles)
+      ? next.titleModel
+      : saved.titleModel,
+  };
+}
+
 function modelReferenceExists(
   reference: ZenXModelReference,
   profiles: readonly ZenXProviderProfile[],
@@ -3931,10 +3996,12 @@ function AppearancePanel() {
 function GeneralPanel({
   draft,
   setDraft,
+  onMaximumValidityChange,
   onImportSession,
 }: {
   draft: ZenXHostProfile;
   setDraft(value: ZenXHostProfile): void;
+  onMaximumValidityChange(invalid: boolean): void;
   onImportSession?(): void;
 }) {
   const { t } = useTranslation("settings");
@@ -3942,13 +4009,22 @@ function GeneralPanel({
     draft.maxToolRounds?.toString() ?? "",
   );
   const [maximumError, setMaximumError] = useState<string | null>(null);
+  const maximumBaseline = useRef(draft.maxToolRounds);
+  const maximumInputInvalid = useRef(false);
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
   const [diagnosticsDetail, setDiagnosticsDetail] = useState<
     string | undefined
   >();
   useEffect(() => {
+    // Activity reconnects effects when a section reopens. That is not a new
+    // saved value and must not erase invalid input still awaiting correction.
+    if (maximumBaseline.current === draft.maxToolRounds) return;
+    maximumBaseline.current = draft.maxToolRounds;
+    if (maximumInputInvalid.current) return;
     setMaximumInput(draft.maxToolRounds?.toString() ?? "");
-  }, [draft.maxToolRounds]);
+    setMaximumError(null);
+    onMaximumValidityChange(false);
+  }, [draft.maxToolRounds, onMaximumValidityChange]);
   return (
     <>
       <header>
@@ -4132,24 +4208,26 @@ function GeneralPanel({
               onChange={(event) => {
                 const value = event.currentTarget.value;
                 setMaximumInput(value);
+                const invalid =
+                  event.currentTarget.validity.badInput ||
+                  (value !== "" &&
+                    (!/^\d+$/u.test(value) ||
+                      !Number.isSafeInteger(Number(value)) ||
+                      Number(value) < 1));
+                maximumInputInvalid.current = invalid;
+                onMaximumValidityChange(invalid);
+                if (invalid) return;
                 if (value === "") {
                   setMaximumError(null);
                   setDraft({ ...draft, maxToolRounds: undefined });
                   return;
                 }
-                if (!/^\d+$/u.test(value)) return;
                 const maximum = Number(value);
-                if (!Number.isSafeInteger(maximum) || maximum < 1) return;
                 setMaximumError(null);
                 setDraft({ ...draft, maxToolRounds: maximum });
               }}
               onBlur={() => {
-                if (
-                  maximumInput !== "" &&
-                  (!/^\d+$/u.test(maximumInput) ||
-                    !Number.isSafeInteger(Number(maximumInput)) ||
-                    Number(maximumInput) < 1)
-                ) {
+                if (maximumInputInvalid.current) {
                   setMaximumError(t("settingsView.enterAWholeNumberOf1OrMore"));
                 }
               }}
