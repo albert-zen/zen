@@ -2,7 +2,7 @@ import "./dom-primitives.js";
 /// <reference path="../src/renderer/src/env.d.ts" />
 
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -1879,6 +1879,9 @@ test("Appearance is an independent Settings section and persists the complete pr
     assert.equal(document.documentElement.dataset.contrast, "standard");
     assert.equal(appearanceModeRadio("system")?.checked, true);
     assertSelectedMarkers();
+    // Reuse this controller's document: the renderer owns one appearance controller.
+    await assertLocalizedAppearanceControls();
+    assert.equal(saved.length, 0);
   } finally {
     await unmount(harness);
   }
@@ -5763,4 +5766,249 @@ test("Models navigation and Account setup guidance use the same plural label", a
   } finally {
     await unmount(harness);
   }
+});
+
+test("provider cards expose full same-prefix identities through a bounded read-only model disclosure", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  const prefix = "Local synthetic provider with a very long shared prefix · ";
+  initial.profile.providerProfiles[0]!.displayName = `${prefix}Alpha`;
+  initial.profile.providerProfiles[1]!.displayName = `${prefix}Beta`;
+  initial.profile.providerProfiles[0]!.models = Array.from(
+    { length: 250 },
+    (_, index) =>
+      model(
+        `synthetic-model-with-a-very-long-shared-prefix-${index === 0 ? "alpha" : index === 1 ? "beta" : index}`,
+      ),
+  );
+  const harness = await mountSettings("general", { initialSettings: initial });
+  try {
+    await changeControl(requiredInput("Maximum tool rounds"), "12");
+    await click(document.getElementById("settings-tab-models")!);
+    const cards = [
+      ...document.querySelectorAll<HTMLElement>(".provider-profile-card"),
+    ];
+    assert.equal(
+      cards[0]?.querySelector(".provider-profile-name strong")?.textContent,
+      `${prefix}Alpha`,
+    );
+    assert.equal(
+      cards[1]?.querySelector(".provider-profile-name strong")?.textContent,
+      `${prefix}Beta`,
+    );
+    const disclosure = cards[0]?.querySelector<HTMLDetailsElement>(
+      "details.provider-model-summary",
+    );
+    assert.ok(
+      disclosure,
+      "Full models must be inspectable without entering Edit",
+    );
+    assert.equal(disclosure.open, false);
+    const summary = disclosure.querySelector("summary")!;
+    assert.match(summary.textContent ?? "", /250 models/u);
+    assert.equal(
+      summary.getAttribute("aria-label"),
+      `250 models for ${prefix}Alpha`,
+    );
+    const preview = [...summary.querySelectorAll(".provider-model-preview-id")];
+    assert.deepEqual(
+      preview.map((element) => element.textContent),
+      initial.profile.providerProfiles[0]!.models.slice(0, 2).map(
+        (entry) => entry.id,
+      ),
+    );
+    assert.match(summary.textContent ?? "", /248 more/u);
+    summary.focus();
+    await click(summary);
+    assert.equal(disclosure.open, true);
+    const region = disclosure.querySelector<HTMLElement>('[role="region"]')!;
+    assert.ok(region);
+    assert.equal(region.tabIndex, 0);
+    region.focus();
+    assert.equal(document.activeElement, region);
+    const rows = [...region.querySelectorAll("li")];
+    assert.equal(rows.length, 250);
+    assert.equal(
+      rows[249]?.textContent,
+      initial.profile.providerProfiles[0]!.models[249]!.id,
+    );
+    assert.equal(document.querySelector(".provider-editor"), null);
+    assert.equal(exactButtonRequired("Apply").disabled, false);
+    summary.focus();
+    await click(summary);
+    assert.equal(disclosure.open, false);
+    assert.equal(document.activeElement, summary);
+    await click(labeledButtonRequired(`Edit ${prefix}Alpha`));
+    await changeControl(requiredInput("Display name"), "Discard this name");
+    await click(exactButtonRequired("Cancel"));
+    assert.equal(
+      cards[0]?.querySelector(".provider-profile-name strong")?.textContent,
+      `${prefix}Alpha`,
+    );
+    assert.ok(labeledButton(`Edit ${prefix}Alpha`));
+    await click(exactButtonRequired("General"));
+    assert.equal(requiredInput("Maximum tool rounds").value, "12");
+  } finally {
+    await unmount(harness);
+  }
+});
+
+async function assertLocalizedAppearanceControls() {
+  const { i18n } = await import("../src/renderer/src/i18n.js");
+  try {
+    await waitFor(() => appearanceModeRadio("light"));
+    await click(appearanceModeRadio("dark")!);
+    for (const language of ["en", "zh-CN"] as const) {
+      await act(async () => {
+        await i18n.changeLanguage(language);
+      });
+      const labels =
+        language === "en"
+          ? ["System", "Light", "Dark", "Standard", "High"]
+          : ["跟随系统", "浅色", "深色", "标准", "高"];
+      for (const [index, token] of (
+        ["system", "light", "dark"] as const
+      ).entries()) {
+        const radio = appearanceModeRadio(token)!;
+        assert.equal(
+          radio.closest("label")?.textContent?.trim(),
+          labels[index],
+        );
+        await click(radio);
+        assert.equal(radio.checked, true);
+        assert.equal(
+          document.documentElement.dataset.appearance,
+          token === "system" ? "light" : token,
+        );
+        assert.equal(
+          JSON.parse(localStorage.getItem("zenx.appearance")!).mode,
+          token,
+        );
+      }
+      for (const [index, token] of ["standard", "high"].entries()) {
+        const radio = appearanceChoice("appearance-contrast", token)!;
+        assert.equal(
+          radio.closest("label")?.textContent?.trim(),
+          labels[index + 3],
+        );
+        await click(radio);
+        assert.equal(radio.checked, true);
+        assert.equal(document.documentElement.dataset.contrast, token);
+        assert.equal(
+          JSON.parse(localStorage.getItem("zenx.appearance")!).contrast,
+          token,
+        );
+      }
+      for (const name of [
+        "Graphite",
+        "Cobalt",
+        "Ember",
+        "Azure",
+        "Iris",
+        "Jade",
+      ]) {
+        assert.ok(document.body.textContent?.includes(name));
+      }
+    }
+  } finally {
+    await act(async () => {
+      await i18n.changeLanguage("en");
+    });
+  }
+}
+
+for (const count of [0, 1, 2]) {
+  test(`provider model inspection keeps ${count} exact models and localized counts without Host writes`, async () => {
+    const { i18n } = await import("../src/renderer/src/i18n.js");
+    const initial = structuredClone(multiProviderSettings);
+    initial.profile.providerProfiles[0]!.models = Array.from(
+      { length: count },
+      (_, index) => model(`${"x".repeat(500)}-${index}`),
+    );
+    let writes = 0;
+    const harness = await mountSettings("models", {
+      initialSettings: initial,
+      save: async () => {
+        writes++;
+        return initial;
+      },
+    });
+    try {
+      await waitFor(() => exactButton("Add provider"));
+      const details = document.querySelector<HTMLDetailsElement>(
+        "details.provider-model-summary",
+      )!;
+      const summary = details.querySelector("summary")!;
+      for (const language of ["en", "zh-CN"] as const) {
+        await act(async () => {
+          await i18n.changeLanguage(language);
+        });
+        assert.equal(
+          summary.querySelector(".provider-model-count")?.textContent,
+          language === "en"
+            ? `${count} ${count === 1 ? "model" : "models"}`
+            : `${count} 个模型`,
+        );
+        assert.equal(
+          details.querySelectorAll(".provider-model-preview-id").length,
+          count,
+        );
+        assert.equal(details.querySelector(".provider-model-more"), null);
+        await click(summary);
+        assert.equal(details.open, true);
+        const ids = [
+          ...details.querySelectorAll(".provider-model-list li"),
+        ].map((entry) => entry.textContent);
+        assert.deepEqual(
+          ids,
+          initial.profile.providerProfiles[0]!.models.map((entry) => entry.id),
+        );
+        if (count === 0)
+          assert.equal(
+            details.querySelector(".provider-model-list p")?.textContent,
+            language === "en" ? "No models configured" : "尚未配置模型",
+          );
+        await click(summary);
+        assert.equal(details.open, false);
+      }
+      assert.equal(writes, 0);
+      assert.equal(document.querySelector(".provider-editor"), null);
+      assert.equal(exactButtonRequired("应用").disabled, true);
+    } finally {
+      await act(async () => {
+        await i18n.changeLanguage("en");
+      });
+      await unmount(harness);
+    }
+  });
+}
+
+test("provider identity styles wrap readable text and bound expanded model scrolling", async () => {
+  const css = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  const rule = (selector: string) =>
+    css.slice(css.indexOf(`\n${selector} {`) + 1).split("}")[0]!;
+  assert.match(
+    rule(".provider-profile-name strong"),
+    /overflow-wrap: anywhere/u,
+  );
+  assert.doesNotMatch(
+    rule(".provider-profile-name strong"),
+    /ellipsis|nowrap/u,
+  );
+  assert.match(
+    rule(".provider-model-preview-id,\n.provider-model-list li"),
+    /font-size: var\(--font-size-caption\)/u,
+  );
+  assert.match(
+    rule(".provider-model-preview-id,\n.provider-model-list li"),
+    /overflow-wrap: anywhere/u,
+  );
+  assert.match(rule(".provider-model-list"), /max-height: 12rem/u);
+  assert.match(rule(".provider-model-list"), /overflow: auto/u);
+  assert.match(
+    rule(".provider-model-summary[open] .provider-model-preview"),
+    /display: none/u,
+  );
 });

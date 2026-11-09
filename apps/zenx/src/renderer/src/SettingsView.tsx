@@ -2004,14 +2004,6 @@ function ProviderProfileCard({
         </div>
       </div>
       <div
-        className="provider-model-summary"
-        aria-label={`${provider.displayName} models`}
-      >
-        {provider.models.map((model) => (
-          <span key={model.id}>{model.id}</span>
-        ))}
-      </div>
-      <div
         className="provider-profile-roles"
         aria-label={t("settingsView.providerGlobalRoles", {
           name: provider.displayName,
@@ -2046,6 +2038,51 @@ function ProviderProfileCard({
           {t("settingsView.delete")}
         </button>
       </div>
+      <details className="provider-model-summary">
+        <summary
+          aria-label={t("settingsView.modelCountForProvider", {
+            count: provider.models.length,
+            name: provider.displayName,
+          })}
+        >
+          <span className="provider-model-count">
+            {t("settingsView.modelCount", { count: provider.models.length })}
+          </span>
+          <span className="provider-model-preview" aria-hidden="true">
+            {provider.models.slice(0, 2).map((model) => (
+              <span className="provider-model-preview-id" key={model.id}>
+                {model.id}
+              </span>
+            ))}
+            {provider.models.length > 2 ? (
+              <span className="provider-model-more">
+                {t("settingsView.moreModelCount", {
+                  count: provider.models.length - 2,
+                })}
+              </span>
+            ) : null}
+          </span>
+        </summary>
+        <div
+          className="provider-model-list"
+          role="region"
+          aria-label={t("settingsView.modelCountForProvider", {
+            count: provider.models.length,
+            name: provider.displayName,
+          })}
+          tabIndex={0}
+        >
+          {provider.models.length === 0 ? (
+            <p>{t("settingsView.noConfiguredModels")}</p>
+          ) : (
+            <ul>
+              {provider.models.map((model) => (
+                <li key={model.id}>{model.id}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </details>
     </article>
   );
 }
@@ -3844,6 +3881,16 @@ function isRunnableModel(model: ZenXModelCatalogEntry): boolean {
   );
 }
 
+const appearanceModeLabels = {
+  system: "settingsView.appearanceModeSystem",
+  light: "settingsView.appearanceModeLight",
+  dark: "settingsView.appearanceModeDark",
+} as const;
+const appearanceContrastLabels = {
+  standard: "settingsView.appearanceContrastStandard",
+  high: "settingsView.appearanceContrastHigh",
+} as const;
+
 function AppearancePanel() {
   const { t } = useTranslation("settings");
   const appearanceController = getAppearanceController();
@@ -3888,7 +3935,7 @@ function AppearancePanel() {
                 onChange={() => updateAppearance({ mode: option })}
               />
               <span>
-                {option[0]?.toUpperCase() + option.slice(1)}
+                {t(appearanceModeLabels[option])}
                 <span className="appearance-choice-marker" aria-hidden="true">
                   {appearance.mode === option ? (
                     <Icon
@@ -3979,7 +4026,7 @@ function AppearancePanel() {
                     onChange={() => updateAppearance({ contrast: option })}
                   />
                   <span>
-                    {appearanceLabel(option)}
+                    {t(appearanceContrastLabels[option])}
                     <span
                       className="appearance-choice-marker"
                       aria-hidden="true"

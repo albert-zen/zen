@@ -1,5 +1,17 @@
 // Settings UI copy. Keep keys stable across locales; product data and user content stay unchanged.
 export const en = {
+  "settingsView.modelCount_one": "{{count}} model",
+  "settingsView.modelCount_other": "{{count}} models",
+  "settingsView.modelCountForProvider_one": "{{count}} model for {{name}}",
+  "settingsView.modelCountForProvider_other": "{{count}} models for {{name}}",
+  "settingsView.moreModelCount_one": "{{count}} more",
+  "settingsView.moreModelCount_other": "{{count}} more",
+  "settingsView.noConfiguredModels": "No models configured",
+  "settingsView.appearanceModeSystem": "System",
+  "settingsView.appearanceModeLight": "Light",
+  "settingsView.appearanceModeDark": "Dark",
+  "settingsView.appearanceContrastStandard": "Standard",
+  "settingsView.appearanceContrastHigh": "High",
   "settingsView.finishProviderEditBeforeSwitching":
     "Save or cancel the current provider edit before editing or deleting another provider. Your changes stay in this editor until then.",
   "settingsView.importConversations": "Import conversations",
@@ -1358,6 +1370,18 @@ export const en = {
 } as const;
 
 export const zhCN: Record<keyof typeof en, string> = {
+  "settingsView.modelCount_one": "{{count}} 个模型",
+  "settingsView.modelCount_other": "{{count}} 个模型",
+  "settingsView.modelCountForProvider_one": "{{name}} 的 {{count}} 个模型",
+  "settingsView.modelCountForProvider_other": "{{name}} 的 {{count}} 个模型",
+  "settingsView.moreModelCount_one": "另有 {{count}} 个",
+  "settingsView.moreModelCount_other": "另有 {{count}} 个",
+  "settingsView.noConfiguredModels": "尚未配置模型",
+  "settingsView.appearanceModeSystem": "跟随系统",
+  "settingsView.appearanceModeLight": "浅色",
+  "settingsView.appearanceModeDark": "深色",
+  "settingsView.appearanceContrastStandard": "标准",
+  "settingsView.appearanceContrastHigh": "高",
   "settingsView.finishProviderEditBeforeSwitching":
     "请先保存或取消当前服务商的编辑，再编辑或删除其他服务商。在此之前，修改会保留在当前编辑器中。",
   "settingsView.importConversations": "导入会话",
