@@ -302,14 +302,18 @@ for (const event of ["end", "close"])
     assert.equal(bus._connection.stream.listenerCount("close"), 0);
     assert.equal(bus.disconnected, true);
   });
-it("rejects image decoding that outlasts its monotonic deadline before a timer runs", async () => {
+it("rejects image decoding that outlasts its monotonic deadline before a timer runs", async (t) => {
+  // Real file I/O must reach the decoder before this test advances either clock.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   const bus = new Bus();
   let now = 0;
+  let decoded = false;
   await assert.rejects(
     capturePortalActiveAppShot(
       options(bus, {
         now: () => now,
         createImage: () => {
+          decoded = true;
           now = 101;
           return image();
         },
@@ -317,15 +321,22 @@ it("rejects image decoding that outlasts its monotonic deadline before a timer r
     ),
     /timed out/,
   );
+  assert.equal(decoded, true);
   assert.equal(bus.disconnected, true);
   assert.deepEqual(await fs.readFile(path), png);
 });
-it("rejects a clean disconnect during image decoding instead of delivering pixels", async () => {
+it("rejects a clean disconnect during image decoding instead of delivering pixels", async (t) => {
+  // A congested host can spend >100ms in open/stat/read/close. Wall time is
+  // not the event under test: let decoding begin before emitting disconnect.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   const bus = new Bus();
+  let decoded = false;
   await assert.rejects(
     capturePortalActiveAppShot(
       options(bus, {
+        now: () => 0,
         createImage: () => {
+          decoded = true;
           bus._connection.emit("end");
           return image();
         },
@@ -333,14 +344,20 @@ it("rejects a clean disconnect during image decoding instead of delivering pixel
     ),
     /disconnected/,
   );
+  assert.equal(decoded, true);
   assert.equal(bus.disconnected, true);
+  assert.equal(bus._connection.listenerCount("end"), 0);
+  assert.equal(bus._connection.stream.listenerCount("close"), 0);
+  assert.deepEqual(await fs.readFile(path), png);
 });
 for (const failure of ["timeout", "disconnect"])
   it(
     `does not begin decoding after ${failure} while file stat is pending`,
     { timeout: 2_000 },
     async (t) => {
+      t.mock.timers.enable({ apis: ["setTimeout"] });
       const bus = new Bus();
+      let now = 0;
       const originalOpen = fs.open;
       let releaseStat!: () => void;
       let enteredStat!: () => void;
@@ -375,6 +392,7 @@ for (const failure of ["timeout", "disconnect"])
         const rejected = assert.rejects(
           capturePortalActiveAppShot(
             options(bus, {
+              now: () => now,
               createImage: () => {
                 decoded = true;
                 return image();
@@ -384,7 +402,12 @@ for (const failure of ["timeout", "disconnect"])
           failure === "timeout" ? /timed out/ : /disconnected/,
         );
         await statEntered;
-        if (failure === "disconnect") bus._connection.emit("end");
+        if (failure === "disconnect") {
+          bus._connection.emit("end");
+        } else {
+          now = 100;
+          t.mock.timers.tick(100);
+        }
         await rejected;
         assert.equal(bus.disconnected, true);
         releaseStat();
