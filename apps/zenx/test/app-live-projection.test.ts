@@ -1,3 +1,4 @@
+import { finishTestCleanup } from "./test-cleanup.js";
 import {
   emptySidebarState,
   applySidebarPatch,
@@ -3511,122 +3512,129 @@ test("full App Room workspace questions and Asking share one journal despite pri
   const { i18n } = await import("../src/renderer/src/i18n.js");
   await i18n.changeLanguage("en");
   const f = await roomWorkspaceQuestionFixture();
-  const first = await f.publish("member-a"),
-    second = await f.publish("member-b"),
-    foreign = await f.publish("member-a", f.other.id),
-    pawQuestion = await f.publish("member-a", f.paw.id);
-  const owner = { kind: "room" as const, id: f.room.id };
-  const initial = await f.information.read(owner, () => {});
-  await f.information.update(
-    {
-      owner,
-      expectedRevision: initial.revision,
-      basis: initial.basis,
-      operations: initial.layout.widgets.map((widget) => ({
-        op: "set" as const,
-        id: widget.id,
-        visible: false,
-      })),
-    },
-    () => {},
-  );
-  const dispose = pluginUiRegistry.registerTrusted(
-    "room-question-workspace-test",
-    { overview: ({ sdk }) => createElement(RoomsPage, { sdk }) },
-  );
-  const snapshot = {
-    plugins: [
-      {
-        id: "zenx-rooms",
-        displayName: "Rooms",
-        enabled: true,
-        available: true,
-        lifecycle: "enabled",
-        contributionCount: 1,
-        version: "1",
-        source: "bundled",
-      },
-    ],
-    pages: [
-      {
-        key: "zenx-rooms:rooms",
-        pluginId: "zenx-rooms",
-        id: "rooms",
-        title: "Rooms",
-        route: "/plugins/zenx-rooms/rooms",
-        surfaceId: "overview",
-      },
-    ],
-    bundles: [
-      {
-        key: "zenx-rooms:main",
-        pluginId: "zenx-rooms",
-        id: "main",
-        apiVersion: 1,
-        kind: "trusted",
-        entry: "room-question-workspace-test",
-      },
-    ],
-    surfaces: [
-      {
-        key: "zenx-rooms:overview",
-        pluginId: "zenx-rooms",
-        id: "overview",
-        bundleId: "main",
-        exportName: "overview",
-      },
-    ],
-    sidebar: [],
-    subroutes: [],
-    settings: [],
-    panels: [],
-    commands: [],
-    menus: [],
-  } as ZenXPluginSnapshot;
-  let privateQuestionReads = 0;
-  const harness = await mountApp({
-    pluginSnapshot: snapshot,
-    roomQuestions: f.api,
-    information: {
-      read: (id) => f.information.read(id, () => {}),
-      update: (input) => f.information.update(input, () => {}),
-    },
-    sidebarApi: {
-      read: (id) => f.information.readSidebar(id, () => {}),
-      update: (input) => f.information.updateSidebar(input, () => {}),
-      onChanged: (listener) => f.sidebar.onChanged(listener),
-    },
-    threads: async (archived) =>
-      archived
-        ? []
-        : [
-            {
-              ...summary("member-a", "Private A"),
-              userQuestionSummary: { openCount: 11 },
-            },
-            {
-              ...summary("member-b", "Private B"),
-              userQuestionSummary: { openCount: 7 },
-            },
-          ],
-    request: async (method) => {
-      if (method.includes("questions")) privateQuestionReads++;
-      throw Error(
-        "No member Thread question read is authorized by this Room fixture: " +
-          method,
-      );
-    },
-    executeCommand: async (plugin, command) => {
-      assert.equal(plugin, "zenx-rooms");
-      if (command === "list") return { rooms: f.listRooms(), nextCursor: null };
-      throw Error("No Room mutation through UI fixture: " + command);
-    },
-  });
-  const card = (id: string) =>
-    document.querySelector<HTMLElement>(`[data-room-question-id="${id}"]`);
-  const badge = () =>
-    document.querySelector(`[data-room-id="${f.room.id}"] .room-asking-badge`);
+  const cleanup: Array<() => void | Promise<void>> = [() => f.close()];
+  const failures: unknown[] = [];
   try {
+    const first = await f.publish("member-a"),
+      second = await f.publish("member-b"),
+      foreign = await f.publish("member-a", f.other.id),
+      pawQuestion = await f.publish("member-a", f.paw.id);
+    const owner = { kind: "room" as const, id: f.room.id };
+    const initial = await f.information.read(owner, () => {});
+    await f.information.update(
+      {
+        owner,
+        expectedRevision: initial.revision,
+        basis: initial.basis,
+        operations: initial.layout.widgets.map((widget) => ({
+          op: "set" as const,
+          id: widget.id,
+          visible: false,
+        })),
+      },
+      () => {},
+    );
+    const dispose = pluginUiRegistry.registerTrusted(
+      "room-question-workspace-test",
+      { overview: ({ sdk }) => createElement(RoomsPage, { sdk }) },
+    );
+    cleanup.unshift(dispose);
+    const snapshot = {
+      plugins: [
+        {
+          id: "zenx-rooms",
+          displayName: "Rooms",
+          enabled: true,
+          available: true,
+          lifecycle: "enabled",
+          contributionCount: 1,
+          version: "1",
+          source: "bundled",
+        },
+      ],
+      pages: [
+        {
+          key: "zenx-rooms:rooms",
+          pluginId: "zenx-rooms",
+          id: "rooms",
+          title: "Rooms",
+          route: "/plugins/zenx-rooms/rooms",
+          surfaceId: "overview",
+        },
+      ],
+      bundles: [
+        {
+          key: "zenx-rooms:main",
+          pluginId: "zenx-rooms",
+          id: "main",
+          apiVersion: 1,
+          kind: "trusted",
+          entry: "room-question-workspace-test",
+        },
+      ],
+      surfaces: [
+        {
+          key: "zenx-rooms:overview",
+          pluginId: "zenx-rooms",
+          id: "overview",
+          bundleId: "main",
+          exportName: "overview",
+        },
+      ],
+      sidebar: [],
+      subroutes: [],
+      settings: [],
+      panels: [],
+      commands: [],
+      menus: [],
+    } as ZenXPluginSnapshot;
+    let privateQuestionReads = 0;
+    const harness = await mountApp({
+      pluginSnapshot: snapshot,
+      roomQuestions: f.api,
+      information: {
+        read: (id) => f.information.read(id, () => {}),
+        update: (input) => f.information.update(input, () => {}),
+      },
+      sidebarApi: {
+        read: (id) => f.information.readSidebar(id, () => {}),
+        update: (input) => f.information.updateSidebar(input, () => {}),
+        onChanged: (listener) => f.sidebar.onChanged(listener),
+      },
+      threads: async (archived) =>
+        archived
+          ? []
+          : [
+              {
+                ...summary("member-a", "Private A"),
+                userQuestionSummary: { openCount: 11 },
+              },
+              {
+                ...summary("member-b", "Private B"),
+                userQuestionSummary: { openCount: 7 },
+              },
+            ],
+      request: async (method) => {
+        if (method.includes("questions")) privateQuestionReads++;
+        throw Error(
+          "No member Thread question read is authorized by this Room fixture: " +
+            method,
+        );
+      },
+      executeCommand: async (plugin, command) => {
+        assert.equal(plugin, "zenx-rooms");
+        if (command === "list")
+          return { rooms: f.listRooms(), nextCursor: null };
+        throw Error("No Room mutation through UI fixture: " + command);
+      },
+    });
+    cleanup.unshift(() => harness.unmount());
+    const card = (id: string) =>
+      document.querySelector<HTMLElement>(`[data-room-question-id="${id}"]`);
+    const badge = () =>
+      document.querySelector(
+        `[data-room-id="${f.room.id}"] .room-asking-badge`,
+      );
     const open = await waitFor(() =>
       document.querySelector<HTMLButtonElement>(
         `[data-room-id="${f.room.id}"]`,
@@ -3829,9 +3837,9 @@ test("full App Room workspace questions and Asking share one journal despite pri
       0,
       "a human can resolve retained workspace resources with no current member",
     );
+  } catch (error) {
+    failures.push(error);
   } finally {
-    await harness.unmount();
-    dispose();
-    await f.close();
+    await finishTestCleanup(cleanup, failures);
   }
 });
