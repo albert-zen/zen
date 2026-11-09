@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 import {
   NativeInformationService,
@@ -435,7 +436,9 @@ test("unknown write outcome is propagated once with no automatic replay", async 
 });
 
 test("trusted current main document required, including same-URL reload and post-read navigation", async (t) => {
-  const rendererUrl = "file:///synthetic/renderer/index.html";
+  const rendererUrl = pathToFileURL(
+    path.resolve("synthetic/RUNNER~1/renderer/index.html"),
+  ).href;
   for (const override of [
     { ownedWindow: false },
     { mainFrame: false },
@@ -469,7 +472,7 @@ test("trusted current main document required, including same-URL reload and post
     sender: () => ({
       ownedWindow: true,
       mainFrame: true,
-      url: `${rendererUrl}#main`,
+      url: `${rendererUrl.replace("%7E", "~")}#main`,
       document,
       destroyed: false,
     }),

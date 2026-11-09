@@ -1,3 +1,5 @@
+import { AttachmentImage } from "./ImagePresentation.js";
+import type { AttachmentRef } from "../../../../../src/attachment.js";
 import { parseSkillDraft } from "./skill-draft.js";
 import { referenceTitle } from "./reference-draft.js";
 import { memo, useState } from "react";
@@ -6,11 +8,19 @@ import type { PendingSendPresentation } from "./composer-state.js";
 
 export const PendingSendRows = memo(function PendingSendRows({
   messages,
+  onReadAttachment,
+  onOpenImage,
   onRecover,
   onDismiss,
   onCheck,
 }: {
   messages: readonly PendingSendPresentation[];
+  onReadAttachment(attachment: AttachmentRef): Promise<Uint8Array>;
+  onOpenImage(
+    attachment: AttachmentRef,
+    name: string,
+    trigger: HTMLButtonElement,
+  ): void;
   onRecover?(clientId: string): void;
   onDismiss?(clientId: string): void;
   onCheck?(): Promise<void>;
@@ -45,16 +55,24 @@ export const PendingSendRows = memo(function PendingSendRows({
         data-pending-send-client-id={message.clientId}
         data-send-state={message.status}
       >
-        <div className="user-bubble">
-          {displayText && <p className="pending-send-content">{displayText}</p>}
-          {message.draft.images.length > 0 && (
-            <ul aria-label={t("attachedImages")}>
-              {message.draft.images.map((image) => (
-                <li key={image.id}>{image.name}</li>
-              ))}
-            </ul>
-          )}
-        </div>
+        {message.draft.images.length > 0 && (
+          <div className="message-images" aria-label={t("attachedImages")}>
+            {message.draft.images.map((image) => (
+              <AttachmentImage
+                key={image.id}
+                attachment={image.attachment}
+                name={image.name}
+                onReadAttachment={onReadAttachment}
+                onOpen={onOpenImage}
+              />
+            ))}
+          </div>
+        )}
+        {displayText && (
+          <div className="user-bubble">
+            <p className="pending-send-content">{displayText}</p>
+          </div>
+        )}
         <p className="pending-send-status" role="status">
           {t(
             message.status === "sending"

@@ -14,8 +14,8 @@ test("ZenX checks and synthetic UI run independently with a fail-closed compatib
   const { jobs } = workflow;
   assert.ok(jobs["zenx-check"]);
   assert.ok(jobs["zenx-ui"]);
-  assert.equal(jobs["zenx-check"].needs, undefined);
-  assert.equal(jobs["zenx-ui"].needs, undefined);
+  assert.equal(jobs["zenx-check"].needs, "selection");
+  assert.equal(jobs["zenx-ui"].needs, "selection");
   assert.deepEqual(jobs.zenx.needs, ["zenx-check", "zenx-ui"]);
   assert.equal(jobs.zenx.name, "ZenX typecheck, tests, and build");
   assert.equal(jobs.zenx.if, "${{ always() }}");
@@ -57,7 +57,7 @@ test("aggregate stays observed and preview commands do not occupy its runner", (
     const upload = job.steps.find(
       (step) => step.name === "Retain exact checkout provenance",
     );
-    assert.equal(upload.if, "${{ always() }}");
+    assert.equal(upload.if, "${{ env.CI_RUN_FULL == 'true' && (always()) }}");
     assert.match(upload.with.name, /github.run_attempt/);
   }
 });
@@ -130,4 +130,54 @@ test("provenance binds head/base and actual checkout without collecting arbitrar
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("pending steer browser matrix and failure artifacts stay in the synthetic UI lane", () => {
+  const steps = workflow.jobs["zenx-ui"].steps;
+  const capture = steps.find(
+    (s) =>
+      s.name === "Verify pending steer previews against canonical messages",
+  );
+  assert.ok(capture);
+  assert.equal(capture["timeout-minutes"], 5);
+  assert.match(capture.if, /!cancelled\(\)/);
+  assert.match(capture.if, /zenx-dependencies/);
+  assert.match(capture.if, /zenx-fonts/);
+  for (const path of [
+    "tsconfig.steer-image-preview.json",
+    "steer-image-geometry.test.mjs",
+    "build-steer-image-preview.mjs",
+    "capture-steer-image-preview.mjs",
+  ])
+    assert.ok(capture.run.includes(path));
+  const artifact = steps.find(
+    (s) => s.name === "Retain synthetic steer image evidence",
+  );
+  assert.ok(artifact);
+  assert.equal(
+    artifact.if,
+    "${{ env.CI_RUN_FULL == 'true' && (matrix.shard == 'conversation' && always()) }}",
+  );
+  assert.deepEqual(workflow.jobs["zenx-ui"].strategy.matrix.shard, [
+    "overflow",
+    "layout",
+    "conversation",
+  ]);
+  assert.match(capture.if, /matrix\.shard == 'conversation'/);
+  assert.equal(
+    steps.filter((s) => s.run?.includes("capture-steer-image-preview.mjs"))
+      .length,
+    1,
+  );
+  assert.equal(
+    steps.filter((s) => s.with?.name === artifact.with.name).length,
+    1,
+  );
+  assert.equal(artifact.with.path, "${{ runner.temp }}/zenx-steer-image");
+  assert.equal(artifact.with["retention-days"], 14);
+  assert.ok(
+    !workflow.jobs["zenx-check"].steps.some((s) =>
+      s.run?.includes("capture-steer-image-preview.mjs"),
+    ),
+  );
 });

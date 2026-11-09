@@ -5,7 +5,7 @@ import { dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const originalBlob = "95465f2ab89ce41a10553f58af83618f7310e83c";
-export const patchedBlob = "306a3f71b9b19ae6047f88f0f743ae5d5677c559";
+export const patchedBlob = "393cfdd0b1cd53a05c19a35159c9dec28c6deab5";
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const patchPath = fileURLToPath(
   new URL("../patches/legend-list-3.3.5-react.patch", import.meta.url),
