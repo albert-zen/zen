@@ -1,0 +1,66 @@
+{
+  "sourceCommit": "00efffddbfd492dbc16f51487eaacf36b5952d88",
+  "captureFinishedUTC": "2026-11-09T16:41:05.136625+00:00",
+  "type": "Actual native Electron43.2.0, isolated public-API canonical synthetic histories, local FakeModel",
+  "rendering": "QA-only hardware acceleration disabled",
+  "buildLog": "build-second-slice-final.log",
+  "steps": [
+    "01: exact-prefix Fork shows inherited history above canonical copied-history separator and branch continuation below.",
+    "02: click source header navigates to source; source-only continuation present, no Fork separator.",
+    "03: dark mode and Standard contrast selection have non-color checks; labels fit.",
+    "04: click High then Light changes both selections without label movement.",
+    "05: native resize to906x724 reflows Settings navigation; checked Light remains visible.",
+    "06: native scroll exposes contrast and reset action at compact size; no overflowing labels.",
+    "07: click Standard at compact size moves check from High to Standard without pill-width change."
+  ],
+  "limits": [
+    "01-02 captured before a later Appearance-only CSS correction; Fork source is identical to this commit.",
+    "No live provider authentication, actual autonomous agent execution, sustained streaming or pending admission timing established.",
+    "Native screenshot bounds include current window framing; CSS viewport not independently measured.",
+    "Rejected pre-fix contrast overflow image preserved separately, excluded from acceptance pack."
+  ],
+  "files": [
+    {
+      "file": "01-fork-history-boundary.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "sha256": "e7b46ad68c72659f5eb4eae6a2ae7c27bcfd6cb95b8cad6d39bb05006a72708e"
+    },
+    {
+      "file": "02-fork-source-navigation.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "sha256": "66e99d4d6517e522c46753c48f4762aabc05dccaaf2a3407cb1698e2c7dbd8b5"
+    },
+    {
+      "file": "03-appearance-dark-standard.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "sha256": "a0fea20e790bd69f31f9e45d8e897760a5b4fbc161a064378b2b00107e2ef259"
+    },
+    {
+      "file": "04-appearance-light-high.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "sha256": "e2d89da6fffdd975bc0ed7456e5cefa90670560adca0259e15f650f1429e8636"
+    },
+    {
+      "file": "05-appearance-compact-top.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [906, 724],
+      "sha256": "1581f1df56a82c614b18ddf4a9fd6f7de9581499d4be8997033fbd6802b49be6"
+    },
+    {
+      "file": "06-appearance-compact-controls.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [906, 724],
+      "sha256": "0f6f1cbd5e3473266fdc43ab4fb71bedd99ff3bb87cea57a250815252f6c244a"
+    },
+    {
+      "file": "07-appearance-compact-standard.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [906, 724],
+      "sha256": "e881d016c717bae2db369a627641a50b077343a178b413e38a9dcce3d7319250"
+    }
+  ]
+}

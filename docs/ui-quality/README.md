@@ -65,3 +65,19 @@ Review `rubric.md`. Scores summarize observed evidence, not an acceptance gate.
 Functional regressions, false state claims, inaccessible essential actions and
 missing verification remain blockers regardless of scores. Keep each review
 independent and tie it to an immutable commit/evidence manifest.
+
+## Checkpoints and evidence
+
+- First implementation: `checkpoints/first-slice.md`, with native manifests and
+  independent baseline Sol/Terra reviews.
+- Independent paired challenge: `reviews/paired-astra.md` and
+  `reviews/paired-luna.md`. Factual corrections remain explicit; scores are not
+  combined into a target or acceptance number.
+- Second implementation: `checkpoints/second-slice.md`, source
+  `00efffddbfd492dbc16f51487eaacf36b5952d88`, with seven native candidate captures
+  described in `checkpoints/second-slice-candidate-manifest.json`.
+- Reproducible public-API canonical journey seed: `scripts/README.md`.
+- The native screenshots, published reference images and recoverable Git bundle
+  are retained together in the separately delivered evidence archive. Manifests
+  record actual decoded file formats and hashes; historical PNG extensions do
+  not override the capture API's actual JPEG encoding.

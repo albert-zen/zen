@@ -19,6 +19,16 @@ import {
   parseInformationWidget,
 } from "../src/information-layout.js";
 
+async function waitFor(condition: () => unknown, description: string) {
+  const deadline = Date.now() + 2000;
+  while (!condition() && Date.now() < deadline) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+  }
+  assert.ok(condition(), `Timed out waiting for ${description}`);
+}
+
 async function fixture(kind: "thread" | "room" = "thread") {
   await i18n.changeLanguage("en");
   const dom = new JSDOM('<div id="root"></div>', {
@@ -165,9 +175,23 @@ async function fixture(kind: "thread" | "room" = "thread") {
       );
     });
   await render();
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 30));
-  });
+  // The native layout reads the filesystem; a fixed sleep can finish before
+  // its receipt mounts any widgets when other test files are running.
+  await waitFor(
+    () =>
+      document.querySelector(
+        `.editable-information-panel[data-owner="${kind}:${scope.id}"] .information-widget`,
+      ),
+    "initial native information layout",
+  );
+  const waitForIdle = () =>
+    waitFor(
+      () =>
+        !document.querySelector(
+          '.editable-information-panel[data-busy="true"]',
+        ),
+      "native information edit to settle",
+    );
   const click = async (text: string, container: ParentNode = document) => {
     const button = [
       ...container.querySelectorAll<HTMLButtonElement>("button"),
@@ -257,6 +281,7 @@ async function fixture(kind: "thread" | "room" = "thread") {
       };
     },
     click,
+    waitForIdle,
     row,
     change,
     fail: (value: typeof fail) => {
@@ -474,8 +499,8 @@ test("retained conflict and in-flight edits survive closing/reopening without an
     assert.equal(reapply.disabled, true);
     await act(async () => {
       release();
-      await new Promise((resolve) => setTimeout(resolve, 50));
     });
+    await f.waitForIdle();
     assert.doesNotMatch(document.body.textContent!, /Retained edit/);
     assert.equal(
       f.updates.length,
