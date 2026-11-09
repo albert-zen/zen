@@ -82,3 +82,71 @@ CSS hunk, run the bounded joint regression suite and build, then capture matched
 native journeys. Review the resulting evidence independently and iterate on real
 remaining defects. Full App/large-history resource gaps, other platforms,
 assistive technologies and post-Stop recovery limits remain open.
+
+## Reviewed candidate and recovery update
+
+The source candidate is frozen at local
+`f1a19f19bd941d06eb924618664e89ed399404ac`, tree
+`6c8a56d312c452c94dab1492d227f8bece014b71`. Its verified remote checkpoint 18 is
+`d39a3b990fd8c5b2934261abf5ee79e539f9e415`. Five final changed files, parent,
+blob identities/modes and non-force branch readback match; fixed bundle and
+isolated-index patch restoration reproduce the exact tree. The intervening
+checkpoint 17 remote is `1d89c84769d48ad32244c4a9f3bd9b31bfcca5a3`, with tree
+`77a8a0665909e5ca08b34609d6203334a59b01b0`.
+
+The earlier Room issues above have now been addressed in reviewed commit
+`b0967e80a6ec1c63656d2cd138872e0407cb7bd6`: 32 focused tests cover mutation
+warnings, stale read settlement and current-read failure/recovery dismissal
+focus. Independent Terra source re-review found no further actionable issue in
+scope. Account commit `e75a1db1a3457057a23b40a0bf1e8ae6a9feceab` supplies
+synchronous action exclusion, localized pending feedback, owner fencing and
+Account-local errors without losing General drafts. Author and independent Sol
+runs each passed 158 Settings tests. Concurrent Node typechecks were killed with
+exit 137 under resource pressure; those outcomes remain recorded. A subsequent
+Node-only serialized check passed, as did renderer types and scoped formatting.
+
+Independent Sol also reproduced a new sidebar menu/name-preview dismissal
+regression against the exact old baseline. It was corrected in `f1a19f19`, with
+23 Room tests and the reviewer's original two-case comparison plus three affected
+cases passing. Escape now dismisses the menu once and returns focus; previews
+resume after it closes. Full findings and source hashes are retained in
+`../reviews/round-six-room-entry-terra.md` and
+`../reviews/round-six-sidebar-account-sol.md`. These are code/test reviews, not
+native visual certification.
+
+The isolated combined candidate is
+`c9d9d635259d774b60456c1d515f2addb9992478`, tree
+`23ae20d17e714b6630bbdebb15d254b30e79ddbe`. Eight authorized source commits
+applied without conflict. Fourteen non-styles changed files exactly match the
+UI candidate; the fourteen protected #748 files, 36-line fullscreen CSS block
+and main CI workflow remain unchanged. The 43-file focused suite, two bounded
+App groups, types and one build are running serially. Their final outcome and
+matched native after evidence are still pending at this entry.
+
+## Completed-evidence archive
+
+The separate immutable baseline backup
+`zenx-ui-quality-round-six-baseline-evidence.zip` has 81 entries, 6,922,452 bytes,
+SHA-256 `f1facb9cbd9dcdfd96282e2c5c7a42317e6a5ab6cac27a9ef588985a765741ab`.
+It preserves the 65 original Zen QA JPEGs, five original public-reference PNGs,
+manifests, safe assertions and independent baseline reports. Independent audit
+verified all entry/image hashes, performed OCR on all 70 images and manually
+inspected 18 originals. No actual credential or user-private identity was
+identified; the declared Account identity is fictional `qa@example.test`.
+This is bounded screening, not an absolute guarantee or final-candidate archive.
+QA paths/timestamps and public publisher context remain visible. Two public PNGs
+retain original date metadata; the originals were not altered or described as
+fully synthetic or metadata-free. Raw profiles, auth files, Trace, runtime
+journals, executable fixtures and underlying tool-result files are excluded.
+
+## Measured next-iteration questions
+
+`../reviews/round-six-source-contrast.md` resolves source tokens and alpha
+compositing across 36 theme combinations. Ordinary General/Account/Models copy
+exceeds the inspected text targets; there is no evidence for globally brightening
+that copy. Narrower pairs require native confirmation and focused follow-up:
+selected Appearance supporting text at 4.10–4.26:1 in dark Graphite Standard,
+light tinted error text at 4.25–4.49:1, and some dark select boundaries at
+2.44–2.85:1. Border ratios alone do not establish WCAG failure. No theme change
+was made to the frozen candidate. Source calculations, screenshots, native
+computed styles and accessibility certification must remain separate evidence.
