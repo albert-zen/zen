@@ -12349,16 +12349,32 @@ button:disabled {
   outline: none;
 }
 
-/* Fullscreen's leading conversation tab reveals the existing main surface in
-   place. Its React/DOM identity, composer and reading state never move. */
+/* Keep fullscreen conversation geometry even behind a resource tab. A zero
+   width (or display:none at the narrow breakpoint) collapses the virtual
+   transcript's scroll range and overwrites a paused reader's position. Only
+   visibility changes between tabs; split/narrow resource layouts stay intact. */
+.workspace:has(> .auxiliary-panel[data-open="true"][data-expanded="true"])
+  > :is(.agent-surface, .plugin-product-page) {
+  display: grid;
+  width: calc(100% - var(--information-dock-reserved-width, 0px));
+  padding-top: var(--native-titlebar-height, 44px);
+}
 .workspace:has(
     > .auxiliary-panel[data-open="true"][data-expanded="true"][data-primary-active="true"]
   )
   > :is(.agent-surface, .plugin-product-page) {
-  display: grid;
   visibility: visible;
-  width: calc(100% - var(--information-dock-reserved-width, 0px));
-  padding-top: var(--native-titlebar-height, 44px);
+}
+/* Descendants such as expanded traces can explicitly restore visibility.
+   Keep those too out of painting, hit testing and keyboard navigation. */
+.workspace:has(
+    > .auxiliary-panel[data-open="true"][data-expanded="true"]:not(
+        [data-primary-active="true"]
+      )
+  )
+  > :is(.agent-surface, .plugin-product-page)
+  * {
+  visibility: hidden;
 }
 .auxiliary-panel[data-primary-active="true"] {
   background: transparent;

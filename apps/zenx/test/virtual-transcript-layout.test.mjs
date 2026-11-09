@@ -83,3 +83,31 @@ test("vertical row containers can shrink below Legend's previous measured width"
     /\.experimental-transcript-viewport > \.virtual-transcript-content > div\s*\{\s*min-width: 0 !important;\s*max-width: 100%;/,
   );
 });
+
+// The native scroll range must not collapse while a fullscreen resource covers
+// the conversation. DOM identity alone is not enough to preserve a paused reader.
+test("fullscreen tab changes retain hidden conversation geometry", () => {
+  const fullscreen = css.slice(
+    css.indexOf("/* Keep fullscreen conversation geometry"),
+  );
+  const geometry = fullscreen.match(
+    /\.workspace:has\(> \.auxiliary-panel\[data-open="true"\]\[data-expanded="true"\]\)\s*> :is\(\.agent-surface, \.plugin-product-page\)\s*\{([^}]+)\}/,
+  )?.[1];
+  assert.ok(geometry, "geometry must apply to every fullscreen tab");
+  assert.match(geometry, /display:\s*grid;/);
+  assert.match(
+    geometry,
+    /width:\s*calc\(100% - var\(--information-dock-reserved-width, 0px\)\);/,
+  );
+  assert.match(
+    geometry,
+    /padding-top:\s*var\(--native-titlebar-height, 44px\);/,
+  );
+  assert.doesNotMatch(geometry, /visibility:\s*visible/);
+  const selected = fullscreen.match(
+    /\[data-primary-active="true"\][\s\S]*?> :is\(\.agent-surface, \.plugin-product-page\)\s*\{([^}]+)\}/,
+  )?.[1];
+  assert.ok(selected);
+  assert.match(selected, /visibility:\s*visible;/);
+  assert.doesNotMatch(selected, /display:|width:|padding-top:/);
+});

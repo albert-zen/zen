@@ -71,14 +71,14 @@ function makeThread(id: string, title: string): Thread {
     agentRole: null,
     gitInfo: null,
     name: title,
-    turns: Array.from({ length: 8 }, (_, index) => ({
+    turns: Array.from({ length: 80 }, (_, index) => ({
       id: `${id}-turn-${index}`,
       items: [
         {
           type: "agentMessage" as const,
           id: `${id}-message-${index}`,
           text:
-            index === 7
+            index === 79
               ? text(
                   "The reference page is ready. Expand the workspace to keep reading that page, or select the first tab to return to this conversation.\n\nYour unsent draft stays in the same composer.",
                   "参考网页已准备好。展开工作区后会继续显示该网页，也可以点击第一个标签回到主聊天。\n\n未发送草稿始终保留在同一个输入框中。",
@@ -206,22 +206,20 @@ const rooms = [
     name: names["room-a"],
     members: [{ name: names["thread-a"], threadId: "thread-a" }],
     createdAt: now,
-    messages: [
-      {
-        id: "room-agent-message",
-        kind: "agent",
-        author: names["thread-a"],
-        roomId: "room-a",
-        originThreadId: "thread-a",
-        originTurnId: null,
-        text: text(
-          "This is the Room conversation, not its member’s execution Thread. The first fullscreen tab returns to this exact Room view.",
-          "这里是 Room 对话，不是成员的执行线程。全屏中的第一个标签返回同一个 Room 对话视图。",
-        ),
-        createdAt: now,
-        mentions: [],
-      },
-    ],
+    messages: Array.from({ length: 40 }, (_, index) => ({
+      id: `room-agent-message-${index}`,
+      kind: "agent",
+      author: names["thread-a"],
+      roomId: "room-a",
+      originThreadId: "thread-a",
+      originTurnId: null,
+      text: text(
+        "This is the Room conversation, not its member’s execution Thread. The first fullscreen tab returns to this exact Room view.",
+        "这里是 Room 对话，不是成员的执行线程。全屏中的第一个标签返回同一个 Room 对话视图。",
+      ),
+      createdAt: now + index,
+      mentions: [],
+    })),
   },
 ];
 const roomSdk = {
