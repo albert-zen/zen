@@ -484,7 +484,7 @@ test("loading and failed Rooms reads do not masquerade as healthy empty Rooms", 
     await act(async () =>
       root.render(React.createElement(RoomsPage, { sdk: recoveredSdk })),
     );
-    assert.equal(document.querySelector('[role="alert"]'), null);
+    assert.ok(document.querySelector('[role="alert"]') === null);
     assert.equal(
       document.querySelector(".rooms-chat-empty button")?.textContent,
       "New Room",
@@ -557,4 +557,333 @@ for (const scenario of [
       dom.window.close();
     }
   });
+}
+
+for (const dismissal of ["Close", "Escape"]) {
+  test(`unknown Room creation preserves empty entry, warning and focus after ${dismissal}`, async () => {
+    const dom = new JSDOM('<div id="root"></div>', {
+      url: "http://localhost",
+      pretendToBeVisual: true,
+    });
+    Object.assign(globalThis, {
+      window: dom.window,
+      document: dom.window.document,
+      React,
+      IS_REACT_ACT_ENVIRONMENT: true,
+      requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+    });
+    Object.assign(window, {
+      zenx: {
+        threads: {
+          list: async () => [
+            {
+              threadId: "member-thread",
+              name: "Member conversation",
+              preview: "Member conversation",
+              status: "idle",
+              archived: false,
+              currentMetadata: { cwd: "/work" },
+            },
+          ],
+        },
+      },
+    });
+    let creates = 0;
+    const sdk = {
+      context: { route: "/plugins/zenx-rooms/rooms", primaryNavigation: true },
+      commands: {
+        execute: async (command: string) => {
+          if (command === "list") return { rooms: [] };
+          if (command === "create") {
+            creates++;
+            throw Error("Creation response lost");
+          }
+          throw Error(command);
+        },
+      },
+    } as unknown as PluginUiSdkV1;
+    const root = createRoot(document.getElementById("root")!);
+    try {
+      await act(async () =>
+        root.render(React.createElement(RoomsPage, { sdk })),
+      );
+      const entry = document.querySelector<HTMLButtonElement>(
+        ".rooms-chat-empty button",
+      )!;
+      entry.focus();
+      await act(async () => entry.click());
+      for (const [label, value] of [
+        ["Room name", "New room"],
+        ["Member name", "Member"],
+      ]) {
+        await act(async () => {
+          const input = [...document.querySelectorAll("label")]
+            .find((node) => node.querySelector("span")?.textContent === label)!
+            .querySelector("input")!;
+          Object.getOwnPropertyDescriptor(
+            dom.window.HTMLInputElement.prototype,
+            "value",
+          )!.set!.call(input, value);
+          input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+        });
+      }
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>(
+            '[aria-label="Member conversation"]',
+          )!
+          .click(),
+      );
+      await act(async () =>
+        document
+          .querySelector<HTMLElement>(
+            '[role=option][data-value="member-thread"]',
+          )!
+          .click(),
+      );
+      const submit = [
+        ...document.querySelectorAll<HTMLButtonElement>("button"),
+      ].find((button) => button.textContent === "Create Room")!;
+      assert.equal(submit.disabled, false);
+      await act(async () => submit.click());
+      assert.equal(creates, 1);
+      assert.match(
+        document.querySelector('[role="dialog"]')!.textContent!,
+        /Result unknown; refresh before repeating/,
+      );
+      if (dismissal === "Close") {
+        await act(async () =>
+          [
+            ...document.querySelectorAll<HTMLButtonElement>(
+              '[role="dialog"] button',
+            ),
+          ]
+            .find((button) => button.textContent === "Close")!
+            .click(),
+        );
+      } else {
+        await act(async () =>
+          document.querySelector('[role="dialog"]')!.dispatchEvent(
+            new dom.window.KeyboardEvent("keydown", {
+              key: "Escape",
+              bubbles: true,
+            }),
+          ),
+        );
+      }
+      await new Promise((resolve) => dom.window.requestAnimationFrame(resolve));
+      assert.ok(
+        document.querySelector(".rooms-chat-empty button") === entry,
+        "mutation failure must not retire the healthy empty entry",
+      );
+      assert.equal(document.activeElement, entry);
+      assert.doesNotMatch(
+        document.querySelector("main")!.textContent!,
+        /Rooms are unavailable/,
+      );
+      assert.match(
+        document.querySelector('main [role="alert"]')!.textContent!,
+        /Result unknown; refresh before repeating/,
+      );
+      await act(async () => entry.click());
+      assert.equal(
+        creates,
+        1,
+        "opening the form never retries unknown creation",
+      );
+      assert.match(
+        document.querySelector('[role="dialog"]')!.textContent!,
+        /Result unknown; refresh before repeating/,
+      );
+    } finally {
+      await act(async () => root.unmount());
+      dom.window.close();
+    }
+  });
+}
+
+for (const latestState of ["loaded", "loading"] as const) {
+  test(`retired Rooms read rejection cannot replace newer ${latestState} state`, async () => {
+    const dom = new JSDOM('<div id="root"></div>', {
+      url: "http://localhost",
+      pretendToBeVisual: true,
+    });
+    Object.assign(globalThis, {
+      window: dom.window,
+      document: dom.window.document,
+      React,
+      IS_REACT_ACT_ENVIRONMENT: true,
+    });
+    Object.assign(window, { zenx: { threads: { list: async () => [] } } });
+    let rejectOld!: (reason: Error) => void;
+    let resolveNew!: (result: unknown) => void;
+    const oldRead = new Promise((_, reject) => {
+      rejectOld = reject;
+    });
+    const newRead = new Promise((resolve) => {
+      resolveNew = resolve;
+    });
+    const sdk = (read: Promise<unknown>) =>
+      ({
+        context: {
+          route: "/plugins/zenx-rooms/rooms",
+          primaryNavigation: true,
+        },
+        commands: {
+          execute: async (command: string) => {
+            assert.equal(command, "list");
+            return read;
+          },
+        },
+      }) as unknown as PluginUiSdkV1;
+    const root = createRoot(document.getElementById("root")!);
+    try {
+      await act(async () =>
+        root.render(React.createElement(RoomsPage, { sdk: sdk(oldRead) })),
+      );
+      await act(async () =>
+        root.render(React.createElement(RoomsPage, { sdk: sdk(newRead) })),
+      );
+      if (latestState === "loaded")
+        await act(async () => resolveNew({ rooms: [] }));
+      await act(async () => rejectOld(Error("Stale source failure")));
+      assert.ok(document.querySelector('[role="alert"]') === null);
+      if (latestState === "loading") {
+        assert.match(
+          document.querySelector('[role="status"]')!.textContent!,
+          /Loading rooms/,
+        );
+        assert.equal(document.querySelector(".rooms-chat-empty button"), null);
+        await act(async () => resolveNew({ rooms: [] }));
+      }
+      assert.equal(
+        document.querySelector(".rooms-chat-empty button")?.textContent,
+        "New Room",
+      );
+    } finally {
+      await act(async () => root.unmount());
+      dom.window.close();
+    }
+  });
+}
+
+for (const dismissal of ["Close", "Escape"]) {
+  for (const target of [
+    "primary rail",
+    "local rail",
+    "main",
+    "recovered entry",
+    "disabled primary rail",
+    "hidden primary rail",
+  ] as const) {
+    test(`Rooms read failure restores focus to ${target} after ${dismissal}`, async () => {
+      const rail = target.includes("primary rail")
+        ? `<section class="room-conversation-group" ${target === "hidden primary rail" ? "hidden" : ""}><button class="room-conversation-create" ${target === "disabled primary rail" ? "disabled" : ""}>New room</button><div id="sidebar-room-conversations"></div></section>`
+        : "";
+      const dom = new JSDOM(`${rail}<div id="root"></div>`, {
+        url: "http://localhost",
+        pretendToBeVisual: true,
+      });
+      Object.assign(globalThis, {
+        window: dom.window,
+        document: dom.window.document,
+        React,
+        IS_REACT_ACT_ENVIRONMENT: true,
+        requestAnimationFrame: dom.window.requestAnimationFrame.bind(
+          dom.window,
+        ),
+      });
+      Object.assign(window, { zenx: { threads: { list: async () => [] } } });
+      const sdk = (fail = false) =>
+        ({
+          context: {
+            route: "/plugins/zenx-rooms/rooms",
+            primaryNavigation: target !== "local rail",
+          },
+          commands: {
+            execute: async (command: string) => {
+              assert.equal(command, "list", "opening/dismissing never creates");
+              if (fail) throw Error("Current Room read failed");
+              return { rooms: [] };
+            },
+          },
+        }) as unknown as PluginUiSdkV1;
+      const root = createRoot(document.getElementById("root")!);
+      try {
+        await act(async () =>
+          root.render(React.createElement(RoomsPage, { sdk: sdk() })),
+        );
+        const entry = document.querySelector<HTMLButtonElement>(
+          ".rooms-chat-empty button",
+        )!;
+        entry.focus();
+        await act(async () => entry.click());
+        await act(async () =>
+          root.render(React.createElement(RoomsPage, { sdk: sdk(true) })),
+        );
+        assert.equal(entry.isConnected, false);
+        assert.match(
+          document.querySelector("main")!.textContent!,
+          /Rooms are unavailable.*Current Room read failed/,
+        );
+        if (target === "recovered entry")
+          await act(async () =>
+            root.render(React.createElement(RoomsPage, { sdk: sdk() })),
+          );
+        if (dismissal === "Close") {
+          await act(async () =>
+            [
+              ...document.querySelectorAll<HTMLButtonElement>(
+                '[role="dialog"] button',
+              ),
+            ]
+              .find((button) => button.textContent === "Close")!
+              .click(),
+          );
+        } else {
+          await act(async () =>
+            document.querySelector('[role="dialog"]')!.dispatchEvent(
+              new dom.window.KeyboardEvent("keydown", {
+                key: "Escape",
+                bubbles: true,
+              }),
+            ),
+          );
+        }
+        await new Promise((resolve) =>
+          dom.window.requestAnimationFrame(resolve),
+        );
+        const expected = document.querySelector(
+          target === "primary rail"
+            ? ".room-conversation-create"
+            : target === "local rail"
+              ? ".rooms-chat-list-head button"
+              : target === "recovered entry"
+                ? ".rooms-chat-empty button"
+                : "main",
+        );
+        assert.ok(
+          expected && document.activeElement === expected,
+          `focus should return to live ${target}`,
+        );
+        if (expected?.tagName === "MAIN") {
+          assert.equal(expected.getAttribute("tabindex"), "-1");
+          assert.equal(expected.getAttribute("aria-label"), "Rooms");
+        }
+        if (target !== "recovered entry") {
+          assert.match(
+            document.querySelector("main")!.textContent!,
+            /Rooms are unavailable.*Current Room read failed/,
+          );
+          assert.equal(
+            document.querySelector(".rooms-chat-empty button"),
+            null,
+          );
+        }
+      } finally {
+        await act(async () => root.unmount());
+        dom.window.close();
+      }
+    });
+  }
 }
