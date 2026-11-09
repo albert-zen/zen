@@ -38,6 +38,17 @@ import "./fullscreen-primary-chat-preview.css";
 
 Object.assign(globalThis, { React });
 const query = new URLSearchParams(location.search);
+const nativeBridge = (
+  window as unknown as {
+    __nativeFullscreenBridge?: { mount(request: unknown): Promise<void> };
+  }
+).__nativeFullscreenBridge;
+const nativeMode = query.get("native") === "1";
+if (nativeMode && !nativeBridge)
+  throw Error("Native fixture requires its isolated preload bridge");
+const streamListeners = new Set<
+  (threadId: string, complete: boolean) => void
+>();
 const zh = query.get("lang") === "zh-CN";
 document.documentElement.dataset.appearance = query.get("theme") ?? "light";
 document.documentElement.dataset.themePreset = "graphite";
@@ -154,6 +165,9 @@ const browserListeners = new Set<(event: BrowserThreadEvent) => void>();
 Object.assign(window, {
   __fullscreenPrimaryPreview: {
     receipts,
+    stream(threadId: string, complete = false) {
+      for (const listener of streamListeners) listener(threadId, complete);
+    },
     preview(threadId: string, sequence: number) {
       for (const listener of browserListeners)
         listener({
@@ -223,6 +237,11 @@ Object.assign(window, {
           tabId: request.tabId,
           visible: Boolean(request.bounds),
         });
+        if (nativeMode) {
+          await nativeBridge!.mount(request);
+          publishReceipt();
+          return;
+        }
         lastLease = request.lease;
         if (request.bounds) {
           if (currentLease !== request.lease) showCount++;
@@ -291,6 +310,50 @@ const noAction = async () => {
 
 function Preview() {
   useSyncExternalStore(subscribeReceipts, receiptSnapshot);
+  const [liveThreads, setLiveThreads] = useState(threads);
+  useEffect(() => {
+    const stream = (id: string, complete: boolean) =>
+      setLiveThreads((current) => {
+        const thread = current[id];
+        if (!thread) throw Error("Unknown synthetic stream owner");
+        const turns = thread.turns.map((turn, index) =>
+          index !== thread.turns.length - 1
+            ? turn
+            : {
+                ...turn,
+                status: complete
+                  ? ("completed" as const)
+                  : ("inProgress" as const),
+                completedAt: complete ? now + 100 : null,
+                durationMs: complete ? 1000 : null,
+                items: turn.items.map((item) =>
+                  item.type === "agentMessage"
+                    ? {
+                        ...item,
+                        text:
+                          item.text +
+                          (complete ? "" : "\nSynthetic streamed text chunk."),
+                      }
+                    : item,
+                ),
+              },
+        );
+        return {
+          ...current,
+          [id]: {
+            ...thread,
+            status: complete
+              ? { type: "idle" as const }
+              : { type: "active" as const, activeFlags: [] },
+            turns,
+          },
+        };
+      });
+    streamListeners.add(stream);
+    return () => {
+      streamListeners.delete(stream);
+    };
+  }, []);
   const [owner, setOwner] = useState<Owner>(
     (query.get("owner") as Owner) in names
       ? (query.get("owner") as Owner)
@@ -365,6 +428,15 @@ function Preview() {
     >
       <div
         className="app-shell fullscreen-primary-preview"
+        data-stream-status={liveThreads[threadId]!.turns.at(-1)!.status}
+        data-streamed-chunks={liveThreads[threadId]!.turns.at(-1)!.items.reduce(
+          (count, item) =>
+            count +
+            (item.type === "agentMessage"
+              ? (item.text.match(/Synthetic streamed text chunk/g) ?? []).length
+              : 0),
+          0,
+        )}
         style={
           { "--workspace-panel-width": `${width}px` } as React.CSSProperties
         }
@@ -476,7 +548,7 @@ function Preview() {
               id="primary-conversation-content"
               className="agent-surface"
             >
-              {renderThread(owner, threads[owner]!)}
+              {renderThread(owner, liveThreads[owner]!)}
             </section>
           )}
           <AuxiliaryPanel
