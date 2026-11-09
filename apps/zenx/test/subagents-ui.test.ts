@@ -1147,3 +1147,75 @@ test("embedded lineage keeps its creation action but leaves the heading to the o
     await f.close();
   }
 });
+
+test("ordinary Information distinguishes empty lineage from failed reads and Retry recovers", async () => {
+  await i18n.changeLanguage("en");
+  let fail = true;
+  const visible: boolean[] = [];
+  const f = await fixture(
+    async () => {
+      if (fail) throw new Error("Synthetic unavailable lineage");
+      return { threads: [] };
+    },
+    undefined,
+    {
+      report: (value) => visible.push(value),
+      manageMode: false,
+      embedded: true,
+    },
+  );
+  try {
+    await f.render("parent");
+    assert.equal(visible.at(-1), true);
+    assert.match(
+      f.dom.window.document.querySelector('[role="alert"]')!.textContent!,
+      /Synthetic unavailable lineage/,
+    );
+    fail = false;
+    await f.click(f.button("Retry"));
+    assert.equal(visible.at(-1), false);
+    assert.equal(f.dom.window.document.querySelector(".subagents-panel"), null);
+    assert.deepEqual(
+      f.calls.map((call) => call.commandId),
+      ["list", "list"],
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("ordinary Information retires old-owner lineage failures and ignores late rejected reads", async () => {
+  await i18n.changeLanguage("en");
+  let rejectOld!: (cause: Error) => void;
+  const visible: boolean[] = [];
+  const f = await fixture(
+    async ({ input }) => {
+      const parent = (input as { parentThreadId: string }).parentThreadId;
+      if (parent === "failed") throw new Error("Synthetic old-owner failure");
+      if (parent === "pending")
+        return new Promise((_resolve, reject) => {
+          rejectOld = reject;
+        });
+      return { threads: [] };
+    },
+    undefined,
+    {
+      report: (value) => visible.push(value),
+      manageMode: false,
+      embedded: true,
+    },
+  );
+  try {
+    await f.render("failed");
+    assert.ok(f.dom.window.document.querySelector('[role="alert"]'));
+    await f.render("pending");
+    assert.equal(f.dom.window.document.querySelector('[role="alert"]'), null);
+    await f.render("current");
+    await act(async () => rejectOld(new Error("Synthetic late failure")));
+    assert.equal(visible.at(-1), false);
+    assert.equal(f.dom.window.document.querySelector(".subagents-panel"), null);
+    assert.deepEqual(f.routes, []);
+  } finally {
+    await f.close();
+  }
+});

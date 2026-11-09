@@ -124,7 +124,10 @@ function ConversationInformationContent({
   const [busyTrigger, setBusyTrigger] = useState<string | null>(null);
   const [triggerError, setTriggerError] = useState<string | null>(null);
   const triggersVisible =
-    show("triggers") && (triggers.length > 0 || !!triggerError);
+    show("triggers") &&
+    (triggers.length > 0 ||
+      !!triggerError ||
+      (admissionId !== null && state.status === "error"));
   const visible =
     !!attention ||
     triggersVisible ||

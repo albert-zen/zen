@@ -550,7 +550,7 @@ function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
   const hasArchived = all.some(
     (entry) => entry.archived && entry.parentThreadId === parent,
   );
-  const visible = !!tree || hasArchived;
+  const visible = !!tree || hasArchived || error !== null;
   useEffect(() => {
     information?.report(visible);
   }, [information, visible]);
