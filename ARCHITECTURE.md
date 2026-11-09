@@ -1841,3 +1841,5 @@ Question-list read recovery is a disposable mounted-view concern: existing autho
 - **Tiered CI risk policy** — Every PR, draft or ready, receives static feedback and an explicit union of path-based risk lanes plus current-run bound unit files, while the complete aggregate remains on main/manual; unknown evidence retains all PR risk lanes, typed omission receipts never claim full acceptance, and existing native work remains mandatory for its selected risk.
 
 CI 桌面归档缓存只持久化按平台、架构、版本和 SHA256 定址且重新核验的 Electron ZIP / RTK tarball；Electron 校验投影绑定 npm lock 的官方包完整性，安装与打包共用显式缓存根，缓存命中不代表产品验收。
+
+`build:fixtures` 保留第一方插件（含 Plugin SDK）准备并编译既有主进程、preload 和 renderer bundle，供已确认不消费产品资源的独立 Browser/File fixture 使用；默认 `build`、完整 App 验收和打包仍保留插件与 RTK 资源准备，fixture 构建不代表产品完整性验收。
