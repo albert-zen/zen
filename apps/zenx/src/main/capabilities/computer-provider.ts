@@ -4183,6 +4183,16 @@ struct DesktopFence: Equatable {
   static func == (_ lhs: DesktopFence, _ rhs: DesktopFence) -> Bool {
     return lhs.foreground == rhs.foreground && lhs.pointer == rhs.pointer && lhs.displayAsleep == rhs.displayAsleep && lhs.windows == rhs.windows
   }
+  // Diagnostic names only: no foreign identities, titles, positions or window IDs.
+  // Keep admission in ==; these fields explain that existing decision, never relax it.
+  func changedFields(from baseline: DesktopFence) -> [String] {
+    var fields: [String] = []
+    if foreground != baseline.foreground { fields.append("foreground_application") }
+    if pointer != baseline.pointer { fields.append("pointer_position") }
+    if displayAsleep != baseline.displayAsleep { fields.append("display_sleep") }
+    if windows != baseline.windows { fields.append("window_order_or_membership") }
+    return fields
+  }
   func matchesApplicationContext(from baseline: DesktopFence, targetPID: pid_t) -> Bool {
     guard metadataComplete, baseline.metadataComplete,
           targetPID > 0, foreground == baseline.foreground, pointer == baseline.pointer,
@@ -4676,6 +4686,13 @@ func captureWindow(_ binding: Binding, _ path: String, _ diagnosticRequestId: St
   captureProgress(.completed, requestId)
   return ["width": image.width, "height": image.height, "coordinateSpace": "full_window_pixels_top_left", "source": displayAsleep ? "window_server_exact_window" : "screen_capture_kit_exact_window"]
 }
+// Reuse one fresh snapshot for both the existing admission test and its explanation.
+func requireUnchangedDesktop(_ baseline: DesktopFence, _ message: String) throws {
+  let current = try DesktopFence()
+  guard current == baseline else {
+    try refuse(message + "; changed=" + current.changedFields(from: baseline).joined(separator: ","))
+  }
+}
 // Only this operation uses PID-scoped window-local packets. Foreground input below
 // retains its explicit global/activation semantics; there is no fallback between them.
 func backgroundClickPair(_ binding: Binding, _ request: [String: Any], _ posted: inout Int) throws {
@@ -4744,12 +4761,12 @@ func backgroundClickPair(_ binding: Binding, _ request: [String: Any], _ posted:
     let activation = try appStateEvent(1)
     deactivation = try appStateEvent(2)
     try windowInputPermission(); try binding.verify()
-    guard try DesktopFence() == baseline else { try refuse("Desktop changed before app-local preparation") }
+    try requireUnchangedDesktop(baseline, "Desktop changed before app-local preparation")
     postToTarget(activation, binding.app.processIdentifier); preparationPosted = true
     usleep(30_000)
   }
   try windowInputPermission(); try binding.verify()
-  guard try DesktopFence() == baseline else { try refuse("Desktop changed before background input") }
+  try requireUnchangedDesktop(baseline, "Desktop changed before background input")
   // Both events are prebuilt. Cancellation and stale window state do not gate
   // deferred up; application birth identity is revalidated before cleanup.
   emit(["phase": "backgroundPairStarted"])
@@ -4765,7 +4782,7 @@ func backgroundClick(_ binding: Binding, _ request: [String: Any], _ posted: ino
   usleep(30_000)
   try binding.verifyApplication()
   try windowInputPermission()
-  guard try DesktopFence() == baseline else { try refuse("Desktop focus/pointer/window order changed after background posting") }
+  try requireUnchangedDesktop(baseline, "Desktop focus/pointer/window order changed after background posting")
 }
 
 // Application scope deliberately does not verify the old window, AX focus or geometry.
