@@ -2728,16 +2728,10 @@ export async function runTargetedInputContractSmoke(options: {
             acknowledgedDispatches: 0,
             settlementReads: 0,
           };
-          const screenshot = await rpc.send("Page.captureScreenshot", {
-            format: "png",
-            fromSurface: true,
-            captureBeyondViewport: false,
-          });
-          assert.ok(
-            typeof screenshot.data === "string" && screenshot.data.length > 0,
-            "Direct fixture needs a real read-only compositor capture before input",
-          );
-          remoteWitness.compositorCaptured = true;
+          // This independent input oracle consumes DOM focus/geometry and
+          // verifies the trusted pair and its exact effect below, not pixels.
+          // Product input separately requires inspect()'s captured image and
+          // coherent observation. Do not gate this oracle on a second capture.
           await guard();
           if (kind === "click") {
             const position = await rpc.evaluate<RemoteFixturePoint>(
