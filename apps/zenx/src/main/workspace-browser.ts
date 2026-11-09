@@ -5,6 +5,7 @@ import {
 import {
   assertBrowserInputSnapshot,
   browserInputSnapshotScript,
+  browserInputReleaseParameters,
   browserTargetedInputPolicy,
   browserInputProbeScript,
   dispatchBrowserTargetedInput,
@@ -40,6 +41,7 @@ import {
   BrowserScreenshotArtifactStore,
   redactBrowserUrl,
   resolveBrowserObservedTarget,
+  submitBrowserTyping,
   type BrowserInspection,
   type BrowserLiveObservationListener,
   type BrowserObservation,
@@ -97,7 +99,14 @@ interface Tab {
   handoffMode: boolean;
   agentActionsInFlight: number;
   agentActionOutcomeUnknown: boolean;
+  /** Set while new site input is withheld; reads and programmatic actions stay open. */
   inputQuarantine?: string;
+  /** Key whose release was never acknowledged, enabling one exact release. */
+  inputQuarantineKey?: BrowserInputKey;
+  /** Set once the single controlled release attempt has been spent. */
+  inputQuarantineReset?: "attempted";
+  /** When the withheld input started, for summaries and diagnostics. */
+  inputQuarantineSince?: number;
   inputInFlight?: boolean;
   inputLifecycleRevision: number;
   frameEvidence: BrowserFrameEvidence;
@@ -1193,6 +1202,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     signal?: AbortSignal,
   ): Promise<BrowserTabSummary> {
     const tab = this.#requireAgentTab(sessionId, tabId);
+    this.#assertSiteInputAllowed(tab);
     if (tab.inputInFlight)
       throw new Error(
         "Browser targeted input is already in flight; wait and inspect again",
@@ -1305,7 +1315,12 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
                   return await pending;
                 },
                 quarantine: (error) => {
+                  // Only new site input is withheld: the page stays readable and
+                  // inspect/evaluate/content/screenshot keep working.
                   tab.inputQuarantine = error.message;
+                  tab.inputQuarantineKey ??= error.key;
+                  tab.inputQuarantineReset = undefined;
+                  tab.inputQuarantineSince = Date.now();
                   tab.agentActionOutcomeUnknown = true;
                   tab.observation = undefined;
                 },
@@ -1809,6 +1824,55 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     );
   }
 
+  /**
+   * Read the withheld-input state without dispatching anything, then optionally
+   * perform the one release this episode is allowed. No page action is repeated.
+   */
+  async inputReset(
+    sessionId: string,
+    tabId: string,
+    signal?: AbortSignal,
+  ): Promise<{
+    blocked: boolean;
+    released: boolean;
+    key?: string;
+    reason?: string;
+  }> {
+    signal?.throwIfAborted();
+    const tab = this.#requireAgentTab(sessionId, tabId);
+    const reason = tab.inputQuarantine;
+    if (reason === undefined) return { blocked: false, released: false };
+    const key = tab.inputQuarantineKey;
+    if (key === undefined) return { blocked: true, released: false, reason };
+    if (tab.inputQuarantineReset === "attempted")
+      throw new Error(
+        `Browser input release for ${key} was already attempted once for this tab; do not repeat it. A human must close this tab to release input that is still held. Reads and programmatic actions remain available.`,
+      );
+    // Record the attempt before dispatching: a second call must never send a
+    // second release, even if this one is interrupted.
+    tab.inputQuarantineReset = "attempted";
+    this.#publish(tab.threadId);
+    try {
+      const debuggerApi = tab.view.webContents.debugger;
+      if (!debuggerApi.isAttached()) debuggerApi.attach("1.3");
+      await debuggerApi.sendCommand(
+        "Input.dispatchKeyEvent",
+        browserInputReleaseParameters(key),
+      );
+    } catch (error) {
+      throw new Error(
+        `Browser input release for ${key} was not acknowledged (${error instanceof Error ? error.message : String(error)}). This tab still withholds new site input; a human must close it. Reads and programmatic actions remain available.`,
+        { cause: error },
+      );
+    }
+    tab.inputQuarantine = undefined;
+    tab.inputQuarantineKey = undefined;
+    tab.inputQuarantineReset = undefined;
+    tab.inputQuarantineSince = undefined;
+    this.#publish(tab.threadId);
+    return { blocked: false, released: true, key };
+  }
+
   keepTab(sessionId: string, tabId: string): void {
     this.#requireAgentTab(sessionId, tabId).temporarySession = undefined;
     this.#publish(this.#requireSessionThread(sessionId));
@@ -1877,9 +1941,15 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
             const result = await this.#evaluate<{
               ok: boolean;
               reason?: string;
+              focusOwned?: boolean;
             }>(
               tab,
-              browserActionScript(target, action, value, submit),
+              browserActionScript(
+                target,
+                action,
+                value,
+                submit ? "enter" : "none",
+              ),
               dispatch,
             );
             if (!result.ok)
@@ -1903,6 +1973,38 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
               action,
               renderRevision,
             );
+            if (action === "type" && submit) {
+              if (result.focusOwned !== true)
+                throw new Error(
+                  "Browser type wrote the value but the exact control does not hold focus; no Enter was sent. The value is written; inspect the page before pressing a key",
+                );
+              // A submit is a real Enter to the verified control, never a form
+              // submission, and the result is only reported when the page reacts.
+              const submitDocumentVersion = tab.documentVersion;
+              const effect = await submitBrowserTyping(
+                {
+                  evaluate: async <T>(expression: string) =>
+                    await this.#evaluate<T>(tab, expression),
+                  dispatchKey: async (params) => {
+                    const debuggerApi = tab.view.webContents.debugger;
+                    if (!debuggerApi.isAttached()) debuggerApi.attach("1.3");
+                    await debuggerApi.sendCommand(
+                      "Input.dispatchKeyEvent",
+                      params,
+                    );
+                  },
+                  signal: async () => await this.#pageEffectSignal(tab),
+                  navigated: () =>
+                    tab.navigationGeneration !== navigationGeneration ||
+                    tab.documentVersion !== submitDocumentVersion,
+                },
+                target,
+              );
+              if (effect === "none")
+                throw new Error(
+                  "Browser type wrote the value and pressed Enter on the focused control, but the page showed no change. The submit did not take effect; inspect the page and confirm before acting, and do not repeat it blindly",
+                );
+            }
             return this.#agentSummary(sessionId, tab);
           },
           signal,
@@ -1916,6 +2018,18 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       control: tab.control,
       agentActionsInFlight: tab.agentActionsInFlight,
       agentActionOutcomeUnknown: tab.agentActionOutcomeUnknown,
+      ...(tab.inputQuarantine === undefined
+        ? {}
+        : {
+            inputBlocked: {
+              reason: tab.inputQuarantine,
+              ...(tab.inputQuarantineKey === undefined
+                ? {}
+                : { key: tab.inputQuarantineKey }),
+              reset: tab.inputQuarantineReset ?? ("available" as const),
+              since: tab.inputQuarantineSince ?? 0,
+            },
+          }),
       requiresFreshObservation:
         tab.handoffMode &&
         (tab.control === "human" ||
@@ -2183,6 +2297,19 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     this.#publish(tab.threadId);
   }
 
+  /**
+   * The refusal must name the withheld input, not a generic
+   * "inspect again": while input is blocked a fresh observation intentionally
+   * carries no input evidence, so a later check would send the Agent in circles.
+   */
+  #assertSiteInputAllowed(tab: Tab): void {
+    const reason = tab.inputQuarantine;
+    if (reason === undefined) return;
+    throw new Error(
+      `${reason}\nReads and programmatic actions still work on this tab; only new site input is withheld. The input_reset operation may attempt one controlled release, or close the tab.`,
+    );
+  }
+
   async #evaluate<T>(
     tab: Tab,
     expression: string,
@@ -2216,6 +2343,26 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
           },
         )),
     );
+  }
+
+  /**
+   * Cheap page fingerprint for "did the document react". The isolated-world
+   * counters observe DOM mutations and trusted input without touching the page.
+   */
+  async #pageEffectSignal(tab: Tab): Promise<string> {
+    const snapshot = await this.#evaluate<{
+      documentKey?: unknown;
+      layoutRevision?: unknown;
+      inputRevision?: unknown;
+    }>(tab, browserInputSnapshotScript);
+    return [
+      tab.navigationGeneration,
+      tab.documentVersion,
+      tab.view.webContents.getURL(),
+      String(snapshot?.documentKey ?? ""),
+      String(snapshot?.layoutRevision ?? ""),
+      String(snapshot?.inputRevision ?? ""),
+    ].join("|");
   }
 }
 

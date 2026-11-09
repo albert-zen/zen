@@ -23,6 +23,7 @@ export const browserOperations = [
   "key_press",
   "close",
   "close_session",
+  "input_reset",
 ] as const;
 
 export function browserOperation(name: string): string {
@@ -58,6 +59,8 @@ export const browserModelDescriptions: Readonly<Record<string, string>> = {
   close:
     "Close the exact tab. Shared Workspace tabs may require a post-takeover observation.",
   close_session: "Close the exact session and its tabs.",
+  input_reset:
+    "Report whether the exact tab withholds new site input and make one bounded key-release attempt. Reads stay available; no page action is repeated.",
 };
 
 export const sessionTools = new Set(["list_tabs", "open", "close_session"]);
