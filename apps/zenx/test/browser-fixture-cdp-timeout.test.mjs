@@ -68,6 +68,9 @@ function fixture({ failSink = false } = {}) {
     sends,
     callbacks,
     logs,
+    advance: (ms) => {
+      now += ms;
+    },
     expire: () => {
       now = 10015;
       timer();
@@ -389,3 +392,127 @@ for (const silent of [false, true]) {
     },
   );
 }
+
+for (const sessionId of [undefined, "private-session"]) {
+  test(`context receipts are passive and session matched (${sessionId ? "scoped" : "root"})`, async () => {
+    const f = fixture();
+    const client = await f.Rpc.connect("ws://private-url");
+    let listenerCalls = 0;
+    const remove = client.onEvent(() => listenerCalls++);
+    const event = (method, session = sessionId) =>
+      client.socket.emit(
+        "message",
+        JSON.stringify({
+          method,
+          ...(session === undefined ? {} : { sessionId: session }),
+          params: {
+            executionContextId: "private-context",
+            executionContextUniqueId: "private-unique",
+            url: "private-event-url",
+          },
+        }),
+      );
+    event("Runtime.executionContextsCleared");
+    assert.equal(client.screenshotTransport().records.length, 0);
+    const pending = client.send(
+      "Page.captureScreenshot",
+      { secret: "private-param" },
+      sessionId,
+    );
+    event("Runtime.executionContextsCleared", "private-unrelated");
+    event("Runtime.executionContextCreated");
+    assert.equal(
+      client.screenshotTransport().records[0].contextsClearedCount,
+      0,
+    );
+    f.advance(7);
+    event("Runtime.executionContextsCleared");
+    remove(); // Original setup listeners can disappear; diagnostics remain passive.
+    f.advance(4);
+    event("Runtime.executionContextDestroyed");
+    event("Runtime.executionContextDestroyed");
+    const record = client.screenshotTransport().records[0];
+    assert.equal(record.contextsClearedCount, 1);
+    assert.equal(record.contextDestroyedCount, 2);
+    assert.equal(record.contextFirstElapsedMs, 7);
+    assert.equal(record.contextLastElapsedMs, 11);
+    assert.equal(record.outcome, "pending");
+    assert.equal(listenerCalls, 4);
+    record.contextDestroyedCount = -1;
+    assert.equal(
+      client.screenshotTransport().records[0].contextDestroyedCount,
+      2,
+    );
+    client.socket.emit(
+      "message",
+      JSON.stringify({ id: 1, result: { data: "private-pixels" } }),
+    );
+    assert.equal((await pending).data, "private-pixels");
+    const settled = JSON.stringify(client.screenshotTransport());
+    event("Runtime.executionContextsCleared");
+    event("Runtime.executionContextDestroyed");
+    assert.equal(JSON.stringify(client.screenshotTransport()), settled);
+    client.close();
+    assert.equal(
+      JSON.stringify([client.screenshotTransport(), f.logs]).includes(
+        "private-",
+      ),
+      false,
+    );
+    assert.deepEqual(
+      f.sends.map((send) => send.method),
+      ["Page.captureScreenshot"],
+    );
+  });
+}
+
+test("context receipt counts cap without event history and stop at timeout", async () => {
+  const f = fixture();
+  const client = await f.Rpc.connect("ws://private-url");
+  const pending = client.send("Page.captureScreenshot");
+  const event = (method) =>
+    client.socket.emit(
+      "message",
+      JSON.stringify({
+        method,
+        params: { executionContextId: "private-context" },
+      }),
+    );
+  for (let i = 0; i < 65540; i++) {
+    event("Runtime.executionContextsCleared");
+    event("Runtime.executionContextDestroyed");
+  }
+  const record = client.screenshotTransport().records[0];
+  assert.equal(record.contextsClearedCount, 65535);
+  assert.equal(record.contextDestroyedCount, 65535);
+  assert.equal(record.contextFirstElapsedMs, 0);
+  assert.equal(record.contextLastElapsedMs, 0);
+  assert.ok(JSON.stringify(record).length < 700);
+  f.expire();
+  let failure;
+  await assert.rejects(pending, (error) => {
+    failure = error;
+    return true;
+  });
+  const before = JSON.stringify(client.screenshotTransport());
+  event("Runtime.executionContextsCleared");
+  event("Runtime.executionContextDestroyed");
+  assert.equal(JSON.stringify(client.screenshotTransport()), before);
+  assert.equal(JSON.stringify(failure.fixtureCdp.screenshotTransport), before);
+  client.socket.emit(
+    "message",
+    JSON.stringify({ id: 1, result: { data: "private-late-pixels" } }),
+  );
+  await assert.rejects(pending, (error) => error === failure);
+  assert.equal(client.screenshotTransport().records[0].outcome, "timeout");
+  assert.equal(client.screenshotTransport().records[0].contextLastElapsedMs, 0);
+  client.close();
+  assert.equal(
+    JSON.stringify([failure.fixtureCdp, f.logs]).includes("private-"),
+    false,
+  );
+  assert.deepEqual(
+    f.sends.map((send) => send.method),
+    ["Page.captureScreenshot"],
+  );
+});

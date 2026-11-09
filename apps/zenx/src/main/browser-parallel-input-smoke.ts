@@ -106,6 +106,11 @@ class Rpc {
       id: number;
       startedAt: number;
       sessionScoped: boolean;
+      sessionId?: string; // Matching only; excluded from every diagnostic snapshot.
+      contextsClearedCount: number;
+      contextDestroyedCount: number;
+      contextFirstElapsedMs?: number;
+      contextLastElapsedMs?: number;
       transportAccepted: boolean;
       sendCallback: "pending" | "ok" | "error";
       sendCallbackElapsedMs?: number;
@@ -160,16 +165,19 @@ class Rpc {
     return {
       limit: 16,
       dropped: this.#screenshotDropped,
-      records: Array.from(this.#screenshots.values(), (record) => ({
-        ...record,
-        sent: { ...record.sent },
-        ...(record.returned ? { returned: { ...record.returned } } : {}),
-        ...(record.sendCallbackState
-          ? { sendCallbackState: { ...record.sendCallbackState } }
-          : {}),
-        ...(record.settled ? { settled: { ...record.settled } } : {}),
-        ...(record.lateReply ? { lateReply: { ...record.lateReply } } : {}),
-      })),
+      records: Array.from(
+        this.#screenshots.values(),
+        ({ sessionId: _sessionId, ...record }) => ({
+          ...record,
+          sent: { ...record.sent },
+          ...(record.returned ? { returned: { ...record.returned } } : {}),
+          ...(record.sendCallbackState
+            ? { sendCallbackState: { ...record.sendCallbackState } }
+            : {}),
+          ...(record.settled ? { settled: { ...record.settled } } : {}),
+          ...(record.lateReply ? { lateReply: { ...record.lateReply } } : {}),
+        }),
+      ),
     };
   }
   #reportScreenshots(phase: "cleanup" | "socket-end") {
@@ -204,6 +212,30 @@ class Rpc {
         error?: unknown;
       } & FixtureCdpEvent;
       if (message.id === undefined) {
+        // Passive evidence only: Runtime enablement depends on existing caller
+        // setup; Rpc never enables it or adds a subscription for diagnostics.
+        // Count only this session's events during the original pending interval.
+        // Zero events does not establish context stability or browser health.
+        if (
+          message.method === "Runtime.executionContextsCleared" ||
+          message.method === "Runtime.executionContextDestroyed"
+        ) {
+          for (const screenshot of this.#screenshots.values()) {
+            if (
+              screenshot.outcome !== "pending" ||
+              screenshot.sessionId !== message.sessionId
+            )
+              continue;
+            const key =
+              message.method === "Runtime.executionContextsCleared"
+                ? "contextsClearedCount"
+                : "contextDestroyedCount";
+            screenshot[key] = Math.min(65_535, screenshot[key] + 1);
+            const elapsedMs = Math.max(0, Date.now() - screenshot.startedAt);
+            screenshot.contextFirstElapsedMs ??= elapsedMs;
+            screenshot.contextLastElapsedMs = elapsedMs;
+          }
+        }
         for (const listener of this.#listeners) listener(message);
         return;
       }
@@ -280,6 +312,9 @@ class Rpc {
         id,
         startedAt,
         sessionScoped: sessionId !== undefined,
+        sessionId,
+        contextsClearedCount: 0,
+        contextDestroyedCount: 0,
         transportAccepted: false,
         sendCallback: "pending",
         outcome: "pending",
