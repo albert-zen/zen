@@ -18,7 +18,9 @@ concurrency:
   cancel-in-progress: true
 jobs:
   native-question:
-    runs-on: macos-14
+    # macos-14 retired on 2026-11-02. Preserve x64 on supported macOS 15.
+    # This lane no longer provides macOS 14 runtime coverage.
+    runs-on: macos-15-intel
     timeout-minutes: 18
     steps:
       - uses: actions/checkout@v4

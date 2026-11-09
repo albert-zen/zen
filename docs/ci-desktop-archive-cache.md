@@ -62,8 +62,9 @@ Existing triggers, lane-selection conditions, validation commands, timeouts and
 required-result gates are unchanged. New restore/save invocations each have a
 five-minute upper bound; a failed test is still failed even if a verified archive
 can be saved afterward. No application, browser or native test is retried. The
-separate user-question workflow's pre-existing retired macOS runner is outside
-this cache change and remains a limitation, not an acceptance claim.
+user-question workflow uses supported macOS 15 Intel after macOS 14 runner
+retirement; it retains the same full-App acceptance command and timeouts, and
+does not claim macOS 14 runtime coverage.
 
 Logs and job summaries distinguish the Actions key hit from independent archive
 byte validation and identify the checksum authority. Restoration does not trust
