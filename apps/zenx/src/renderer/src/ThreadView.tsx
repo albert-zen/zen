@@ -416,7 +416,7 @@ interface ThreadViewProps {
   pluginUiRegistry?: PluginUiRegistry | null;
   onRecoverPendingSend?(clientId: string): void;
   onDismissPendingSend?(clientId: string): void;
-  onCheckPendingSends?(): Promise<void>;
+  onCheckPendingSends?(): Promise<"checked" | "unavailable">;
   onDraftChange(draft: string): void;
   onOpenMessageLink?(target: { kind: "file" | "browser"; value: string }): void;
   onImportImages?(files: readonly File[]): Promise<void>;

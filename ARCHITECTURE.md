@@ -1754,6 +1754,8 @@ ZenX's turn-outcome lookup is a disposable renderer index of the current immutab
 
 Existing-thread ordinary Send may transfer its draft into a renderer-local, client-ID-keyed pending presentation before native admission; this disposable copy distinguishes sending, admitted-but-not-yet-projected and unknown outcomes, reconciles only exact canonical identity, and never becomes a durable receipt, second transcript or model-consumption authority.
 
+Explicit delivery-check feedback is disposable renderer state owned by the exact pending input, admission state and mounted Thread view; its read-completion signal distinguishes a usable read from unavailable/stale results but never grants delivery, rejection, retry or removal authority.
+
 ZenX conversation action contexts use stable UI delegates whose targets update only after a committed render and are invalidated on unmount; this avoids unrelated history redraws while preserving the latest App-owned selection and permission checks, without granting or caching action authority.
 
 Composer autosizing restores an empty textarea to its CSS/rows baseline without synchronous geometry reads. Nonempty content retains min/max bounded measurement; one width observer lives with the actual editor rather than each draft revision. This is a narrow layout experiment, not a claimed long-history latency acceptance; transcript following, history retention and native admission are unchanged.

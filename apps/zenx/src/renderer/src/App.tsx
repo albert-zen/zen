@@ -169,6 +169,7 @@ import {
   dismissCompactionFeedback,
   failComposerSubmission,
   reconcileCanonicalAdmission,
+  reconcilePendingSendPresentations,
   removeComposerImage,
   type ComposerIntent,
   type ComposerState,
@@ -2356,9 +2357,11 @@ function AppContent() {
     );
   };
 
-  const checkPendingDelivery = async (threadId: string) => {
+  const checkPendingDelivery = async (
+    threadId: string,
+  ): Promise<"checked" | "unavailable"> => {
     const before = threadProjectionCacheRef.current.get(threadId);
-    if (before === undefined) return;
+    if (before === undefined) return "unavailable";
     // Native resume reads/subscribes; unlike the navigation wrapper it does not
     // discard drafts or change selection. It never dispatches model/tool work.
     const recovery = await window.zenx.protocol.request("zen/thread/resume", {
@@ -2370,18 +2373,19 @@ function AppContent() {
       recovery.threadId !== threadId ||
       recovery.thread.id !== threadId
     )
-      return;
+      return "unavailable";
     if (
       current.processEpoch !== before.processEpoch &&
       current.processEpoch !== recovery.processEpoch
     )
-      return;
+      return "unavailable";
+    const recovered = projectNativeRecovery(recovery);
     const projected =
       current.processEpoch === recovery.processEpoch &&
       current.watermark >= recovery.watermark
         ? current
         : replayThreadProjection(
-            projectNativeRecovery(recovery),
+            recovered,
             settingsFromSnapshot(
               threadId,
               nativeSettingsSnapshot(recovery.thread),
@@ -2397,10 +2401,20 @@ function AppContent() {
       setThreadDetail(projected.thread);
       setSelectedSettings(projected.settings);
     }
-    if (projected.thread.canonicalItems !== undefined)
-      updateComposer(threadId, (state) =>
-        reconcileCanonicalAdmission(state, projected.thread.canonicalItems!),
-      );
+    if (projected.thread.canonicalItems === undefined) return "unavailable";
+    updateComposer(threadId, (state) =>
+      reconcileCanonicalAdmission(
+        // A newer bounded window can omit an older exact receipt from this
+        // full read. Use it only for pending-copy identity reconciliation;
+        // never concatenate snapshots or infer compaction order from them.
+        reconcilePendingSendPresentations(
+          state,
+          recovered.canonicalItems ?? [],
+        ),
+        projected.thread.canonicalItems!,
+      ),
+    );
+    return "checked";
   };
 
   const deliverComposerSubmission = async (
@@ -4752,9 +4766,7 @@ function AppContent() {
                     dismissPendingSend(state, clientId),
                   )
                 }
-                onCheckPendingSends={async (threadId) => {
-                  await checkPendingDelivery(threadId);
-                }}
+                onCheckPendingSends={checkPendingDelivery}
                 onSubmit={submitComposer}
                 onSubmitNewThread={submitNewThreadDraft}
                 selectedSettings={selectedSettings}
@@ -5568,7 +5580,7 @@ function AgentSurface({
   onDismissCompaction(threadId: string): void;
   onRecoverPendingSend(threadId: string, clientId: string): void;
   onDismissPendingSend(threadId: string, clientId: string): void;
-  onCheckPendingSends(threadId: string): Promise<void>;
+  onCheckPendingSends(threadId: string): Promise<"checked" | "unavailable">;
   onSubmit(
     intent: ComposerIntent,
     expectedTurnId: string | null,

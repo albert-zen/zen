@@ -597,6 +597,19 @@
 .pending-tray:empty {
   display: none;
 }
+/* A bounded pending list must advertise its hidden rows before interaction.
+   Native auto overflow supplies the thumb only when content actually overflows;
+   keep the shared thin, trackless geometry and the global auto-hide elsewhere. */
+.pending-tray,
+:root[data-scrollbar-autohide] .pending-tray {
+  scrollbar-color: var(--color-text-muted) transparent;
+}
+@media (forced-colors: active) {
+  .pending-tray,
+  :root[data-scrollbar-autohide] .pending-tray {
+    scrollbar-color: auto;
+  }
+}
 .pending-tray > .queue-shelf {
   width: 100%;
   max-width: none;
@@ -637,6 +650,16 @@
 .pending-tray .pending-send-status,
 .pending-tray .pending-send-recovery p {
   margin: 4px 0;
+}
+.pending-tray .pending-send-check-feedback {
+  margin-top: var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-label);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.pending-tray .pending-send-check-feedback[data-check-state="failed"] {
+  color: var(--color-status-danger);
 }
 .pending-tray .pending-send-recovery,
 .pending-tray .pending-send-recovery pre,

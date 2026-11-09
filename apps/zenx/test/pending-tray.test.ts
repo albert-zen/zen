@@ -106,6 +106,44 @@ test("the combined pending tray owns the only pending-list scroll and one total 
   );
 });
 
+test("the pending tray exposes native overflow even while other scrollbars auto-hide", async () => {
+  const css = await readFile(
+    new URL("../src/renderer/src/queued-messages.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    css,
+    /:root\[data-scrollbar-autohide\] \.pending-tray\s*\{[^}]*scrollbar-color:\s*var\(--color-text-muted\) transparent/s,
+    "The local override must outrank the global auto-hide paint without changing its controller",
+  );
+  assert.match(
+    css,
+    /\.pending-tray\s*\{[^}]*overflow-y:\s*auto[^}]*scrollbar-gutter:\s*stable/s,
+    "Native auto overflow shows the thumb only when rows exceed the existing tray cap",
+  );
+  assert.doesNotMatch(
+    css,
+    /\.pending-tray\s*\{[^}]*overflow-y:\s*scroll/s,
+    "A short pending group must not imply hidden content",
+  );
+});
+
+test("direct-child delivery-check feedback keeps readable neutral type without a recovery wrapper", async () => {
+  const css = await readFile(
+    new URL("../src/renderer/src/queued-messages.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    css,
+    /\.pending-tray \.pending-send-check-feedback\s*\{[^}]*color:\s*var\(--color-text-secondary\)[^}]*font-size:\s*var\(--font-size-label\)/s,
+  );
+  assert.doesNotMatch(
+    css,
+    /\.pending-send-recovery \.pending-send-check-feedback/s,
+    "Admitted and uncertain checks share the same direct-child feedback placement",
+  );
+});
+
 test("pending and approval share outer scrolling without collapsing approval content", async () => {
   const css = await readFile(
     new URL("../src/renderer/src/styles.css", import.meta.url),

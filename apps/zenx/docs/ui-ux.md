@@ -603,7 +603,7 @@ PAW 导航使用与共享图标相同描边风格的对话气泡，表达一对�
 
 Normal PAW chat keeps only compact, named rename/workspace/settings controls. Do not put model-cycle, quota or background implementation descriptions under its input. Paused delivery and failures remain explicit; Pause/Resume lives in conversation settings. Rename edits the display name only and preserves the Room identity and bound working Thread; Cancel/Escape leaves the name unchanged. PAW/Rooms appear after plugin entries and at the same section hierarchy as Projects, using neutral selected surfaces and spacing instead of extra truncated separators.
 
-Native scrollbars retain their geometry and scrolling behavior. Their track is transparent against each surface; the thumb uses the theme's muted text color while scrolling, keyboard/focus interaction or edge/drag activity is occurring, and becomes transparent at rest. Forced-colors uses native colors. Do not hide overflow to simulate autohide, and do not count Linux/mock evidence as native Windows/macOS validation.
+Native scrollbars retain their geometry and scrolling behavior. The bounded composer-adjacent pending tray is a local exception to thumb autohide: its native thin thumb stays visible whenever the tray actually overflows, so hidden pending messages are discoverable before hover or scrolling. It still uses one existing scroll container, preserves the stable gutter and has no artificial overflow or custom scroll authority. Elsewhere, their track is transparent against each surface; the thumb uses the theme's muted text color while scrolling, keyboard/focus interaction or edge/drag activity is occurring, and becomes transparent at rest. Forced-colors uses native colors. Do not hide overflow to simulate autohide, and do not count Linux/mock evidence as native Windows/macOS validation.
 
 ### 2026-10-08: Room IM presentation references
 
@@ -947,6 +947,10 @@ The exact leading legacy `[Message quote; ...]` transport is rendered through th
 
 Copying or cutting a capsule between main and side-chat composers preserves its exact source and selected text through structured clipboard metadata; external plain-text applications receive readable text with real line breaks and no injected source IDs. Pasting into a plain or rich Composer preserves surrounding draft text and existing capsules, positions the caret after the inserted content, and never sends automatically. Cut/paste participates in native editor undo/redo; malformed or mismatched clipboard metadata falls back to ordinary text rather than guessing a source.
 
+### Running Send menu readability
+
+The existing running Send popover uses the shared 13px label and 12px caption tokens, with secondary foreground for action explanations and keyboard shortcuts. Its desktop width is 380px, clamped to the available viewport; a bounded body scroll keeps actions and the default-mode control reachable when height is constrained. The default-mode Select retains a 44px minimum target. At widths up to 480px, shortcuts move below their action explanation and the default-mode control stacks rather than compressing text. These are presentation changes only: default send mode, keyboard shortcuts, Stop, queue and steer admission semantics remain unchanged.
+
 ### Immediate ordinary Send feedback
 
 For an existing Thread, ordinary Send/Steer immediately transfers the exact draft
@@ -963,6 +967,11 @@ duplicate bubble. ACK and event order must both work. Generic post-dispatch IPC
 errors are **delivery unconfirmed**, not invented rejection, and never resend
 automatically. Explicit Check delivery uses the existing authoritative recovery
 read outside the send critical path; absence is not proof of rejection.
+The checked input shows accessible checking progress and retains a qualified
+result while its recovery row remains mounted. A usable read that leaves delivery
+unknown says so; an unavailable or failed read never claims completion. Feedback
+does not transfer to other inputs or threads, survive removal, or override a
+later admission/canonical outcome. It is not a persisted delivery receipt.
 
 Unknown/unsent text and images remain in a recovery row. Add back to draft
 preserves newer text and images, does not send, and warns that resending an

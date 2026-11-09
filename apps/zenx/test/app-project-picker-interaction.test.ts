@@ -29,6 +29,7 @@ import { workspaceLauncherSnapshot } from "./workspace-launcher-snapshot.js";
 import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
 import { i18n } from "../src/renderer/src/i18n.js";
 import { parseSentReferenceContent } from "../src/renderer/src/reference-draft.js";
+import { selectThreadHistoryWindow } from "../../../src/thread-history-window.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
 const {
@@ -3311,6 +3312,299 @@ test("late canonical queue ID settles only the original unknown submission, not 
     );
     assert.match(document.body.textContent ?? "", /outcome unknown/u);
     assert.equal(sends.length, 2);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+for (const newerEvent of [false, true]) {
+  test(`delivery check uses full exact receipt outside a ${newerEvent ? "newer" : "same-watermark"} history window without replacing the window`, async () => {
+    const history: Thread = {
+      ...liveThread(),
+      turns: Array.from({ length: 21 }, (_, index) => ({
+        id: `delivery-history-${index}`,
+        itemsView: "full",
+        status: "completed",
+        error: null,
+        startedAt: index + 10,
+        completedAt: index + 11,
+        durationMs: 1000,
+        items: [
+          {
+            id: `delivery-history-input-${index}`,
+            type: "userMessage",
+            clientId: `history-client-${index}`,
+            content: [
+              {
+                type: "text",
+                text: `Historical delivery ${index}`,
+                text_elements: [],
+              },
+            ],
+          },
+        ],
+      })),
+    };
+    const full = resumed(history);
+    const selected = selectThreadHistoryWindow(
+      full.threadId,
+      full.thread.items,
+    );
+    const windowed = {
+      ...full,
+      thread: {
+        ...full.thread,
+        items: selected.items,
+        turns: full.thread.turns.filter((turn) =>
+          selected.turnIds.has(turn.id),
+        ),
+        history: selected.history,
+      },
+    };
+    const oldest = full.thread.items.find(
+      (item) => item.type === "user_message",
+    );
+    assert.ok(oldest?.type === "user_message");
+    assert.equal(
+      selected.items.some((item) => item.id === oldest.id),
+      false,
+    );
+    let clientId = "";
+    let sends = 0;
+    let checking = false;
+    const read = deferred<typeof full>();
+    let notify:
+      Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+    const harness = await mountThreadApp({
+      onNotification: (listener) => {
+        notify = listener;
+        return () => undefined;
+      },
+      request: async (method, params) => {
+        if (method === "zen/thread/resume")
+          return checking ? read.promise : windowed;
+        if (method === "zen/turn/send") {
+          sends++;
+          clientId = (params as { clientUserMessageId: string })
+            .clientUserMessageId;
+          // This exact receipt exists only outside the initial bounded view.
+          oldest.clientId = clientId;
+          throw new Error("Synthetic admission outcome unknown");
+        }
+        throw new Error(`Unexpected ${method}`);
+      },
+    });
+    try {
+      const composer = await selectedComposer();
+      await setTextareaValue(composer, "Synthetic earlier delivery");
+      await dispatchComposerKey(composer, { key: "Enter" });
+      await waitFor(() =>
+        document.querySelector('[data-send-state="unconfirmed"]'),
+      );
+      await setTextareaValue(composer, "Keep newer draft during full check");
+      checking = true;
+      const check = exactButton("Check delivery");
+      assert.ok(check);
+      await invokeButtonClick(check);
+      if (newerEvent)
+        await act(async () =>
+          notify?.("zen/thread/event", {
+            threadId: full.threadId,
+            processEpoch: full.processEpoch,
+            watermark: full.watermark + 1,
+            event: {
+              type: "item_completed",
+              item: {
+                type: "agent_message",
+                id: "delivery-newer-cache-message",
+                threadId: full.threadId,
+                turnId: "delivery-history-20",
+                createdAt: "2026-11-09T00:00:00Z",
+                text: "Newer cached canonical output",
+              },
+            },
+          }),
+        );
+      if (newerEvent)
+        assert.match(
+          document.body.textContent ?? "",
+          /Newer cached canonical output/,
+        );
+      await act(async () => {
+        read.resolve(full);
+        await read.promise;
+      });
+      assert.equal(
+        document.querySelector(
+          `[data-pending-send-client-id="${clientId}"]`,
+        ) === null,
+        true,
+        "Full exact acceptance must remove the recovery copy even when the bounded cache wins",
+      );
+      assert.equal(
+        document.querySelector(
+          '[data-sent-message-id="delivery-history-input-0"]',
+        ),
+        null,
+        "Explicit delivery check must not replace the retained history window",
+      );
+      assert.equal(document.querySelectorAll(".turn").length, 20);
+      if (newerEvent)
+        assert.match(
+          document.body.textContent ?? "",
+          /Newer cached canonical output/,
+        );
+      assert.equal(composer.value, "Keep newer draft during full check");
+      assert.equal(sends, 1);
+    } finally {
+      read.resolve(full);
+      await unmountApp(harness);
+    }
+  });
+}
+
+test("delivery check reports usable, unavailable and failed reads without changing exact send authority", async () => {
+  let notify:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  let clientId = "";
+  let sends = 0;
+  let reads = 0;
+  let read = async () => resumed(liveThread());
+  const harness = await mountThreadApp({
+    onNotification: (listener) => {
+      notify = listener;
+      return () => undefined;
+    },
+    request: async (method, params) => {
+      if (method === "zen/thread/resume") {
+        reads++;
+        return read();
+      }
+      if (method === "zen/turn/send") {
+        sends++;
+        clientId = (params as { clientUserMessageId: string })
+          .clientUserMessageId;
+        throw new Error("Synthetic admission outcome unknown");
+      }
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  try {
+    const composer = await selectedComposer();
+    await setTextareaValue(composer, "Synthetic delivery check input");
+    await dispatchComposerKey(composer, { key: "Enter" });
+    await waitFor(() =>
+      document.querySelector('[data-send-state="unconfirmed"]'),
+    );
+    await setTextareaValue(composer, "Newer draft must remain");
+    const feedback = () => {
+      const element = document.querySelector<HTMLElement>(
+        ".pending-send-check-feedback",
+      );
+      assert.ok(element);
+      return element;
+    };
+    const check = async () => {
+      const button = exactButton("Check delivery");
+      assert.ok(button);
+      await invokeButtonClick(button);
+    };
+
+    await check();
+    assert.equal(feedback().dataset.checkState, "completed");
+    assert.equal(
+      feedback().textContent,
+      "Check completed. Delivery is still unconfirmed.",
+    );
+    assert.ok(
+      document.querySelector(`[data-pending-send-client-id="${clientId}"]`),
+    );
+
+    read = async () => resumed({ ...liveThread(), id: "wrong-thread" });
+    await check();
+    assert.equal(feedback().dataset.checkState, "unavailable");
+    assert.doesNotMatch(feedback().textContent ?? "", /Check completed/);
+
+    read = async () => {
+      throw new Error("Synthetic recovery read failed");
+    };
+    await check();
+    assert.equal(feedback().dataset.checkState, "failed");
+    assert.equal(feedback().getAttribute("role"), "alert");
+    assert.match(
+      feedback().textContent ?? "",
+      /Synthetic recovery read failed/,
+    );
+    assert.equal(composer.value, "Newer draft must remain");
+    assert.equal(sends, 1, "All checks are reads, never sends");
+
+    const lateRead = deferred<ReturnType<typeof resumed>>();
+    read = () => lateRead.promise;
+    const readsBefore = reads;
+    const button = exactButton("Check delivery");
+    assert.ok(button);
+    await invokeButtonClick(button, 2);
+    assert.equal(reads, readsBefore + 1, "Repeated check activation is fenced");
+    assert.equal(feedback().dataset.checkState, "checking");
+    assert.equal(button.disabled, true);
+    let watermark = 0;
+    const emit = async (
+      event: import("../../../src/app-server.js").AppServerEvent,
+    ) =>
+      act(async () =>
+        notify?.("zen/thread/event", {
+          threadId: "thread-1",
+          processEpoch: "test-process-epoch",
+          watermark: ++watermark,
+          event,
+        }),
+      );
+    await emit({
+      type: "item_completed",
+      item: {
+        type: "turn_started",
+        id: "delivery-started",
+        threadId: "thread-1",
+        turnId: "delivery-turn",
+        createdAt: "2026-11-09T00:00:00Z",
+        selection: {
+          providerProfileId: "fake",
+          modelId: "fake",
+          reasoningEffort: "medium",
+        },
+      },
+    });
+    await emit({
+      type: "turn_started",
+      threadId: "thread-1",
+      turnId: "delivery-turn",
+    });
+    await emit({
+      type: "item_completed",
+      item: {
+        type: "user_message",
+        id: "delivery-user",
+        threadId: "thread-1",
+        turnId: "delivery-turn",
+        createdAt: "2026-11-09T00:00:00Z",
+        clientId,
+        text: "Synthetic delivery check input",
+      },
+    });
+    assert.equal(document.querySelector("[data-pending-send-client-id]"), null);
+    await act(async () => {
+      lateRead.resolve(resumed(liveThread()));
+      await lateRead.promise;
+    });
+    assert.equal(document.querySelector("[data-pending-send-client-id]"), null);
+    assert.equal(document.querySelector(".pending-send-check-feedback"), null);
+    assert.equal(
+      document.querySelectorAll('[data-sent-message-id="delivery-user"]')
+        .length,
+      1,
+    );
+    assert.equal(composer.value, "Newer draft must remain");
+    assert.equal(sends, 1);
   } finally {
     await unmountApp(harness);
   }
