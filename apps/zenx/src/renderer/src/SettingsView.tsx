@@ -4233,7 +4233,9 @@ function GeneralPanel({
                   : "max-tool-rounds-help max-tool-rounds-error"
               }
               aria-invalid={maximumError === null ? undefined : true}
-              onChange={(event) => {
+              // Native bad input and a cleared number can both have value ''.
+              // Observe every input event, including validity-only changes.
+              onInput={(event) => {
                 const value = event.currentTarget.value;
                 setMaximumInput(value);
                 const invalid =

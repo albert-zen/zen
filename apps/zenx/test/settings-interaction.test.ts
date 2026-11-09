@@ -4185,6 +4185,60 @@ test("invalid General maximum blocks Apply when another setting is dirty, includ
   }
 });
 
+for (const correction of ["", "18"] as const) {
+  test(`General native bad input recovers through input events to ${correction === "" ? "Unlimited" : "a valid number"}`, async () => {
+    const saved: ZenXSettingsUpdate[] = [];
+    const harness = await mountSettings("general", {
+      save: async (update) => {
+        saved.push(update);
+        return { ...settings, profile: { ...settings.profile, ...update } };
+      },
+    });
+    try {
+      await changeControl(
+        (await labeledSelect("Send while a reply is running"))!,
+        "queue",
+      );
+      const maximum = requiredInput("Maximum tool rounds");
+      await changeControl(maximum, "12");
+      // Chromium exposes both an unfinished '-' and a truly empty number
+      // input as value ''. This models its validity change, not native typing.
+      let badInput = true;
+      Object.defineProperty(maximum, "validity", {
+        configurable: true,
+        get: () => ({ badInput }),
+      });
+      await changeControl(maximum, "");
+      await act(async () => {
+        maximum.dispatchEvent(new window.Event("focusout", { bubbles: true }));
+      });
+      assert.equal(maximum.getAttribute("aria-invalid"), "true");
+      assert.equal(exactButtonRequired("Apply").disabled, true);
+      badInput = false;
+      if (correction === "") {
+        // No value/tracker change: clearing partial input is still an input
+        // event even though React's synthetic change event is deduplicated.
+        await act(async () => {
+          maximum.dispatchEvent(new window.Event("input", { bubbles: true }));
+          maximum.dispatchEvent(
+            new window.Event("focusout", { bubbles: true }),
+          );
+        });
+      } else {
+        await changeControl(maximum, correction);
+      }
+      assert.equal(maximum.hasAttribute("aria-invalid"), false);
+      assert.equal(exactButtonRequired("Apply").disabled, false);
+      await click(exactButtonRequired("Apply"));
+      assert.equal(saved.length, 1);
+      assert.equal(saved[0]!.composerSendMode, "queue");
+      assert.equal(saved[0]!.maxToolRounds, correction === "" ? undefined : 18);
+    } finally {
+      await unmount(harness);
+    }
+  });
+}
+
 for (const mutation of ["add", "delete", "delete-finalization"] as const) {
   test(`provider ${mutation} keeps unrelated drafts and the new Host revision`, async () => {
     let authoritative = structuredClone(multiProviderSettings);
