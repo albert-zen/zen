@@ -93,6 +93,16 @@ export interface BrowserTabSummary {
   agentActionOutcomeUnknown?: boolean;
   requiresFreshObservation?: boolean;
   mutationsRequireObservation?: boolean;
+  /** Input withholding is separate from the earlier action's unknown outcome. */
+  inputBlocked?: BrowserInputBlockedSummary;
+}
+
+export interface BrowserInputBlockedSummary {
+  reason: string;
+  key?: BrowserInputKey;
+  reset: "available" | "attempted" | "unavailable";
+  resetReason?: string;
+  since: number;
 }
 
 export interface BrowserInspection extends BrowserTabSummary {
@@ -192,6 +202,13 @@ export interface ZenXBrowserBackend {
   bindThreadSession?(sessionId: string, threadId: string): void;
   /** Turn cleanup: release human pages and retire unkept Agent-created pages. */
   finishSession?(sessionId: string): Promise<void> | void;
+  /** Explicit site input: one exact key release, never a replay or a read. */
+  inputReset?(
+    sessionId: string,
+    tabId: string,
+    observationId?: string,
+    signal?: AbortSignal,
+  ): Promise<{ blocked: boolean; released: boolean; key?: BrowserInputKey }>;
   keepTab?(sessionId: string, tabId: string): void;
   /** Read-only exact existing-target liveness; must never adopt or create targets. */
   hasTab?(sessionId: string, tabId: string): boolean | Promise<boolean>;
@@ -521,6 +538,17 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
       permissions: ["browser.navigate"],
       interactionMode: "background_safe",
       capabilities: ["dedicated_profile", "tab.close"],
+    },
+    {
+      name: "browser_input_reset",
+      description:
+        "Explicitly release one recorded possibly held key at most once on the original unchanged Workspace tab. This sends a key-up event and may trigger page handlers; it requires interaction permission. Never repeats the earlier action or proves its outcome. Read inputBlocked via list_tabs or inspect first. Unsupported providers refuse rather than claim recovery.",
+      inputSchema: browserTargetSchema({
+        observationId: handoffObservationOption(),
+      }),
+      permissions: ["browser.interact", "browser.tabs.read"],
+      interactionMode: "background_safe",
+      capabilities: ["dedicated_profile", "cdp"],
     },
     {
       name: "browser_close_session",
@@ -984,7 +1012,10 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
           };
       }
       this.#presentation.invalidate(key);
-    } else if (key !== undefined && toolName === "browser_navigate")
+    } else if (
+      key !== undefined &&
+      (toolName === "browser_navigate" || toolName === "browser_input_reset")
+    )
       this.#presentation.invalidate(key);
     else if (key !== undefined && toolName === "browser_close")
       this.#presentation.forget(key);
@@ -1257,6 +1288,21 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
         );
         return { closed: true, sessionId, tabId };
       }
+      case "browser_input_reset":
+        if (this.#backend.inputReset === undefined)
+          throw new Error(
+            "This browser backend does not support input recovery; no release was dispatched",
+          );
+        return {
+          ...(await this.#backend.inputReset(
+            sessionId,
+            requiredTargetId(invocation.arguments, "tabId"),
+            optionalTargetId(invocation.arguments, "observationId"),
+            invocation.signal,
+          )),
+          sessionId,
+          tabId: requiredTargetId(invocation.arguments, "tabId"),
+        };
       case "browser_close_session":
         if (this.#backend.finishSession) {
           await this.#backend.finishSession(sessionId);

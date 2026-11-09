@@ -162,7 +162,10 @@ export function decodeBrowserArguments(
       if (
         other !== field &&
         input[other] !== undefined &&
-        !(["navigate", "close"].includes(op) && other === "observation") &&
+        !(
+          ["navigate", "close", "input_reset"].includes(op) &&
+          other === "observation"
+        ) &&
         !(targetTools.has(op) && other === "observation")
       )
         throw Error(
@@ -175,7 +178,8 @@ export function decodeBrowserArguments(
     if (field === "target") args.targetId = bound.targetId;
     if (field === "cursor") args.cursor = bound.cursor;
     if (
-      (["navigate", "close"].includes(op) || targetTools.has(op)) &&
+      (["navigate", "close", "input_reset"].includes(op) ||
+        targetTools.has(op)) &&
       input.observation !== undefined
     ) {
       const observed = resolve(input.observation, "observation");
@@ -337,6 +341,10 @@ function projectBrowserResult(
         "control",
         "agentActionsInFlight",
         "agentActionOutcomeUnknown",
+        "inputBlocked",
+        "blocked",
+        "released",
+        "key",
         "requiresFreshObservation",
         "mutationsRequireObservation",
         "automaticPresentation",

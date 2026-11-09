@@ -531,6 +531,30 @@
       ]
     },
     {
+      "name": "browser_input_reset",
+      "description": "Explicitly release one recorded possibly held key at most once on the original unchanged Workspace tab. This sends a key-up event and may trigger page handlers; it requires interaction permission. Never repeats the earlier action or proves its outcome. Read inputBlocked via list_tabs or inspect first. Unsupported providers refuse rather than claim recovery.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string",
+            "description": "Required for a shared Workspace tab after human takeover: pass its latest browser_inspect observationId. Missing, stale, or pre-takeover references reject. Other backends do not require this field."
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.interact", "browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["user_session", "authenticated_state_in_place", "cdp"]
+    },
+    {
       "name": "browser_close_session",
       "description": "End this user-browser session: retire unkept Agent-created pages and release existing user pages without clearing storage or changing the user profile.",
       "inputSchema": {

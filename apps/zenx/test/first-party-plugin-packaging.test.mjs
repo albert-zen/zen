@@ -61,23 +61,23 @@ const providerVariants = new Map([
   ],
   [
     "zenx-browser-plugin-multi-1.2.0.tgz",
-    ["browser", "1.2.0", "multi-browser", 43],
+    ["browser", "1.2.0", "multi-browser", 45],
   ],
   [
     "zenx-browser-plugin-concurrent-1.2.0.tgz",
-    ["browser", "1.2.0", "concurrent-browser", 42],
+    ["browser", "1.2.0", "concurrent-browser", 44],
   ],
   [
     "zenx-browser-plugin-electron-1.2.0.tgz",
-    ["browser", "1.2.0", "electron-dedicated-browser", 21],
+    ["browser", "1.2.0", "electron-dedicated-browser", 22],
   ],
   [
     "zenx-browser-plugin-playwright-1.2.0.tgz",
-    ["browser", "1.2.0", "playwright-cli", 12],
+    ["browser", "1.2.0", "playwright-cli", 13],
   ],
   [
     "zenx-browser-plugin-user-session-1.2.0.tgz",
-    ["browser", "1.2.0", "user-browser-cdp", 21],
+    ["browser", "1.2.0", "user-browser-cdp", 22],
   ],
   [
     "zenx-computer-plugin-macos-1.5.0.tgz",

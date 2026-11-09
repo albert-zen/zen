@@ -5,6 +5,7 @@ import {
 import {
   assertBrowserInputSnapshot,
   browserInputSnapshotScript,
+  browserKeyStrokeParameters,
   browserTargetedInputPolicy,
   browserInputProbeScript,
   dispatchBrowserTargetedInput,
@@ -41,6 +42,7 @@ import {
   redactBrowserUrl,
   resolveBrowserObservedTarget,
   type BrowserInspection,
+  type BrowserInputBlockedSummary,
   type BrowserLiveObservationListener,
   type BrowserObservation,
   type BrowserScrollDirection,
@@ -98,6 +100,14 @@ interface Tab {
   agentActionsInFlight: number;
   agentActionOutcomeUnknown: boolean;
   inputQuarantine?: string;
+  inputRecovery?: {
+    key?: BrowserInputKey;
+    since: number;
+    attempted: boolean;
+    /** Original native identity/control fences, not a new observation's authority. */
+    assertCurrent(): void;
+    probe(): Promise<void>;
+  };
   inputInFlight?: boolean;
   inputLifecycleRevision: number;
   frameEvidence: BrowserFrameEvidence;
@@ -1306,6 +1316,70 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
                 },
                 quarantine: (error) => {
                   tab.inputQuarantine = error.message;
+                  const assertRecoveryCurrent = () => {
+                    assertInputLifecycle();
+                    observation.assertInputCapture?.();
+                    this.#assertAgentOperationCurrent(
+                      sessionId,
+                      tab,
+                      navigation,
+                      version,
+                      "input release",
+                      render,
+                    );
+                    this.#assertControlRevision(tab, control);
+                    if (
+                      this.#sessionIncarnations.get(sessionId) !== incarnation
+                    )
+                      throw new Error(
+                        "Browser session changed since the original key dispatch",
+                      );
+                    if (
+                      tab.control !== "agent" ||
+                      tab.nativeDialogOpen ||
+                      !tab.view.webContents.debugger.isAttached()
+                    )
+                      throw new Error(
+                        "Browser input release target no longer has its original control or debugger attachment",
+                      );
+                  };
+                  tab.inputRecovery = {
+                    key: error.key,
+                    since: Date.now(),
+                    attempted: false,
+                    assertCurrent: assertRecoveryCurrent,
+                    probe: async () => {
+                      assertRecoveryCurrent();
+                      const current = requireBrowserInputSnapshot(
+                        frameCapture
+                          ? await frameCapture.probe(
+                              action,
+                              assertRecoveryCurrent,
+                            )
+                          : await this.#evaluate(
+                              tab,
+                              browserInputProbeScript(action),
+                            ),
+                      );
+                      assertRecoveryCurrent();
+                      if (
+                        current.inputRevision < input.snapshot.inputRevision ||
+                        current.inputRevision > input.snapshot.inputRevision + 1
+                      )
+                        throw new Error(
+                          "Browser intervening input changed since the original press; cannot safely release",
+                        );
+                      // Ignore only this press's one input counter increment. Focus,
+                      // document, frame, viewport and native node evidence stay exact.
+                      assertBrowserInputSnapshot(
+                        {
+                          ...input.snapshot,
+                          inputRevision: current.inputRevision,
+                        },
+                        current,
+                      );
+                    },
+                  };
                   tab.agentActionOutcomeUnknown = true;
                   tab.observation = undefined;
                 },
@@ -1809,6 +1883,80 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     );
   }
 
+  /** One explicitly requested release; a key-up is site input, not a harmless probe. */
+  async inputReset(
+    sessionId: string,
+    tabId: string,
+    observationId?: string,
+    signal?: AbortSignal,
+  ): Promise<{ blocked: boolean; released: boolean; key?: BrowserInputKey }> {
+    signal?.throwIfAborted();
+    const tab = this.#requireAgentTab(sessionId, tabId);
+    if (tab.inputQuarantine === undefined)
+      return { blocked: false, released: false };
+    const recovery = tab.inputRecovery;
+    if (recovery?.attempted)
+      throw new Error(
+        "Browser input release was already attempted; do not repeat it. Close the actual tab if input remains blocked",
+      );
+    const status = this.#inputBlockedSummary(tab)!;
+    if (!recovery || !recovery.key || status.reset !== "available")
+      throw new Error(
+        `Browser cannot safely release this input: ${status.resetReason}. Close the actual tab; reads remain available`,
+      );
+    if (tab.agentActionsInFlight > 0)
+      throw new Error(
+        "An earlier Browser action is still in flight; wait for native settlement before requesting input release",
+      );
+    const key = recovery.key;
+    await this.#mutate(
+      sessionId,
+      tab,
+      observationId,
+      signal,
+      async (dispatch) => {
+        await recovery.probe();
+        signal?.throwIfAborted();
+        recovery.assertCurrent();
+        if (recovery.attempted || tab.inputRecovery !== recovery)
+          throw new Error(
+            "Browser input release was already attempted; do not repeat it",
+          );
+        if (tab.agentActionsInFlight > 0)
+          throw new Error(
+            "An earlier Browser action is still in flight; no input release was sent",
+          );
+        dispatch();
+        // Spend before sending. An unacknowledged key-up must never be retried.
+        recovery.attempted = true;
+        tab.inputInFlight = true;
+        this.#publish(tab.threadId);
+        try {
+          await tab.view.webContents.debugger.sendCommand(
+            "Input.dispatchKeyEvent",
+            {
+              ...browserKeyStrokeParameters(key),
+              type: "keyUp",
+            },
+          );
+          signal?.throwIfAborted();
+          recovery.assertCurrent();
+          // Releasing the key does not establish the earlier action's outcome.
+          tab.inputQuarantine = undefined;
+          tab.inputRecovery = undefined;
+        } catch (cause) {
+          throw new Error(
+            `Browser input release was not acknowledged on the original target; input remains blocked. Do not retry: ${cause instanceof Error ? cause.message : String(cause)}`,
+            { cause },
+          );
+        } finally {
+          tab.inputInFlight = false;
+        }
+      },
+    );
+    return { blocked: false, released: true, key };
+  }
+
   keepTab(sessionId: string, tabId: string): void {
     this.#requireAgentTab(sessionId, tabId).temporarySession = undefined;
     this.#publish(this.#requireSessionThread(sessionId));
@@ -1911,11 +2059,39 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     return this.#agentSummary(sessionId, tab);
   }
 
+  #inputBlockedSummary(tab: Tab): BrowserInputBlockedSummary | undefined {
+    if (tab.inputQuarantine === undefined) return undefined;
+    const recovery = tab.inputRecovery;
+    let reset: BrowserInputBlockedSummary["reset"] = "unavailable";
+    let resetReason: string | undefined;
+    if (recovery?.attempted) reset = "attempted";
+    else if (!recovery?.key)
+      resetReason = "No exact recoverable key was recorded";
+    else {
+      try {
+        recovery.assertCurrent();
+        reset = "available";
+      } catch (error) {
+        resetReason = error instanceof Error ? error.message : String(error);
+      }
+    }
+    return {
+      reason: tab.inputQuarantine,
+      ...(recovery?.key === undefined ? {} : { key: recovery.key }),
+      reset,
+      ...(resetReason === undefined ? {} : { resetReason }),
+      since: recovery?.since ?? 0,
+    };
+  }
+
   #controlSummary(tab: Tab) {
     return {
       control: tab.control,
       agentActionsInFlight: tab.agentActionsInFlight,
       agentActionOutcomeUnknown: tab.agentActionOutcomeUnknown,
+      ...(tab.inputQuarantine === undefined
+        ? {}
+        : { inputBlocked: this.#inputBlockedSummary(tab) }),
       requiresFreshObservation:
         tab.handoffMode &&
         (tab.control === "human" ||
@@ -1951,7 +2127,9 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
         "Browser programmable evaluation is still in flight; mutations remain blocked until native settlement or tab closure",
       );
     if (inputOptions.targetedInput && tab.inputQuarantine !== undefined)
-      throw new Error(tab.inputQuarantine);
+      throw new Error(
+        `${tab.inputQuarantine} Reads remain available. Read inputBlocked in list_tabs or inspect to check whether one explicit input_reset is available`,
+      );
     if (tab.inputInFlight)
       throw new Error(
         "Browser targeted input is already in flight; wait and inspect again",
@@ -1986,7 +2164,9 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
           "Browser targeted input is already in flight; inspect again",
         );
       if (tab.inputQuarantine !== undefined && inputOptions.targetedInput)
-        throw new Error(tab.inputQuarantine);
+        throw new Error(
+          `${tab.inputQuarantine} Reads remain available. Read inputBlocked in list_tabs or inspect to check whether one explicit input_reset is available`,
+        );
       this.#requireAgentTab(sessionId, tab.id);
       this.#assertControlRevision(tab, revision);
       if (this.#sessionIncarnations.get(sessionId) !== sessionIncarnation)

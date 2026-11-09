@@ -534,6 +534,30 @@
       "capabilities": ["dedicated_profile", "tab.close"]
     },
     {
+      "name": "browser_workspace_input_reset",
+      "description": "[Workspace browser] Explicitly release one recorded possibly held key at most once on the original unchanged Workspace tab. This sends a key-up event and may trigger page handlers; it requires interaction permission. Never repeats the earlier action or proves its outcome. Read inputBlocked via list_tabs or inspect first. Unsupported providers refuse rather than claim recovery.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string",
+            "description": "Required for a shared Workspace tab after human takeover: pass its latest browser_workspace_inspect observationId. Missing, stale, or pre-takeover references reject. Other backends do not require this field."
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.interact", "browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp"]
+    },
+    {
       "name": "browser_workspace_close_session",
       "description": "[Workspace browser] Detach this Agent session without closing the user's shared Workspace pages or clearing their storage.",
       "inputSchema": {
@@ -1287,6 +1311,33 @@
         "authenticated_state_in_place",
         "tab.close"
       ]
+    },
+    {
+      "name": "browser_connected_input_reset",
+      "description": "[Connected external browser] Explicitly release one recorded possibly held key at most once on the original unchanged Workspace tab. This sends a key-up event and may trigger page handlers; it requires interaction permission. Never repeats the earlier action or proves its outcome. Read inputBlocked via list_tabs or inspect first. Unsupported providers refuse rather than claim recovery.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string",
+            "description": "Required for a shared Workspace tab after human takeover: pass its latest browser_connected_inspect observationId. Missing, stale, or pre-takeover references reject. Other backends do not require this field."
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "browser.connected.interact",
+        "browser.connected.tabs.read"
+      ],
+      "interactionMode": "background_safe",
+      "capabilities": ["user_session", "authenticated_state_in_place", "cdp"]
     },
     {
       "name": "browser_connected_close_session",

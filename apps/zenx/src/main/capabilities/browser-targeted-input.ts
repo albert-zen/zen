@@ -1257,10 +1257,39 @@ export function browserInputKey(value: unknown): BrowserInputKey {
   return value as BrowserInputKey;
 }
 
+const browserVirtualKeys: Record<BrowserInputKey, number> = {
+  Enter: 13,
+  Tab: 9,
+  Escape: 27,
+  ArrowUp: 38,
+  ArrowDown: 40,
+  ArrowLeft: 37,
+  ArrowRight: 39,
+  Backspace: 8,
+  Delete: 46,
+  Home: 36,
+  End: 35,
+  PageUp: 33,
+  PageDown: 34,
+  Space: 32,
+};
+
+/** Exact descriptor shared by the original press and an explicitly requested release. */
+export function browserKeyStrokeParameters(
+  key: BrowserInputKey,
+): Record<string, unknown> {
+  return {
+    key: key === "Space" ? " " : key,
+    code: key,
+    windowsVirtualKeyCode: browserVirtualKeys[key],
+  };
+}
+
 export class BrowserInputOutcomeUnknownError extends Error {
   constructor(
     cause: unknown,
     readonly inputMayRemainPressed = true,
+    readonly key?: BrowserInputKey,
   ) {
     super(
       `Browser targeted input outcome is unknown after dispatch. Do not retry. ${inputMayRemainPressed ? "This tab's input is blocked; have the user close the actual browser tab to release any held input (detaching ZenX alone is not enough)." : "Both input events were acknowledged; inspect again before continuing."} ${cause instanceof Error ? cause.message : String(cause)}`,
@@ -1320,31 +1349,11 @@ export async function dispatchBrowserTargetedInput(
     action.kind === "click"
       ? browserInputPoint(initial, action.x, action.y)
       : undefined;
-  const virtualKeys: Record<BrowserInputKey, number> = {
-    Enter: 13,
-    Tab: 9,
-    Escape: 27,
-    ArrowUp: 38,
-    ArrowDown: 40,
-    ArrowLeft: 37,
-    ArrowRight: 39,
-    Backspace: 8,
-    Delete: 46,
-    Home: 36,
-    End: 35,
-    PageUp: 33,
-    PageDown: 34,
-    Space: 32,
-  };
   const key = action.kind === "key" ? browserInputKey(action.key) : undefined;
   const method = point ? "Input.dispatchMouseEvent" : "Input.dispatchKeyEvent";
   const parameters = point
     ? { ...point, button: "left", clickCount: 1 }
-    : {
-        key: key === "Space" ? " " : key,
-        code: key,
-        windowsVirtualKeyCode: virtualKeys[key!],
-      };
+    : browserKeyStrokeParameters(key!);
   // Route selection precedes the first mutation. A frame capture must supply a
   // receipt; it cannot silently fall back to root when its evidence is absent.
   const mouse = point ? port.prepareMouse?.(initial) : undefined;
@@ -1430,7 +1439,7 @@ export async function dispatchBrowserTargetedInput(
     port.assertCurrent();
   } catch (cause) {
     if (!dispatched) throw cause;
-    const error = new BrowserInputOutcomeUnknownError(cause, !released);
+    const error = new BrowserInputOutcomeUnknownError(cause, !released, key);
     if (!released) port.quarantine(error);
     throw error;
   }
