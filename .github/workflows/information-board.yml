@@ -33,7 +33,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-14]
+        # macos-14 retired on 2026-11-02. Keep x64 on supported macOS 15;
+        # this lane no longer provides macOS 14 runtime coverage.
+        os: [windows-latest, macos-15-intel]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 18
     steps:
@@ -48,12 +50,19 @@ jobs:
       - name: Select installed SDK for the unchanged production native helper
         if: runner.os == 'macOS'
         # Xcode 15's SDK cannot compile the guarded macOS 15 capture property.
-        # Keep the macOS 14 runtime; select only this job's installed SDK.
+        # The macOS 15 Intel image still ships Xcode 16.2 with macOS SDK 15.2.
+        # Select it only for this job, without changing global xcode-select.
         env:
           DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+        shell: bash
         run: |
+          sdk_version=$(xcrun --sdk macosx --show-sdk-version)
+          echo "macOS SDK: $sdk_version"
+          if [[ ! "$sdk_version" =~ ^[1-9][0-9]*(\.[0-9]+)*$ ]] || (( ${sdk_version%%.*} < 15 )); then
+            echo "::error::The production native helper requires macOS SDK 15 or newer" >&2
+            exit 1
+          fi
           echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
-          xcrun --sdk macosx --show-sdk-version
       - name: Native information board flow in disposable full production App
         timeout-minutes: 6
         run: node apps/zenx/scripts/launch-information-board-acceptance.mjs "${{ runner.temp }}/information-board"
