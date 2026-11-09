@@ -493,6 +493,7 @@ export const SubagentsInformationVisibilityContext = createContext<{
 
 function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
   useTranslation("panels");
+  const sidebar = useContext(ChildThreadSidebarContext);
   const { parent, all, error, refresh } = useRelatedThreads(sdk);
   const [showArchived, setShowArchived] = useState(false);
   const render = (
@@ -582,6 +583,11 @@ function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
             {i18n.t("panels:retry")}
           </button>
         </p>
+      ) : null}
+      {tree && sidebar ? (
+        <div className="subagent-sidebar-heading">
+          {i18n.t("panels:subagentSidebarHeading")}
+        </div>
       ) : null}
       {tree ?? (
         <p className="subagent-empty">{i18n.t("panels:noSubagentsYet")}</p>

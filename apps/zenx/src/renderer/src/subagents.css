@@ -82,6 +82,12 @@
 .subagents-panel > header strong {
   font-weight: 500;
 }
+.subagent-sidebar-heading {
+  padding: 0 6px 4px;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+  text-align: right;
+}
 .subagent-tree {
   list-style: none;
   padding: 0;

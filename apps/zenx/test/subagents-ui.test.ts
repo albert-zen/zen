@@ -26,6 +26,7 @@ import {
 
 import type { ModelSummary } from "../src/protocol-client/index.js";
 import { encodeModelKey } from "../../../src/protocol/model-key.js";
+import { i18n } from "../src/renderer/src/i18n.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -765,6 +766,126 @@ test("clear an effort-only override after its model loses selectable efforts", a
     );
     await chooseCreationOption(f, "Reasoning effort", "");
     assert.equal(f.button("New side chat").disabled, false);
+  } finally {
+    await f.close();
+  }
+});
+
+test("the visible sidebar caption names the switch column once in English and Chinese", async () => {
+  const children = [summary("child", "parent"), summary("nested", "child")];
+  const f = await fixture(
+    async () => ({ threads: children }),
+    { visibleSubagentThreadIds: ["nested"], setVisible: async () => {} },
+    { report() {}, manageMode: false, embedded: true },
+  );
+  try {
+    await f.render("parent");
+    for (const [language, caption] of [
+      ["en", "Sidebar"],
+      ["zh-CN", "侧栏"],
+    ]) {
+      await act(async () => i18n.changeLanguage(language));
+      const document = f.dom.window.document;
+      const headings = document.querySelectorAll(".subagent-sidebar-heading");
+      assert.equal(headings.length, 1);
+      assert.equal(headings[0]!.textContent, caption);
+      assert.equal(headings[0]!.closest("button"), null);
+      assert.equal(
+        headings[0]!.previousElementSibling,
+        document.querySelector(".subagents-panel > header"),
+      );
+      assert.equal(
+        headings[0]!.nextElementSibling,
+        document.querySelector(".subagents-panel > .subagent-tree"),
+      );
+      assert.equal(document.querySelectorAll(".subagent-tree-row").length, 2);
+      assert.equal(document.querySelector(".subagent-empty"), null);
+      const switches = [...document.querySelectorAll('[role="switch"]')];
+      assert.equal(switches.length, 2);
+      for (const [index, toggle] of switches.entries()) {
+        assert.equal(
+          toggle.getAttribute("aria-label"),
+          i18n.t("shell:showSubagentInSidebar", {
+            title: children[index]!.threadId,
+          }),
+        );
+        assert.equal(
+          toggle.getAttribute("title"),
+          i18n.t(index ? "shell:hideFromSidebar" : "shell:showInSidebar"),
+        );
+        assert.equal(toggle.getAttribute("aria-checked"), String(index === 1));
+        assert.equal(
+          toggle.textContent,
+          i18n.t(index ? "shell:sidebarShown" : "shell:sidebarHidden"),
+        );
+      }
+    }
+    assert.deepEqual(f.routes, []);
+    assert.equal(
+      f.calls.every((call) => call.commandId === "list"),
+      true,
+    );
+  } finally {
+    await f.close();
+    await i18n.changeLanguage("en");
+  }
+});
+
+test("the sidebar caption follows actual displayed child rows, not unrelated or archived summaries", async () => {
+  const f = await fixture(undefined, {
+    visibleSubagentThreadIds: [],
+    setVisible: async () => {},
+  });
+  try {
+    const document = f.dom.window.document;
+    const assertEmpty = () => {
+      assert.equal(document.querySelector(".subagent-sidebar-heading"), null);
+      assert.equal(document.querySelector(".subagent-tree-row"), null);
+      assert.equal(document.querySelector('[role="switch"]'), null);
+      assert.equal(
+        document.querySelector(".subagent-empty")?.textContent,
+        "No subagents yet.",
+      );
+    };
+    await f.render("parent");
+    assertEmpty();
+    await f.render("parent", "panel", [
+      summary("parent"),
+      summary("unrelated", "elsewhere"),
+      summary("nested", "unrelated"),
+      summary("archived", "parent", { archived: true }),
+    ]);
+    assertEmpty();
+    const archived = document.querySelector<HTMLInputElement>(
+      "input[type='checkbox']",
+    )!;
+    await f.click(archived);
+    assert.equal(
+      document.querySelector(".subagent-sidebar-heading")?.textContent,
+      "Sidebar",
+    );
+    assert.equal(document.querySelectorAll(".subagent-tree-row").length, 1);
+    assert.equal(
+      document.querySelector(".subagent-tree-title")?.textContent,
+      "archived",
+    );
+    assert.equal(document.querySelector(".subagent-empty"), null);
+    await f.click(archived);
+    assertEmpty();
+  } finally {
+    await f.close();
+  }
+});
+
+test("child rows without the trusted sidebar context do not advertise unavailable switches", async () => {
+  const f = await fixture();
+  try {
+    await f.render("parent", "panel", [summary("child", "parent")]);
+    const document = f.dom.window.document;
+    assert.equal(document.querySelectorAll(".subagent-tree-row").length, 1);
+    assert.equal(document.querySelector(".subagent-empty"), null);
+    assert.equal(document.querySelector(".subagent-sidebar-heading"), null);
+    assert.equal(document.querySelector('[role="switch"]'), null);
   } finally {
     await f.close();
   }
