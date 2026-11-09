@@ -150,3 +150,9 @@ light tinted error text at 4.25–4.49:1, and some dark select boundaries at
 2.44–2.85:1. Border ratios alone do not establish WCAG failure. No theme change
 was made to the frozen candidate. Source calculations, screenshots, native
 computed styles and accessibility certification must remain separate evidence.
+
+## Combined verification completed
+
+The final isolated combined candidate is now `d52b68577b0f3c24085dc09b3f9381be9d7267d1`, tree `0e82e2a5e4540de034650832a9ed161a3ac08f31`. The original 43-file run produced 506 passes and the one stale SVG-count failure. Test-only correction `d19bea0f` replaced that count with separate folder/disclosure assertions; the complete corrected file passes. Other production inputs and 42 focused files are byte-identical. Final bounded App groups pass 8/8 and 5/5; formatting, node/web types and one prepared build pass. This is explicitly not a clean full 43-file run on final HEAD or a repository-wide/CI pass. See `round-six-combined-validation.md` and the frozen fingerprints/manifests beside it.
+
+Protected main/#748 checks passed again. Native matched capture is now underway on that immutable build. The next small text-contrast iteration is separate and must not be represented as part of this captured source. Current remote checkpoint 20 is `020571d71cc4d469d203df85f637fdf0cdc8686a`, tree `86f9fe7efd454bc83b7791257e3d4cfe50692efb`; its added files are only reproducible measurement documentation and published Account reference provenance. No PR, merge, deployment or real account operation has occurred.

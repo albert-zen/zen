@@ -93,6 +93,7 @@
   --color-status-success: #73d2ad;
   --color-status-warning: #e0b266;
   --color-status-danger: #ef877f;
+  --color-text-on-danger-soft: var(--color-status-danger);
   --color-status-success-soft: rgb(115 210 173 / 10%);
   --color-status-warning-soft: rgb(224 178 102 / 10%);
   --color-status-danger-soft: rgb(239 135 127 / 10%);
@@ -207,6 +208,7 @@
   --color-status-success: #287a60;
   --color-status-warning: #96651d;
   --color-status-danger: #b74742;
+  --color-text-on-danger-soft: #a93f3a;
   --color-status-success-soft: rgb(40 122 96 / 11%);
   --color-status-warning-soft: rgb(150 101 29 / 11%);
   --color-status-danger-soft: rgb(183 71 66 / 10%);

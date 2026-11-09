@@ -4355,6 +4355,10 @@ button:disabled {
   font-size: var(--font-size-caption);
   line-height: 1.4;
 }
+.appearance-preset-options input:checked + span small,
+.appearance-accent-options input:checked + span small {
+  color: var(--color-text-secondary);
+}
 .appearance-control-list {
   display: grid;
   border-top: 1px solid var(--color-border-subtle);
@@ -4451,7 +4455,7 @@ button:disabled {
 }
 .settings-error {
   background: var(--status-danger-soft);
-  color: var(--danger);
+  color: var(--color-text-on-danger-soft);
 }
 .settings-success {
   background: var(--status-good-soft);
