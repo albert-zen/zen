@@ -3,12 +3,18 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import WebSocket from "ws";
 
-export const PREVIEW_STARTUP_TIMEOUT_MS = 30_000;
+const DEFAULT_PHASE_TIMEOUTS_MS = Object.freeze({
+  "devtools-port": 30_000,
+  "target-list": 10_000,
+  "websocket-connect": 5_000,
+});
+export const PREVIEW_STARTUP_TIMEOUT_MS = 45_000;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function observePreviewChrome(child, profile, options = {}) {
   const {
     timeoutMs = PREVIEW_STARTUP_TIMEOUT_MS,
+    phaseTimeoutsMs: phaseOverrides = {},
     pollMs = 100,
     now = () => performance.now(),
     delay = sleep,
@@ -25,8 +31,31 @@ export function observePreviewChrome(child, profile, options = {}) {
     termMs = 5_000,
     killMs = 2_000,
   } = options;
+  if (
+    !phaseOverrides ||
+    typeof phaseOverrides !== "object" ||
+    Array.isArray(phaseOverrides)
+  )
+    throw new TypeError("phaseTimeoutsMs must be a phase budget object");
+  const phaseTimeoutsMs = { ...DEFAULT_PHASE_TIMEOUTS_MS, ...phaseOverrides };
+  for (const name of Object.keys(phaseOverrides)) {
+    if (!Object.hasOwn(DEFAULT_PHASE_TIMEOUTS_MS, name))
+      throw new TypeError(`Unknown startup phase: ${name}`);
+  }
+  for (const [name, value] of Object.entries({
+    timeoutMs,
+    pollMs,
+    ...phaseTimeoutsMs,
+  })) {
+    if (!Number.isFinite(value) || value <= 0 || value > 2 ** 31 - 1)
+      throw new RangeError(
+        `${name} must be finite positive milliseconds no greater than 2147483647`,
+      );
+  }
   const started = now();
   const deadline = started + timeoutMs;
+  let phaseDeadline = deadline;
+  let startupPhase;
   let spawnError;
   let exited = child.exitCode !== null || child.signalCode !== null;
   let closed = false;
@@ -36,6 +65,7 @@ export function observePreviewChrome(child, profile, options = {}) {
     pid: child.pid ?? null,
     executable: child.spawnfile ?? null,
     startupTimeoutMs: timeoutMs,
+    phaseTimeoutsMs,
     phase: "spawn",
     events: [],
     pollCount: 0,
@@ -64,6 +94,7 @@ export function observePreviewChrome(child, profile, options = {}) {
     stderr = (stderr + String(data)).slice(-65_536);
   });
   const failure = (message) => {
+    finishStartupPhase("failed");
     const error = new Error(
       `Preview browser ${receipt.phase} failed after ${Math.round(now() - started)}ms: ${message}; stderr tail: ${stderr || "(empty)"}`,
     );
@@ -73,47 +104,115 @@ export function observePreviewChrome(child, profile, options = {}) {
   const alive = () => {
     if (spawnError) {
       phase("spawn");
-      throw failure(spawnError.message);
+      throw new Error(spawnError.message);
     }
     if (exited)
-      throw failure(
+      throw new Error(
         `Chrome exited (code=${child.exitCode}, signal=${child.signalCode})`,
       );
   };
-  const remaining = () => Math.max(0, deadline - now());
-  // Bound even a stalled read/body promise; abort the underlying supported I/O too.
-  const bounded = async (operation, budgetMs) => {
-    const controller = new AbortController();
-    let timer;
-    try {
-      return await Promise.race([
-        Promise.resolve().then(() => operation(controller.signal)),
-        new Promise((_resolve, reject) => {
-          timer = setTimeout(
-            () => {
-              const error = new Error("Readiness I/O deadline exceeded");
-              controller.abort(error);
-              reject(error);
-            },
-            Math.max(1, Math.ceil(budgetMs)),
-          );
-        }),
-      ]);
-    } finally {
-      clearTimeout(timer);
+  const finishStartupPhase = (outcome) => {
+    if (startupPhase && !startupPhase.outcome) {
+      startupPhase.durationMs =
+        Math.round(now() - started) - startupPhase.elapsedMs;
+      startupPhase.outcome = outcome;
     }
   };
+  const beginStartupPhase = (name) => {
+    finishStartupPhase("passed");
+    phase(name);
+    phaseDeadline = Math.min(deadline, now() + phaseTimeoutsMs[name]);
+    startupPhase = receipt.events.at(-1);
+    Object.assign(startupPhase, {
+      timeoutMs: phaseTimeoutsMs[name],
+      deadlineElapsedMs: Math.round(phaseDeadline - started),
+      pollCount: 0,
+    });
+    delete receipt.lastObservation;
+  };
+  const remaining = () => Math.max(0, phaseDeadline - now());
+  const checkpoint = () => {
+    alive();
+    const time = now();
+    if (time >= phaseDeadline) {
+      const limit =
+        time >= deadline
+          ? `startup deadline ${timeoutMs}ms`
+          : `${receipt.phase} deadline ${phaseTimeoutsMs[receipt.phase]}ms`;
+      throw new Error(
+        `${limit} exceeded; last observation: ${receipt.lastObservation ?? "none"}`,
+      );
+    }
+  };
+  // Only readiness observations are polled. Every wait is bounded and child
+  // termination aborts supported I/O, including a stalled response body.
+  const bounded = async (operation, budgetMs) => {
+    checkpoint();
+    const operationDeadline = Math.min(phaseDeadline, now() + budgetMs);
+    const controller = new AbortController();
+    const checkOperationDeadline = () => {
+      checkpoint();
+      if (now() >= operationDeadline) {
+        const error = new Error("Readiness I/O deadline exceeded");
+        controller.abort(error);
+        throw error;
+      }
+    };
+    let timer;
+    let failed;
+    const stopped = () => failed(new Error("Chrome exited during readiness"));
+    try {
+      const interrupted = new Promise((_resolve, reject) => {
+        failed = (error) => {
+          controller.abort(error);
+          reject(error);
+        };
+        child.once("exit", stopped);
+        child.once("error", failed);
+        const expire = () => {
+          const left = operationDeadline - now();
+          // Node timers may fire slightly early. Keep the absolute deadline;
+          // rescheduling this timer never repeats the underlying operation.
+          if (left > 0) timer = setTimeout(expire, Math.ceil(left));
+          else failed(new Error("Readiness I/O deadline exceeded"));
+        };
+        expire();
+      });
+      const result = await Promise.race([
+        Promise.resolve().then(() => {
+          checkOperationDeadline();
+          return operation(controller.signal);
+        }),
+        interrupted,
+      ]);
+      // Timers can run late under load; an I/O completion is not proof that
+      // it arrived before the absolute deadline.
+      checkOperationDeadline();
+      return result;
+    } catch (error) {
+      checkpoint();
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      child.off("exit", stopped);
+      child.off("error", failed);
+    }
+  };
+  const pause = () =>
+    bounded(() => delay(Math.min(pollMs, remaining())), remaining());
   return {
     receipt,
     async connect() {
       let port;
       let target;
-      phase("devtools-port");
-      while (remaining() > 0) {
-        alive();
-        receipt.pollCount++;
-        try {
-          if (!port) {
+      let socket;
+      try {
+        beginStartupPhase("devtools-port");
+        while (!port) {
+          checkpoint();
+          receipt.pollCount++;
+          startupPhase.pollCount++;
+          try {
             const value = Number(
               (await bounded(readPort, remaining())).split("\n")[0],
             );
@@ -121,79 +220,85 @@ export function observePreviewChrome(child, profile, options = {}) {
               throw new Error("DevToolsActivePort has no valid port yet");
             port = value;
             receipt.port = port;
-            phase("target-list");
+          } catch (error) {
+            checkpoint();
+            receipt.lastObservation = String(error?.message ?? error);
           }
-          const pages = await bounded(
-            async (signal) => {
-              const response = await fetchTargets(port, signal);
-              if (!response.ok) throw new Error(`HTTP ${response.status}`);
-              return response.json();
-            },
-            Math.min(2_000, remaining()),
-          );
-          target = pages.find(
-            (page) => page.type === "page" && page.webSocketDebuggerUrl,
-          );
-          if (target) break;
-          receipt.lastObservation = "DevTools reachable, no page target yet";
-        } catch (error) {
-          receipt.lastObservation =
-            error instanceof Error ? error.message : String(error);
+          if (!port) await pause();
         }
-        await delay(Math.min(pollMs, remaining()));
-      }
-      alive();
-      if (!target || remaining() <= 0)
-        throw failure(
-          `startup deadline ${timeoutMs}ms exceeded; last observation: ${receipt.lastObservation ?? "none"}`,
-        );
-      phase("websocket-connect");
-      let socket;
-      try {
-        socket = createSocket(
-          target.webSocketDebuggerUrl,
-          Math.max(1, Math.ceil(remaining())),
-        );
-        await new Promise((resolve, reject) => {
-          const cleanup = () => {
-            clearTimeout(timer);
-            socket.off("open", opened);
-            socket.off("error", failed);
-            socket.off("close", closed);
-            child.off("exit", closed);
-            child.off("error", failed);
-          };
-          const opened = () => {
-            cleanup();
-            resolve();
-          };
-          const failed = (error) => {
-            cleanup();
-            reject(error);
-          };
-          const closed = () =>
-            failed(new Error("Chrome or socket closed before connection"));
-          const timer = setTimeout(
-            () => failed(new Error("WebSocket startup deadline exceeded")),
-            remaining(),
+        checkpoint();
+        beginStartupPhase("target-list");
+        while (!target) {
+          checkpoint();
+          receipt.pollCount++;
+          startupPhase.pollCount++;
+          try {
+            const pages = await bounded(
+              async (signal) => {
+                const response = await fetchTargets(port, signal);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return response.json();
+              },
+              Math.min(2_000, remaining()),
+            );
+            target = pages.find(
+              (page) => page.type === "page" && page.webSocketDebuggerUrl,
+            );
+            if (!target)
+              receipt.lastObservation =
+                "DevTools reachable, no page target yet";
+          } catch (error) {
+            checkpoint();
+            receipt.lastObservation = String(error?.message ?? error);
+          }
+          if (!target) await pause();
+        }
+        checkpoint();
+        beginStartupPhase("websocket-connect");
+        await bounded((signal) => {
+          socket = createSocket(
+            target.webSocketDebuggerUrl,
+            Math.max(1, Math.ceil(remaining())),
           );
-          socket.once("open", opened);
-          socket.once("error", failed);
-          socket.once("close", closed);
-          child.once("exit", closed);
-          child.once("error", failed);
-        });
+          checkpoint();
+          return new Promise((resolve, reject) => {
+            const cleanup = () => {
+              socket.off("open", opened);
+              socket.off("error", failed);
+              socket.off("close", closed);
+              signal.removeEventListener("abort", aborted);
+            };
+            const opened = () => {
+              cleanup();
+              resolve();
+            };
+            const failed = (error) => {
+              cleanup();
+              reject(error);
+            };
+            const closed = () =>
+              failed(new Error("Socket closed before connection"));
+            const aborted = () => failed(signal.reason);
+            socket.once("open", opened);
+            socket.once("error", failed);
+            socket.once("close", closed);
+            signal.addEventListener("abort", aborted, { once: true });
+            if (signal.aborted) aborted();
+          });
+        }, remaining());
+        checkpoint();
         // Avoid an unhandled socket error after opening; commands retain their own deadlines.
         socket.on("error", (error) => {
           receipt.socketError = error.message;
         });
+        finishStartupPhase("passed");
         phase("page-setup");
         receipt.readyElapsedMs = Math.round(now() - started);
         return socket;
       } catch (error) {
         socket?.on("error", () => {});
         socket?.terminate();
-        throw failure(error.message);
+        throw failure(String(error?.message ?? error));
       }
     },
     commandStarted(method) {

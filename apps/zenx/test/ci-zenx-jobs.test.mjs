@@ -14,8 +14,8 @@ test("ZenX checks and synthetic UI run independently with a fail-closed compatib
   const { jobs } = workflow;
   assert.ok(jobs["zenx-check"]);
   assert.ok(jobs["zenx-ui"]);
-  assert.equal(jobs["zenx-check"].needs, undefined);
-  assert.equal(jobs["zenx-ui"].needs, undefined);
+  assert.equal(jobs["zenx-check"].needs, "selection");
+  assert.equal(jobs["zenx-ui"].needs, "selection");
   assert.deepEqual(jobs.zenx.needs, ["zenx-check", "zenx-ui"]);
   assert.equal(jobs.zenx.name, "ZenX typecheck, tests, and build");
   assert.equal(jobs.zenx.if, "${{ always() }}");
@@ -57,7 +57,7 @@ test("aggregate stays observed and preview commands do not occupy its runner", (
     const upload = job.steps.find(
       (step) => step.name === "Retain exact checkout provenance",
     );
-    assert.equal(upload.if, "${{ always() }}");
+    assert.equal(upload.if, "${{ env.CI_RUN_FULL == 'true' && (always()) }}");
     assert.match(upload.with.name, /github.run_attempt/);
   }
 });
@@ -156,7 +156,7 @@ test("pending steer browser matrix and failure artifacts stay in the synthetic U
   assert.ok(artifact);
   assert.equal(
     artifact.if,
-    "${{ matrix.shard == 'conversation' && always() }}",
+    "${{ env.CI_RUN_FULL == 'true' && (matrix.shard == 'conversation' && always()) }}",
   );
   assert.deepEqual(workflow.jobs["zenx-ui"].strategy.matrix.shard, [
     "overflow",

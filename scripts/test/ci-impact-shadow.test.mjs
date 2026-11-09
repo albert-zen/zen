@@ -121,7 +121,7 @@ test("pinned endpoints are used even when checkout has moved", (t) => {
   assert.equal(report.headSha, head);
 });
 
-test("the fast workflow cannot use shadow candidates to skip acceptance", async () => {
+test("the fast workflow never activates shadow candidates directly", async () => {
   const { readFileSync } = await import("node:fs");
   const source = readFileSync(
     new URL("../../.github/workflows/fast-feedback.yml", import.meta.url),
@@ -130,7 +130,7 @@ test("the fast workflow cannot use shadow candidates to skip acceptance", async 
   assert.match(source, /pull_request:/);
   assert.doesNotMatch(
     source,
-    /pull_request_target:|paths:|paths-ignore:|needs:|fromJSON|candidateLanes|outputs:/,
+    /pull_request_target:|paths:|paths-ignore:|needs:|fromJSON|candidateLanes/,
   );
   assert.match(source, /fetch-depth: 0/);
   assert.match(source, /persist-credentials: false/);
