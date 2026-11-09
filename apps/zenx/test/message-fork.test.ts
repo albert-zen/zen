@@ -1,5 +1,6 @@
 import "./dom-primitives.js";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import * as React from "react";
@@ -180,6 +181,7 @@ test("repeat clicks share the pending action and failures stay visible and retry
     await revealHistory();
     const button = buttons()[0]!;
     assert.ok(button, "Durable terminal response exposes Fork after expansion");
+    assert.equal(button.querySelector(".message-fork-label"), null);
     await act(async () => {
       button.click();
       button.click();
@@ -190,15 +192,70 @@ test("repeat clicks share the pending action and failures stay visible and retry
     assert.equal(button.title, "Forking / copying this thread…");
     assert.equal(button.getAttribute("aria-label"), button.title);
     assert.ok(button.querySelector('.mini-spinner[aria-hidden="true"]'));
+    assert.equal(
+      button.querySelector(".message-fork-label")?.textContent,
+      "Forking…",
+      "Pending feedback is visible text, not only a tooltip or accessible name",
+    );
     await act(async () =>
       reject(new Error("The exact message is unavailable")),
     );
     assert.equal(button.disabled, false);
+    assert.equal(button.querySelector(".message-fork-label"), null);
+    assert.equal(button.querySelector(".mini-spinner"), null);
+    assert.equal(button.title, "Fork thread from this message");
     assert.match(
       document.querySelector('[role="alert"]')?.textContent ?? "",
       /exact message is unavailable/,
     );
   });
+});
+
+test("successful Fork clears pending feedback on the same mounted action", async () => {
+  await mount(async (render) => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    await render(fixture(), async () => pending);
+    await revealHistory();
+    const button = buttons()[0]!;
+    await act(async () => button.click());
+    assert.equal(button.textContent, "Forking…");
+    await act(async () => finish());
+    assert.equal(buttons()[0], button);
+    assert.equal(button.disabled, false);
+    assert.equal(button.getAttribute("aria-busy"), "false");
+    assert.equal(button.textContent, "");
+    assert.equal(button.querySelector(".mini-spinner"), null);
+    assert.equal(button.title, "Fork thread from this message");
+  });
+});
+
+test("pending Fork styles keep feedback readable, compact and static with reduced motion", async () => {
+  const css = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  const pending = css.match(
+    /\.message-actions \.message-fork\[aria-busy="true"\]\s*\{([^}]+)\}/u,
+  )?.[1];
+  assert.ok(pending, "Pending styles are local to the Fork action");
+  assert.match(pending, /width:\s*auto;/u);
+  assert.match(pending, /display:\s*inline-flex;/u);
+  assert.match(pending, /color:\s*var\(--color-text-secondary\);/u);
+  assert.match(pending, /opacity:\s*1;/u);
+  assert.match(pending, /white-space:\s*nowrap;/u);
+  const spinner = css.match(
+    /\.message-fork\[aria-busy="true"\] > \.mini-spinner\s*\{([^}]+)\}/u,
+  )?.[1];
+  assert.ok(spinner, "Spinner contrast changes stay local to pending Fork");
+  assert.match(spinner, /border-color:\s*currentColor;/u);
+  assert.match(spinner, /border-right-color:\s*transparent;/u);
+  assert.match(
+    css,
+    /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.message-fork\[aria-busy="true"\] > \.mini-spinner\s*\{\s*animation:\s*none;/u,
+  );
 });
 
 test("pending completion loses navigation ownership after switching threads", async () => {

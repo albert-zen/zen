@@ -5170,7 +5170,12 @@ function MessageForkButton({ target }: { target: MessageForkTarget }) {
         onClick={() => void run()}
       >
         {pending ? (
-          <span className="mini-spinner" aria-hidden="true" />
+          <>
+            <span className="mini-spinner" aria-hidden="true" />
+            <span className="message-fork-label">
+              {i18n.t("shell:forking")}
+            </span>
+          </>
         ) : (
           <Icon name="fork" size={14} />
         )}

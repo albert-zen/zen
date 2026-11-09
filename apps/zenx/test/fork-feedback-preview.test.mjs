@@ -112,7 +112,19 @@ test("the actual bundled fork fixture keeps the Composer contract through edits,
       assert.match(doc.querySelector("header").textContent, /1 fork request/);
       assert.ok(
         doc.querySelector(".message-fork .mini-spinner"),
-        "Pending Fork is visible",
+        "Pending Fork retains its decorative spinner",
+      );
+      assert.equal(
+        doc.querySelector(".message-fork .message-fork-label")?.textContent,
+        lang === "zh-CN" ? "正在复制…" : "Forking…",
+        `${lang}: pending Fork has a visible localized label`,
+      );
+      assert.equal(doc.querySelector(".message-fork").disabled, true);
+      assert.equal(
+        doc.querySelector(".message-fork").title,
+        lang === "zh-CN"
+          ? "正在 Fork，为你复制这个线程…"
+          : "Forking / copying this thread…",
       );
       assert.equal(completeCopy.disabled, false);
       assert.equal(failCopy.disabled, false);
@@ -128,6 +140,7 @@ test("the actual bundled fork fixture keeps the Composer contract through edits,
       failedRequest.complete();
       assert.match(doc.querySelector("header").textContent, /Source thread/);
       assert.equal(doc.querySelector(".message-fork").disabled, false);
+      assert.equal(doc.querySelector(".message-fork-label"), null);
       assert.equal(
         doc.querySelector(".turn-toggle").getAttribute("aria-expanded"),
         "false",
@@ -148,6 +161,7 @@ test("the actual bundled fork fixture keeps the Composer contract through edits,
       await settled(() =>
         doc.querySelector("header")?.textContent.includes("Copied thread"),
       );
+      assert.equal(doc.querySelector(".message-fork-label"), null);
       assert.ok(
         doc.querySelector('[data-read-message-id="final"]'),
         "Copy retains the actual answer",

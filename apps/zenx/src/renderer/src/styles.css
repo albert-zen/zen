@@ -1922,6 +1922,30 @@ button:disabled {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
+.message-actions .message-fork[aria-busy="true"] {
+  width: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  opacity: 1;
+  cursor: wait;
+}
+.message-fork[aria-busy="true"] > .mini-spinner {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  border-color: currentColor;
+  border-right-color: transparent;
+}
+@media (prefers-reduced-motion: reduce) {
+  .message-fork[aria-busy="true"] > .mini-spinner {
+    animation: none;
+  }
+}
 .message-fork-error {
   flex-basis: 100%;
   color: var(--color-text-primary);
