@@ -116,3 +116,23 @@ No fetch, checkout or repo changes were made. The old October 1 research artifac
 ## Evidence limitations
 
 No authenticated third-party apps, paid model calls, downloads/installations, repo edits or publishing. Four current browser captures were saved, but only public docs/marketing/editorial pages were available. No worker-generated screenshot here qualifies as a current authenticated Codex, T3, Linear, Vercel dashboard or DeepSeek Harness app audit. Historical PR media are primary author-provided evidence, not independently replayed tests. Search summaries, including the Theo video transcript, were used only to locate primary links; exact runtime/cost claims from those summaries are not relied on.
+
+## Follow-up: verified Codex interface reference
+
+A later, bounded public-source check found and visually inspected a genuine
+published Codex app image, separate from the launch-header capture excluded
+above. The official article
+https://developers.openai.com/blog/run-long-horizon-tasks-with-codex is dated
+February 23, 2026 and publishes
+https://developers.openai.com/images/blog/long-horizon-4.jpeg with alt text
+“Codex app workspace with project thread”.
+
+The unaltered 1200×673 JPEG shows global actions, grouped project/thread
+navigation, a new-thread workspace, composer and restrained toolbar. It is useful
+for hierarchy, spacing and navigation comparison, not settings or interaction
+acceptance. Neither the app build nor capture date is established; the article
+date and visible model label are not a version claim. The original bytes and
+source/limits note are retained with the next evidence archive. See
+[`references/codex-published-interface.md`](references/codex-published-interface.md)
+for exact URL, size and SHA-256. Earlier frozen reviews did not see this new
+reference and their scores are not rewritten.

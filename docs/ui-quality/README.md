@@ -68,9 +68,11 @@ independent and tie it to an immutable commit/evidence manifest.
 
 ## Checkpoints and evidence
 
-Start with [`checkpoints/implementation-summary.md`](checkpoints/implementation-summary.md)
-for implemented changes, final code identity, evidence navigation and remaining
-verification limits. Historical checkpoint source identities remain unchanged.
+Start with [`checkpoints/fifth-settings-integrity.md`](checkpoints/fifth-settings-integrity.md)
+for the latest settings implementation and verification, then
+[`checkpoints/implementation-summary.md`](checkpoints/implementation-summary.md)
+for the preceding visual/interaction slices and their evidence. Historical
+checkpoint source identities and scores remain unchanged.
 
 - First implementation: `checkpoints/first-slice.md`, with native manifests and
   independent baseline Sol/Terra reviews.
