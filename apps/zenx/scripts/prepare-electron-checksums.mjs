@@ -13,6 +13,7 @@ export async function electronDownloadOptions({
   version = ELECTRON_VERSION,
   platform = process.platform,
   arch = process.arch,
+  cacheRoot = process.env.electron_config_cache,
   packageDirectory = path.dirname(require.resolve("electron/package.json")),
 } = {}) {
   const manifest = JSON.parse(
@@ -32,6 +33,7 @@ export async function electronDownloadOptions({
     throw new Error(`Electron package checksums do not cover ${artifactName}`);
   }
   return {
+    ...(cacheRoot ? { cacheRoot: path.resolve(cacheRoot) } : {}),
     checksums: { [artifactName]: digest },
   };
 }

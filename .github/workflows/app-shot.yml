@@ -51,6 +51,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Restore verified desktop archives
+        timeout-minutes: 5
+        id: desktop-archives
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: restore
       - run: npm ci
       - name: Prepare workspace SDK for packaging tests
         run: npm run prepare:plugin-sdk --workspace @zen/zenx
@@ -77,6 +83,14 @@ jobs:
           path: ${{ runner.temp }}/zenx-app-shot
           if-no-files-found: warn
           retention-days: 14
+      - name: Save verified desktop archives
+        timeout-minutes: 5
+        if: ${{ always() && steps.desktop-archives.outcome == 'success' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: save
+          electron-cache-hit: ${{ steps.desktop-archives.outputs.electron-cache-hit }}
+          rtk-cache-hit: ${{ steps.desktop-archives.outputs.rtk-cache-hit }}
 
   macos-jxa:
     name: App Shot real macOS JXA bridge, not native capture acceptance
@@ -88,6 +102,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Restore verified desktop archives
+        timeout-minutes: 5
+        id: desktop-archives
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: restore
       - run: npm ci
       - name: Exercise actual JXA without permission changes or screen capture
         timeout-minutes: 1
@@ -103,6 +123,14 @@ jobs:
           path: ${{ runner.temp }}/app-shot-jxa.json
           if-no-files-found: warn
           retention-days: 14
+      - name: Save verified desktop archives
+        timeout-minutes: 5
+        if: ${{ always() && steps.desktop-archives.outcome == 'success' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: save
+          electron-cache-hit: ${{ steps.desktop-archives.outputs.electron-cache-hit }}
+          rtk-cache-hit: ${{ steps.desktop-archives.outputs.rtk-cache-hit }}
 
   native-modifiers:
     name: Native modifier lifecycle (${{ matrix.os }}), not desktop acceptance
@@ -121,6 +149,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Restore verified desktop archives
+        timeout-minutes: 5
+        id: desktop-archives
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: restore
       - run: npm ci
       - name: Build the actual worker entries
         run: |
@@ -143,6 +177,14 @@ jobs:
           path: ${{ runner.temp }}/app-shot-windows.json
           if-no-files-found: ignore
           retention-days: 14
+      - name: Save verified desktop archives
+        timeout-minutes: 5
+        if: ${{ always() && steps.desktop-archives.outcome == 'success' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: save
+          electron-cache-hit: ${{ steps.desktop-archives.outputs.electron-cache-hit }}
+          rtk-cache-hit: ${{ steps.desktop-archives.outputs.rtk-cache-hit }}
 
   macos-owned-acceptance:
     name: Owned synthetic macOS App Shot acceptance (permission-gated)
@@ -155,6 +197,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Restore verified desktop archives
+        timeout-minutes: 5
+        id: desktop-archives
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: restore
       - run: npm ci
       - name: Build unmodified production worker and shared chunks
         run: |
@@ -179,6 +227,14 @@ jobs:
             ${{ runner.temp }}/app-shot-owned-macos/foreground.png
           if-no-files-found: warn
           retention-days: 14
+      - name: Save verified desktop archives
+        timeout-minutes: 5
+        if: ${{ always() && steps.desktop-archives.outcome == 'success' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: save
+          electron-cache-hit: ${{ steps.desktop-archives.outputs.electron-cache-hit }}
+          rtk-cache-hit: ${{ steps.desktop-archives.outputs.rtk-cache-hit }}
 
   formatting:
     name: Check changed-source formatting with read-only repair evidence
@@ -192,6 +248,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Restore verified desktop archives
+        timeout-minutes: 5
+        id: desktop-archives
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: restore
       - run: npm ci
       - name: Check formatting without modifying the repository
         shell: bash
@@ -214,3 +276,11 @@ jobs:
           console.log("APP_SHOT_FORMAT_END:" + Object.keys(changed).length);
           if (Object.keys(changed).length) process.exitCode = 1;
           NODE
+      - name: Save verified desktop archives
+        timeout-minutes: 5
+        if: ${{ always() && steps.desktop-archives.outcome == 'success' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: save
+          electron-cache-hit: ${{ steps.desktop-archives.outputs.electron-cache-hit }}
+          rtk-cache-hit: ${{ steps.desktop-archives.outputs.rtk-cache-hit }}

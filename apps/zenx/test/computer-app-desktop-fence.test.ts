@@ -8,6 +8,25 @@ import {
   runProcess,
 } from "../src/main/capabilities/computer-provider.js";
 
+test("exact-window background refusal identifies changed fields without weakening admission", () => {
+  for (const message of [
+    "Desktop changed before app-local preparation",
+    "Desktop changed before background input",
+    "Desktop focus/pointer/window order changed after background posting",
+  ]) {
+    assert.ok(
+      MAC_BOUND_TARGET_SOURCE.includes(
+        `try requireUnchangedDesktop(baseline, "${message}")`,
+      ),
+    );
+  }
+  assert.match(MAC_BOUND_TARGET_SOURCE, /guard current == baseline else/);
+  assert.match(
+    MAC_BOUND_TARGET_SOURCE,
+    /current.changedFields\(from: baseline\).joined/,
+  );
+});
+
 test(
   "App desktop fence allows only target reordering behind all foreground windows while exact-window equality stays strict",
   { skip: process.platform !== "darwin", timeout: 90000 },
@@ -31,6 +50,14 @@ func snapshot(_ order:[Int],_ owners:[Int:pid_t]?=nil,_ foreground:pid_t=10,_ po
  let defaults:[Int:pid_t]=[1:10,2:10,3:30,4:40,5:30,6:30]
  return DesktopFence(foreground:foreground,pointer:pointer,displayAsleep:asleep,windows:order,windowOwners:owners ?? defaults.filter{order.contains($0.key)},consoleLocked:locked,onConsole:console,foregroundIsLoginWindow:loginWindow,metadataComplete:complete)
 }
+let unchanged=snapshot([1,2,3,4])
+precondition(unchanged.changedFields(from:unchanged).isEmpty)
+precondition(snapshot([1,2,3,4],nil,11).changedFields(from:unchanged)==["foreground_application"])
+precondition(snapshot([1,2,3,4],nil,10,CGPoint(x:3,y:3)).changedFields(from:unchanged)==["pointer_position"])
+precondition(snapshot([1,2,3,4],nil,10,CGPoint(x:2,y:3),true).changedFields(from:unchanged)==["display_sleep"])
+precondition(snapshot([2,1,3,4]).changedFields(from:unchanged)==["window_order_or_membership"])
+precondition(snapshot([2,1,3,4],nil,11,CGPoint(x:3,y:3),true).changedFields(from:unchanged)==["foreground_application","pointer_position","display_sleep","window_order_or_membership"])
+precondition(snapshot([1,2,3,4],nil,10,CGPoint(x:2,y:3),false,true).changedFields(from:unchanged).isEmpty,"diagnostics must describe only the original exact-window equality fields")
 let above=snapshot([3,1,2,4]),behind=snapshot([1,2,3,4]),bottom=snapshot([1,2,4,3])
 precondition(behind.allowsApplicationInput(from:above,targetPID:30),"own above to below foreground is allowed")
 precondition(behind.allowsApplicationInput(from:bottom,targetPID:30),"own bottom to directly behind foreground is allowed")
