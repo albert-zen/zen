@@ -179,3 +179,19 @@ visibility and focus-history guard remain unchanged. The foreground
 `cdp-data-isolation` layer still uses `Input.insertText`; both foreground and
 behind-sentinel `real-os-input` layers still send guarded native events and verify
 their exact destination/value. DOM data mutation is not native typing evidence.
+
+## Browser product input acceptance
+
+The targeted-input smoke exercises the actual browser backend: each product
+click or key pair obtains a fresh provider inspection and uses that observation
+ID for `pointerClick` or `keyPress`. Acceptance checks the exact trusted event
+pair, target and effect, dispatch route and foreground invariants. Product
+screenshot authorization and unknown-outcome/no-replay rules remain unchanged.
+
+A separate raw-CDP fixture click/key oracle is not a prerequisite for this
+acceptance. Its extra screenshot and direct input sequence have been removed
+from the default product contract path, rather than retaining a fixture-only
+failure that prevents the product checks from running. The independent route
+diagnostics remain diagnostic only: ordinary probe failures are recorded, while
+foreground-safety or target-cleanup failures still stop the run. Their success
+is not evidence that the product passed.
