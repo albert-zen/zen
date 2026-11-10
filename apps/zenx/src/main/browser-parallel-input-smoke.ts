@@ -2728,16 +2728,27 @@ export async function runTargetedInputContractSmoke(options: {
             acknowledgedDispatches: 0,
             settlementReads: 0,
           };
-          const screenshot = await rpc.send("Page.captureScreenshot", {
-            format: "png",
-            fromSurface: true,
-            captureBeyondViewport: false,
-          });
-          assert.ok(
-            typeof screenshot.data === "string" && screenshot.data.length > 0,
-            "Direct fixture needs a real read-only compositor capture before input",
-          );
-          remoteWitness.compositorCaptured = true;
+          // Hidden-frame mouse routing needs surface preparation in addition
+          // to DOM geometry: native #754 ACKed both events without consuming
+          // either when this capture was omitted. A capture is not proof of
+          // hit-test readiness; the exact trusted pair/effect below remains
+          // authoritative. Do not replace this with rAF or a DOM-only hit test.
+          // Keys use document focus, not compositor coordinates. Their omission
+          // of this extra capture still needs native qualification.
+          await guard();
+          if (kind === "click") {
+            remoteWitness.surfacePreparation = "pending";
+            const screenshot = await rpc.send("Page.captureScreenshot", {
+              format: "png",
+              fromSurface: true,
+              captureBeyondViewport: false,
+            });
+            assert.ok(
+              typeof screenshot.data === "string" && screenshot.data.length > 0,
+              "Direct mouse fixture needs a completed surface capture",
+            );
+            remoteWitness.surfacePreparation = "captured";
+          }
           await guard();
           if (kind === "click") {
             const position = await rpc.evaluate<RemoteFixturePoint>(
