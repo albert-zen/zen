@@ -18,7 +18,9 @@ concurrency:
   cancel-in-progress: true
 jobs:
   native-question:
-    runs-on: macos-14
+    # macos-14 retired on 2026-11-02. Preserve x64 on supported macOS 15.
+    # This lane no longer provides macOS 14 runtime coverage.
+    runs-on: macos-15-intel
     timeout-minutes: 18
     steps:
       - uses: actions/checkout@v4
@@ -26,6 +28,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Restore verified desktop archives
+        timeout-minutes: 5
+        id: desktop-archives
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: restore
       - run: npm ci
       - run: npm run build
       - run: npm run build --workspace @zen/zenx
@@ -43,3 +51,11 @@ jobs:
             ${{ runner.temp }}/user-question-ui/*.png
           if-no-files-found: error
           retention-days: 14
+      - name: Save verified desktop archives
+        timeout-minutes: 5
+        if: ${{ always() && steps.desktop-archives.outcome == 'success' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: save
+          electron-cache-hit: ${{ steps.desktop-archives.outputs.electron-cache-hit }}
+          rtk-cache-hit: ${{ steps.desktop-archives.outputs.rtk-cache-hit }}

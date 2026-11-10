@@ -55,6 +55,12 @@ jobs:
         with:
           path: ${{ steps.cjk-package.outputs.deb-path }}
           key: ${{ steps.cjk-package.outputs.cache-key }}
+      - name: Restore verified desktop archives
+        timeout-minutes: 5
+        id: desktop-archives
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: restore
       - run: npm ci
       - run: npm run build --workspace @zenx/plugin-sdk
       - name: Native answer provenance and real renderer interactions
@@ -76,3 +82,11 @@ jobs:
             ${{ runner.temp }}/answered-question/*lifecycle*.json
           if-no-files-found: warn
           retention-days: 14
+      - name: Save verified desktop archives
+        timeout-minutes: 5
+        if: ${{ always() && steps.desktop-archives.outcome == 'success' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: save
+          electron-cache-hit: ${{ steps.desktop-archives.outputs.electron-cache-hit }}
+          rtk-cache-hit: ${{ steps.desktop-archives.outputs.rtk-cache-hit }}
