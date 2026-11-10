@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "electron": {
+    "version": "43.2.0",
+    "packageUrl": "https://registry.npmjs.org/electron/-/electron-43.2.0.tgz",
+    "packageIntegrity": "sha512-80zvrgG7ZRXD+tD0IyLvrnN9n+veSxadMRsMaC9wKKP3iUbtC7rGM8+dVuCmOb0Rrwwv8ESW4awnUZh9Hbp1fA==",
+    "checksums": {
+      "electron-v43.2.0-darwin-arm64.zip": "ad4a0ae3c37ee05aa06c7e2ed0627608389790f0505a2b0d20319efbe33ffe28",
+      "electron-v43.2.0-darwin-x64.zip": "1349ff423539cfe2b3edf1b14111e618db234d9ba761cbe97ea549edcb2e7a98",
+      "electron-v43.2.0-linux-arm64.zip": "50e1cdefbf8590e0d89b0276314a99c7b98e8eed732204c6f1a1c2a38376ed87",
+      "electron-v43.2.0-linux-armv7l.zip": "e5cf445bda3ef071bbe9f16dfbabbca61b24b528f2dcbdff227e98fb349c99e8",
+      "electron-v43.2.0-linux-x64.zip": "f77ca6ed67bbc68702b69b56ad499bca6ae090705ade7d04f0ac545e409dec68",
+      "electron-v43.2.0-win32-arm64.zip": "7aa459c685b93f0a9ee2e0ffb58593293d087f2a6166259f33e731c975907219",
+      "electron-v43.2.0-win32-ia32.zip": "9b98b4071bd5a7af91d8773bdd0021b6d14970f9cbeedeef72ffacc5522ca3b2",
+      "electron-v43.2.0-win32-x64.zip": "eba5f5088af40ecb364fe258809c79a5234c6ece5a75c64722772eba01b02786"
+    }
+  },
+  "rtk": {
+    "version": "0.48.0",
+    "platform": "darwin",
+    "arch": "arm64",
+    "url": "https://github.com/rtk-ai/rtk/releases/download/v0.48.0/rtk-aarch64-apple-darwin.tar.gz",
+    "archiveSha256": "4fa025cc93a744b6963f4e53a008e5ba3f74b6a38061f4a47c639e1c3023e0db",
+    "binarySha256": "8f79804b15fdedec85cf1f7a33b8a1c28350ef46f5595c5da932a8a64db03951"
+  }
+}

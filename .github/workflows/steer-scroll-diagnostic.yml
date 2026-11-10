@@ -21,6 +21,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Restore verified desktop archives
+        timeout-minutes: 5
+        id: desktop-archives
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: restore
       - run: npm ci
       - name: Verify synthetic diagnostic contracts
         run: node --test apps/zenx/test/steer-scroll-diagnostic.test.mjs
@@ -41,3 +47,11 @@ jobs:
           path: ${{ runner.temp }}/steer-scroll-diagnostic
           if-no-files-found: warn
           retention-days: 14
+      - name: Save verified desktop archives
+        timeout-minutes: 5
+        if: ${{ always() && steps.desktop-archives.outcome == 'success' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: save
+          electron-cache-hit: ${{ steps.desktop-archives.outputs.electron-cache-hit }}
+          rtk-cache-hit: ${{ steps.desktop-archives.outputs.rtk-cache-hit }}

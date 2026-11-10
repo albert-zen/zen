@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import {
@@ -16,17 +17,23 @@ import { promisify } from "node:util";
 import { acquireVerifiedArtifact } from "../../../scripts/verified-artifact-acquisition.mjs";
 
 const run = promisify(execFile);
-export const RTK_BINARY_SHA256 =
-  "8f79804b15fdedec85cf1f7a33b8a1c28350ef46f5595c5da932a8a64db03951";
-export const RTK_ARCHIVE_SHA256 =
-  "4fa025cc93a744b6963f4e53a008e5ba3f74b6a38061f4a47c639e1c3023e0db";
-const defaultArchiveUrl =
-  "https://github.com/rtk-ai/rtk/releases/download/v0.48.0/rtk-aarch64-apple-darwin.tar.gz";
+const rtkLock = JSON.parse(
+  readFileSync(
+    new URL("../../../scripts/desktop-archives.lock.json", import.meta.url),
+    "utf8",
+  ),
+).rtk;
+export const RTK_BINARY_SHA256 = rtkLock.binarySha256;
+export const RTK_ARCHIVE_SHA256 = rtkLock.archiveSha256;
+const defaultArchiveUrl = rtkLock.url;
 const defaultDirectory = fileURLToPath(
   new URL("../resources", import.meta.url),
 );
 const defaultCacheDirectory = fileURLToPath(
-  new URL("../.packaged/cache/rtk/v0.48.0/darwin-arm64", import.meta.url),
+  new URL(
+    `../.packaged/cache/rtk/v${rtkLock.version}/darwin-arm64`,
+    import.meta.url,
+  ),
 );
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
@@ -61,7 +68,7 @@ export async function prepareRtkResource({
   const scratch = await mkdtemp(path.join(resourcesDirectory, ".rtk-build-"));
   try {
     const tarball = await acquireVerifiedArtifact({
-      artifactName: "RTK v0.48.0 darwin-arm64 archive",
+      artifactName: `RTK v${rtkLock.version} darwin-arm64 archive`,
       url: archiveUrl,
       digest: expectedArchiveSha256,
       deadline: Date.now() + 60_000,

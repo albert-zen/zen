@@ -33,6 +33,7 @@ export const baselineTests = Object.freeze([
   "scripts/test/ci-docs-selection.test.mjs",
   "scripts/test/ci-risk-selection.test.mjs",
   "apps/zenx/test/ci-docs-selection-workflow.test.mjs",
+  "apps/zenx/test/desktop-archive-cache.test.mjs",
   "apps/zenx/test/ci-risk-workflow.test.mjs",
   "apps/zenx/test/ci-zenx-jobs.test.mjs",
   "apps/zenx/test/ci-ui-shards.test.mjs",
