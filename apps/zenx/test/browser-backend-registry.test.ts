@@ -235,6 +235,7 @@ test("registry tools retain separate approval names and generated permission sco
     "scroll",
     "pointer_click",
     "key_press",
+    "input_reset",
     "close",
     "close_session",
     "evaluate",
@@ -1345,6 +1346,35 @@ test("explicit session close retires its temporary pages and completes its opera
     );
   } finally {
     stop();
+    await registry.close();
+  }
+});
+
+test("input reset is interaction-gated and unsupported providers never claim a clear block", async () => {
+  const manifest = concurrentBrowserManifest();
+  for (const namespace of ["workspace", "connected"]) {
+    const tool = manifest.tools.find(
+      (t) => t.name === `browser_${namespace}_input_reset`,
+    )!;
+    const prefix = namespace === "connected" ? "browser.connected" : "browser";
+    assert.ok(tool.permissions.includes(`${prefix}.interact`));
+  }
+  const f = fixture("Workspace");
+  const registry = new BrowserBackendRegistry(f.backend);
+  try {
+    const [tab] = (await registry.invoke(
+      "browser_workspace_list_tabs",
+      invocation(),
+    )) as BrowserTabSummary[];
+    await assert.rejects(
+      registry.invoke(
+        "browser_workspace_input_reset",
+        invocation({ tabId: tab!.tabId }),
+      ),
+      /does not support input recovery/,
+    );
+    assert.deepEqual(f.calls, []);
+  } finally {
     await registry.close();
   }
 });

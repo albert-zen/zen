@@ -21,6 +21,7 @@ export const browserOperations = [
   "scroll",
   "pointer_click",
   "key_press",
+  "input_reset",
   "close",
   "close_session",
 ] as const;
@@ -58,6 +59,8 @@ export const browserModelDescriptions: Readonly<Record<string, string>> = {
   close:
     "Close the exact tab. Shared Workspace tabs may require a post-takeover observation.",
   close_session: "Close the exact session and its tabs.",
+  input_reset:
+    "Explicitly send one recorded key-up on an unchanged Workspace tab. May trigger page handlers; never replay the earlier action. Read inputBlocked first; unavailable providers refuse.",
 };
 
 export const sessionTools = new Set(["list_tabs", "open", "close_session"]);
@@ -109,7 +112,12 @@ export function buildBrowserModelDefinition<
         fields.cursor = MODEL_REF;
         fields.query = { type: "string", minLength: 1, maxLength: 120 };
       } else required.push(field);
-      if (op === "navigate" || op === "close" || targetTools.has(op))
+      if (
+        op === "navigate" ||
+        op === "close" ||
+        op === "input_reset" ||
+        targetTools.has(op)
+      )
         fields.observation = MODEL_REF;
     }
     const native = asRecord(tool.inputSchema.properties) ?? {};

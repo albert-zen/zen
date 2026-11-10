@@ -810,3 +810,80 @@ test("ordinary diagnostic previews exclude structured credentials while exact ra
     await f.bridge.close();
   }
 });
+
+test("Browser model projection exposes input withholding and the exact release result", async () => {
+  const f = await workspaceFixture();
+  const blocked = {
+    reason: "uncertain key press",
+    key: "Enter" as const,
+    reset: "available" as const,
+    since: 1,
+  };
+  const list = f.backend.listTabs.bind(f.backend);
+  const inspect = f.backend.inspect.bind(f.backend);
+  f.backend.listTabs = async (...args) =>
+    (await list(...args)).map((tab) => ({ ...tab, inputBlocked: blocked }));
+  f.backend.inspect = async (...args) => ({
+    ...(await inspect(...args)),
+    inputBlocked: blocked,
+  });
+  f.backend.inputReset = async (...args) => {
+    f.calls.push({ name: "inputReset", args });
+    return { blocked: false, released: true, key: "Enter" };
+  };
+  try {
+    const tabs = await f.bridge.call("browser_workspace_list_tabs", {});
+    assert.deepEqual(tabs.tabs[0].inputBlocked, blocked);
+    const page = await f.bridge.call("browser_workspace_inspect", {
+      tab: tabs.tabs[0].tab,
+    });
+    assert.deepEqual(page.inputBlocked, blocked);
+    const result = await f.bridge.call("browser_workspace_input_reset", {
+      tab: tabs.tabs[0].tab,
+    });
+    assert.equal(result.blocked, false);
+    assert.equal(result.released, true);
+    assert.equal(result.key, "Enter");
+    ref(result.tab);
+  } finally {
+    await f.bridge.close();
+  }
+});
+
+test("Browser model input reset forwards a matching handoff observation and rejects another tab", async () => {
+  const f = await workspaceFixture();
+  f.backend.inputReset = async (...args) => {
+    f.calls.push({ name: "inputReset", args });
+    return { blocked: false, released: true, key: "Enter" };
+  };
+  try {
+    const tabs = await f.bridge.call("browser_workspace_list_tabs", {});
+    const page = await f.bridge.call("browser_workspace_inspect", {
+      tab: tabs.tabs[0].tab,
+    });
+    await f.bridge.call("browser_workspace_input_reset", {
+      tab: tabs.tabs[0].tab,
+      observation: page.observation,
+    });
+    assert.equal(
+      f.calls.find((c) => c.name === "inputReset")!.args[2],
+      "RAW-observation-1",
+    );
+    const other = await f.bridge.call("browser_workspace_list_tabs", {
+      session: "other",
+    });
+    const otherPage = await f.bridge.call("browser_workspace_inspect", {
+      tab: other.tabs[0].tab,
+    });
+    await assert.rejects(
+      f.bridge.call("browser_workspace_input_reset", {
+        tab: tabs.tabs[0].tab,
+        observation: otherPage.observation,
+      }),
+      /another exact tab/,
+    );
+    assert.equal(f.calls.filter((c) => c.name === "inputReset").length, 1);
+  } finally {
+    await f.bridge.close();
+  }
+});

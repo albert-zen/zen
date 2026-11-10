@@ -1504,6 +1504,354 @@ test("Workspace takeover between targeted press and release blocks old release a
   }
 });
 
+test("Workspace input recovery reports a block, releases only its key once, and preserves unknown outcome", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const tab = await f.browser.open("a", "https://example.test/input");
+    const input = installTargetedInputFixture(
+      f.views[0]!.webContents.debuggerApi,
+    );
+    const observed = await f.browser.inspect("a", tab.tabId);
+    input.afterInput = () => {
+      throw new Error("lost key acknowledgement");
+    };
+    await assert.rejects(
+      f.browser.keyPress("a", tab.tabId, observed.observationId, "Enter"),
+      /outcome is unknown/,
+    );
+    input.afterInput = undefined;
+    const blocked = (await f.browser.listTabs("a"))[0]!.inputBlocked;
+    assert.equal(blocked?.key, "Enter");
+    assert.equal(blocked?.reset, "available");
+    assert.ok(blocked!.since > 0);
+    const fresh = await f.browser.inspect("a", tab.tabId);
+    await assert.rejects(
+      f.browser.keyPress("a", tab.tabId, fresh.observationId, "Enter"),
+      /input is blocked/,
+    );
+    const reset = await f.browser.inputReset(
+      "a",
+      tab.tabId,
+      fresh.observationId,
+    );
+    assert.deepEqual(reset, { blocked: false, released: true, key: "Enter" });
+    assert.deepEqual(
+      input.events.map((e) => e.params.type),
+      ["keyDown", "keyUp"],
+    );
+    assert.equal(input.events[1]!.params.key, "Enter");
+    assert.equal(
+      (await f.browser.listTabs("a"))[0]!.agentActionOutcomeUnknown,
+      true,
+    );
+    assert.deepEqual(await f.browser.inputReset("a", tab.tabId), {
+      blocked: false,
+      released: false,
+    });
+    assert.equal(input.events.length, 2);
+    assert.equal(
+      (await f.browser.inspect("a", tab.tabId)).agentActionOutcomeUnknown,
+      false,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("Workspace input recovery spends a failed release and never dispatches it twice", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const tab = await f.browser.open("a", "https://example.test/input");
+    const input = installTargetedInputFixture(
+      f.views[0]!.webContents.debuggerApi,
+    );
+    const observed = await f.browser.inspect("a", tab.tabId);
+    input.afterInput = () => {
+      throw new Error("lost acknowledgement");
+    };
+    await assert.rejects(
+      f.browser.keyPress("a", tab.tabId, observed.observationId, "Enter"),
+    );
+    const fresh = await f.browser.inspect("a", tab.tabId);
+    await assert.rejects(
+      f.browser.inputReset("a", tab.tabId, fresh.observationId),
+      /not acknowledged/,
+    );
+    assert.equal(
+      (await f.browser.listTabs("a"))[0]!.inputBlocked?.reset,
+      "attempted",
+    );
+    await assert.rejects(
+      f.browser.inputReset("a", tab.tabId),
+      /already attempted/,
+    );
+    assert.deepEqual(
+      input.events.map((e) => e.params.type),
+      ["keyDown", "keyUp"],
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+for (const change of [
+  "human takeover",
+  "navigation",
+  "debugger detach",
+  "session replacement",
+] as const) {
+  test(`Workspace input recovery refuses ${change} without sending a successor release`, async () => {
+    const f = await sharedFixture();
+    try {
+      f.browser.bindThreadSession("a", "thread-a");
+      const tab = await f.browser.open("a", "https://example.test/input");
+      const input = installTargetedInputFixture(
+        f.views[0]!.webContents.debuggerApi,
+      );
+      const observed = await f.browser.inspect("a", tab.tabId);
+      input.afterInput = () => {
+        throw new Error("lost acknowledgement");
+      };
+      await assert.rejects(
+        f.browser.keyPress("a", tab.tabId, observed.observationId, "Enter"),
+      );
+      input.afterInput = undefined;
+      if (change === "human takeover") {
+        f.browser.command(
+          f.sender as never,
+          "thread-a",
+          "take-control",
+          tab.tabId,
+        );
+        f.browser.command(
+          f.sender as never,
+          "thread-a",
+          "return-control",
+          tab.tabId,
+        );
+      } else if (change === "navigation") {
+        await f.browser.navigate(
+          "a",
+          tab.tabId,
+          "https://example.test/successor",
+        );
+      } else if (change === "debugger detach") {
+        f.views[0]!.webContents.debuggerApi.emit("detach", {}, "replaced");
+      } else {
+        await f.browser.closeSession("a");
+        f.browser.bindThreadSession("a", "thread-a");
+      }
+      const fresh = await f.browser.inspect("a", tab.tabId);
+      assert.equal(fresh.inputBlocked?.reset, "unavailable");
+      await assert.rejects(
+        f.browser.inputReset("a", tab.tabId, fresh.observationId),
+        /cannot safely release/,
+      );
+      assert.equal(input.events.length, 1);
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+test("Workspace mouse quarantine does not invent a recoverable key", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const tab = await f.browser.open("a", "https://example.test/input");
+    const input = installTargetedInputFixture(
+      f.views[0]!.webContents.debuggerApi,
+    );
+    const observed = await f.browser.inspect("a", tab.tabId);
+    input.afterInput = () => {
+      throw new Error("lost acknowledgement");
+    };
+    await assert.rejects(
+      f.browser.pointerClick("a", tab.tabId, observed.observationId, 20, 30),
+    );
+    const fresh = await f.browser.inspect("a", tab.tabId);
+    assert.equal(fresh.inputBlocked?.reset, "unavailable");
+    assert.equal(fresh.inputBlocked?.key, undefined);
+    await assert.rejects(
+      f.browser.inputReset("a", tab.tabId, fresh.observationId),
+      /cannot safely release/,
+    );
+    assert.equal(input.events.length, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+for (const changed of ["focus", "intervening input"] as const) {
+  test(`Workspace input recovery rejects ${changed} drift before its release`, async () => {
+    const f = await sharedFixture();
+    try {
+      f.browser.bindThreadSession("a", "thread-a");
+      const tab = await f.browser.open("a", "https://example.test/input");
+      const input = installTargetedInputFixture(
+        f.views[0]!.webContents.debuggerApi,
+      );
+      const observed = await f.browser.inspect("a", tab.tabId);
+      input.afterInput = () => {
+        throw new Error("lost acknowledgement");
+      };
+      await assert.rejects(
+        f.browser.keyPress("a", tab.tabId, observed.observationId, "Enter"),
+      );
+      input.afterInput = undefined;
+      if (changed === "focus") input.snapshot.focusId = "other-field";
+      else input.snapshot.inputRevision++;
+      const fresh = await f.browser.inspect("a", tab.tabId);
+      await assert.rejects(
+        f.browser.inputReset("a", tab.tabId, fresh.observationId),
+        /changed|intervening/,
+      );
+      assert.equal(input.events.length, 1);
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+test("Workspace input recovery keeps pending release fenced and refuses duplicates until native settlement", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const tab = await f.browser.open("a", "https://example.test/input");
+    const debug = f.views[0]!.webContents.debuggerApi;
+    const input = installTargetedInputFixture(debug);
+    const observed = await f.browser.inspect("a", tab.tabId);
+    input.afterInput = () => {
+      throw new Error("lost acknowledgement");
+    };
+    await assert.rejects(
+      f.browser.keyPress("a", tab.tabId, observed.observationId, "Enter"),
+    );
+    input.afterInput = undefined;
+    const fresh = await f.browser.inspect("a", tab.tabId);
+    const gate = deferred<void>();
+    const send = debug.sendCommand.bind(debug);
+    debug.sendCommand = async (method, params) => {
+      const result = await send(method, params);
+      if (method === "Input.dispatchKeyEvent" && params?.type === "keyUp")
+        await gate.promise;
+      return result;
+    };
+    const controller = new AbortController();
+    const reset = f.browser.inputReset(
+      "a",
+      tab.tabId,
+      fresh.observationId,
+      controller.signal,
+    );
+    const rejected = assert.rejects(reset, /not acknowledged/);
+    while (input.events.length < 2)
+      await new Promise((resolve) => setImmediate(resolve));
+    controller.abort(new Error("cancelled release"));
+    await assert.rejects(
+      f.browser.inputReset("a", tab.tabId),
+      /already attempted/,
+    );
+    await assert.rejects(
+      f.browser.navigate("a", tab.tabId, "https://example.test/other"),
+      /input is already in flight/,
+    );
+    gate.resolve();
+    await rejected;
+    assert.equal(
+      (await f.browser.listTabs("a"))[0]!.inputBlocked?.reset,
+      "attempted",
+    );
+    assert.deepEqual(
+      input.events.map((e) => e.params.type),
+      ["keyDown", "keyUp"],
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("Workspace simultaneous recovery requests send only one key-up", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const tab = await f.browser.open("a", "https://example.test/input");
+    const input = installTargetedInputFixture(
+      f.views[0]!.webContents.debuggerApi,
+    );
+    const observed = await f.browser.inspect("a", tab.tabId);
+    input.afterInput = () => {
+      throw new Error("lost acknowledgement");
+    };
+    await assert.rejects(
+      f.browser.keyPress("a", tab.tabId, observed.observationId, "Enter"),
+    );
+    input.afterInput = undefined;
+    const fresh = await f.browser.inspect("a", tab.tabId);
+    const results = await Promise.allSettled([
+      f.browser.inputReset("a", tab.tabId, fresh.observationId),
+      f.browser.inputReset("a", tab.tabId, fresh.observationId),
+    ]);
+    assert.equal(
+      results.filter((result) => result.status === "fulfilled").length,
+      1,
+    );
+    assert.deepEqual(
+      input.events.map((e) => e.params.type),
+      ["keyDown", "keyUp"],
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("Workspace control change during the recovery probe prevents release", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const tab = await f.browser.open("a", "https://example.test/input");
+    const debug = f.views[0]!.webContents.debuggerApi;
+    const input = installTargetedInputFixture(debug);
+    const observed = await f.browser.inspect("a", tab.tabId);
+    input.afterInput = () => {
+      throw new Error("lost acknowledgement");
+    };
+    await assert.rejects(
+      f.browser.keyPress("a", tab.tabId, observed.observationId, "Enter"),
+    );
+    input.afterInput = undefined;
+    const fresh = await f.browser.inspect("a", tab.tabId);
+    const gate = deferred<void>();
+    const admitted = deferred<void>();
+    const send = debug.sendCommand.bind(debug);
+    debug.sendCommand = async (method, params) => {
+      const result = await send(method, params);
+      if (method === "Runtime.evaluate") {
+        admitted.resolve();
+        await gate.promise;
+      }
+      return result;
+    };
+    const reset = f.browser.inputReset("a", tab.tabId, fresh.observationId);
+    const rejected = assert.rejects(reset, /control changed|became stale/);
+    await admitted.promise;
+    f.browser.command(f.sender as never, "thread-a", "take-control", tab.tabId);
+    f.browser.command(
+      f.sender as never,
+      "thread-a",
+      "return-control",
+      tab.tabId,
+    );
+    gate.resolve();
+    await rejected;
+    assert.equal(input.events.length, 1);
+  } finally {
+    await f.close();
+  }
+});
+
 function installTargetedInputFixture(debuggerApi: FakeDebugger) {
   const snapshot = {
     documentKey: "0123456789abcdef0123456789abcdef|https://example.test/input",
