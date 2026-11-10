@@ -2056,20 +2056,24 @@ function ThreadViewContent({
       : null) ??
     modelError;
 
-  // Composer updates reuse the actual transcript elements, not just TurnBlock bodies.
+  // Composer and ItemList-only updates reuse the actual transcript elements,
+  // not just TurnBlock bodies. The native Thread wrapper may change without
+  // changing the displayed history.
+  const transcriptThreadId = thread?.id;
+  const previewingContext = thread === null && contextPreview !== undefined;
   const renderedTranscriptRows = useMemo(
     () =>
       transcriptRows.map((row) =>
         row.type === "turn" ? (
           <TurnBlock
             index={row.index}
-            key={JSON.stringify([thread?.id, row.turn.id])}
+            key={JSON.stringify([transcriptThreadId, row.turn.id])}
             turn={row.turn}
             compactionPending={
               row.turn.id === runningTurn?.id &&
               composer.compaction?.status === "pending"
             }
-            contextPreview={thread === null && contextPreview !== undefined}
+            contextPreview={previewingContext}
             endItemId={
               lastCanonicalTurnEnd?.turnId === row.turn.id
                 ? lastCanonicalTurnEnd.id
@@ -2102,8 +2106,8 @@ function ThreadViewContent({
         ),
       ),
     [
-      thread,
-      contextPreview,
+      transcriptThreadId,
+      previewingContext,
       transcriptRows,
       runningTurn,
       composer.compaction?.status,

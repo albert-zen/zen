@@ -5328,6 +5328,256 @@ test("stable App transcript props avoid visiting all turn IDs for composer-only 
   });
 });
 
+test("native ItemList-only appends retain transcript elements without revisiting historical row props", async (t) => {
+  const count = 160;
+  let idReads = 0;
+  const turns = Array.from({ length: count }, (_, i) => ({
+    ...turnWithItems("completed", [
+      user(`Question ${i}`, `user-${i}`),
+      agent(`Answer ${i}`),
+    ]),
+    get id() {
+      idReads++;
+      return `item-list-turn-${i}`;
+    },
+  }));
+  const canonicalItems: CanonicalItem[] = turns.flatMap((turn, i) => [
+    {
+      type: "user_message",
+      id: `user-${i}`,
+      threadId: "thread-1",
+      turnId: turn.id,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      text: `Question ${i}`,
+    },
+    {
+      type: "agent_message",
+      id: `agent-Answer ${i}`,
+      threadId: "thread-1",
+      turnId: turn.id,
+      createdAt: "2026-01-01T00:00:01.000Z",
+      text: `Answer ${i}`,
+    },
+  ]);
+  let view: Thread = { ...thread(turns), canonicalItems };
+  const approvals: ApprovalCardState[] = [];
+  const composer = beginImmediateComposerSubmission(
+    editComposer(emptyComposerState(), "A new ordinary message"),
+    "start",
+    null,
+    () => "item-list-client",
+  );
+  await withDom(async (root) => {
+    const renderView = () =>
+      root.render(
+        createElement(ThreadView, {
+          thread: view,
+          approvals,
+          wakeups: [], // The actual App also supplies a fresh empty array.
+          composer,
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      );
+    await act(async () => renderView());
+    const first = requiredElement(".turn");
+    const text = requiredElement(".turn .user-bubble p").firstChild!;
+    const selection = document.getSelection()!;
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    selection.addRange(range);
+    const selected = selection.toString();
+    assert.ok(selected.length > 0);
+    const before = view;
+    view = applyNativeThreadEvent(view, {
+      type: "context_item_completed",
+      threadId: view.id,
+      item: {
+        id: "context-user",
+        threadId: view.id,
+        turnId: "new-turn",
+        createdAt: "2026-01-01T00:00:02.000Z",
+        source: { kind: "user_message", sequence: canonicalItems.length },
+        kind: "message",
+        role: "user",
+        content: {
+          text: "A new ordinary message",
+          parts: [{ type: "text", text: "A new ordinary message" }],
+        },
+      },
+    });
+    assert.ok(view !== before, "ItemList append replaces the Thread wrapper");
+    assert.ok(
+      view.itemList !== before.itemList,
+      "ItemList append replaces only its semantic array",
+    );
+    assert.ok(
+      view.turns === before.turns,
+      "ItemList append retains displayed Turns",
+    );
+    assert.ok(
+      view.canonicalItems === before.canonicalItems,
+      "ItemList append retains canonical presentation",
+    );
+    idReads = 0;
+    await act(async () => renderView());
+    t.diagnostic(
+      `ItemList-only append: ${idReads} historical Turn.id reads for ${count} turns`,
+    );
+    assert.ok(
+      idReads <= 4,
+      `ItemList-only append revisited ${idReads} historical row props`,
+    );
+    assert.ok(
+      requiredElement(".turn") === first,
+      "the historical Turn DOM is retained",
+    );
+    assert.equal(document.querySelectorAll(".turn").length, count);
+    assert.equal(selection.toString(), selected);
+    assert.ok(
+      selection.anchorNode === text,
+      "the selection anchor is retained",
+    );
+    assert.equal(
+      requiredElement(
+        '[data-pending-send-client-id="item-list-client"]',
+      ).getAttribute("data-send-state"),
+      "sending",
+    );
+    selection.removeAllRanges();
+
+    view = applyNativeThreadEvent(view, {
+      type: "turn_started",
+      threadId: view.id,
+      turnId: "new-turn",
+    });
+    view = applyNativeThreadEvent(view, {
+      type: "item_completed",
+      item: {
+        type: "user_message",
+        id: "new-canonical-user",
+        clientId: "item-list-client",
+        threadId: view.id,
+        turnId: "new-turn",
+        createdAt: "2026-01-01T00:00:02.000Z",
+        text: "Native admitted ordinary message",
+      },
+    });
+    await act(async () => renderView());
+    assert.equal(document.querySelectorAll(".turn").length, count + 1);
+    assert.ok(
+      requiredElement(".turn") === first,
+      "the historical Turn DOM is retained",
+    );
+    assert.match(
+      document.querySelector(".turn:last-child")?.textContent ?? "",
+      /Native admitted ordinary message/,
+    );
+
+    view = { ...view, id: "thread-2" };
+    await act(async () => renderView());
+    assert.ok(
+      requiredElement(".turn") !== first,
+      "a different Thread owns new transcript elements",
+    );
+  });
+});
+
+test("preview wrapper changes retain compaction disclosure while preview presence remains live", async (t) => {
+  let idReads = 0;
+  const turns = [
+    {
+      ...turnWithItems("completed", [
+        user("Keep this request"),
+        { ...agent("Kept answer"), id: "agent-1" },
+      ]),
+      get id() {
+        idReads++;
+        return "turn-1";
+      },
+    },
+    {
+      ...turnWithItems("inProgress", [user("Continue", "preview-input")]),
+      id: "turn-2",
+    },
+  ];
+  const source = { ...thread(turns), canonicalItems: compactionHistory() };
+  let preview: Thread | undefined = source;
+  let live: Thread | null = null;
+  const approvals: ApprovalCardState[] = [];
+  const composer = emptyComposerState();
+  await withDom(async (root) => {
+    const renderView = () =>
+      root.render(
+        createElement(ThreadView, {
+          thread: live,
+          contextPreview: preview,
+          approvals,
+          composer,
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      );
+    await act(async () => renderView());
+    assert.ok(
+      document.querySelector(".turn-running-label") === null,
+      "context preview has no live Turn controls",
+    );
+    const first = requiredElement(".turn");
+    const compaction = requiredButton(".context-compaction-toggle");
+    await act(async () => compaction.click());
+    assert.equal(compaction.getAttribute("aria-expanded"), "true");
+    preview = { ...source, name: "Changed preview metadata" };
+    idReads = 0;
+    await act(async () => renderView());
+    t.diagnostic(`Preview wrapper replacement: ${idReads} first-Turn.id reads`);
+    assert.equal(
+      idReads,
+      0,
+      "the unchanged preview must not rebuild its historical rows",
+    );
+    assert.ok(
+      requiredElement(".turn") === first,
+      "the historical Turn DOM is retained",
+    );
+    assert.ok(
+      requiredButton(".context-compaction-toggle") === compaction,
+      "the compaction disclosure DOM is retained",
+    );
+    assert.equal(compaction.getAttribute("aria-expanded"), "true");
+
+    preview = undefined;
+    await act(async () => renderView());
+    assert.ok(
+      document.querySelector(".turn") === null,
+      "removing the preview removes its Turns",
+    );
+    assert.ok(
+      document.querySelector(".context-compaction-toggle") === null,
+      "removing the preview removes its compactions",
+    );
+    preview = source;
+    await act(async () => renderView());
+    assert.equal(document.querySelectorAll(".turn").length, 2);
+    assert.ok(
+      document.querySelector(".turn-running-label") === null,
+      "context preview has no live Turn controls",
+    );
+    live = source;
+    preview = undefined;
+    await act(async () => renderView());
+    assert.ok(
+      document.querySelector(".turn-running-label"),
+      "the same history as a real Thread has live controls",
+    );
+    assert.ok(document.querySelector(".context-compaction-toggle"));
+  });
+});
+
 test("local sending presentation hides draft framing but keeps readable skill and reference names", async () => {
   const { PendingSendRows } =
     await import("../src/renderer/src/PendingSendRows.js");
