@@ -28,6 +28,8 @@ export type {
 import { createHash, randomUUID } from "node:crypto";
 import { open, readFile } from "node:fs/promises";
 import { spawn, type ChildProcess } from "node:child_process";
+import { homedir } from "node:os";
+import { win32 } from "node:path";
 import { sandboxCommand } from "./sandbox.js";
 import type { SandboxMode } from "./item.js";
 import { StringDecoder } from "node:string_decoder";
@@ -2231,6 +2233,63 @@ const SAFE_ENVIRONMENT_VARIABLES = new Set([
   "WINDIR",
 ]);
 
+const WINDOWS_USER_ENVIRONMENT_VARIABLES = new Set([
+  "APPDATA",
+  "COMMONPROGRAMFILES",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "LOCALAPPDATA",
+  "ONEDRIVE",
+  "PROGRAMDATA",
+  "PROGRAMFILES",
+  "PUBLIC",
+  "SYSTEMDRIVE",
+  "USERDOMAIN",
+  "USERNAME",
+  "USERPROFILE",
+]);
+
+/** Complete an already-allowlisted, case-normalized Windows environment. */
+function completeWindowsUserEnvironment(
+  environment: NodeJS.ProcessEnv,
+  home: () => string = homedir,
+): void {
+  let profile = environment.USERPROFILE;
+  if (!profile && environment.HOMEDRIVE && environment.HOMEPATH)
+    profile = `${environment.HOMEDRIVE}${environment.HOMEPATH}`;
+  if (!profile) {
+    try {
+      profile = home();
+    } catch {
+      return;
+    }
+  }
+  // Do not turn an unavailable or relative profile into cwd-relative defaults.
+  if (
+    !profile ||
+    !win32.isAbsolute(profile) ||
+    win32.parse(profile).root.length <= 1
+  )
+    return;
+  const fill = (name: string, value: string) => {
+    if (!environment[name]) environment[name] = value;
+  };
+  fill("USERPROFILE", profile);
+  fill("HOME", profile);
+  fill("APPDATA", win32.join(profile, "AppData", "Roaming"));
+  fill("LOCALAPPDATA", win32.join(profile, "AppData", "Local"));
+  const localAppData = environment.LOCALAPPDATA!;
+  fill("TEMP", win32.join(localAppData, "Temp"));
+  fill("TMP", win32.join(localAppData, "Temp"));
+  if (/^[A-Za-z]:[\\/]/u.test(profile)) {
+    fill("HOMEDRIVE", profile.slice(0, 2).toUpperCase());
+    fill("HOMEPATH", profile.slice(2));
+  }
+  const systemRoot = environment.SYSTEMROOT || environment.WINDIR;
+  if (systemRoot && /^[A-Za-z]:[\\/]/u.test(systemRoot))
+    fill("SYSTEMDRIVE", systemRoot.slice(0, 2).toUpperCase());
+}
+
 /**
  * Shell tools get a deliberately small process environment. Provider keys and
  * unrelated host configuration must never become implicit model-visible input.
@@ -2238,19 +2297,38 @@ const SAFE_ENVIRONMENT_VARIABLES = new Set([
 export function sanitizeToolEnvironment(
   source: Readonly<NodeJS.ProcessEnv>,
   blockedEnvironmentVariables: readonly string[] = [],
+  options: { platform?: NodeJS.Platform; home?: () => string } = {},
 ): NodeJS.ProcessEnv {
+  const platform = options.platform ?? process.platform;
   const key = (name: string) =>
-    process.platform === "win32" ? name.toUpperCase() : name;
+    platform === "win32" ? name.toUpperCase() : name;
   const blocked = new Set(blockedEnvironmentVariables.map(key));
   const environment: NodeJS.ProcessEnv = {};
-  for (const [name, value] of Object.entries(source)) {
+  // Node only sends one spelling of a Windows key. Collapse aliases before
+  // filling gaps so an empty APPDATA cannot hide a nonempty AppData (or vice versa).
+  for (const name of Object.keys(source).sort()) {
+    const value = source[name];
+    const normalized = key(name);
     if (
       value !== undefined &&
-      !blocked.has(key(name)) &&
-      (SAFE_ENVIRONMENT_VARIABLES.has(key(name)) || name.startsWith("LC_"))
+      !blocked.has(normalized) &&
+      (SAFE_ENVIRONMENT_VARIABLES.has(normalized) ||
+        normalized.startsWith("LC_") ||
+        (platform === "win32" &&
+          WINDOWS_USER_ENVIRONMENT_VARIABLES.has(normalized))) &&
+      !environment[normalized]
     ) {
-      environment[name] = value;
+      environment[normalized] = value;
     }
   }
+  if (platform === "win32")
+    completeWindowsUserEnvironment(
+      environment,
+      // os.homedir() reads USERPROFILE on Windows. A blocked credential source
+      // must not be read again and exposed under derived, otherwise-safe names.
+      blocked.has("USERPROFILE") ? () => "" : options.home,
+    );
+  // Completion may derive a blocked name, but it must never reach either spawn path.
+  for (const name of blocked) delete environment[name];
   return environment;
 }
