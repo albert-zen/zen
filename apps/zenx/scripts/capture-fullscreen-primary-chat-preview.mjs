@@ -39,11 +39,22 @@ const measure = `(() => {
     virtualParent:read(root?.querySelector('.experimental-transcript-viewport')?.parentElement),
     rows:[...root.querySelectorAll('.virtual-transcript-row')].map(read),
     messages:read('#primary-conversation-content .messages'), composer:read('#primary-conversation-content .composer'),
+    anchor:(() => {
+      const viewport=root?.querySelector('.messages');
+      if (!viewport) return null;
+      const top=viewport.getBoundingClientRect().top;
+      const row=[...viewport.querySelectorAll('[data-transcript-row-key]')]
+        .filter(e=>e.getBoundingClientRect().bottom>top)
+        .sort((a,b)=>a.getBoundingClientRect().top-b.getBoundingClientRect().top)[0];
+      return row ? {key:row.dataset.transcriptRowKey,offset:row.getBoundingClientRect().top-top} : null;
+    })(),
+    paused:!!root?.querySelector('.back-live'),
     bottom:read('#primary-conversation-content .bottom-zone'), heading:read('.auxiliary-heading'),
     panel:read('#thread-workspace-panel'), overview:read('.fixture-overview'),
     selected:document.querySelector('[role="tab"][aria-selected="true"]')?.id,
     expanded:document.querySelector('#thread-workspace-panel')?.dataset.expanded,
     primaryActive:document.querySelector('#thread-workspace-panel')?.dataset.primaryActive,
+    visiblePrimaryDescendants:[...root.querySelectorAll('*')].filter(e=>getComputedStyle(e).visibility==='visible').length,
     browserHidden:document.querySelector('.synthetic-native-page')?.hidden,
     draft:editor?.value ?? editor?.textContent,
     samePrimary:root===window.__layoutIdentity?.primary,
@@ -438,6 +449,44 @@ try {
             "expanded browser panel fills workspace",
           );
           let first;
+          let reading;
+          const checkReading = (m, saved, phase) => {
+            assert.equal(
+              m.paused,
+              true,
+              `${phase}: manual reading remains paused`,
+            );
+            near(
+              m.messages.scrollTop,
+              saved.messages.scrollTop,
+              `${phase}: native scroll offset`,
+            );
+            assert.equal(
+              m.anchor?.key,
+              saved.anchor?.key,
+              `${phase}: same visible row`,
+            );
+            near(
+              m.anchor.offset,
+              saved.anchor.offset,
+              `${phase}: same position within row`,
+            );
+          };
+          const pauseByWheel = async (deltaY) => {
+            const m = await evaluate(measure);
+            await send("Input.dispatchMouseEvent", {
+              type: "mouseWheel",
+              x: m.messages.x + m.messages.width / 2,
+              y: m.messages.y + Math.min(160, m.messages.height / 3),
+              deltaX: 0,
+              deltaY,
+            });
+            await until(
+              `!!document.querySelector('#primary-conversation-content .back-live') && document.querySelector('#primary-conversation-content .messages').scrollTop < ${m.messages.scrollTop - 2}`,
+              "real upward wheel pauses live follow",
+            );
+            await delay(300);
+          };
           for (let round = 1; round <= 3; round++) {
             await click(primaryTab);
             await until(
@@ -446,6 +495,21 @@ try {
             );
             const m = await capture(`primary-${round}`);
             checkPrimary(m, split.draft);
+            if (reading) checkReading(m, reading, `primary-${round}`);
+            else {
+              const range = m.messages.scrollHeight - m.messages.clientHeight;
+              assert.ok(range > 200, "fixture provides scrollable history");
+              await pauseByWheel(-range * 0.55);
+              reading = await capture("paused-history");
+              assert.ok(
+                reading.anchor,
+                "paused reader has a canonical virtual row anchor",
+              );
+              assert.ok(
+                reading.messages.scrollTop > 50,
+                "reader is away from both edges",
+              );
+            }
             if (first) {
               for (const key of ["primary", "thread", "composer"])
                 for (const dimension of ["x", "y", "width", "height"])
@@ -461,12 +525,82 @@ try {
                 "!document.querySelector('.synthetic-native-page').hidden",
                 "synthetic browser remounted",
               );
+              const hidden = await capture(`browser-${round}`);
+              assert.equal(hidden.primaryActive, "false");
+              assert.equal(hidden.primary.visibility, "hidden");
               assert.equal(
-                (await capture(`browser-${round}`)).primaryActive,
-                "false",
+                hidden.visiblePrimaryDescendants,
+                0,
+                "resource tabs hide explicitly visible conversation descendants too",
+              );
+              assert.equal(
+                await evaluate(`(() => {
+                const root=document.querySelector('#primary-conversation-content');
+                root.querySelector('textarea, .cm-content')?.focus();
+                return root.contains(document.activeElement);
+              })()`),
+                false,
+                "hidden conversation cannot take keyboard focus",
+              );
+              for (const dimension of ["width", "height"])
+                near(
+                  hidden.messages[dimension],
+                  reading.messages[dimension],
+                  `hidden transcript ${dimension}`,
+                );
+              near(
+                hidden.messages.scrollTop,
+                reading.messages.scrollTop,
+                "hidden transcript retains native offset",
               );
             }
           }
+          // Activity preview is distinct from an explicit resource-tab selection:
+          // the owner's primary choice must survive while the Browser is displayed.
+          const preview = (sequence) =>
+            evaluate(
+              `window.__fullscreenPrimaryPreview.preview(${JSON.stringify(scene.owner)}, ${sequence})`,
+            );
+          await preview(1);
+          await until(
+            "document.querySelector('#thread-workspace-panel').dataset.primaryActive==='false' && !document.querySelector('.synthetic-native-page').hidden",
+            "activity preview overrides retained primary choice",
+          );
+          const activity = await capture("activity-preview");
+          assert.equal(activity.primary.visibility, "hidden");
+          assert.equal(activity.visiblePrimaryDescendants, 0);
+          assert.equal(
+            await evaluate(
+              "getComputedStyle(document.querySelector('.workspace-browser-address')).visibility",
+            ),
+            "visible",
+          );
+          await click(primaryTab);
+          const returned = await capture("activity-preview-return");
+          checkPrimary(returned, split.draft);
+          checkReading(returned, reading, "activity preview return");
+          await preview(1);
+          await delay(300);
+          assert.equal(
+            (await evaluate(measure)).primaryActive,
+            "true",
+            "dismissed activity stays hidden",
+          );
+          await preview(2);
+          await until(
+            "!document.querySelector('.synthetic-native-page').hidden",
+            "new activity previews",
+          );
+          await evaluate(
+            `window.__fullscreenPrimaryPreview.retire(${JSON.stringify(scene.owner)}, 2)`,
+          );
+          await until(
+            "document.querySelector('#thread-workspace-panel').dataset.primaryActive==='true' && document.querySelector('.synthetic-native-page').hidden",
+            "retired activity restores primary",
+          );
+          const retired = await capture("activity-preview-retired");
+          checkPrimary(retired, split.draft);
+          checkReading(retired, reading, "retired activity return");
           await click('[id="aux-tab-custom:overview"]');
           const overview = await capture("overview-control");
           assert.equal(overview.selected, "aux-tab-custom:overview");
@@ -482,6 +616,28 @@ try {
           await click(primaryTab);
           const fromOverview = await capture("primary-from-overview");
           checkPrimary(fromOverview, split.draft);
+          checkReading(fromOverview, reading, "nonbrowser return");
+          // Explicit Back to live owns the position again, and the next native
+          // upward wheel must still release following after another tab round trip.
+          await click("#primary-conversation-content .back-live");
+          await click(browserTab);
+          await click(primaryTab);
+          const live = await capture("live-return");
+          assert.equal(live.paused, false);
+          near(
+            live.messages.scrollTop,
+            live.messages.scrollHeight - live.messages.clientHeight,
+            "live reader stays at the bottom",
+          );
+          await pauseByWheel(-90);
+          const nearBottom = await capture("paused-near-bottom");
+          await click(browserTab);
+          await click(primaryTab);
+          checkReading(
+            await capture("near-bottom-return"),
+            nearBottom,
+            "near-bottom reader return",
+          );
           near(
             fromOverview.thread.height,
             first.thread.height,
@@ -514,6 +670,134 @@ try {
           }
           throw error;
         }
+      }
+      // Room uses a nonvirtual feed, but shares the fullscreen surface contract.
+      for (const width of [1280, 1000]) {
+        const result = {
+          owner: "room-a",
+          width,
+          height: 900,
+          status: "running",
+          observations: [],
+        };
+        report.scenes.push(result);
+        await send("Emulation.setDeviceMetricsOverride", {
+          width,
+          height: 900,
+          deviceScaleFactor: 1,
+          mobile: false,
+        });
+        const destination = `${url}/fullscreen-primary-chat.html?owner=room-a`;
+        await send("Page.navigate", { url: destination });
+        await until(
+          `location.href===${JSON.stringify(destination)} && !!document.querySelector('.rooms-chat-feed .room-message') && !document.querySelector('.synthetic-native-page')?.hidden`,
+          "Room fixture ready",
+        );
+        await click(expand);
+        await click(primaryTab);
+        const roomMeasure = `(() => {
+          const root=document.querySelector('#primary-conversation-content');
+          const feed=root.querySelector('.rooms-chat-feed');
+          const r=feed.getBoundingClientRect();
+          const anchor=[...feed.querySelectorAll('[data-room-message-id]')].find(e=>e.getBoundingClientRect().bottom>r.top);
+          return {x:r.x,y:r.y,width:r.width,height:r.height,top:feed.scrollTop,range:feed.scrollHeight-feed.clientHeight,
+            visibility:getComputedStyle(feed).visibility,
+            anchor:anchor?.dataset.roomMessageId,offset:anchor?.getBoundingClientRect().top-r.top,
+            draft:root.querySelector('textarea')?.value};
+        })()`;
+        let saved = await evaluate(roomMeasure);
+        assert.ok(saved.range > 300, "Room fixture has scrollable history");
+        // Narrow split mode initially mounts this feed under display:none.
+        // Establish a native bottom position rather than depending on a hidden
+        // mount's attempted scroll-to-end before testing the fullscreen round trip.
+        await send("Input.dispatchMouseEvent", {
+          type: "mouseWheel",
+          x: saved.x + saved.width / 2,
+          y: saved.y + 100,
+          deltaX: 0,
+          deltaY: saved.range + saved.height,
+        });
+        await until(
+          `(() => {
+          const feed=document.querySelector('.rooms-chat-feed');
+          return feed.scrollHeight-feed.clientHeight-feed.scrollTop <= 2;
+        })()`,
+          "Room reader reaches the live edge before pausing",
+        );
+        await delay(300);
+        saved = await evaluate(roomMeasure);
+        await send("Input.dispatchMouseEvent", {
+          type: "mouseWheel",
+          x: saved.x + saved.width / 2,
+          y: saved.y + 100,
+          deltaX: 0,
+          deltaY: -saved.range * 0.5,
+        });
+        await delay(350);
+        saved = await evaluate(roomMeasure);
+        assert.ok(
+          saved.top > 40 && saved.top < saved.range - 40,
+          "Room reader moved away from both edges",
+        );
+        for (const tab of [
+          '[id="aux-tab-browser:page-thread-a"]',
+          '[id="aux-tab-custom:overview"]',
+        ]) {
+          await click(tab);
+          const hidden = await evaluate(roomMeasure);
+          assert.equal(hidden.visibility, "hidden");
+          near(hidden.width, saved.width, "hidden Room feed width");
+          near(hidden.height, saved.height, "hidden Room feed height");
+          near(hidden.top, saved.top, "hidden Room scroll position");
+          await click(primaryTab);
+          const shown = await evaluate(roomMeasure);
+          assert.equal(shown.visibility, "visible");
+          assert.equal(
+            shown.anchor,
+            saved.anchor,
+            "Room returns to same message",
+          );
+          near(
+            shown.offset,
+            saved.offset,
+            "Room retains message-relative position",
+          );
+          assert.equal(shown.draft, saved.draft, "Room draft is retained");
+          result.observations.push({ tab, hidden, shown });
+        }
+        await evaluate(
+          "window.__fullscreenPrimaryPreview.preview('thread-a', 1)",
+        );
+        await until(
+          "document.querySelector('#thread-workspace-panel').dataset.primaryActive==='false' && !document.querySelector('.synthetic-native-page').hidden",
+          "Room activity preview",
+        );
+        const previewHidden = await evaluate(roomMeasure);
+        assert.equal(previewHidden.visibility, "hidden");
+        near(
+          previewHidden.top,
+          saved.top,
+          "Room preview retains hidden scroll",
+        );
+        await screenshot(`${width}x900-room-activity-preview.png`);
+        await click(primaryTab);
+        const previewReturn = await evaluate(roomMeasure);
+        assert.equal(previewReturn.anchor, saved.anchor);
+        near(previewReturn.offset, saved.offset, "Room preview return offset");
+        assert.equal(previewReturn.draft, saved.draft);
+        assert.equal(
+          await evaluate(
+            "document.querySelector('.synthetic-native-page').hidden",
+          ),
+          true,
+        );
+        result.observations.push({
+          phase: "activity-preview-return",
+          hidden: previewHidden,
+          shown: previewReturn,
+        });
+        await screenshot(`${width}x900-room-reading-return.png`);
+        result.status = "passed";
       }
     },
   );

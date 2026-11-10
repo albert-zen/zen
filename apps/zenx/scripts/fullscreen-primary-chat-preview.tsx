@@ -22,6 +22,8 @@ import { ZenXBrand } from "../src/renderer/src/ZenXBrand.js";
 import { i18n } from "../src/renderer/src/i18n.js";
 import type { Thread } from "../src/protocol-client/index.js";
 import type { PluginUiSdkV1 } from "../src/renderer/src/plugin-ui-host.js";
+import type { BrowserThreadEvent } from "../src/main/capabilities/browser-thread-observation.js";
+import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
 import type { WorkspaceBrowserTab } from "../src/main/workspace-browser.js";
 import "../src/renderer/src/theme.css";
 import "../src/renderer/src/styles.css";
@@ -36,6 +38,17 @@ import "./fullscreen-primary-chat-preview.css";
 
 Object.assign(globalThis, { React });
 const query = new URLSearchParams(location.search);
+const nativeBridge = (
+  window as unknown as {
+    __nativeFullscreenBridge?: { mount(request: unknown): Promise<void> };
+  }
+).__nativeFullscreenBridge;
+const nativeMode = query.get("native") === "1";
+if (nativeMode && !nativeBridge)
+  throw Error("Native fixture requires its isolated preload bridge");
+const streamListeners = new Set<
+  (threadId: string, complete: boolean) => void
+>();
 const zh = query.get("lang") === "zh-CN";
 document.documentElement.dataset.appearance = query.get("theme") ?? "light";
 document.documentElement.dataset.themePreset = "graphite";
@@ -71,14 +84,14 @@ function makeThread(id: string, title: string): Thread {
     agentRole: null,
     gitInfo: null,
     name: title,
-    turns: Array.from({ length: 8 }, (_, index) => ({
+    turns: Array.from({ length: 80 }, (_, index) => ({
       id: `${id}-turn-${index}`,
       items: [
         {
           type: "agentMessage" as const,
           id: `${id}-message-${index}`,
           text:
-            index === 7
+            index === 79
               ? text(
                   "The reference page is ready. Expand the workspace to keep reading that page, or select the first tab to return to this conversation.\n\nYour unsent draft stays in the same composer.",
                   "参考网页已准备好。展开工作区后会继续显示该网页，也可以点击第一个标签回到主聊天。\n\n未发送草稿始终保留在同一个输入框中。",
@@ -148,12 +161,59 @@ const pageFor = (threadId: string): WorkspaceBrowserTab => ({
   agentActionOutcomeUnknown: false,
   requiresFreshObservation: false,
 });
+const browserListeners = new Set<(event: BrowserThreadEvent) => void>();
 Object.assign(window, {
-  __fullscreenPrimaryPreview: { receipts },
+  __fullscreenPrimaryPreview: {
+    receipts,
+    stream(threadId: string, complete = false) {
+      for (const listener of streamListeners) listener(threadId, complete);
+    },
+    preview(threadId: string, sequence: number) {
+      for (const listener of browserListeners)
+        listener({
+          type: "targets",
+          targets: [
+            {
+              id: `workspace:page-${threadId}`,
+              backendId: "workspace",
+              sessionId: "synthetic",
+              tabId: `workspace:page-${threadId}`,
+              title: "Synthetic activity preview",
+              url: "https://example.test/reference",
+              mode: "live",
+              loading: false,
+              previewActive: true,
+              previewSequence: sequence,
+              activityCount: 1,
+            },
+          ],
+        });
+    },
+    retire(threadId: string, sequence: number) {
+      for (const listener of browserListeners)
+        listener({
+          type: "turn-ended",
+          threadId,
+          throughSequence: sequence,
+          failed: false,
+        });
+    },
+  },
   zenx: {
     platform: document.documentElement.dataset.platform,
     threads: { list: async () => [] },
     plugins: { executeCommand: async () => null, readHandle: async () => null },
+    browserObservation: {
+      subscribe(
+        _request: unknown,
+        listener: (event: BrowserThreadEvent) => void,
+      ) {
+        browserListeners.add(listener);
+        return () => {
+          browserListeners.delete(listener);
+        };
+      },
+    },
     workspaceBrowser: {
       command: async (threadId: string, operation: string) => {
         receipts.push({ operation, threadId });
@@ -177,6 +237,11 @@ Object.assign(window, {
           tabId: request.tabId,
           visible: Boolean(request.bounds),
         });
+        if (nativeMode) {
+          await nativeBridge!.mount(request);
+          publishReceipt();
+          return;
+        }
         lastLease = request.lease;
         if (request.bounds) {
           if (currentLease !== request.lease) showCount++;
@@ -206,22 +271,20 @@ const rooms = [
     name: names["room-a"],
     members: [{ name: names["thread-a"], threadId: "thread-a" }],
     createdAt: now,
-    messages: [
-      {
-        id: "room-agent-message",
-        kind: "agent",
-        author: names["thread-a"],
-        roomId: "room-a",
-        originThreadId: "thread-a",
-        originTurnId: null,
-        text: text(
-          "This is the Room conversation, not its member’s execution Thread. The first fullscreen tab returns to this exact Room view.",
-          "这里是 Room 对话，不是成员的执行线程。全屏中的第一个标签返回同一个 Room 对话视图。",
-        ),
-        createdAt: now,
-        mentions: [],
-      },
-    ],
+    messages: Array.from({ length: 40 }, (_, index) => ({
+      id: `room-agent-message-${index}`,
+      kind: "agent",
+      author: names["thread-a"],
+      roomId: "room-a",
+      originThreadId: "thread-a",
+      originTurnId: null,
+      text: text(
+        "This is the Room conversation, not its member’s execution Thread. The first fullscreen tab returns to this exact Room view.",
+        "这里是 Room 对话，不是成员的执行线程。全屏中的第一个标签返回同一个 Room 对话视图。",
+      ),
+      createdAt: now + index,
+      mentions: [],
+    })),
   },
 ];
 const roomSdk = {
@@ -247,6 +310,50 @@ const noAction = async () => {
 
 function Preview() {
   useSyncExternalStore(subscribeReceipts, receiptSnapshot);
+  const [liveThreads, setLiveThreads] = useState(threads);
+  useEffect(() => {
+    const stream = (id: string, complete: boolean) =>
+      setLiveThreads((current) => {
+        const thread = current[id];
+        if (!thread) throw Error("Unknown synthetic stream owner");
+        const turns = thread.turns.map((turn, index) =>
+          index !== thread.turns.length - 1
+            ? turn
+            : {
+                ...turn,
+                status: complete
+                  ? ("completed" as const)
+                  : ("inProgress" as const),
+                completedAt: complete ? now + 100 : null,
+                durationMs: complete ? 1000 : null,
+                items: turn.items.map((item) =>
+                  item.type === "agentMessage"
+                    ? {
+                        ...item,
+                        text:
+                          item.text +
+                          (complete ? "" : "\nSynthetic streamed text chunk."),
+                      }
+                    : item,
+                ),
+              },
+        );
+        return {
+          ...current,
+          [id]: {
+            ...thread,
+            status: complete
+              ? { type: "idle" as const }
+              : { type: "active" as const, activeFlags: [] },
+            turns,
+          },
+        };
+      });
+    streamListeners.add(stream);
+    return () => {
+      streamListeners.delete(stream);
+    };
+  }, []);
   const [owner, setOwner] = useState<Owner>(
     (query.get("owner") as Owner) in names
       ? (query.get("owner") as Owner)
@@ -259,6 +366,9 @@ function Preview() {
     "room-a": text("Room draft — keep this text", "Room 草稿——请保留这段文字"),
   });
   const roomRevisions = useRef<Record<string, number>>({});
+  const [primaryOwners, setPrimaryOwners] = useState<Record<string, boolean>>(
+    {},
+  );
   const [selections, setSelections] = useState<Record<string, string>>({});
   const [orders, setOrders] = useState<Record<string, string[]>>({});
   const intent = useRef(0);
@@ -273,12 +383,14 @@ function Preview() {
     () => ({
       title: i18n.t("panels:mainConversation", { title: names[owner] }),
       contentId: "primary-conversation-content",
+      selected: primaryOwners[owner] ?? false,
       onSelect: () => {
+        setPrimaryOwners((current) => ({ ...current, [owner]: true }));
         const token = ++intent.current;
         return () => token === intent.current;
       },
     }),
-    [owner],
+    [owner, primaryOwners],
   );
   const renderThread = (id: string, thread: Thread) => (
     <ThreadView
@@ -316,6 +428,15 @@ function Preview() {
     >
       <div
         className="app-shell fullscreen-primary-preview"
+        data-stream-status={liveThreads[threadId]!.turns.at(-1)!.status}
+        data-streamed-chunks={liveThreads[threadId]!.turns.at(-1)!.items.reduce(
+          (count, item) =>
+            count +
+            (item.type === "agentMessage"
+              ? (item.text.match(/Synthetic streamed text chunk/g) ?? []).length
+              : 0),
+          0,
+        )}
         style={
           { "--workspace-panel-width": `${width}px` } as React.CSSProperties
         }
@@ -369,6 +490,7 @@ function Preview() {
           <button
             onClick={() => {
               intent.current++;
+              setPrimaryOwners((current) => ({ ...current, [owner]: false }));
               setSelections((current) => ({
                 ...current,
                 [owner]: `browser:page-${threadId}`,
@@ -426,7 +548,7 @@ function Preview() {
               id="primary-conversation-content"
               className="agent-surface"
             >
-              {renderThread(owner, threads[owner]!)}
+              {renderThread(owner, liveThreads[owner]!)}
             </section>
           )}
           <AuxiliaryPanel
@@ -445,10 +567,16 @@ function Preview() {
             open={open}
             onOpenChange={setOpen}
             onWidthChange={setWidth}
-            snapshot={null}
+            snapshot={
+              {
+                plugins: [{ id: "browser", enabled: true, available: true }],
+                panels: [],
+              } as unknown as ZenXPluginSnapshot
+            }
             selectedTab={selected}
             onSelectTab={(tab) => {
               intent.current++;
+              setPrimaryOwners((current) => ({ ...current, [owner]: false }));
               setSelections((current) => ({ ...current, [owner]: tab }));
             }}
             openedTabs={order}

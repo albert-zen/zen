@@ -5,6 +5,10 @@ on:
     paths:
       - .github/workflows/fullscreen-primary-chat-ui.yml
       - apps/zenx/scripts/*fullscreen-primary-chat-preview.*
+      - apps/zenx/scripts/*fullscreen-primary-native.*
+      - apps/zenx/scripts/fullscreen-primary-native-preload.cjs
+      - apps/zenx/src/main/workspace-browser*.ts
+      - apps/zenx/test/fullscreen-primary-native-fixture.test.mjs
       - apps/zenx/scripts/preview-browser*.mjs
       - apps/zenx/src/renderer/**
       - packages/zenx-rooms-plugin/**
@@ -45,6 +49,53 @@ jobs:
           name: fullscreen-primary-chat-${{ github.sha }}
           path: ${{ runner.temp }}/fullscreen-primary-chat
           if-no-files-found: warn
+          retention-days: 14
+      - name: Save verified desktop archives
+        timeout-minutes: 5
+        if: ${{ always() && steps.desktop-archives.outcome == 'success' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: save
+          electron-cache-hit: ${{ steps.desktop-archives.outputs.electron-cache-hit }}
+          rtk-cache-hit: ${{ steps.desktop-archives.outputs.rtk-cache-hit }}
+
+  native-macos-fullscreen:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Restore verified desktop archives
+        timeout-minutes: 5
+        id: desktop-archives
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: restore
+      - run: npm ci
+      - run: npm run build --workspace @zenx/plugin-sdk
+      - name: Validate the isolated native fixture contracts
+        run: node --test apps/zenx/test/fullscreen-primary-native-fixture.test.mjs
+      - name: Build production renderer and production native Browser service
+        run: |
+          node apps/zenx/scripts/build-fullscreen-primary-chat-preview.mjs .fullscreen-primary-native
+          node apps/zenx/scripts/build-fullscreen-primary-native.mjs .fullscreen-primary-native
+      - name: Verify native activity preview, wheel, streamed reading and resize
+        run: npx --no-install electron .fullscreen-primary-native/native-main.cjs .fullscreen-primary-native
+      - name: Require complete exact-version native evidence
+        run: node apps/zenx/scripts/verify-fullscreen-primary-native.mjs .fullscreen-primary-native
+      - name: Preserve native measurements and separate owned-renderer/view captures
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fullscreen-primary-native-macos-${{ github.sha }}
+          path: |
+            .fullscreen-primary-native/*.json
+            .fullscreen-primary-native/*.png
+          include-hidden-files: true
+          if-no-files-found: error
           retention-days: 14
       - name: Save verified desktop archives
         timeout-minutes: 5

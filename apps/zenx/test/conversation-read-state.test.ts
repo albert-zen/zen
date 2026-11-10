@@ -887,3 +887,81 @@ test("read-visible late DOM remains unread until visible and retired or disabled
     await fixture.close();
   }
 });
+
+for (const scope of ["threads", "rooms"] as const) {
+  test(`${scope}: a measurable hidden fullscreen transcript stays unread until its tab returns`, async () => {
+    const dom = new JSDOM(
+      '<div class="workspace"><div id="root"></div><aside class="auxiliary-panel" data-primary-active="false" data-open="true" data-expanded="true"></aside></div>',
+      { url: "http://localhost", pretendToBeVisual: true },
+    );
+    Object.assign(globalThis, {
+      window: dom.window,
+      document: dom.window.document,
+      IS_REACT_ACT_ENVIRONMENT: true,
+    });
+    Object.defineProperty(document, "hasFocus", {
+      configurable: true,
+      value: () => true,
+    });
+    dom.window.HTMLElement.prototype.getBoundingClientRect = function () {
+      return this.dataset.readMessageId ? rect(100, 200) : rect(0, 500);
+    };
+    const root = createRoot(document.getElementById("root")!);
+    function Reader() {
+      const viewport = useRef<HTMLDivElement>(null);
+      useReadVisibleMessage({
+        scope,
+        conversationId: "hidden-primary",
+        message: message("hidden-reply", Date.now(), 1),
+        viewport,
+      });
+      return React.createElement(
+        "div",
+        { ref: viewport, id: "viewport", style: { visibility: "hidden" } },
+        React.createElement(
+          "article",
+          { "data-read-message-id": "hidden-reply" },
+          "Reply",
+        ),
+      );
+    }
+    const flush = async () =>
+      act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      });
+    const read = () =>
+      conversationReadStore().getSnapshot()[scope]["hidden-primary"];
+    try {
+      await act(async () => root.render(React.createElement(Reader)));
+      await flush();
+      assert.equal(
+        read(),
+        undefined,
+        "positive bounds behind a resource do not acknowledge the message",
+      );
+      const viewport = document.getElementById("viewport")!;
+      viewport.dispatchEvent(new dom.window.Event("scroll"));
+      await flush();
+      assert.equal(
+        read(),
+        undefined,
+        "background content growth remains unread",
+      );
+      // CSS becomes visible in production when this sibling attribute changes.
+      // No resize/scroll/focus event is emitted on a same-geometry tab switch.
+      viewport.style.visibility = "visible";
+      document
+        .querySelector(".auxiliary-panel")!
+        .setAttribute("data-primary-active", "true");
+      await flush();
+      assert.equal(
+        read()?.id,
+        "hidden-reply",
+        "returning to the tab checks the same visible tail",
+      );
+    } finally {
+      await act(async () => root.unmount());
+      dom.window.close();
+    }
+  });
+}

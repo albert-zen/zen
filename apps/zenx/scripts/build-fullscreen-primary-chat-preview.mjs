@@ -53,6 +53,7 @@ const sources = [
   "src/renderer/src/App.tsx",
   "src/renderer/src/companion-workspace.tsx",
   "src/renderer/src/ThreadView.tsx",
+  "src/renderer/src/conversation-read-state.ts",
   "src/renderer/src/ExperimentalTranscriptViewport.tsx",
   "src/renderer/src/bundled-automation-ui.tsx",
   "src/renderer/src/room-header.tsx",

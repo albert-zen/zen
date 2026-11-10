@@ -309,6 +309,17 @@ export function useReadVisibleMessage({
         root.querySelectorAll<HTMLElement>("[data-read-message-id]"),
       ).find((element) => element.dataset.readMessageId === message.id);
       if (!target) return;
+      // A fullscreen resource keeps the main transcript's geometry intact, but
+      // that measurable background surface is not a foreground reading view.
+      for (const element of [root, target]) {
+        const style = window.getComputedStyle(element);
+        if (
+          style.visibility === "hidden" ||
+          style.visibility === "collapse" ||
+          style.display === "none"
+        )
+          return;
+      }
       const bounds = target.getBoundingClientRect();
       if (
         messageTailIsVisible(
@@ -353,6 +364,32 @@ export function useReadVisibleMessage({
         : new ResizeObserver(schedule);
     observer?.observe(root);
     if (root.firstElementChild) observer?.observe(root.firstElementChild);
+    // Returning to a fullscreen primary tab changes only visibility, so neither
+    // scroll nor ResizeObserver is guaranteed to fire. Observe the sibling panel
+    // presentation, not the changing transcript subtree.
+    const workspace = root.closest(".workspace");
+    const presentation = workspace
+      ? new MutationObserver(() => {
+          watchPresentation();
+          schedule();
+        })
+      : null;
+    const watchPresentation = () => {
+      if (!workspace || !presentation) return;
+      presentation.disconnect();
+      presentation.observe(workspace, { childList: true });
+      const panel = workspace.querySelector(":scope > .auxiliary-panel");
+      if (panel)
+        presentation.observe(panel, {
+          attributes: true,
+          attributeFilter: [
+            "data-primary-active",
+            "data-open",
+            "data-expanded",
+          ],
+        });
+    };
+    watchPresentation();
     return () => {
       generation.current += 1;
       if (frame !== undefined)
@@ -362,6 +399,7 @@ export function useReadVisibleMessage({
       window.removeEventListener("resize", schedule);
       document.removeEventListener("visibilitychange", schedule);
       observer?.disconnect();
+      presentation?.disconnect();
     };
   }, [
     scope,

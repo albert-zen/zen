@@ -1405,7 +1405,9 @@ export function AuxiliaryPanel({
       inert={!open}
       data-expanded={expanded}
       data-resizing={resizing}
-      data-primary-active={primaryActive && !showChooser}
+      // A temporary Browser preview overrides the retained primary selection.
+      // CSS and native page mounting must agree on the same displayed tab.
+      data-primary-active={active === PRIMARY_CONVERSATION_TAB && !showChooser}
       aria-label={i18n.t("panels:sidePanelFor", { title })}
       style={{ "--auxiliary-width": `${width}px` } as React.CSSProperties}
       onKeyDown={(event) => {
