@@ -1096,3 +1096,102 @@ test("native question origin driver observes the shelf status and invokes only w
     assert.equal(toggle.getAttribute("aria-expanded"), expanded);
   });
 });
+
+test("held headings stay neutral across owners, recovery and languages without requests", async () => {
+  await withRuntimeDom(async () => {
+    const thread = staged();
+    const items = thread.canonicalItems!;
+    const pending = pendingSteerMessages(items);
+    let requests = 0;
+    let restores = 0;
+    protocol(async () => {
+      requests++;
+      throw new Error("Unexpected request");
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const store = createSteerRecallStore();
+    const originalLanguage = i18n.language;
+    try {
+      for (const language of ["en", "zh"]) {
+        await act(async () => {
+          await i18n.changeLanguage(language);
+        });
+        for (const count of [1, 2]) {
+          for (const owner of [
+            "runtime-turn",
+            null,
+            "runtime-turn",
+            "other-turn",
+            "runtime-turn",
+          ]) {
+            for (const mixed of [false, true]) {
+              const visible = pending
+                .slice(0, count)
+                .map((item, index) =>
+                  mixed && index === 1
+                    ? { ...item, expectedTurnId: "older-turn" }
+                    : item,
+                );
+              const held = owner !== "runtime-turn" || (mixed && count === 2);
+              await act(async () => {
+                root.render(
+                  createElement(PendingSteerPanel, {
+                    threadId: thread.id,
+                    items,
+                    pending: visible,
+                    runningTurnId: owner,
+                    store,
+                    onRestore: () => {
+                      restores++;
+                      return true;
+                    },
+                  }),
+                );
+              });
+              const panel = container.querySelector(".pending-steer-panel")!;
+              const expectedLabel =
+                language === "en"
+                  ? held
+                    ? "Pending model input"
+                    : "Messages waiting for the model"
+                  : held
+                    ? "待提交的模型输入"
+                    : "等待进入模型的消息";
+              const expectedCount =
+                language === "en"
+                  ? `${held ? "Pending input" : "Waiting for the model"} · ${count} ${count === 1 ? "message" : "messages"}`
+                  : `${held ? "待提交输入" : "等待进入模型"} · ${count} 条`;
+              assert.equal(panel.getAttribute("aria-label"), expectedLabel);
+              assert.equal(
+                panel.querySelector('[role="status"]')!.textContent,
+                expectedCount,
+              );
+              assert.equal(
+                panel.querySelector(".mini-spinner") !== null,
+                !held,
+              );
+              assert.equal(
+                panel.querySelector(".steer-shelf-notice")?.textContent ?? null,
+                held ? i18n.t("shell:steerHeldNotice") : null,
+              );
+              assert.equal(
+                panel
+                  .querySelector(".queue-shelf-toggle")!
+                  .getAttribute("aria-expanded"),
+                "true",
+              );
+              assert.equal(requests, 0);
+              assert.equal(restores, 0);
+            }
+          }
+        }
+      }
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      await i18n.changeLanguage(originalLanguage);
+    }
+  });
+});
