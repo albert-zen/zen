@@ -2076,6 +2076,12 @@ function ThreadViewContent({
   const showSubmissionError =
     composerBlockingError === null && submissionError != null;
   const composerError = composerBlockingError ?? submissionError ?? modelError;
+  const firstMessageNeedsAttention =
+    thread !== null &&
+    showSubmissionError &&
+    composer.submission?.status === "failed" &&
+    composer.submission.intent === "start" &&
+    composer.submission.immediateFeedback !== true;
 
   // Composer updates reuse the actual transcript elements, not just TurnBlock bodies.
   const renderedTranscriptRows = useMemo(
@@ -2345,14 +2351,18 @@ function ThreadViewContent({
                         {i18n.t(
                           firstMessageSending
                             ? "shell:pendingSendSending"
-                            : "shell:startANewThread",
+                            : firstMessageNeedsAttention
+                              ? "shell:firstSendNeedsAttention"
+                              : "shell:startANewThread",
                         )}
                       </h2>
                       <p>
                         {i18n.t(
                           firstMessageSending
                             ? "shell:firstSendAwaitingConfirmation"
-                            : "shell:describeOutcome",
+                            : firstMessageNeedsAttention
+                              ? "shell:firstSendReviewError"
+                              : "shell:describeOutcome",
                         )}
                       </p>
                     </div>

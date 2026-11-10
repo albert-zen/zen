@@ -129,6 +129,8 @@ export const en = {
   threadFindHighlightUnsupported:
     "This browser cannot paint search highlights. Your text selection is unchanged.",
 
+  firstSendNeedsAttention: "Send needs attention",
+  firstSendReviewError: "Review the error details below before continuing.",
   pendingSendSending: "Sending…",
   firstSendAwaitingConfirmation:
     "Waiting for confirmation. Your draft is preserved.",
@@ -1263,6 +1265,8 @@ export const zhCN = {
   threadFindHighlightUnsupported:
     "当前浏览器不支持搜索高亮，已有文本选择保持不变。",
 
+  firstSendNeedsAttention: "请检查发送问题",
+  firstSendReviewError: "继续操作前，请查看下方的错误详情。",
   pendingSendSending: "正在发送…",
   firstSendAwaitingConfirmation: "正在等待接纳确认，草稿仍保留在输入框中。",
   pendingSendAdmitted: "已接纳，等待会话更新",

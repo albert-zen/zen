@@ -454,6 +454,14 @@ for (const outcome of ["accepted", "rejected", "navigated"] as const) {
           outcome === "rejected" ? "Wait for first-message confirmation" : "",
         );
         if (outcome === "rejected") {
+          assert.equal(
+            document.querySelector(".thread-empty h2")?.textContent,
+            "Send needs attention",
+          );
+          assert.equal(
+            document.querySelector(".thread-empty")?.getAttribute("role"),
+            null,
+          );
           const error = document.querySelector(".composer-error")!;
           assert.equal(
             error.querySelector('[role="alert"]')?.textContent,

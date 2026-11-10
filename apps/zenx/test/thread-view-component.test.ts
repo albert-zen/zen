@@ -210,6 +210,21 @@ test("promoted first Send pending feedback is localized and follows existing adm
           requiredElement(".composer-error").textContent ?? "",
           /Admission rejected/,
         );
+        assert.equal(
+          requiredElement(".thread-empty h2").textContent,
+          language === "en" ? "Send needs attention" : "请检查发送问题",
+        );
+        assert.equal(
+          requiredElement(".thread-empty p").textContent,
+          language === "en"
+            ? "Review the error details below before continuing."
+            : "继续操作前，请查看下方的错误详情。",
+        );
+        assert.equal(
+          document.querySelector(".thread-empty")?.getAttribute("role"),
+          null,
+        );
+        assert.equal(document.querySelectorAll('[role="alert"]').length, 1);
         const error = requiredElement(".composer-error");
         assert.equal(
           error.querySelector('[role="alert"]')?.textContent,
@@ -344,6 +359,133 @@ test("submission disclosure preserves model errors and ordinary unknown delivery
     );
     assert.equal(document.querySelector(".composer-submission-error"), null);
   });
+});
+
+test("first Send attention only replaces the eligible default empty state", () => {
+  const pending = beginComposerSubmission(
+    editComposer(emptyComposerState(), "First message"),
+    "start",
+    null,
+    () => "attention-client",
+  );
+  const failed = failComposerSubmission(
+    pending,
+    "attention-client",
+    "Raw failure",
+  );
+  const imageBlocked = {
+    ...failed,
+    draft: {
+      ...failed.draft,
+      images: [
+        {
+          id: "image",
+          name: "image.png",
+          attachment: {
+            mediaType: "image/png",
+            sha256: "a".repeat(64),
+            byteLength: 4,
+            width: 1,
+            height: 1,
+          } as AttachmentRef,
+        },
+      ],
+    },
+  };
+  for (const [props, attention] of [
+    [{ thread: thread([]), composer: failed }, true],
+    [
+      { thread: thread([]), composer: failed, modelError: "Lower priority" },
+      true,
+    ],
+    [{ thread: thread([]), composer: pending }, false],
+    [
+      {
+        thread: thread([]),
+        composer: acceptComposerSubmission(pending, "attention-client"),
+      },
+      false,
+    ],
+    [
+      { thread: thread([]), composer: editComposer(failed, "Newer message") },
+      false,
+    ],
+    [
+      {
+        thread: thread([]),
+        composer: imageBlocked,
+        imageCapabilityError: "Raw failure",
+      },
+      false,
+    ],
+    [
+      {
+        thread: thread([]),
+        composer: {
+          ...failed,
+          submission: { ...failed.submission!, error: null },
+        },
+      },
+      false,
+    ],
+    [
+      {
+        thread: thread([]),
+        composer: {
+          ...failed,
+          submission: { ...failed.submission!, intent: "steer" as const },
+        },
+      },
+      false,
+    ],
+    [
+      {
+        thread: thread([]),
+        composer: {
+          ...failed,
+          submission: { ...failed.submission!, immediateFeedback: true },
+        },
+      },
+      false,
+    ],
+    [{ thread: null, composer: failed }, false],
+    [{ thread: thread([turn()]), composer: failed }, false],
+    [
+      {
+        thread: thread([]),
+        composer: failed,
+        emptyContent: createElement("p", null, "Custom side chat"),
+      },
+      false,
+    ],
+  ] as const) {
+    const dom = new JSDOM(
+      renderToStaticMarkup(
+        createElement(ThreadView, {
+          ...props,
+          approvals: [],
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      ),
+    );
+    try {
+      assert.equal(
+        dom.window.document.querySelector(".thread-empty h2")?.textContent ===
+          "Send needs attention",
+        attention,
+      );
+      if ("emptyContent" in props)
+        assert.match(
+          dom.window.document.body.textContent ?? "",
+          /Custom side chat/,
+        );
+    } finally {
+      dom.window.close();
+    }
+  }
 });
 
 test("first Send pending feedback does not replace local creation, side-chat context or ordinary Sending rows", () => {

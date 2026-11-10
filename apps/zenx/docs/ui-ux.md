@@ -1241,3 +1241,16 @@ retry safety. Interrupt, attachment, capability and model errors retain their
 existing presentation; ordinary pending-send unknown-delivery warnings and
 recovery controls are unchanged. This is presentation only: no new request,
 retry, admission classification, draft mutation, empty-state or title change.
+
+### Empty first-send error guidance
+
+A created Thread with no transcript rows uses “Send needs attention” and
+“Review the error details below before continuing.” instead of the default
+new-thread invitation only when its same-revision, non-immediate start submission
+is failed and that submission error wins the existing Composer error priority.
+Custom empty content, local creation and side-chat context retain precedence.
+This guidance is not a second live announcement; the Composer keeps its single
+error alert and complete raw diagnostic disclosure. Pending, accepted, edited,
+ordinary immediate-send and higher-priority error presentations are unchanged.
+The cue asserts neither non-delivery nor retry safety, promises no retained draft,
+and adds no request, classification, recovery action or title change.
