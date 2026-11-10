@@ -2714,6 +2714,8 @@ button:disabled {
   padding: 8px 8px 4px;
 }
 .composer-tools {
+  flex: 1 1 auto;
+  flex-wrap: wrap;
   min-width: 0;
   gap: 3px;
   overflow: visible;
@@ -2742,15 +2744,27 @@ button:disabled {
   width: 36px;
   flex-basis: 36px;
 }
+.composer-tools > :not(.composer-model-menu) {
+  flex: 0 0 auto;
+}
 .composer-model-menu {
   position: relative;
-  min-width: 0;
+  flex: 1 1 64px;
+  min-width: 64px;
+  max-width: 220px;
+}
+.composer-model-menu > .composer-model-trigger {
+  max-width: 100%;
+}
+.composer-model-trigger > svg {
+  flex-shrink: 0;
 }
 .composer-model-trigger {
   max-width: 220px;
   cursor: pointer;
 }
 .composer-model-trigger > span:first-child {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2926,6 +2940,7 @@ button:disabled {
   text-transform: capitalize;
 }
 .composer-actions {
+  flex: 0 0 auto;
   gap: 5px;
   min-width: 0;
 }

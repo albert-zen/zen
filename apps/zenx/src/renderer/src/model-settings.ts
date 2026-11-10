@@ -56,6 +56,27 @@ export function settingsFromSnapshot(
   };
 }
 
+/** Shared display only; absent configuration never advertises a default grant. */
+export function permissionPresentation(
+  settings:
+    | Pick<SelectedThreadSettings, "permissionMode" | "approvalPolicy">
+    | null
+    | undefined,
+): {
+  permissionLabel: string | null;
+  permissionMode?: SelectedThreadSettings["permissionMode"];
+} {
+  if (!settings) return { permissionLabel: null };
+  return {
+    permissionMode: settings.permissionMode,
+    permissionLabel:
+      settings.permissionMode === "danger-full-access" &&
+      settings.approvalPolicy === "on-request"
+        ? i18n.t("shell:approvalRequired")
+        : i18n.t("shell:filePermissions"),
+  };
+}
+
 export function applySettingsMirror(
   current: SelectedThreadSettings | null,
   threadId: string,

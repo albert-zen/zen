@@ -185,6 +185,7 @@ import {
   canChangeThreadModel,
   modelChangeRequest,
   permissionModeFromPolicy,
+  permissionPresentation,
   imageCapabilityMessage,
   imageCapabilityNotice,
   reasoningChangeRequest,
@@ -3731,6 +3732,12 @@ function AppContent() {
         ...input,
         ...(roomId ? { roomId } : {}),
         contextPreview: projectNativeThread(thread),
+        // The same read fixes both the fork boundary and its displayed permissions.
+        // Never substitute later live-parent settings for this opening snapshot.
+        inheritedPermissions: {
+          permissionMode: thread.sandbox,
+          approvalPolicy: nativeSettingsSnapshot(thread).approvalPolicy,
+        },
         inheritedModel: encodeModelKey(thread),
         inheritedEffort: thread.reasoningEffort,
       },
@@ -3960,6 +3967,7 @@ function AppContent() {
         composerId={`side-chat-draft-${id}`}
         thread={null}
         contextPreview={draft.contextPreview}
+        {...permissionPresentation(draft.inheritedPermissions)}
         emptyContent={
           <div className="thread-empty">
             <h2>{i18n.t("panels:sideChat")}</h2>
@@ -5887,17 +5895,7 @@ function AgentSurface({
             }
             models={models}
             providerProfiles={providerProfiles}
-            permissionLabel={
-              selectedSettings === null
-                ? null
-                : selectedSettings.permissionMode === "danger-full-access" &&
-                    selectedSettings.approvalPolicy === "on-request"
-                  ? i18n.t("shell:approvalRequired")
-                  : i18n.t("shell:filePermissions")
-            }
-            permissionMode={
-              selectedSettings?.permissionMode ?? "danger-full-access"
-            }
+            {...permissionPresentation(selectedSettings)}
             permissionError={permissionError}
             switchingPermission={switchingPermission}
             onPermissionChange={onPermissionChange}

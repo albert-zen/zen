@@ -276,7 +276,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - 已删除 Provider 或 hidden / Unknown / 不可运行模型的历史 Thread 仍可阅读，但 Composer 在开始或替换 Turn 前明确要求用户选择可运行模型，不自动改写或切换；当前 Turn 的 Steer 仍沿用其冻结 selection。
 - 已确认的视觉校准是缩小 primary action 的**可见圆形轮廓**，但不随之大幅缩小内部图标，也不缩小完整交互 hit target。
 - Composer 底部 toolbar 整体更贴近容器底边；这是相对位置指导，不锁定截图坐标或像素值。
-- 附件、模型、权限与 primary action 共享视觉基线，并按宽度与优先级渐进隐藏。
+- 附件、模型、权限与 primary action 共享视觉基线。窄分栏按 Composer 实际可用宽度分配工具栏：模型文字在自身按钮内省略，完整名称保留于 accessible label 与 tooltip；附件、上下文用量、权限和 Send 保持独立命中区域及原顺序。空间不足时工具换行，不缩小字号或隐藏必要动作；Send 保留最右侧的稳定命中区域。
 - 不在 Composer 重复显示 Turn 已经表达的运行时长或状态。
 - Approval bar 位于聊天流与 Composer 之间，不塞入 Trace Group 或 Composer toolbar。
 - 用户处于实时底部时，新 Item 自动跟随；用户向上阅读后，不改变滚动位置，并显示 **Back to live**。
@@ -594,6 +594,7 @@ New PAW setup discloses an hourly heartbeat and model-quota use before Create. I
 - 每个 Subagent / Side chat Thread 的左侧栏显隐独立保存到本机 Host profile，默认隐藏；Subagents 树每一行提供始终可见、可键盘/触控操作的“在侧栏显示”开关，显示/隐藏只影响该 Thread，不递归改变后代。开关列上方显示一次弱化的“侧栏 / Sidebar”标题，明确区别于整个信息卡片的隐藏操作；仅在实际子线程行及侧栏显隐控件存在时显示，不占用标题或状态的行内宽度。隐藏后仍可从 Subagents 树访问，已打开的独立标签保持不变。
 - 显隐与 Pin/Unpin 完全独立：显示不会自动置顶，隐藏不会取消置顶；隐藏的已置顶子线程不进入 Pinned 列表，再次显示才恢复既有置顶位置。普通线程与独立 Fork 仍默认显示。旧全局 showSubagents 开关移除，既有 localStorage 值不迁移为逐线程显示授权。
 - Subagents Tab 提供 New side chat：点击新建时固定父会话的完整上下文边界并打开 renderer-local 草稿；首次有效 Send 才以该边界创建 fork 子线程并发送。未发送就关闭不创建真实 Thread，不进入子会话列表、Sidebar 或持久工作区。草稿在本次 renderer 内按创建入口的 Thread/Room 工作区和精确父会话独立保留，导航与切换不串归属；模型与 effort 选择只属于该草稿。 草稿立即显示固定边界的父会话只读记录，不伪装为空白新会话；父会话仍在执行的部分只呈现静态快照，不显示旁聊正在执行。读取、创建子线程与发送消息各阶段均有可访问的进度提示；创建和发送期间不能重复提交，失败保留原输入。创建后的上下文末尾追加明确的 side-chat 身份与等待用户请求的指令，不继承可执行待办队列，也不改变父会话执行。创建已确认而发送失败时，同一草稿重用 child ID 和发送幂等键，不重复创建。主动深入交互时可以全屏打开真实子线程。
+- 未发送的 Side chat 权限显示来自固定上下文边界的同次原生读取，复用普通会话的权限标签且不可编辑；不跟随后来父会话的权限变化。尚无该快照时隐藏权限控件，不以 Full access 猜测。此显示不写入或改变权限，首次 Send 仍由既有 fork 配置继承决定。
 - 全屏子线程在现有 top bar 中使用可返回祖先的路径式面包屑标识位置；不另占标题栏下方一行。普通根会话不显示空面包屑。
 - 验收至少检查浅色/深色、桌面/窄屏、长文本、空状态/错误状态、键盘与焦点、打开/关闭/切换后的草稿和上下文归属。修复前后截图绑定实际构建版本；未实际查看的页面必须明确列为未验。
 - 产品改动在 PR 分支交付，不直接修改主线；独立 Review 和实际操作证据共同支持结论，不能相互替代。

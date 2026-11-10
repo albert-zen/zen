@@ -169,13 +169,10 @@
   display: grid;
   --conversation-gutter: 16px;
 }
-.thread-conversation-viewport .composer-tools {
-  flex-wrap: wrap;
-}
 .thread-conversation-viewport .composer-rail {
   align-items: flex-end;
 }
-.thread-conversation-viewport .composer-model-trigger {
+.thread-conversation-viewport .composer-model-menu {
   max-width: 180px;
 }
 .conversation-viewport-status {

@@ -107,3 +107,51 @@ test("permission selector exposes three modes, waits for confirmed state and sho
     dom.window.close();
   }
 });
+
+test("side-chat snapshot modes use the shared labels without granting an edit action", async () => {
+  const { permissionPresentation } =
+    await import("../src/renderer/src/model-settings.js");
+  const { i18n } = await import("../src/renderer/src/i18n.js");
+  const dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" });
+  const previous = { window: globalThis.window, document: globalThis.document };
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    for (const [permissionMode, approvalPolicy, label] of [
+      ["read-only", "on-request", "Read only"],
+      ["workspace-write", "never", "Workspace write"],
+      ["danger-full-access", "never", "Full access"],
+      ["danger-full-access", "on-request", "Approval required"],
+    ] as const) {
+      const presentation = permissionPresentation({
+        permissionMode,
+        approvalPolicy,
+      });
+      await React.act(async () =>
+        root.render(
+          React.createElement(PermissionSelect, {
+            value: presentation.permissionMode!,
+            legacyApproval:
+              presentation.permissionLabel === i18n.t("shell:approvalRequired"),
+            disabled: false,
+          }),
+        ),
+      );
+      const trigger = document.querySelector<HTMLButtonElement>(
+        '[aria-label="File permissions"]',
+      )!;
+      assert.equal(trigger.textContent, label);
+      assert.equal(trigger.disabled, true);
+      await React.act(async () => trigger.click());
+      assert.equal(document.querySelector('[role="menu"]'), null);
+    }
+  } finally {
+    await React.act(async () => root.unmount());
+    Object.assign(globalThis, previous);
+    dom.window.close();
+  }
+});
