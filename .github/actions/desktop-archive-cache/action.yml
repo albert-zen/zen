@@ -1,0 +1,75 @@
+name: Verified desktop archive cache
+description: Restore or save only pinned, complete Electron and RTK archives
+inputs:
+  phase:
+    description: restore before npm ci; save after archive consumers
+    required: true
+  electron-cache-hit:
+    description: Transport hit from the restore invocation (not byte validation)
+    default: "false"
+  rtk-cache-hit:
+    description: Transport hit from the restore invocation (not byte validation)
+    default: "false"
+outputs:
+  electron-cache-hit:
+    description: Exact Actions cache key hit; archive bytes are independently checked
+    value: ${{ steps.electron-restore.outputs.cache-hit || 'false' }}
+  rtk-cache-hit:
+    description: Exact Actions cache key hit; archive bytes are independently checked
+    value: ${{ steps.rtk-restore.outputs.cache-hit || 'false' }}
+runs:
+  using: composite
+  steps:
+    - name: Plan pinned archive identities before installation
+      id: plan
+      if: ${{ !cancelled() }}
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        ARCHIVE_PHASE: ${{ inputs.phase }}
+      run: |
+        if [[ "$ARCHIVE_PHASE" != restore && "$ARCHIVE_PHASE" != save ]]; then
+          echo '::error::Expected restore or save archive phase'
+          exit 1
+        fi
+        node scripts/desktop-archive-cache.mjs plan
+    - name: Restore exact Electron ZIP
+      id: electron-restore
+      if: ${{ !cancelled() && steps.plan.outcome == 'success' && inputs.phase == 'restore' }}
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.plan.outputs.electron-path }}
+        key: ${{ steps.plan.outputs.electron-key }}
+    - name: Restore exact RTK tarball on its supported target
+      id: rtk-restore
+      if: ${{ !cancelled() && steps.plan.outcome == 'success' && inputs.phase == 'restore' && steps.plan.outputs.rtk-enabled == 'true' }}
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.plan.outputs.rtk-path }}
+        key: ${{ steps.plan.outputs.rtk-key }}
+    - name: Independently verify restored bytes before any consumer
+      if: ${{ !cancelled() && steps.plan.outcome == 'success' && inputs.phase == 'restore' }}
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        DESKTOP_ELECTRON_CACHE_HIT: ${{ steps.electron-restore.outputs.cache-hit || 'false' }}
+        DESKTOP_RTK_CACHE_HIT: ${{ steps.rtk-restore.outputs.cache-hit || 'false' }}
+      run: node scripts/desktop-archive-cache.mjs restored
+    - name: Verify exact archive bytes and installed checksum authority before saving
+      id: verified
+      if: ${{ !cancelled() && steps.plan.outcome == 'success' && inputs.phase == 'save' }}
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: node scripts/desktop-archive-cache.mjs save
+    - name: Save verified Electron ZIP only
+      if: ${{ !cancelled() && steps.plan.outcome == 'success' && inputs.phase == 'save' && steps.verified.outcome == 'success' && steps.verified.outputs.electron-verified == 'true' && inputs.electron-cache-hit != 'true' }}
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ steps.plan.outputs.electron-path }}
+        key: ${{ steps.plan.outputs.electron-key }}
+    - name: Save verified RTK tarball only
+      if: ${{ !cancelled() && steps.plan.outcome == 'success' && inputs.phase == 'save' && steps.verified.outcome == 'success' && steps.verified.outputs.rtk-verified == 'true' && inputs.rtk-cache-hit != 'true' }}
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ steps.plan.outputs.rtk-path }}
+        key: ${{ steps.plan.outputs.rtk-key }}

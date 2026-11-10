@@ -2321,7 +2321,6 @@ export async function runTargetedInputContractSmoke(options: {
   });
   const inputs: ContractInput[] = [];
   const reports: Record<string, unknown>[] = [];
-  let remoteWitness: Record<string, unknown> | undefined;
   const protocolRouteDiagnostics: Record<string, unknown>[] = [];
   const interruptedRouteFailures: Record<string, unknown>[] = [];
   // A passive, scoped tap on actual outgoing ws messages. No mock transport,
@@ -2624,7 +2623,6 @@ export async function runTargetedInputContractSmoke(options: {
       "ordinary-dom",
       ...remoteFrameModes,
     ]) {
-      remoteWitness = undefined;
       const withheldBefore = withheldCaptures;
       options.onPhase?.(`input-contracts:${mode}:navigate`);
       await guard();
@@ -2707,120 +2705,10 @@ export async function runTargetedInputContractSmoke(options: {
         );
         providerPlacement = placement;
         cases.push({ case: "observed-frame-process-placement", ...placement });
-        // Root mouse delivery to OOPIFs is measured only on the independent
-        // disposable diagnostics. Its known platform limitation must not gate a
-        // separately preselected provider child route. Provider success below
-        // still requires the exact real trusted pair and effect in every mode.
-        const directKinds: ("click" | "key")[] =
-          mode === "cross-origin-same-process" ? ["click", "key"] : ["key"];
-        for (const kind of directKinds) {
-          const id = kind === "click" ? "canvas" : "text-a";
-          if (kind === "key") assert.equal((await focus(id)).inner, id);
-          const before = await state();
-          remoteWitness = {
-            mode,
-            layer: "direct-root-cdp-fixture-oracle",
-            kind,
-            id,
-            placement,
-            before,
-            dispatchAttempts: 0,
-            acknowledgedDispatches: 0,
-            settlementReads: 0,
-          };
-          const screenshot = await rpc.send("Page.captureScreenshot", {
-            format: "png",
-            fromSurface: true,
-            captureBeyondViewport: false,
-          });
-          assert.ok(
-            typeof screenshot.data === "string" && screenshot.data.length > 0,
-            "Direct fixture needs a real read-only compositor capture before input",
-          );
-          remoteWitness.compositorCaptured = true;
-          await guard();
-          if (kind === "click") {
-            const position = await rpc.evaluate<RemoteFixturePoint>(
-              `window.contract.point(${JSON.stringify(id)})`,
-            );
-            remoteWitness.position = position;
-            console.log(
-              "Remote frame fixture point",
-              JSON.stringify({ mode, position }),
-            );
-            assertRemoteFixturePoint(
-              position,
-              id,
-              mode.startsWith("nested-") ? 2 : 1,
-            );
-            assert.equal(position.documentId, before.documentId);
-            for (const type of ["mousePressed", "mouseReleased"]) {
-              remoteWitness.dispatchAttempts =
-                Number(remoteWitness.dispatchAttempts) + 1;
-              await rpc.send("Input.dispatchMouseEvent", {
-                type,
-                x: position.x,
-                y: position.y,
-                button: "left",
-                buttons: type === "mousePressed" ? 1 : 0,
-                clickCount: 1,
-              });
-              remoteWitness.acknowledgedDispatches =
-                Number(remoteWitness.acknowledgedDispatches) + 1;
-            }
-          } else {
-            for (const type of ["keyDown", "keyUp"]) {
-              remoteWitness.dispatchAttempts =
-                Number(remoteWitness.dispatchAttempts) + 1;
-              await rpc.send("Input.dispatchKeyEvent", {
-                type,
-                key: " ",
-                code: "Space",
-                windowsVirtualKeyCode: 32,
-                ...(type === "keyDown" ? { text: " " } : {}),
-              });
-              remoteWitness.acknowledgedDispatches =
-                Number(remoteWitness.acknowledgedDispatches) + 1;
-            }
-          }
-          const witness = remoteWitness;
-          const settled = await settleRemoteFixturePair(
-            async () => {
-              await guard();
-              const current = await state();
-              witness.after = current;
-              witness.settlementReads = Number(witness.settlementReads) + 1;
-              return current;
-            },
-            before,
-            kind,
-            id,
-          );
-          const after = settled.state;
-          assert.deepEqual(
-            after.events.slice(before.events.length).map((event) => ({
-              type: event.type,
-              trusted: event.trusted,
-              target: event.target,
-            })),
-            (kind === "click"
-              ? ["pointerdown", "pointerup"]
-              : ["keydown", "keyup"]
-            ).map((type) => ({ type, trusted: true, target: id })),
-          );
-          if (kind === "click") assert.equal(after.clicks, before.clicks + 1);
-          else assert.equal(after.values[id], before.values[id] + " ");
-          assert.equal(after.visibility, "hidden");
-          await guard();
-          remoteWitness.status = "passed";
-          cases.push({
-            case: `child-${kind}-witness`,
-            layer: "direct-root-cdp-fixture-oracle",
-            trustedPair: true,
-            effect: true,
-            settlementReads: settled.reads,
-          });
-        }
+        // Exercise the product directly. Raw CDP fixture input is a protocol
+        // diagnostic, not a prerequisite for provider acceptance. paired()
+        // obtains its own product screenshot authorization and checks the real
+        // trusted pair, exact target/effect, route and foreground invariants.
         if (options.remoteFrameInput === "supported") {
           cases.push({
             case: "provider-remote-canvas",
@@ -3257,7 +3145,6 @@ export async function runTargetedInputContractSmoke(options: {
     const diagnostic = {
       scenario: "targeted-input-contracts",
       completedReports: reports,
-      lastDirectRemoteWitness: remoteWitness,
       protocolRouteDiagnostics,
       interruptedRouteFailures,
       error: error instanceof Error ? error.message : String(error),

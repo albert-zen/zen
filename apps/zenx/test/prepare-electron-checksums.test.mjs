@@ -118,3 +118,55 @@ test("locked @electron/get validates warm ZIPs with package checksums and makes 
     "package.json",
   ]);
 });
+
+test("installer and packager share the explicit root and the planned upstream ZIP layout", async (t) => {
+  const f = await fixture(t);
+  const cacheRoot = path.join(f.root, "shared-cache");
+  const options = await electronDownloadOptions({ ...f.options, cacheRoot });
+  assert.equal(options.cacheRoot, cacheRoot);
+  const installer = await readFile(
+    new URL("../../../node_modules/electron/install.js", import.meta.url),
+    "utf8",
+  );
+  assert.match(installer, /cacheRoot: process\.env\.electron_config_cache/u);
+  let requests = 0;
+  const download = {
+    ...options,
+    version: ELECTRON_VERSION,
+    platform: "darwin",
+    arch: "arm64",
+    artifactName: "electron",
+    downloader: {
+      async download(_url, target) {
+        requests++;
+        await writeFile(target, bytes);
+      },
+    },
+  };
+  const file = await downloadArtifact(download);
+  const urlDirectory = `https://github.com/electron/electron/releases/download/v${ELECTRON_VERSION}`;
+  assert.equal(
+    file,
+    path.join(
+      cacheRoot,
+      createHash("sha256").update(urlDirectory).digest("hex"),
+      artifactName,
+    ),
+  );
+  // The second independently constructed consumer reuses and validates that ZIP.
+  assert.equal(
+    await downloadArtifact({
+      ...download,
+      ...(await electronDownloadOptions({ ...f.options, cacheRoot })),
+    }),
+    file,
+  );
+  assert.equal(requests, 1);
+  assert.equal(
+    (await electronDownloadOptions({ ...f.options, cacheRoot: undefined }))
+      .cacheRoot,
+    process.env.electron_config_cache
+      ? path.resolve(process.env.electron_config_cache)
+      : undefined,
+  );
+});
