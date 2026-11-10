@@ -2065,14 +2065,17 @@ function ThreadViewContent({
         composer.focus({ preventScroll: true });
     });
   };
-  const composerError =
+  const composerBlockingError =
     interruptError ??
     attachmentError ??
-    (blockedByImageCapability ? imageCapabilityError : null) ??
-    (composer.submission?.draftRevision === composer.draftRevision
+    (blockedByImageCapability ? imageCapabilityError : null);
+  const submissionError =
+    composer.submission?.draftRevision === composer.draftRevision
       ? composer.submission.error
-      : null) ??
-    modelError;
+      : null;
+  const showSubmissionError =
+    composerBlockingError === null && submissionError != null;
+  const composerError = composerBlockingError ?? submissionError ?? modelError;
 
   // Composer updates reuse the actual transcript elements, not just TurnBlock bodies.
   const renderedTranscriptRows = useMemo(
@@ -3073,7 +3076,18 @@ function ThreadViewContent({
               />
             </div>
           </div>
-          {composerError !== null ? (
+          {showSubmissionError ? (
+            <div
+              className="composer-error composer-submission-error"
+              id={modelError === null ? undefined : `${composerId}-model-error`}
+            >
+              <p role="alert">{i18n.t("shell:composerSendError")}</p>
+              <details className="composer-error-details">
+                <summary>{i18n.t("shell:technicalDetails")}</summary>
+                <pre tabIndex={0}>{submissionError}</pre>
+              </details>
+            </div>
+          ) : composerError !== null ? (
             <p
               className="composer-error"
               id={modelError === null ? undefined : `${composerId}-model-error`}

@@ -2978,6 +2978,42 @@ button:disabled {
   font-size: var(--font-size-caption);
 }
 
+.composer-submission-error > p {
+  margin: 0;
+}
+.composer-error-details {
+  color: var(--text-secondary);
+}
+.composer-error-details summary {
+  display: list-item;
+  width: fit-content;
+  max-width: 100%;
+  padding: 6px 0;
+  cursor: pointer;
+}
+.composer-error-details pre {
+  max-height: min(240px, 30dvh);
+  overflow: auto;
+  margin: 4px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-wash);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.composer-error-details summary:focus-visible,
+.composer-error-details pre:focus-visible {
+  outline: 1px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+@media (pointer: coarse), (max-width: 480px) {
+  .composer-error-details summary {
+    min-height: 44px;
+    align-content: center;
+  }
+}
+
 .image-preview-layer {
   position: fixed;
   inset: 0;

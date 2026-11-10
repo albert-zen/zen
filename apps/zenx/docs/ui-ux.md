@@ -1227,3 +1227,15 @@ Question information cards show the default open request heading once, while ret
 Healthy question cards have no manual refresh action. Native/Room question events, connection recovery and returning to the app refresh the list automatically; transient read failures receive at most two delayed retries (1s, 3s). Read failure appears as one compact row: “Loading failed” beside a reload-icon “Retry” button with an explicit accessible name. It does not expose technical details in the card. Recovery only reads lists, keeps independent drafts and uncertain response identities, and retires when the view changes or unmounts.
 
 Question draft-storage limitations appear only as a collapsed, keyboard-accessible disclosure when the current card has editable unsent content. Empty drafts and sending, unconfirmed, accepted or terminal responses do not display an unsent-draft warning. This presentation change does not add persistence or alter answer recovery authority.
+
+### Composer submission error hierarchy
+
+An existing submission error selected by the Composer's unchanged error priority
+shows a localized “Send encountered an error.” alert and a collapsed, keyboard-
+accessible Technical details disclosure containing the complete original error as
+plain text. Diagnostics wrap and scroll locally rather than dominating the
+Composer. The summary does not assert non-delivery, preserved drafts, recovery or
+retry safety. Interrupt, attachment, capability and model errors retain their
+existing presentation; ordinary pending-send unknown-delivery warnings and
+recovery controls are unchanged. This is presentation only: no new request,
+retry, admission classification, draft mutation, empty-state or title change.

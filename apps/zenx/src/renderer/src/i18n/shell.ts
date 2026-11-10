@@ -845,6 +845,7 @@ export const en = {
   summaryCopied: "Summary copied",
   switchProject: "Switch Project",
   technicalDetails: "Technical details",
+  composerSendError: "Send encountered an error.",
   text: "Text",
   textOnly: "Text only",
   theActiveTurnChangedBeforeReplacement:
@@ -1925,6 +1926,7 @@ export const zhCN = {
   summaryCopied: "摘要已复制",
   switchProject: "切换项目",
   technicalDetails: "技术详情",
+  composerSendError: "发送时发生错误。",
   text: "文本",
   textOnly: "仅文本",
   theActiveTurnChangedBeforeReplacement: "替换当前执行前轮次已变化",

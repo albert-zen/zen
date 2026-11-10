@@ -453,11 +453,22 @@ for (const outcome of ["accepted", "rejected", "navigated"] as const) {
             ?.value,
           outcome === "rejected" ? "Wait for first-message confirmation" : "",
         );
-        if (outcome === "rejected")
-          assert.match(
-            document.querySelector(".composer-error")?.textContent ?? "",
-            /Admission rejected/,
+        if (outcome === "rejected") {
+          const error = document.querySelector(".composer-error")!;
+          assert.equal(
+            error.querySelector('[role="alert"]')?.textContent,
+            "Send encountered an error.",
           );
+          const details = error.querySelector("details")!;
+          assert.equal(details.open, false);
+          assert.equal(
+            details.querySelector("pre")?.textContent,
+            "Admission rejected",
+          );
+          await act(async () => details.querySelector("summary")?.click());
+          assert.equal(details.open, true);
+          assert.equal(sends, 1, "opening diagnostics never retries input");
+        }
       }
       assert.equal(creates, 1);
       assert.equal(sends, 1, "feedback never dispatches or retries input");

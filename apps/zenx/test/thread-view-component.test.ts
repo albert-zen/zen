@@ -161,6 +161,8 @@ test("new-thread execution context can sit beneath input while existing conversa
 test("promoted first Send pending feedback is localized and follows existing admission or failure", async () => {
   const { i18n } = await import("../src/renderer/src/i18n.js");
   const previousLanguage = i18n.language;
+  const rawError =
+    "Error invoking remote method 'zenx:protocol:request': ZenXProtocolError: Admission rejected";
   const pending = beginComposerSubmission(
     editComposer(emptyComposerState(), "Keep the first draft"),
     "start",
@@ -198,13 +200,7 @@ test("promoted first Send pending feedback is localized and follows existing adm
         assert.equal(document.querySelector(".turn"), null);
 
         await act(async () =>
-          show(
-            failComposerSubmission(
-              pending,
-              "first-send-client",
-              "Admission rejected",
-            ),
-          ),
+          show(failComposerSubmission(pending, "first-send-client", rawError)),
         );
         assert.equal(
           document.querySelector('.thread-empty[role="status"]'),
@@ -214,9 +210,35 @@ test("promoted first Send pending feedback is localized and follows existing adm
           requiredElement(".composer-error").textContent ?? "",
           /Admission rejected/,
         );
+        const error = requiredElement(".composer-error");
+        assert.equal(
+          error.querySelector('[role="alert"]')?.textContent,
+          language === "en" ? "Send encountered an error." : "发送时发生错误。",
+        );
+        const details = error.querySelector("details")!;
+        assert.equal(details.open, false);
+        assert.equal(details.querySelector("pre")?.textContent, rawError);
+        assert.equal(details.querySelector("pre")?.tabIndex, 0);
+        assert.equal(
+          details.querySelector("summary")?.textContent,
+          language === "en" ? "Technical details" : "技术详情",
+        );
         assert.equal(
           requiredElement<HTMLTextAreaElement>("textarea").value,
           "Keep the first draft",
+        );
+        await act(async () =>
+          show(
+            editComposer(
+              failComposerSubmission(pending, "first-send-client", rawError),
+              "Newer draft",
+            ),
+          ),
+        );
+        assert.equal(document.querySelector(".composer-error"), null);
+        assert.equal(
+          requiredElement<HTMLTextAreaElement>("textarea").value,
+          "Newer draft",
         );
 
         await act(async () =>
@@ -256,6 +278,72 @@ test("promoted first Send pending feedback is localized and follows existing adm
   } finally {
     await i18n.changeLanguage(previousLanguage);
   }
+});
+
+test("submission disclosure preserves model errors and ordinary unknown delivery", async () => {
+  await withDom(async (root) => {
+    const pending = beginComposerSubmission(
+      editComposer(emptyComposerState(), "Original draft"),
+      "start",
+      null,
+      () => "failed-client",
+    );
+    const failed = failComposerSubmission(
+      pending,
+      "failed-client",
+      "Raw submission failure",
+    );
+    const show = (composer: ComposerState) =>
+      root.render(
+        createElement(ThreadView, {
+          thread: thread([]),
+          approvals: [],
+          composer,
+          modelError: "Model unavailable",
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      );
+    await act(async () => show(failed));
+    assert.equal(
+      requiredElement(".composer-error pre").textContent,
+      "Raw submission failure",
+    );
+    assert.equal(document.querySelectorAll(".composer-error").length, 1);
+    await act(async () => show(editComposer(failed, "Newer draft")));
+    assert.equal(
+      requiredElement('.composer-error[role="alert"]').textContent,
+      "Model unavailable",
+    );
+    assert.equal(document.querySelector(".composer-error details"), null);
+    const immediate = beginImmediateComposerSubmission(
+      editComposer(emptyComposerState(), "Uncertain message"),
+      "start",
+      null,
+      () => "unknown-client",
+    );
+    await act(async () =>
+      show(
+        failImmediateComposerSubmission(
+          immediate,
+          "unknown-client",
+          "Response lost",
+          true,
+        ),
+      ),
+    );
+    const recovery = requiredElement('[data-send-state="unconfirmed"]');
+    assert.match(recovery.textContent ?? "", /Delivery not confirmed/);
+    assert.match(recovery.textContent ?? "", /may already have been accepted/);
+    assert.equal(recovery.querySelector("pre")?.textContent, "Response lost");
+    assert.doesNotMatch(
+      recovery.textContent ?? "",
+      /Not sent|Send encountered an error/,
+    );
+    assert.equal(document.querySelector(".composer-submission-error"), null);
+  });
 });
 
 test("first Send pending feedback does not replace local creation, side-chat context or ordinary Sending rows", () => {
