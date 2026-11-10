@@ -1510,6 +1510,29 @@ button:disabled {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.thread-heading-metadata {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--text-3);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--font-size-caption);
+}
+.thread-heading-cwd,
+.thread-heading-source {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thread-heading-cwd {
+  flex: 1 1 auto;
+}
+.thread-heading-source {
+  flex: 0 0 auto;
+  max-width: 60%;
+}
 .thread-source-link {
   padding: 0;
   border: 0;

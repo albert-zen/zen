@@ -5367,32 +5367,43 @@ function ConversationTitleBar({
               title={threadTitle(selectedSummary)}
             />
           </div>
-          <span>
-            {selectedSummary.status === "systemError"
-              ? i18n.t("shell:unavailableJournal")
-              : selectedSummary.currentMetadata.cwd}
+          <div className="thread-heading-metadata">
+            <span
+              className="thread-heading-cwd"
+              title={
+                selectedSummary.status === "systemError"
+                  ? i18n.t("shell:unavailableJournal")
+                  : selectedSummary.currentMetadata.cwd
+              }
+            >
+              {selectedSummary.status === "systemError"
+                ? i18n.t("shell:unavailableJournal")
+                : selectedSummary.currentMetadata.cwd}
+            </span>
             {threadDetail?.forkedFromId === null ||
             threadDetail?.forkedFromId === undefined ? null : sourceSummary ===
               undefined ? (
-              <>
-                {" · "}
+              <span
+                className="thread-heading-source"
+                title={i18n.t("shell:copiedFromUnavailableSource")}
+              >
                 {i18n.t("shell:copiedFromUnavailableSource")}
-              </>
+              </span>
             ) : (
-              <>
-                {" · "}
-                <button
-                  className="thread-source-link"
-                  type="button"
-                  onClick={() => onOpenSource(sourceSummary.threadId)}
-                >
-                  {i18n.t("shell:copiedFrom", {
-                    name: threadTitle(sourceSummary),
-                  })}
-                </button>
-              </>
+              <button
+                className="thread-heading-source thread-source-link"
+                type="button"
+                title={i18n.t("shell:copiedFrom", {
+                  name: threadTitle(sourceSummary),
+                })}
+                onClick={() => onOpenSource(sourceSummary.threadId)}
+              >
+                {i18n.t("shell:copiedFrom", {
+                  name: threadTitle(sourceSummary),
+                })}
+              </button>
             )}
-          </span>
+          </div>
         </div>
       </div>
     </div>
