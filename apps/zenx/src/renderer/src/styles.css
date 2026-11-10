@@ -1747,7 +1747,7 @@ button:disabled {
   gap: 8px;
   margin: 0;
   padding: 0 14px 8px;
-  color: var(--text-3);
+  color: var(--color-text-secondary);
   font-size: 12px;
   line-height: 1.5;
 }
@@ -7111,6 +7111,11 @@ button:disabled {
 .permission-trigger {
   max-width: none;
   flex-shrink: 0;
+}
+.permission-trigger.permission-readonly:disabled {
+  color: var(--color-text-secondary);
+  opacity: 1;
+  cursor: default;
 }
 .permission-trigger > svg {
   flex-shrink: 0;

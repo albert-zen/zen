@@ -72,5 +72,6 @@ test("App captures permissions in the boundary read and passes display-only prop
     render,
     /\{\.\.\.permissionPresentation\(draft.inheritedPermissions\)\}/u,
   );
+  assert.match(render, /permissionDisplayOnly/u);
   assert.doesNotMatch(render.split("onSubmit=")[0], /onPermissionChange=/u);
 });

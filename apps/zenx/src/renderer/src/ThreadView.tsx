@@ -399,6 +399,7 @@ interface ThreadViewProps {
   models?: readonly ModelSummary[];
   permissionLabel?: string | null;
   permissionMode?: FilePermissionMode;
+  permissionDisplayOnly?: boolean;
   permissionError?: string | null;
   switchingPermission?: boolean;
   onPermissionChange?(mode: FilePermissionMode): void;
@@ -670,6 +671,7 @@ function ThreadViewContent({
   models = [],
   permissionLabel = i18n.t("shell:fullAccess"),
   permissionMode = "danger-full-access",
+  permissionDisplayOnly = false,
   permissionError,
   switchingPermission,
   onPermissionChange,
@@ -3049,6 +3051,7 @@ function ThreadViewContent({
                     permissionLabel === i18n.t("shell:approvalRequired")
                   }
                   value={permissionMode}
+                  displayOnly={permissionDisplayOnly}
                   disabled={
                     runningTurn !== null ||
                     composerDisabled ||
@@ -4938,7 +4941,12 @@ function InputMessage({
             kind: "thread",
             id: item.sender.threadId,
             ...(item.sender.deviceId === undefined
-              ? {}
+              ? {
+                  sourceTool: {
+                    itemId: item.sender.toolCallId,
+                    callId: item.sender.callId,
+                  },
+                }
               : {
                   deviceId: item.sender.deviceId,
                   itemId: item.id,

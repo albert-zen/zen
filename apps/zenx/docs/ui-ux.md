@@ -757,6 +757,8 @@ Triggers use the existing clock artwork throughout navigation, workspace tabs an
 
 The Subagents panel keeps one-click inherited side-chat drafting and offers a compact model-settings action beside it. Model and reasoning overrides are local to that parent's creation form, use the current Host catalog, and apply atomically before the child becomes visible. Omitted values retain native inheritance/default semantics; a model change clears a stale effort choice. Opening fixes the parent context boundary in renderer memory; first valid Send atomically creates the configured child before delivery. Closing an unsent draft leaves no Thread. The workspace launcher plus remains the inherited one-click drafting action.
 
+The unsent Side chat preview helper and fixed inherited permission label use secondary text contrast in both themes. The inherited label keeps its accessible File permissions name and disabled semantics, but has no dropdown chevron or menu affordance; it is not a permission editor. Unknown/loading snapshots remain hidden. This treatment is scoped to the preview, not all disabled Composer controls.
+
 ### Browser operation previews in the unified workspace (2026-11-02)
 
 Browser Use shares the existing workspace tab rail. An actual Agent operation automatically reveals and selects its exact page without moving keyboard or OS focus. Discovery alone does not create a preview. Repeated operations on one native target reuse one tab, including an already-open human page; URLs and titles never merge distinct targets. Connected-page observation is an adapter behind this same interaction, not a second workspace type or a required launcher choice.
@@ -1265,3 +1267,14 @@ error alert and complete raw diagnostic disclosure. Pending, accepted, edited,
 ordinary immediate-send and higher-priority error presentations are unchanged.
 The cue asserts neither non-delivery nor retry safety, promises no retained draft,
 and adds no request, classification, recovery action or title change.
+
+### Local agent message source inspection
+
+A received local agent message opens its sender Thread and, when the exact canonical
+sending tool item and call identity remain available, materializes and expands that
+item with the existing brief source highlight. Sending-tool identities are separate
+from delivered-message receipt identities. Missing or mismatched tool provenance
+keeps the existing sender-Thread navigation without guessing another item from text,
+a tool name or a same-name Thread. Remote return-bound source inspection and outgoing
+View sent message links retain their existing routes. Navigation remains read-only;
+owner changes and newer navigation retire stale reads and disclosure work.

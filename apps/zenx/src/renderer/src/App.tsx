@@ -23,7 +23,10 @@ import {
 } from "./compaction-feedback.js";
 import { EditableInformationPanel } from "./EditableInformationPanel.js";
 import { PluginInformationHost } from "./plugin-information-host.js";
-import { resolveDeliveredMessage } from "./tool-action-targets.js";
+import {
+  resolveDeliveredMessage,
+  resolveSourceTool,
+} from "./tool-action-targets.js";
 import type { MessageTargetRequest } from "./message-target-navigation.js";
 import { unwrapCompactionIpcReply } from "../../preload/compaction-ipc.js";
 import type { ClientSendObservation } from "../../../../../src/client-observation.js";
@@ -3398,15 +3401,21 @@ function AppContent() {
       throw new Error(i18n.t("shell:sourceThreadUnavailable"));
     if (result.thread.archived)
       throw new Error(i18n.t("shell:sourceThreadArchived"));
-    const message = target.itemId
-      ? target.excerpt !== undefined
-        ? result.thread.items.some(
-            (item) => item.id === target.itemId && item.threadId === target.id,
-          )
-          ? { itemId: target.itemId }
-          : "missing"
-        : resolveDeliveredMessage(result.thread.items, target.itemId)
+    const sourceTool = target.sourceTool
+      ? resolveSourceTool(result.thread.items, target.id, target.sourceTool)
       : undefined;
+    const message = target.sourceTool
+      ? sourceTool
+      : target.itemId
+        ? target.excerpt !== undefined
+          ? result.thread.items.some(
+              (item) =>
+                item.id === target.itemId && item.threadId === target.id,
+            )
+            ? { itemId: target.itemId }
+            : "missing"
+          : resolveDeliveredMessage(result.thread.items, target.itemId)
+        : undefined;
     if (message === "missing")
       throw new Error(i18n.t("shell:toolMessageMissing"));
     if (message === "cancelled")
@@ -3424,6 +3433,7 @@ function AppContent() {
         threadId: target.id,
         itemId: message.itemId,
         requestId: intent,
+        ...(sourceTool ? { sourceTool: true } : {}),
         ...(target.excerpt !== undefined ? { excerpt: target.excerpt } : {}),
       });
   };
@@ -3968,6 +3978,7 @@ function AppContent() {
         thread={null}
         contextPreview={draft.contextPreview}
         {...permissionPresentation(draft.inheritedPermissions)}
+        permissionDisplayOnly
         emptyContent={
           <div className="thread-empty">
             <h2>{i18n.t("panels:sideChat")}</h2>
