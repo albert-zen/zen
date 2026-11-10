@@ -40,12 +40,15 @@ test("Browser full projection keeps literal text, exact private targets, native 
     ref(first.nextCursor);
     assert.equal(first.visibleText, LITERAL);
     assert.equal(first.targets[0].name, LITERAL);
+    assert.equal(first.targets[0].documentFocused, true);
+    assert.equal(first.targets[1].documentFocused, false);
     assert.equal(first.screenshot.artifactPath, "/literal/unchanged.png");
     assert.equal(JSON.stringify(first).includes("RAW-"), false);
     const next = await f.bridge.call("browser_workspace_inspect", {
       cursor: first.nextCursor,
     });
     assert.equal(next.targets.length, 10);
+    assert.equal(next.targets[0].documentFocused, false);
     assert.equal(next.observation, first.observation);
     assert.equal(f.calls.filter((c) => c.name === "inspect").length, 1);
     await f.bridge.call("browser_workspace_type", {

@@ -340,6 +340,9 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
         name: target.name,
         actions: [...target.actions],
         ...(target.value === undefined ? {} : { value: target.value }),
+        ...(target.documentFocused === undefined
+          ? {}
+          : { documentFocused: target.documentFocused }),
         ...(target.checked === undefined ? {} : { checked: target.checked }),
         ...(target.selected === undefined ? {} : { selected: target.selected }),
         ...(target.options === undefined

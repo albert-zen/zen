@@ -51,6 +51,7 @@ export function browserBackend(count = 90) {
           targetId: `RAW-native-node-${i}`,
           role: "button",
           name: i ? "Save" : LITERAL,
+          documentFocused: i === 0,
           actions: ["click" as const, "type" as const],
         })),
         screenshot: {
