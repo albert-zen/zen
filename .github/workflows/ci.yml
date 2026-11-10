@@ -103,10 +103,25 @@ jobs:
           git config --global
           url."git@github.com:albert-zen/im-agent-sdk.git".insteadOf
           "https://github.com/albert-zen/im-agent-sdk.git"
+      - name: Restore verified desktop archives
+        timeout-minutes: 5
+        id: desktop-archives
+        if: ${{ env.CI_RUN_FULL == 'true' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: restore
       - run: npm ci
         if: ${{ env.CI_RUN_FULL == 'true' }}
       - run: npm run check
         if: ${{ env.CI_RUN_FULL == 'true' }}
+      - name: Save verified desktop archives
+        timeout-minutes: 5
+        if: ${{ env.CI_RUN_FULL == 'true' && always() && steps.desktop-archives.outcome == 'success' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: save
+          electron-cache-hit: ${{ steps.desktop-archives.outputs.electron-cache-hit }}
+          rtk-cache-hit: ${{ steps.desktop-archives.outputs.rtk-cache-hit }}
       - name: Require successful workload selection
         if: ${{ always() }}
         working-directory: ${{ runner.temp }}
@@ -157,6 +172,13 @@ jobs:
           path: ${{ runner.temp }}/zenx-${{ github.job }}-provenance.json
           if-no-files-found: error
           retention-days: 14
+      - name: Restore verified desktop archives
+        timeout-minutes: 5
+        id: desktop-archives
+        if: ${{ env.CI_RUN_FULL == 'true' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: restore
       - run: npm ci
         if: ${{ env.CI_RUN_FULL == 'true' }}
         timeout-minutes: 5
@@ -204,6 +226,14 @@ jobs:
           else
             echo 'PR risk unit checks only. This stable check name does not mean the full aggregate, all tests or product build ran.' >> "$GITHUB_STEP_SUMMARY"
           fi
+      - name: Save verified desktop archives
+        timeout-minutes: 5
+        if: ${{ env.CI_RUN_FULL == 'true' && always() && steps.desktop-archives.outcome == 'success' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: save
+          electron-cache-hit: ${{ steps.desktop-archives.outputs.electron-cache-hit }}
+          rtk-cache-hit: ${{ steps.desktop-archives.outputs.rtk-cache-hit }}
       - name: Require successful workload selection
         if: ${{ always() }}
         working-directory: ${{ runner.temp }}
@@ -255,6 +285,13 @@ jobs:
           path: ${{ runner.temp }}/zenx-${{ github.job }}-${{ matrix.shard }}-provenance.json
           if-no-files-found: error
           retention-days: 14
+      - name: Restore verified desktop archives
+        timeout-minutes: 5
+        id: desktop-archives
+        if: ${{ env.CI_RUN_FULL == 'true' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: restore
       - run: npm ci
         if: ${{ env.CI_RUN_FULL == 'true' }}
         timeout-minutes: 5
@@ -568,6 +605,14 @@ jobs:
           retention-days: 14
 
       # Preserve the existing check name while requiring BOTH independent lanes.
+      - name: Save verified desktop archives
+        timeout-minutes: 5
+        if: ${{ env.CI_RUN_FULL == 'true' && always() && steps.desktop-archives.outcome == 'success' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: save
+          electron-cache-hit: ${{ steps.desktop-archives.outputs.electron-cache-hit }}
+          rtk-cache-hit: ${{ steps.desktop-archives.outputs.rtk-cache-hit }}
       - name: Require successful workload selection
         if: ${{ always() }}
         working-directory: ${{ runner.temp }}
@@ -630,6 +675,13 @@ jobs:
           # Never restore staging output or another runner's transaction locks.
           path: apps/zenx/.packaged/cache/artifacts/sha256/[0-9a-f]*
           key: zenx-provider-archives-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/zenx/resources/providers/provider-lock.json') }}
+      - name: Restore verified desktop archives
+        timeout-minutes: 5
+        id: desktop-archives
+        if: ${{ env.CI_RUN_FULL == 'true' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: restore
       - run: npm ci
         if: ${{ env.CI_RUN_FULL == 'true' }}
       - name: Exercise shared Shell PTY on macOS
@@ -653,7 +705,7 @@ jobs:
         if: ${{ env.CI_RUN_FULL == 'true' }}
         env:
           ZENX_COMPUTER_CONSTRUCTION_EVIDENCE: ${{ runner.temp }}/computer-event-construction.json
-        run: node --import tsx --test apps/zenx/test/computer-native-dispatch.test.ts apps/zenx/test/computer-native-construction.test.ts apps/zenx/test/computer-bound-native.test.ts apps/zenx/test/computer-app-keyboard-native.test.ts apps/zenx/test/computer-background-pointer-native.test.ts
+        run: node --import tsx --test apps/zenx/test/computer-native-dispatch.test.ts apps/zenx/test/computer-native-construction.test.ts apps/zenx/test/computer-bound-native.test.ts apps/zenx/test/computer-app-keyboard-native.test.ts apps/zenx/test/computer-background-pointer-native.test.ts apps/zenx/test/computer-app-desktop-fence.test.ts
       - name: Retain construction-only CoreGraphics metadata
         if: ${{ env.CI_RUN_FULL == 'true' && (always()) }}
         uses: actions/upload-artifact@v4
@@ -718,6 +770,14 @@ jobs:
           path: ${{ runner.temp }}/zenx-launch-path-evidence
           if-no-files-found: warn
           retention-days: 14
+      - name: Save verified desktop archives
+        timeout-minutes: 5
+        if: ${{ env.CI_RUN_FULL == 'true' && always() && steps.desktop-archives.outcome == 'success' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: save
+          electron-cache-hit: ${{ steps.desktop-archives.outputs.electron-cache-hit }}
+          rtk-cache-hit: ${{ steps.desktop-archives.outputs.rtk-cache-hit }}
       - name: Require successful workload selection
         if: ${{ always() }}
         working-directory: ${{ runner.temp }}
@@ -757,6 +817,13 @@ jobs:
       - name: Report WinApp CLI version
         if: ${{ env.CI_RUN_FULL == 'true' }}
         run: winapp --version
+      - name: Restore verified desktop archives
+        timeout-minutes: 5
+        id: desktop-archives
+        if: ${{ env.CI_RUN_FULL == 'true' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: restore
       - run: npm ci
         if: ${{ env.CI_RUN_FULL == 'true' }}
       - name: Exercise shared Shell ConPTY on Windows
@@ -788,6 +855,14 @@ jobs:
         run: node --import tsx --test --test-timeout=30000 apps/zenx/test/windows-smoke-phase.test.ts
       - run: npm --workspace apps/zenx run smoke:windows-computer
         if: ${{ env.CI_RUN_FULL == 'true' }}
+      - name: Save verified desktop archives
+        timeout-minutes: 5
+        if: ${{ env.CI_RUN_FULL == 'true' && always() && steps.desktop-archives.outcome == 'success' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: save
+          electron-cache-hit: ${{ steps.desktop-archives.outputs.electron-cache-hit }}
+          rtk-cache-hit: ${{ steps.desktop-archives.outputs.rtk-cache-hit }}
       - name: Require successful workload selection
         if: ${{ always() }}
         working-directory: ${{ runner.temp }}
@@ -847,6 +922,13 @@ jobs:
         with:
           path: apps/zenx/.packaged/cache/artifacts/sha256/[0-9a-f]*
           key: zenx-provider-archives-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/zenx/resources/providers/provider-lock.json') }}
+      - name: Restore verified desktop archives
+        timeout-minutes: 5
+        id: desktop-archives
+        if: ${{ env.CI_RUN_FULL == 'true' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: restore
       - run: npm ci
         if: ${{ env.CI_RUN_FULL == 'true' }}
       - name: Exercise Windows publish handle lifecycle and rollback
@@ -1077,6 +1159,14 @@ jobs:
             ${{ runner.temp }}/zenx-winapp-symbols/symbols-provenance.json
           if-no-files-found: warn
           retention-days: 14
+      - name: Save verified desktop archives
+        timeout-minutes: 5
+        if: ${{ env.CI_RUN_FULL == 'true' && always() && steps.desktop-archives.outcome == 'success' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: save
+          electron-cache-hit: ${{ steps.desktop-archives.outputs.electron-cache-hit }}
+          rtk-cache-hit: ${{ steps.desktop-archives.outputs.rtk-cache-hit }}
       - name: Require successful workload selection
         if: ${{ always() }}
         working-directory: ${{ runner.temp }}
@@ -1106,6 +1196,13 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Restore verified desktop archives
+        timeout-minutes: 5
+        id: desktop-archives
+        if: ${{ env.CI_RUN_FULL == 'true' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: restore
       - run: npm ci
         if: ${{ env.CI_RUN_FULL == 'true' }}
       - name: Install a pinned headed Chromium fixture
@@ -1146,6 +1243,14 @@ jobs:
           name: windows-browser-parallel-input
           path: ${{ runner.temp }}/zenx-parallel-input-evidence
           if-no-files-found: ignore
+      - name: Save verified desktop archives
+        timeout-minutes: 5
+        if: ${{ env.CI_RUN_FULL == 'true' && always() && steps.desktop-archives.outcome == 'success' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: save
+          electron-cache-hit: ${{ steps.desktop-archives.outputs.electron-cache-hit }}
+          rtk-cache-hit: ${{ steps.desktop-archives.outputs.rtk-cache-hit }}
       - name: Require successful workload selection
         if: ${{ always() }}
         working-directory: ${{ runner.temp }}
@@ -1175,6 +1280,13 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Restore verified desktop archives
+        timeout-minutes: 5
+        id: desktop-archives
+        if: ${{ env.CI_RUN_FULL == 'true' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: restore
       - run: npm ci
         if: ${{ env.CI_RUN_FULL == 'true' }}
       - name: Verify native Electron Trace frame ownership
@@ -1269,6 +1381,14 @@ jobs:
           name: macos-browser-parallel-input
           path: ${{ runner.temp }}/zenx-parallel-input-evidence
           if-no-files-found: ignore
+      - name: Save verified desktop archives
+        timeout-minutes: 5
+        if: ${{ env.CI_RUN_FULL == 'true' && always() && steps.desktop-archives.outcome == 'success' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: save
+          electron-cache-hit: ${{ steps.desktop-archives.outputs.electron-cache-hit }}
+          rtk-cache-hit: ${{ steps.desktop-archives.outputs.rtk-cache-hit }}
       - name: Require successful workload selection
         if: ${{ always() }}
         working-directory: ${{ runner.temp }}
@@ -1320,6 +1440,13 @@ jobs:
         if: ${{ env.CI_RUN_FULL == 'true' }}
       - run: npm run typecheck
         if: ${{ env.CI_RUN_FULL == 'true' }}
+      - name: Restore verified desktop archives
+        timeout-minutes: 5
+        id: desktop-archives
+        if: ${{ env.CI_RUN_FULL == 'true' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: restore
       - run: npm ci
         if: ${{ env.CI_RUN_FULL == 'true' }}
         working-directory: .
@@ -1345,6 +1472,14 @@ jobs:
           name: zenx-mobile-integration-debug-apk
           path: apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+      - name: Save verified desktop archives
+        timeout-minutes: 5
+        if: ${{ env.CI_RUN_FULL == 'true' && always() && steps.desktop-archives.outcome == 'success' }}
+        uses: ./.github/actions/desktop-archive-cache
+        with:
+          phase: save
+          electron-cache-hit: ${{ steps.desktop-archives.outputs.electron-cache-hit }}
+          rtk-cache-hit: ${{ steps.desktop-archives.outputs.rtk-cache-hit }}
       - name: Require successful workload selection
         if: ${{ always() }}
         working-directory: ${{ runner.temp }}
