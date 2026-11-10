@@ -3,183 +3,141 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import test from "node:test";
 import ts from "typescript";
+
 const source = readFileSync(
   new URL("../src/main/browser-parallel-input-smoke.ts", import.meta.url),
   "utf8",
 );
-const start = source.indexOf("        for (const kind of directKinds)");
-const end = source.indexOf(
-  '        if (options.remoteFrameInput === "supported")',
-  start,
-);
+const start = source.indexOf("  const paired = async (");
+const end = source.indexOf("  const rejected = async (", start);
 assert.ok(start > 0 && end > start);
-function witness(mode, kind, fault) {
-  const sends = [];
-  let guardCalls = 0,
-    read = 0;
+
+test("product acceptance has no direct-CDP fixture oracle prerequisite", () => {
+  assert.ok(!source.includes("direct-root-cdp-fixture-oracle"));
+  assert.ok(!source.includes("directKinds"));
+  const paired = source.slice(start, end);
+  assert.match(paired, /await inspect\(\)/);
+  assert.match(paired, /backend\.pointerClick!/);
+  assert.match(paired, /backend\.keyPress!/);
+  assert.ok(!paired.includes("rpc.send"));
+  assert.match(source, /case: "provider-remote-canvas"/);
+  assert.match(source, /case: "provider-remote-text"/);
+});
+
+function exercise(kind, fault) {
+  const inputs = [];
+  const calls = [];
+  const id = kind === "click" ? "canvas" : "text-a";
   const before = {
+    mode: "cross-origin-same-process",
     events: [],
-    values: { "text-a": "" },
     clicks: 0,
-    visibility: "hidden",
-    documentId: "same-document",
+    values: { "text-a": "" },
   };
-  const eventTypes =
-    kind === "click" ? ["pointerdown", "pointerup"] : ["keydown", "keyup"];
   const after = {
     ...before,
-    events: eventTypes.map((type) => ({
+    events: (kind === "click"
+      ? ["pointerdown", "pointerup"]
+      : ["keydown", "keyup"]
+    ).map((type) => ({
       type,
       trusted: fault !== "untrusted",
-      target:
-        fault === "wrong-target"
-          ? "other"
-          : kind === "click"
-            ? "canvas"
-            : "text-a",
+      target: fault === "wrong-target" ? "other" : id,
     })),
-    values: { "text-a": fault === "wrong-effect" ? "" : " " },
     clicks: fault === "wrong-effect" ? 0 : 1,
-    visibility: fault === "visible" ? "visible" : "hidden",
+    values: { "text-a": fault === "wrong-effect" ? "" : " " },
   };
-  const script = `(async () => { let remoteWitness; const cases = []; ${source.slice(start, end)}; return {remoteWitness,cases}; })()`;
+  let reads = 0;
+  const dispatch = async (...args) => {
+    calls.push({ kind, args });
+    if (fault === "unknown") throw new Error("unknown input outcome");
+    for (const type of kind === "click"
+      ? ["mousePressed", "mouseReleased"]
+      : ["keyDown", "keyUp"])
+      inputs.push({
+        type,
+        method:
+          kind === "click"
+            ? "Input.dispatchMouseEvent"
+            : "Input.dispatchKeyEvent",
+        sessionId: "child",
+        socketId: 1,
+      });
+  };
+  const script = `(async () => { ${source.slice(start, end)}; return paired(${JSON.stringify(kind)}, ${JSON.stringify(id)}); })()`;
   const result = runInNewContext(
     ts.transpileModule(script, {
       compilerOptions: { target: ts.ScriptTarget.ES2022 },
     }).outputText,
     {
-      // Normalize realm prototypes, not contents, for plain synthetic receipts.
       assert: {
         ...assert,
-        deepEqual: (actual, expected) =>
+        deepEqual: (a, b) =>
           assert.deepEqual(
-            JSON.parse(JSON.stringify(actual)),
-            JSON.parse(JSON.stringify(expected)),
+            JSON.parse(JSON.stringify(a)),
+            JSON.parse(JSON.stringify(b)),
           ),
       },
-      mode,
-      directKinds: [kind],
-      placement: {},
-      console: { log() {} },
-      focus: async () => ({
-        inner: fault === "wrong-focus" ? "other" : "text-a",
-      }),
-      state: async () => (read++ === 0 ? before : after),
+      backend: { pointerClick: dispatch, keyPress: dispatch },
+      sessionId: "product-session",
+      tabId: "owned-tab",
+      inspect: async () => {
+        calls.push({ kind: "inspect" });
+        if (fault === "capture") throw new Error("product capture failed");
+        return {
+          observationId: "product-observation",
+          focusedInputAvailable: true,
+        };
+      },
+      focus: async () => ({ inner: id }),
+      point: async () => ({ x: 12, y: 34 }),
+      state: async () => (reads++ === 0 ? before : after),
+      inputs,
+      isRemoteFrameMode: () => true,
+      providerRootSession: {},
+      providerPlacement: {},
+      assertRemoteFixturePoint: () => {},
+      assertRemoteProviderRoute: () => {
+        if (fault === "wrong-route") throw new Error("wrong product route");
+      },
+      settleRemoteFixturePair: async (read) => ({ state: await read() }),
       guard: async () => {
-        guardCalls++;
         if (fault === "foreground") throw new Error("foreground drift");
       },
-      assertRemoteFixturePoint: (point, id, depth) => {
-        assert.equal(id, "canvas");
-        assert.equal(point.documentId, "same-document");
-        assert.equal(depth, mode.startsWith("nested-") ? 2 : 1);
-      },
-      rpc: {
-        evaluate: async () => ({
-          x: 12,
-          y: 34,
-          documentId: fault === "document" ? "replacement" : "same-document",
-        }),
-        send: async (method, params) => {
-          sends.push({ method, params });
-          if (method === "Page.captureScreenshot") {
-            if (fault === "capture-timeout") throw new Error("surface timeout");
-            return { data: fault === "capture-empty" ? "" : "synthetic-image" };
-          }
-          if (fault === "unknown") throw new Error("unknown dispatched input");
-          return {};
-        },
-      },
-      settleRemoteFixturePair: async (read) => ({
-        state: await read(),
-        reads: 1,
-      }),
     },
   );
-  return { result, sends, guards: () => guardCalls };
+  return { result, calls };
 }
-for (const mode of [
-  "cross-origin-same-process",
-  "cross-origin-oopif",
-  "nested-oopif",
-  "nested-same-process",
-]) {
-  for (const kind of mode === "cross-origin-same-process"
-    ? ["click", "key"]
-    : ["key"])
-    test(`${mode} ${kind} retains exact trusted effect with kind-specific preparation`, async () => {
-      const f = witness(mode, kind);
-      const r = await f.result;
-      assert.equal(r.remoteWitness.status, "passed");
-      assert.equal(
-        r.remoteWitness.surfacePreparation,
-        kind === "click" ? "captured" : undefined,
-      );
-      assert.deepEqual(
-        f.sends.map((s) => s.method),
-        kind === "click"
-          ? [
-              "Page.captureScreenshot",
-              "Input.dispatchMouseEvent",
-              "Input.dispatchMouseEvent",
-            ]
-          : ["Input.dispatchKeyEvent", "Input.dispatchKeyEvent"],
-      );
-      assert.equal(f.guards(), 4);
-      assert.equal(r.cases[0].trustedPair, true);
-      assert.equal(r.cases[0].effect, true);
-    });
-}
-for (const fault of ["untrusted", "wrong-target", "wrong-effect", "visible"])
-  test(`direct key witness still rejects ${fault}`, async () => {
-    const f = witness("nested-oopif", "key", fault);
-    await assert.rejects(f.result);
-    assert.equal(f.sends.length, 2);
-  });
-for (const fault of ["wrong-focus", "foreground"])
-  test(`direct witness rejects ${fault} before input`, async () => {
-    const f = witness("nested-oopif", "key", fault);
-    await assert.rejects(f.result);
-    assert.equal(f.sends.length, 0);
-  });
-test("unknown direct input never sends release or retries", async () => {
-  const f = witness("nested-oopif", "key", "unknown");
-  await assert.rejects(f.result, /unknown dispatched input/);
-  assert.equal(f.sends.length, 1);
-});
-test("direct mouse geometry must belong to the same document", async () => {
-  const f = witness("cross-origin-same-process", "click", "document");
-  await assert.rejects(f.result);
-  assert.equal(f.sends.length, 1);
-});
-
-for (const fault of ["capture-timeout", "capture-empty"]) {
-  test(`mouse preparation ${fault} rejects before any input`, async () => {
-    const f = witness("cross-origin-same-process", "click", fault);
-    await assert.rejects(f.result);
+for (const kind of ["click", "key"]) {
+  test(`product ${kind} obtains its own observation and dispatches through backend`, async () => {
+    const e = exercise(kind);
+    await e.result;
     assert.deepEqual(
-      f.sends.map((s) => s.method),
-      ["Page.captureScreenshot"],
+      e.calls.map((c) => c.kind),
+      ["inspect", kind],
     );
+    assert.deepEqual(e.calls[1].args.slice(0, 3), [
+      "product-session",
+      "owned-tab",
+      "product-observation",
+    ]);
   });
+  for (const fault of [
+    "untrusted",
+    "wrong-target",
+    "wrong-effect",
+    "wrong-route",
+    "foreground",
+    "capture",
+    "unknown",
+  ]) {
+    test(`product ${kind} still rejects ${fault} without replay`, async () => {
+      const e = exercise(kind, fault);
+      await assert.rejects(e.result);
+      assert.equal(
+        e.calls.filter((c) => c.kind === kind).length,
+        fault === "capture" ? 0 : 1,
+      );
+    });
+  }
 }
-test("unknown mouse dispatch never sends release or retries preparation", async () => {
-  const f = witness("cross-origin-same-process", "click", "unknown");
-  await assert.rejects(f.result, /unknown dispatched input/);
-  assert.deepEqual(
-    f.sends.map((s) => s.method),
-    ["Page.captureScreenshot", "Input.dispatchMouseEvent"],
-  );
-});
-for (const fault of ["untrusted", "wrong-target", "wrong-effect", "visible"]) {
-  test(`surface capture does not waive mouse ${fault} assertions`, async () => {
-    const f = witness("cross-origin-same-process", "click", fault);
-    await assert.rejects(f.result);
-    assert.equal(f.sends.length, 3);
-  });
-}
-test("foreground drift prevents mouse surface preparation and input", async () => {
-  const f = witness("cross-origin-same-process", "click", "foreground");
-  await assert.rejects(f.result, /foreground drift/);
-  assert.equal(f.sends.length, 0);
-});
