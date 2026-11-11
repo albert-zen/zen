@@ -765,3 +765,17 @@
     max-height: min(480px, 55dvh);
   }
 }
+
+/* End-of-reading return: ordinary reverse Tab from the Composer reaches this
+   before individual message actions. No actions are removed from tab order. */
+.queue-reading-return {
+  display: none;
+}
+@media (min-width: 961px) {
+  .queue-reading-return {
+    display: flex;
+    justify-content: flex-end;
+    padding: 6px 10px;
+    border-top: 1px solid var(--border-soft);
+  }
+}

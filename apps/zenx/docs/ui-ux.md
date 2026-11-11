@@ -1316,3 +1316,7 @@ The actual [T3 Code proposal #28840](https://github.com/pingdotgg/t3code/pull/28
 ### Send surface closing focus
 
 The nonmodal Send surface becomes inert as soon as it is logically closed, even while its exit animation keeps the DOM mounted. Closed actions must not participate in native Tab navigation or pointer activation. Escape and actions that return focus do so at logical close; animation completion must not steal focus after the user has moved on. The visible exit animation and open-state controls retain their existing behavior.
+
+### Expanded queue return to writing
+
+Desktop expanded reading provides an additional Less space action after the queue rows, adjacent in DOM order to the Composer. This makes the return available from the writing end without traversing every per-message action. The header control remains, every message action retains ordinary keyboard reachability, and neither positive tab indices nor special Tab handling change navigation. The trailing control is not sticky and cannot cover a message; activating it reduces reading space and returns focus to the Composer before the control disappears. It appears only during explicit desktop expansion. Actual browser verification must measure reverse-Tab distance and the footer's space cost; component tests alone do not prove a visual improvement.

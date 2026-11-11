@@ -136,3 +136,18 @@ test("extra reading space is desktop-only, bounded and explicitly opted in", () 
     /\.pending-tray:has\(> \.queue-shelf\[data-reading-expanded="true"\]\)\s*\{\s*max-height: min\(480px, 55dvh\);/u,
   );
 });
+
+test("reading return stays desktop-only and in ordinary flow", () => {
+  assert.match(source, /\.queue-reading-return\s*\{\s*display: none;/u);
+  assert.match(
+    source,
+    /@media \(min-width: 961px\)\s*\{\s*\.queue-reading-return\s*\{\s*display: flex;/u,
+  );
+  const blocks = [...source.matchAll(/\.queue-reading-return\s*\{([^}]+)\}/gu)];
+  assert.equal(
+    blocks.some((match) =>
+      /position:\s*(sticky|fixed|absolute)/u.test(match[1]),
+    ),
+    false,
+  );
+});

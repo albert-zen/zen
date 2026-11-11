@@ -467,6 +467,32 @@ function QueueShelf({
           </button>
         ) : null}
       </div>
+      {integrated && readingExpanded ? (
+        <div className="queue-reading-return">
+          <button
+            type="button"
+            className="queue-header-action"
+            data-queue-control="reading-return"
+            aria-controls={viewportId}
+            aria-expanded={true}
+            aria-label={t("queueReduceReadingArea")}
+            onClick={() => {
+              setReadingExpanded(false);
+              // This footer disappears on collapse; return to writing rather
+              // than losing focus or traversing every message action again.
+              if (focusComposer) focusComposer();
+              else
+                rootRef.current
+                  ?.querySelector<HTMLElement>(
+                    '[data-queue-control="reading-space"]',
+                  )
+                  ?.focus();
+            }}
+          >
+            {t("queueLessSpace")}
+          </button>
+        </div>
+      ) : null}
     </section>
   );
 }

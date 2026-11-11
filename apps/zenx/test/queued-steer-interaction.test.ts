@@ -518,6 +518,39 @@ test("desktop reading expansion is explicit, non-mutating, focus-stable and Thre
       "Keep this unsent draft.",
     );
     await act(async () => toggle.click());
+    const returnControl = document.querySelector<HTMLButtonElement>(
+      '[data-queue-control="reading-return"]',
+    )!;
+    assert.ok(returnControl);
+    const queueButtons = [
+      ...document.querySelectorAll<HTMLButtonElement>(".queue-shelf button"),
+    ];
+    assert.equal(
+      queueButtons.at(-1),
+      returnControl,
+      "reverse navigation from Composer reaches the return before row actions",
+    );
+    assert.equal(returnControl.getAttribute("aria-controls"), tray.id);
+    await act(async () => {
+      returnControl.focus();
+      returnControl.click();
+    });
+    assert.equal(
+      document.querySelector('[data-queue-control="reading-return"]'),
+      null,
+    );
+    assert.equal(
+      document.activeElement,
+      document.querySelector(".composer textarea"),
+      "removed return control hands focus back to writing",
+    );
+    assert.deepEqual(
+      [...document.querySelectorAll<HTMLElement>(".queue-row")].map(
+        (row) => row.dataset.queueId,
+      ),
+      originalRows,
+    );
+    await act(async () => toggle.click());
     await h.render({ ...thread, id: "different-reading-owner" });
     assert.equal(
       document.querySelector('[data-reading-expanded="true"]'),
