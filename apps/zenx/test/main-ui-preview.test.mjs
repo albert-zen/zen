@@ -44,3 +44,27 @@ test("independent fast workflow does not depend on aggregate CI or native build"
   assert.match(workflow, /timeout-minutes: 6/u);
   assert.match(workflow, /persist-credentials: false/u);
 });
+
+test("pending density captures real compact widths and source-bound DOM geometry", async () => {
+  const capture = await load("../scripts/capture-main-ui-preview.mjs");
+  for (const name of ["narrow-dark", "compact-light", "compact-dark"])
+    assert.ok(capture.includes(`name: "${name}"`));
+  assert.match(capture, /width: 390/u);
+  assert.match(capture, /options\.onlyScene && scene !== options\.onlyScene/u);
+  for (const field of [
+    "bodyWidthRatio",
+    "bodyHorizontalOverflow",
+    "actionLineCount",
+    "fullyWithinTrayCount",
+    "centerHit",
+    "pendingLayout",
+  ])
+    assert.ok(capture.includes(field));
+  // Parse, but do not execute, the exact browser-side observation expression.
+  // Browser geometry must come from the hosted renderer, never JSDOM estimates.
+  const observation = capture.match(
+    /const observation = await evaluate\(`([\s\S]*?)`\);/u,
+  );
+  assert.ok(observation);
+  assert.doesNotThrow(() => new Function(`return ${observation[1]};`));
+});

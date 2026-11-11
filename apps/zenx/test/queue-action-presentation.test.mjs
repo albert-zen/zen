@@ -88,3 +88,20 @@ test("pending group timing stays sticky with space reserved for keyboard focus",
     dom.window.close();
   }
 });
+
+test("desktop queue actions reserve space for visible send text without shrinking targets", () => {
+  assert.match(
+    source,
+    /@media \(pointer: fine\) and \(min-width: 481px\)\s*\{\s*\.pending-tray \.queue-row-actions\s*\{\s*max-width: 192px;/u,
+  );
+  assert.match(
+    source,
+    /@media \(max-width: 480px\)\s*\{\s*\.pending-tray \.queue-row-actions\s*\{\s*max-width: 88px;/u,
+  );
+  assert.match(
+    source,
+    /\.pending-tray \.queue-row-actions\s*\{[^}]*flex-wrap: wrap;/u,
+  );
+  // Media query matching and resulting row height are browser acceptance, not
+  // simulated by JSDOM. The interaction suite covers exact handlers and focus.
+});

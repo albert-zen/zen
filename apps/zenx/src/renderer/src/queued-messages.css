@@ -727,3 +727,11 @@
 .pending-tray {
   scroll-padding-block-start: 64px;
 }
+
+/* A visible Send now label must not strand Cancel on a second desktop row.
+   Keep wrapping available for long localized pending-status labels. */
+@media (pointer: fine) and (min-width: 481px) {
+  .pending-tray .queue-row-actions {
+    max-width: 192px;
+  }
+}

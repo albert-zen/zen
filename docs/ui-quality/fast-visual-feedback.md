@@ -46,7 +46,22 @@ errors and build/capture timings. Dirty local builds are explicitly identified,
 not mislabeled as committed evidence. Capture refuses source or bundle drift.
 Artifacts retain PNG, HTML and bounded diagnostics for seven days.
 
-Default coverage is desktop light/dark (1280 × 900) and narrow (760 × 900).
+Default coverage is desktop light/dark (1280 × 900) and narrow light (760 × 900).
+Pending additionally covers narrow dark and compact light/dark (390 × 900), all
+with a fine pointer and hover. The 390px cases exercise the <=480px CSS rule;
+760px is not a substitute, and none of these cases proves touch/coarse input.
+The pending-only selection produces 18 PNGs; all three scenes produce 24.
+
+Each pending image records actual row/body/action rectangles, body width ratio,
+horizontal overflow, action line count, scroll offsets, rows geometrically inside
+the tray, and per-control center hit tests. A row geometrically inside the tray
+can still be partly occluded by a sticky header, so do not label that count as
+fully readable without inspecting the PNG and hit tests. These are observations,
+not minimum-density or design-quality assertions. Compare matched viewports,
+input media, text, state and focus targets. A wider action group can reduce action
+wrapping while also narrowing message text; inspect both rather than approving
+only the smaller action line count.
+
 This is a layout feedback matrix, not an exhaustive journey or accessibility
 suite. After choosing a change, run the affected focused interaction tests;
 keep broader, native and integration acceptance separate before merge.

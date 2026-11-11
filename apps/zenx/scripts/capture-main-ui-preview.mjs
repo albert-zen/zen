@@ -202,8 +202,20 @@ try {
     await delay(200);
     const observation = await evaluate(`(() => {
       const rect=e=>{if(!e)return null;const r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};
-      const selectors={sidebar:'.sidebar',thread:'.thread-view',composer:'.composer',information:'.editable-information-panel',pending:'.queue-shelf',agentName:'.subagent-tree-title'};
-      return {url:location.href,input:{finePointer:matchMedia('(pointer:fine)').matches,hover:matchMedia('(hover:hover)').matches},viewport:{width:innerWidth,height:innerHeight},overflow:document.documentElement.scrollWidth>innerWidth,visibleText:document.body.innerText.slice(0,12000),geometry:Object.fromEntries(Object.entries(selectors).map(([k,s])=>[k,rect(document.querySelector(s))])),names:[...document.querySelectorAll('.subagent-tree-title')].map(e=>({text:e.textContent,rect:rect(e),scrollWidth:e.scrollWidth,clientWidth:e.clientWidth})),buttons:[...document.querySelectorAll('.queue-shelf button')].map(e=>({label:e.getAttribute('aria-label'),disabled:e.disabled,rect:rect(e),color:getComputedStyle(e).color,background:getComputedStyle(e).backgroundColor})),active:{tag:document.activeElement?.tagName,label:document.activeElement?.getAttribute('aria-label')}};
+      const selectors={sidebar:'.sidebar',thread:'.thread-view',composer:'.composer',information:'.editable-information-panel',pending:'.queue-shelf',pendingTray:'.pending-tray',bottomZone:'.bottom-zone',agentName:'.subagent-tree-title'};
+      const tray=document.querySelector('.pending-tray'),trayRect=rect(tray);
+      const pendingRows=[...document.querySelectorAll('.pending-tray .queue-row')].filter(e=>e.getBoundingClientRect().height>0).map(e=>{
+        const row=rect(e),body=e.querySelector('.queue-row-content'),bodyRect=rect(body),actions=e.querySelector('.queue-row-actions');
+        const controls=[...e.querySelectorAll('.queue-row-actions button')].map(button=>{
+          const r=rect(button),x=r.x+r.width/2,y=r.y+r.height/2;
+          return {control:button.dataset.queueControl,label:button.getAttribute('aria-label'),text:button.textContent,disabled:button.disabled,rect:r,centerHit:button.contains(document.elementFromPoint(x,y))};
+        });
+        const actionLines=[];
+        for(const control of controls)if(!actionLines.some(y=>Math.abs(y-control.rect.y)<2))actionLines.push(control.rect.y);
+        return {id:e.dataset.queueId,index:e.dataset.queueIndex,rect:row,bodyRect,bodyWidthRatio:bodyRect.width/row.width,bodyHorizontalOverflow:body.scrollWidth>body.clientWidth+1,actionsRect:rect(actions),actionLineCount:actionLines.length,fullyWithinTray:row.y>=Math.max(0,trayRect.y)&&row.bottom<=Math.min(innerHeight,trayRect.bottom),controls};
+      });
+      const pendingLayout=tray?{trayRect,clientHeight:tray.clientHeight,scrollHeight:tray.scrollHeight,scrollTop:tray.scrollTop,horizontalOverflow:tray.scrollWidth>tray.clientWidth+1,visibleRowCount:pendingRows.filter(row=>row.rect.bottom>trayRect.y&&row.rect.y<trayRect.bottom).length,fullyWithinTrayCount:pendingRows.filter(row=>row.fullyWithinTray).length,rows:pendingRows}:null;
+      return {pendingLayout,url:location.href,input:{finePointer:matchMedia('(pointer:fine)').matches,hover:matchMedia('(hover:hover)').matches},viewport:{width:innerWidth,height:innerHeight},overflow:document.documentElement.scrollWidth>innerWidth,visibleText:document.body.innerText.slice(0,12000),geometry:Object.fromEntries(Object.entries(selectors).map(([k,s])=>[k,rect(document.querySelector(s))])),names:[...document.querySelectorAll('.subagent-tree-title')].map(e=>({text:e.textContent,rect:rect(e),scrollWidth:e.scrollWidth,clientWidth:e.clientWidth})),buttons:[...document.querySelectorAll('.queue-shelf button')].map(e=>({label:e.getAttribute('aria-label'),disabled:e.disabled,rect:rect(e),color:getComputedStyle(e).color,background:getComputedStyle(e).backgroundColor})),active:{tag:document.activeElement?.tagName,label:document.activeElement?.getAttribute('aria-label')}};
     })()`);
     const result = await send("Page.captureScreenshot", {
       format: "png",
@@ -246,6 +258,32 @@ try {
       theme: "light",
       lang: "en",
     },
+    // These additional cases only render pending. 760px does not exercise the
+    // <=480px CSS branch; both are fine-pointer window widths, not touch tests.
+    {
+      name: "narrow-dark",
+      width: 760,
+      height: 900,
+      theme: "dark",
+      lang: "en",
+      onlyScene: "pending",
+    },
+    {
+      name: "compact-light",
+      width: 390,
+      height: 900,
+      theme: "light",
+      lang: "en",
+      onlyScene: "pending",
+    },
+    {
+      name: "compact-dark",
+      width: 390,
+      height: 900,
+      theme: "dark",
+      lang: "en",
+      onlyScene: "pending",
+    },
   ]) {
     await send("Emulation.setDeviceMetricsOverride", {
       width: options.width,
@@ -254,6 +292,7 @@ try {
       mobile: false,
     });
     for (const scene of Object.keys(source.scenes)) {
+      if (options.onlyScene && scene !== options.onlyScene) continue;
       const query = new URLSearchParams({
         theme: options.theme,
         lang: options.lang,
