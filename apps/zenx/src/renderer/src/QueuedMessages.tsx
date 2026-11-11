@@ -1,3 +1,4 @@
+import { revealQueueFocusContext } from "./queue-focus-context.js";
 import type { QueueMutationPhase } from "./queue-mutation-state.js";
 import { UserMessageContent } from "./UserMessageContent.js";
 import { parseSentReferenceContent } from "./reference-draft.js";
@@ -239,6 +240,7 @@ function QueueShelf({
       onFocusCapture={(event) => {
         const target = event.target;
         if (!(target instanceof HTMLElement)) return;
+        revealQueueFocusContext(target);
         focusedControl.current = target;
         const index =
           target.closest<HTMLElement>("[data-queue-index]")?.dataset.queueIndex;

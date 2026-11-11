@@ -440,3 +440,31 @@ test("staged promotion replies require a revision and receipt identity, and lost
     window.zenx = old;
   }
 });
+
+test("focusing a queue action reveals its owning row inside only the pending tray", async () => {
+  await withRuntimeDom(async (h) => {
+    await h.render(queueScenario(2), {
+      onSteerQueued: async () => assert.fail("Focus must not send a message"),
+    });
+    const target = document.querySelector<HTMLButtonElement>(
+      ".queue-row-steer:not(:disabled)",
+    )!;
+    const row = target.closest<HTMLElement>(".queue-row")!;
+    const tray = row.closest<HTMLElement>(".pending-tray")!;
+    const rect = (top: number, height: number) =>
+      ({ top, bottom: top + height, height }) as DOMRect;
+    tray.style.scrollPaddingBlockStart = "64px";
+    Object.defineProperties(tray, {
+      clientHeight: { value: 240 },
+      scrollHeight: { value: 1000 },
+    });
+    tray.getBoundingClientRect = () => rect(100, 240);
+    row.getBoundingClientRect = () => rect(150, 60);
+    target.getBoundingClientRect = () => rect(180, 28);
+    tray.scrollTop = 100;
+    await act(async () => target.focus());
+    assert.equal(tray.scrollTop, 84);
+    assert.equal(document.activeElement, target);
+    assert.equal(document.querySelector(".thread-view")!.scrollTop, 0);
+  });
+});
