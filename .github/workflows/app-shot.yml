@@ -199,11 +199,12 @@ jobs:
           node --input-type=module <<'NODE'
           import { execFileSync } from "node:child_process";
           import { readFile } from "node:fs/promises";
-          import { format, resolveConfig } from "prettier";
+          import { format, getFileInfo, resolveConfig } from "prettier";
           const base = execFileSync("git", ["merge-base", "HEAD", "origin/main"], { encoding: "utf8" }).trim();
           const files = execFileSync("git", ["diff", "--name-only", "--diff-filter=ACMR", base, "HEAD"], { encoding: "utf8" }).trim().split("\n").filter((file) => /\.(?:ts|tsx|js|mjs|json|md|yml|css)$/u.test(file));
           const changed = {};
           for (const file of files) {
+            if ((await getFileInfo(file, { ignorePath: ".prettierignore" })).ignored) continue;
             const source = await readFile(file, "utf8");
             const formatted = await format(source, { ...(await resolveConfig(file)), filepath: file });
             if (formatted !== source) changed[file] = formatted;
