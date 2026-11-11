@@ -121,3 +121,18 @@ test("narrow queue separates reading and actions without hiding controls or grow
   // Browser capture must check complete action rows, full-width message text,
   // focus visibility, 390px light/dark, and coarse-pointer 44px targets.
 });
+
+test("extra reading space is desktop-only, bounded and explicitly opted in", () => {
+  assert.match(
+    source,
+    /\.queue-shelf \.queue-reading-toggle\s*\{\s*display: none;/u,
+  );
+  assert.match(
+    source,
+    /@media \(min-width: 961px\)\s*\{\s*\.queue-shelf \.queue-reading-toggle\s*\{\s*display: inline-flex;/u,
+  );
+  assert.match(
+    source,
+    /\.pending-tray:has\(> \.queue-shelf\[data-reading-expanded="true"\]\)\s*\{\s*max-height: min\(480px, 55dvh\);/u,
+  );
+});

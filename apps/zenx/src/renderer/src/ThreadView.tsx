@@ -1044,6 +1044,7 @@ function ThreadViewContent({
   const viewRef = useRef<HTMLDivElement>(null);
   const bottomZoneRef = useRef<HTMLDivElement>(null);
   const pendingTrayRef = useRef<HTMLDivElement>(null);
+  const pendingTrayId = useId();
   // Align the shared content box, not its border or native scrollbar, with
   // the real transcript column. Both groups keep one scrolling owner.
   useLayoutEffect(() => {
@@ -2456,6 +2457,7 @@ function ThreadViewContent({
           <MessageQuoteSourceContext.Provider value={navigateQuoteSource}>
             <div
               className="pending-tray"
+              id={pendingTrayId}
               ref={pendingTrayRef}
               role="region"
               aria-label={i18n.t("shell:pendingTray")}
@@ -2524,6 +2526,7 @@ function ThreadViewContent({
               {thread ? (
                 <QueuedMessages
                   integrated
+                  viewportId={pendingTrayId}
                   threadId={thread.id}
                   messages={(thread.queuedMessages ?? []).map((message) => ({
                     ...message,

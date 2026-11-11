@@ -751,3 +751,17 @@
     max-width: 192px;
   }
 }
+
+/* Desktop-only, explicit reading space; never resize the Composer or split the
+   existing pending groups into independent scrolling regions. */
+.queue-shelf .queue-reading-toggle {
+  display: none;
+}
+@media (min-width: 961px) {
+  .queue-shelf .queue-reading-toggle {
+    display: inline-flex;
+  }
+  .pending-tray:has(> .queue-shelf[data-reading-expanded="true"]) {
+    max-height: min(480px, 55dvh);
+  }
+}

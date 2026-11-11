@@ -66,6 +66,7 @@ export interface QueuedMessagesProps {
   compact?: boolean;
   /** Share the Composer tray's one scrolling surface. */
   integrated?: boolean;
+  viewportId?: string;
   editableIds?: ReadonlySet<string>;
   /** Saving rows may reopen their existing read-only edit session. */
   editingIds?: ReadonlySet<string>;
@@ -114,6 +115,7 @@ function QueueShelf({
   resumeError = null,
   compact = false,
   integrated = false,
+  viewportId,
   editableIds,
   editingIds,
   onEdit,
@@ -131,6 +133,8 @@ function QueueShelf({
   const revealFailure = useRef<string | null>(null);
   const [open, setOpen] = useState<boolean | null>(null);
   const [showAll, setShowAll] = useState(false);
+  const [readingExpanded, setReadingExpanded] = useState(false);
+  const [viewportOverflow, setViewportOverflow] = useState(false);
   const [reading, setReading] = useState<ReadonlySet<string>>(new Set());
   const hasMessages = messages.length > 0;
   const root = rootRef.current;
@@ -143,6 +147,33 @@ function QueueShelf({
   );
   const detailsOpen =
     open ?? (!compact || showAll || readingCurrentMessage || interacting);
+  useLayoutEffect(() => {
+    const shelf = rootRef.current;
+    const tray = integrated
+      ? shelf?.closest<HTMLElement>(".pending-tray")
+      : null;
+    if (!tray || !shelf) return;
+    const measure = () =>
+      // Once offered, keep the control stable even if expansion or delivery
+      // makes the contents fit. Removing a focused control would lose focus.
+      setViewportOverflow(
+        (previous) =>
+          previous ||
+          (tray.clientHeight > 0 && tray.scrollHeight > tray.clientHeight + 1),
+      );
+    measure();
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? undefined
+        : new ResizeObserver(measure);
+    observer?.observe(tray);
+    observer?.observe(shelf);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [integrated, hasMessages, detailsOpen, messages]);
   const visibleMessages =
     integrated || showAll ? messages : messages.slice(0, 2);
   const failureHidden =
@@ -237,6 +268,7 @@ function QueueShelf({
       ref={rootRef}
       className={`queue-shelf${detailsOpen ? " is-open" : " is-collapsed"}${compact ? " is-compact" : ""}`}
       aria-label={t("messageQueue")}
+      data-reading-expanded={readingExpanded ? "true" : undefined}
       onFocusCapture={(event) => {
         const target = event.target;
         if (!(target instanceof HTMLElement)) return;
@@ -285,6 +317,23 @@ function QueueShelf({
           <Icon name="chevron-down" size={12} className="queue-shelf-chevron" />
         </button>
         <div className="queue-shelf-actions">
+          {integrated && (viewportOverflow || readingExpanded) ? (
+            <button
+              type="button"
+              className="queue-header-action queue-reading-toggle"
+              data-queue-control="reading-space"
+              aria-expanded={readingExpanded}
+              aria-controls={viewportId}
+              aria-label={t(
+                readingExpanded
+                  ? "queueReduceReadingArea"
+                  : "queueExpandReadingArea",
+              )}
+              onClick={() => setReadingExpanded((current) => !current)}
+            >
+              {t(readingExpanded ? "queueLessSpace" : "queueMoreSpace")}
+            </button>
+          ) : null}
           {onCancelAll !== undefined && messages.length > 1 ? (
             <button
               type="button"
@@ -348,6 +397,7 @@ function QueueShelf({
         tabIndex={0}
         role="group"
         aria-label={t("messageQueue")}
+        data-reading-expanded={readingExpanded ? "true" : undefined}
         onPointerDown={() => {
           if (open === null) setOpen(true);
         }}

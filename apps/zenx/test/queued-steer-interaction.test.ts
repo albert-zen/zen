@@ -468,3 +468,60 @@ test("focusing a queue action reveals its owning row inside only the pending tra
     assert.equal(document.querySelector(".thread-view")!.scrollTop, 0);
   });
 });
+
+test("desktop reading expansion is explicit, non-mutating, focus-stable and Thread-owned", async () => {
+  await withRuntimeDom(async (h) => {
+    const thread = queueScenario(2);
+    await h.render(thread, {
+      onSteerQueued: async () => assert.fail("reading must not send"),
+    });
+    assert.equal(document.querySelector(".queue-reading-toggle"), null);
+    const tray = document.querySelector<HTMLElement>(".pending-tray")!;
+    Object.defineProperties(tray, {
+      clientHeight: { configurable: true, value: 240 },
+      scrollHeight: { configurable: true, value: 640 },
+    });
+    await act(async () => window.dispatchEvent(new window.Event("resize")));
+    const toggle = document.querySelector<HTMLButtonElement>(
+      ".queue-reading-toggle",
+    )!;
+    assert.ok(toggle);
+    assert.equal(toggle.getAttribute("aria-controls"), tray.id);
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+    const originalRows = [
+      ...document.querySelectorAll<HTMLElement>(".queue-row"),
+    ].map((row) => row.dataset.queueId);
+    await act(async () => {
+      toggle.focus();
+      toggle.click();
+    });
+    assert.equal(toggle.getAttribute("aria-expanded"), "true");
+    assert.ok(
+      document.querySelector('.queue-shelf[data-reading-expanded="true"]'),
+    );
+    Object.defineProperty(tray, "clientHeight", {
+      configurable: true,
+      value: 640,
+    });
+    await act(async () => window.dispatchEvent(new window.Event("resize")));
+    await act(async () => toggle.click());
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+    assert.equal(document.activeElement, toggle);
+    assert.deepEqual(
+      [...document.querySelectorAll<HTMLElement>(".queue-row")].map(
+        (row) => row.dataset.queueId,
+      ),
+      originalRows,
+    );
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>(".composer textarea")!.value,
+      "Keep this unsent draft.",
+    );
+    await act(async () => toggle.click());
+    await h.render({ ...thread, id: "different-reading-owner" });
+    assert.equal(
+      document.querySelector('[data-reading-expanded="true"]'),
+      null,
+    );
+  });
+});
