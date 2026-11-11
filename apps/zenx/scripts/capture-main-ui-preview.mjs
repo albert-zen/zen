@@ -205,14 +205,21 @@ try {
       const selectors={sidebar:'.sidebar',thread:'.thread-view',composer:'.composer',information:'.editable-information-panel',pending:'.queue-shelf',pendingTray:'.pending-tray',bottomZone:'.bottom-zone',agentName:'.subagent-tree-title'};
       const tray=document.querySelector('.pending-tray'),trayRect=rect(tray);
       const pendingRows=[...document.querySelectorAll('.pending-tray .queue-row')].filter(e=>e.getBoundingClientRect().height>0).map(e=>{
-        const row=rect(e),body=e.querySelector('.queue-row-content'),bodyRect=rect(body),actions=e.querySelector('.queue-row-actions');
+        const kind=e.matches('.steer-shelf-row')?'steer':e.hasAttribute('data-queue-id')?'queue':'unknown';
+        const bodySelector=kind==='steer'?(e.querySelector('.user-bubble')?'.user-bubble':'.pending-steer-images'):'.queue-row-content';
+        const row=rect(e),body=e.querySelector(bodySelector),bodyRect=rect(body),actions=e.querySelector('.queue-row-actions');
+        const observationWarnings=[];
+        if(kind==='unknown')observationWarnings.push('unrecognized-row-kind');
+        if(!body)observationWarnings.push('missing-body');
+        if(row.width<=0)observationWarnings.push('zero-width-row');
+        if(kind==='queue'&&!actions)observationWarnings.push('missing-action-group');
         const controls=[...e.querySelectorAll('.queue-row-actions button')].map(button=>{
           const r=rect(button),x=r.x+r.width/2,y=r.y+r.height/2;
           return {control:button.dataset.queueControl,label:button.getAttribute('aria-label'),text:button.textContent,disabled:button.disabled,rect:r,centerHit:button.contains(document.elementFromPoint(x,y))};
         });
         const actionLines=[];
         for(const control of controls)if(!actionLines.some(y=>Math.abs(y-control.rect.y)<2))actionLines.push(control.rect.y);
-        return {id:e.dataset.queueId,index:e.dataset.queueIndex,rect:row,bodyRect,bodyWidthRatio:bodyRect.width/row.width,bodyHorizontalOverflow:body.scrollWidth>body.clientWidth+1,actionsRect:rect(actions),actionLineCount:actionLines.length,fullyWithinTray:row.y>=Math.max(0,trayRect.y)&&row.bottom<=Math.min(innerHeight,trayRect.bottom),controls};
+        return {kind,id:e.dataset.queueId??null,index:e.dataset.queueIndex??null,rect:row,bodySelector:body?bodySelector:null,bodyRect,bodyWidthRatio:bodyRect&&row.width>0?bodyRect.width/row.width:null,bodyHorizontalOverflow:body?body.scrollWidth>body.clientWidth+1:null,actionsRect:rect(actions),actionLineCount:actions?actionLines.length:null,observationWarnings,fullyWithinTray:row.y>=Math.max(0,trayRect.y)&&row.bottom<=Math.min(innerHeight,trayRect.bottom),controls};
       });
       const pendingLayout=tray?{trayRect,clientHeight:tray.clientHeight,scrollHeight:tray.scrollHeight,scrollTop:tray.scrollTop,horizontalOverflow:tray.scrollWidth>tray.clientWidth+1,visibleRowCount:pendingRows.filter(row=>row.rect.bottom>trayRect.y&&row.rect.y<trayRect.bottom).length,fullyWithinTrayCount:pendingRows.filter(row=>row.fullyWithinTray).length,rows:pendingRows}:null;
       return {pendingLayout,url:location.href,input:{finePointer:matchMedia('(pointer:fine)').matches,hover:matchMedia('(hover:hover)').matches},viewport:{width:innerWidth,height:innerHeight},overflow:document.documentElement.scrollWidth>innerWidth,visibleText:document.body.innerText.slice(0,12000),geometry:Object.fromEntries(Object.entries(selectors).map(([k,s])=>[k,rect(document.querySelector(s))])),names:[...document.querySelectorAll('.subagent-tree-title')].map(e=>({text:e.textContent,rect:rect(e),scrollWidth:e.scrollWidth,clientWidth:e.clientWidth})),buttons:[...document.querySelectorAll('.queue-shelf button')].map(e=>({label:e.getAttribute('aria-label'),disabled:e.disabled,rect:rect(e),color:getComputedStyle(e).color,background:getComputedStyle(e).backgroundColor})),active:{tag:document.activeElement?.tagName,label:document.activeElement?.getAttribute('aria-label')}};

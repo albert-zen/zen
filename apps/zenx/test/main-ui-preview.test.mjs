@@ -68,3 +68,170 @@ test("pending density captures real compact widths and source-bound DOM geometry
   assert.ok(observation);
   assert.doesNotThrow(() => new Function(`return ${observation[1]};`));
 });
+
+async function inspectMarkup(markup, { zeroRowWidth = false } = {}) {
+  const [{ JSDOM }, { runInNewContext }] = await Promise.all([
+    import("jsdom"),
+    import("node:vm"),
+  ]);
+  const capture = await load("../scripts/capture-main-ui-preview.mjs");
+  const expression = capture.match(
+    /const observation = await evaluate\(`([\s\S]*?)`\);/u,
+  )[1];
+  const dom = new JSDOM(markup, {
+    url: "https://preview.invalid/pending.html",
+  });
+  const { document, HTMLElement } = dom.window;
+  try {
+    // Explicit synthetic boxes test observation logic, not browser layout.
+    // JSDOM's default zero boxes would filter out the real failing Steer rows.
+    HTMLElement.prototype.getBoundingClientRect = function () {
+      const width = this.matches(".queue-row-content")
+        ? 400
+        : this.matches(".queue-row") && zeroRowWidth
+          ? 0
+          : 500;
+      return { x: 10, y: 10, width, height: 40, right: 10 + width, bottom: 50 };
+    };
+    document.elementFromPoint = () => document.querySelector("button");
+    document.body.innerText = document.body.textContent;
+    return JSON.parse(
+      JSON.stringify(
+        runInNewContext(expression, {
+          document,
+          location: dom.window.location,
+          innerWidth: 1280,
+          innerHeight: 900,
+          matchMedia: () => ({ matches: true }),
+          getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+        }),
+      ),
+    );
+  } finally {
+    dom.window.close();
+  }
+}
+
+async function productionPendingMarkup() {
+  const [{ tsImport }, React, { renderToStaticMarkup }] = await Promise.all([
+    import("tsx/esm/api"),
+    import("react"),
+    import("react-dom/server"),
+  ]);
+  const [{ PendingSteerPanel }, { QueuedMessages }] = await Promise.all([
+    tsImport("../src/renderer/src/PendingSteerPanel.tsx", import.meta.url),
+    tsImport("../src/renderer/src/QueuedMessages.tsx", import.meta.url),
+  ]);
+  const prior = globalThis.React;
+  globalThis.React = React;
+  try {
+    const pending = [
+      {
+        id: "steer-text",
+        input: [{ type: "text", text: "Synthetic pending text" }],
+      },
+      {
+        id: "steer-image",
+        input: [
+          {
+            type: "image",
+            attachment: {
+              sha256: "a".repeat(64),
+              byteLength: 1,
+              mediaType: "image/png",
+            },
+          },
+        ],
+      },
+    ].map((item) => ({
+      ...item,
+      clientId: item.id,
+      threadId: "synthetic-thread",
+      type: "user_message_queued",
+      createdAt: "2026-11-11T00:00:00Z",
+      deliveryMode: "steer",
+      expectedTurnId: "synthetic-turn",
+      revision: 0,
+    }));
+    return renderToStaticMarkup(
+      React.createElement(
+        "div",
+        { className: "pending-tray" },
+        React.createElement(PendingSteerPanel, {
+          integrated: true,
+          threadId: "synthetic-thread",
+          items: [],
+          pending,
+          runningTurnId: "synthetic-turn",
+        }),
+        React.createElement(QueuedMessages, {
+          threadId: "synthetic-thread",
+          integrated: true,
+          messages: [
+            {
+              id: "queue-text",
+              clientId: "queue-text",
+              text: "Synthetic queue",
+              imageCount: 0,
+            },
+          ],
+          onMove() {},
+          onSteer() {},
+          onEdit() {},
+          onCancel() {},
+        }),
+      ),
+    );
+  } finally {
+    if (prior === undefined) delete globalThis.React;
+    else globalThis.React = prior;
+  }
+}
+
+test("observer executes on actual production text/image Steer and Queue DOM", async () => {
+  const markup = await productionPendingMarkup();
+  assert.match(markup, /queue-row user-row steer-shelf-row/u);
+  assert.match(markup, /pending-steer-images/u);
+  const { pendingLayout } = await inspectMarkup(markup);
+  assert.equal(pendingLayout.rows.length, 3);
+  const [text, image, queue] = pendingLayout.rows;
+  assert.equal(text.kind, "steer");
+  assert.equal(text.bodySelector, ".user-bubble");
+  assert.equal(image.kind, "steer");
+  assert.equal(image.bodySelector, ".pending-steer-images");
+  for (const row of [text, image]) {
+    assert.equal(row.actionsRect, null);
+    assert.equal(row.actionLineCount, null);
+    assert.deepEqual(row.controls, []);
+    assert.deepEqual(row.observationWarnings, []);
+    assert.equal(row.bodyWidthRatio, 1);
+  }
+  assert.equal(queue.kind, "queue");
+  assert.equal(queue.id, "queue-text");
+  assert.equal(queue.bodyWidthRatio, 0.8);
+  assert.equal(queue.actionLineCount, 1);
+  assert.equal(queue.controls.length, 5);
+  assert.deepEqual(queue.observationWarnings, []);
+});
+
+test("observer reports missing and zero-width bodies without fabricated measurements", async () => {
+  const { pendingLayout } = await inspectMarkup(
+    `<div class="pending-tray">
+    <div class="queue-row">Unknown row</div>
+    <div class="queue-row" data-queue-id="missing-body"><div class="queue-row-actions"></div></div>
+    <div class="queue-row" data-queue-id="zero"><div class="queue-row-content"></div></div>
+  </div>`,
+    { zeroRowWidth: true },
+  );
+  const [unknown, missing, zero] = pendingLayout.rows;
+  assert.equal(unknown.kind, "unknown");
+  assert.equal(unknown.bodyRect, null);
+  assert.equal(unknown.bodyWidthRatio, null);
+  assert.equal(unknown.bodyHorizontalOverflow, null);
+  assert.ok(unknown.observationWarnings.includes("unrecognized-row-kind"));
+  assert.equal(missing.kind, "queue");
+  assert.equal(missing.bodyRect, null);
+  assert.ok(missing.observationWarnings.includes("missing-body"));
+  assert.equal(zero.bodyWidthRatio, null);
+  assert.ok(zero.observationWarnings.includes("zero-width-row"));
+});

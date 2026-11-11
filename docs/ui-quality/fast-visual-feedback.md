@@ -57,7 +57,15 @@ horizontal overflow, action line count, scroll offsets, rows geometrically insid
 the tray, and per-control center hit tests. A row geometrically inside the tray
 can still be partly occluded by a sticky header, so do not label that count as
 fully readable without inspecting the PNG and hit tests. These are observations,
-not minimum-density or design-quality assertions. Compare matched viewports,
+not minimum-density or design-quality assertions. The observer distinguishes
+Queue rows from Steer rows, which share `.queue-row` but do not share a body or
+action-group structure. Text and image-only Steer rows use their actual bubble or
+image container; absent body/action measurements remain `null`. Unknown or
+incomplete structures retain explicit observation warnings, not fabricated zero
+measurements. Executed structural tests render production Queue and Steer
+components, then run the same observation expression with explicitly synthetic
+boxes. This catches DOM-shape errors but does not simulate browser geometry.
+Compare matched viewports,
 input media, text, state and focus targets. A wider action group can reduce action
 wrapping while also narrowing message text; inspect both rather than approving
 only the smaller action line count.
