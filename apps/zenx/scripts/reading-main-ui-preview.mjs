@@ -264,7 +264,7 @@ export function verifyApprovalMode(
       "Summary contains no approval decision controls or hidden full body",
     );
     assert.match(s.approvalSummaryText, /run_code/);
-    assert.match(s.approvalSummaryText, /Remembered permission/);
+    assert.match(s.approvalSummaryText, /Request to remember permission/);
     assert.match(
       s.approvalSummaryText,
       /Waiting for your review.*No decision/s,

@@ -573,7 +573,7 @@ test("reading disclosure keeps a stable controlled region and explicit duration 
       assert.equal(document.getElementById(controlledId), region);
       assert.match(
         region!.textContent!,
-        once ? /One-time approval/ : /Remembered permission/,
+        once ? /Request: this call only/ : /Request to remember permission/,
       );
       assert.match(region!.textContent!, /Edge abcd1234/);
       assert.equal(region!.querySelector(".approval-request-allow"), null);
@@ -581,5 +581,91 @@ test("reading disclosure keeps a stable controlled region and explicit duration 
       assert.equal(document.getElementById(controlledId), region);
       assert.ok(region!.querySelector(".approval-request-allow"));
     }
+  });
+});
+
+test("approval reading labels describe requests, not granted access, in English and Chinese", async () => {
+  const { i18n } = await import("../src/renderer/src/i18n.js");
+  const previous = i18n.language;
+  try {
+    for (const [language, onceText, rememberedText] of [
+      ["en", "Request: this call only", "Request to remember permission"],
+      ["zh", "请求仅本次授权", "请求持续授权"],
+    ]) {
+      await i18n.changeLanguage(language);
+      await withRuntimeDom(async (h) => {
+        for (const once of [true, false]) {
+          await h.render(runtimeThread(), {
+            approvals: [
+              {
+                ...request(`locale-${language}-${once}`),
+                params: {
+                  ...runtimeApproval.params,
+                  approvalScope: once
+                    ? "once"
+                    : runtimeApproval.params.approvalScope,
+                },
+              },
+            ],
+          });
+          await press(".approval-reading-toggle");
+          assert.ok(
+            document
+              .querySelector(".approval-reading-summary")!
+              .textContent!.includes(once ? onceText! : rememberedText!),
+          );
+          assert.equal(document.querySelector(".approval-request-allow"), null);
+        }
+      });
+    }
+  } finally {
+    await i18n.changeLanguage(previous);
+  }
+});
+
+test("reading mode cannot conceal a failed mock response and new requests reset error and disclosure", async () => {
+  await withRuntimeDom(async (h) => {
+    const attempt = deferred();
+    let calls = 0;
+    const options = {
+      approvals: [request("reading-error")],
+      onRespondToApproval: async () => {
+        calls++;
+        await attempt.promise;
+      },
+    };
+    await h.render(runtimeThread(), options);
+    await press(".approval-reading-toggle");
+    await press(".approval-reading-toggle");
+    await press(".approval-request-allow");
+    assert.equal(calls, 1);
+    assert.equal(button(".approval-reading-toggle").disabled, true);
+    assert.ok(document.querySelector(".approval-request-preview"));
+    await act(async () =>
+      attempt.reject(new Error("Synthetic response failed")),
+    );
+    assert.match(
+      document.querySelector(".approval-request-error")!.textContent!,
+      /Synthetic response failed/,
+    );
+    assert.equal(button(".approval-reading-toggle").disabled, true);
+    assert.equal(document.querySelector(".approval-reading-summary"), null);
+    const editor = document.querySelector<HTMLTextAreaElement>("textarea")!;
+    assert.equal(editor.disabled, false);
+    await act(async () => editor.focus());
+    assert.equal(document.activeElement, editor);
+    assert.equal(editor.value, draft.draft.text);
+    await h.render(runtimeThread(), {
+      ...options,
+      approvals: [request("fresh-after-error")],
+    });
+    assert.equal(document.querySelector(".approval-request-error"), null);
+    assert.equal(button(".approval-reading-toggle").disabled, false);
+    assert.equal(
+      button(".approval-reading-toggle").getAttribute("aria-expanded"),
+      "true",
+    );
+    assert.ok(document.querySelector(".approval-request-preview"));
+    assert.equal(calls, 1);
   });
 });

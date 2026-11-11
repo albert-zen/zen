@@ -454,8 +454,8 @@ export const en = {
   queueWaiting: "Waiting to send",
 
   approvalScopeLabel: "Permission scope",
-  approvalOnceShortScope: "One-time approval",
-  approvalRememberedShortScope: "Remembered permission",
+  approvalOnceShortScope: "Request: this call only",
+  approvalRememberedShortScope: "Request to remember permission",
   approvalOnceScope: "This call and its nested operations only",
   approvalCapabilityScope: "Remember this tool capability",
   approvalTargetRemembered:
@@ -1568,8 +1568,8 @@ export const zhCN = {
   queueWaiting: "等待发送",
 
   approvalScopeLabel: "权限范围",
-  approvalOnceShortScope: "仅本次授权",
-  approvalRememberedShortScope: "持续记住权限",
+  approvalOnceShortScope: "请求仅本次授权",
+  approvalRememberedShortScope: "请求持续授权",
   approvalOnceScope: "仅本次调用及其嵌套操作",
   approvalCapabilityScope: "记住此工具能力",
   approvalTargetRemembered:

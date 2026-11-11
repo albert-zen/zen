@@ -243,7 +243,7 @@ const approvalState = (reading = false) => ({
   allow: reading ? null : box(),
   deny: reading ? null : box(),
   approvalSummaryText: reading
-    ? "run_code · Remembered permission · Waiting for your review. No decision has been made."
+    ? "run_code · Request to remember permission · Waiting for your review. No decision has been made."
     : null,
   conversationUncoveredHeight: reading ? 400 : 250,
 });
@@ -263,6 +263,7 @@ test("explicit approval reading preserves scope, no-decision and focus while def
   for (const fault of [
     "decision",
     "scope",
+    "ambiguous-scope",
     "pending",
     "focus",
     "draft",
@@ -273,8 +274,11 @@ test("explicit approval reading preserves scope, no-decision and focus while def
     if (fault === "decision") s.allow = box();
     if (fault === "scope")
       s.approvalSummaryText = "run_code Waiting for your review. No decision";
+    if (fault === "ambiguous-scope")
+      s.approvalSummaryText =
+        "run_code · Remembered permission · Waiting for your review. No decision has been made.";
     if (fault === "pending")
-      s.approvalSummaryText = "run_code Remembered permission";
+      s.approvalSummaryText = "run_code Request to remember permission";
     if (fault === "focus") s.approvalToggle.focusVisible = false;
     if (fault === "draft") s.draft = "changed";
     if (fault === "no-gain") s.conversationUncoveredHeight = 250;
@@ -336,4 +340,24 @@ test("approval trip adds exactly three frames per theme and never invokes a deci
     assert(h.includes(file));
     assert(w.includes(file));
   }
+});
+
+// Keep the screenshot contract tied to the production English text, not just
+// a synthetic measurement object. Chinese copy has separate component tests.
+test("reading capture requires request wording from the production permission label", async () => {
+  const copy = await read("../src/renderer/src/i18n/shell.ts");
+  const capture = await read("../scripts/reading-main-ui-preview.mjs");
+  assert.match(
+    copy,
+    /approvalRememberedShortScope: "Request to remember permission"/,
+  );
+  assert.match(copy, /approvalOnceShortScope: "Request: this call only"/);
+  assert.match(
+    capture,
+    /assert\.match\(s\.approvalSummaryText, \/Request to remember permission\/\)/,
+  );
+  assert.doesNotMatch(
+    capture,
+    /assert\.match\(s\.approvalSummaryText, \/Remembered permission\/\)/,
+  );
 });
