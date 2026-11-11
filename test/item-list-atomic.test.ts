@@ -278,7 +278,7 @@ test("unawaited scoped publication failure is still an unknown operation result"
   );
 });
 
-test("public reads decode owned values while unchanged append scopes reuse verified bytes", async (t) => {
+test("public reads warm owned prefixes while unchanged append scopes reuse verified bytes", async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "zen-item-decode-count-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const store = new FileItemListStore(dir);
@@ -329,8 +329,9 @@ test("public reads decode owned values while unchanged append scopes reuse verif
   }
   t.diagnostic(JSON.stringify({ counts }));
   assert.deepEqual(counts, [
-    { clones: 40, parses: 40 },
-    { clones: 40, parses: 40 },
+    // Forty schema-decoded items plus one defensive public-result clone.
+    { clones: 41, parses: 40 },
+    { clones: 0, parses: 0 },
     { clones: 0, parses: 0 },
     { clones: 0, parses: 0 },
   ]);
@@ -434,10 +435,6 @@ test("append snapshot rejects old, new-batch and successfully repaired identity 
     }),
     /duplicate/,
   );
-  assert.deepEqual(
-    (await store.read("t")).map((value) => value.id),
-    ["old", "repair"],
-  );
   const parse = JSON.parse;
   let parses = 0;
   const countedParse = t.mock.method(
@@ -449,6 +446,16 @@ test("append snapshot rejects old, new-batch and successfully repaired identity 
     },
   );
   try {
+    assert.deepEqual(
+      (await store.read("t")).map((value) => value.id),
+      ["old", "repair"],
+    );
+    assert.equal(
+      parses,
+      2,
+      "the failed scope retires its prefix before a public read warms it",
+    );
+    parses = 0;
     await store.withAppendSnapshot("t", async (scope) => {
       assert.deepEqual(
         (await scope.read()).map((value) => value.id),
@@ -458,8 +465,8 @@ test("append snapshot rejects old, new-batch and successfully repaired identity 
     });
     assert.equal(
       parses,
-      2,
-      "the next scope parses its complete durable prefix",
+      0,
+      "the next scope reuses its freshly read and byte-verified durable prefix",
     );
   } finally {
     countedParse.mock.restore();
