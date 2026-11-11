@@ -32,6 +32,8 @@ export function observeReading() {
       background: style.backgroundColor,
       scrollWidth: e.scrollWidth,
       clientWidth: e.clientWidth,
+      offsetWidth: e.offsetWidth,
+      clientLeft: e.clientLeft,
       scrollHeight: e.scrollHeight,
       clientHeight: e.clientHeight,
       scrollTop: e.scrollTop,
@@ -43,7 +45,8 @@ export function observeReading() {
   const names = {
     sidebar: ".sidebar",
     thread: ".thread-view",
-    column: ".messages-inner",
+    column:
+      ".virtual-transcript-header, .virtual-transcript-row, .messages-inner",
     messages: ".messages",
     prose: ".agent-copy",
     paragraph: ".agent-copy .markdown-body p",
@@ -74,6 +77,12 @@ export function observeReading() {
   );
   return {
     ...targets,
+    columnKind: document.querySelector(names.column)?.className ?? null,
+    messageScrollbarWidth: targets.messages
+      ? targets.messages.offsetWidth -
+        targets.messages.clientWidth -
+        2 * targets.messages.clientLeft
+      : null,
     horizontalOverflow: document.documentElement.scrollWidth > innerWidth,
     conversationUncoveredHeight:
       targets.messages && targets.bottom

@@ -1057,15 +1057,24 @@ function ThreadViewContent({
       ?.querySelector<HTMLElement>(
         ".virtual-transcript-header, .messages-inner",
       );
-    if (!tray || !zone || !column) return;
+    if (!zone || !column) return;
     const measure = () => {
       const rect = column.getBoundingClientRect();
-      if (rect.width <= 0 || tray.offsetWidth <= 0) return;
-      const origin =
+      if (rect.width <= 0) return;
+      const contentOrigin =
         zone.getBoundingClientRect().left +
         zone.clientLeft +
-        parseFloat(getComputedStyle(zone).paddingLeft) +
-        tray.clientLeft;
+        parseFloat(getComputedStyle(zone).paddingLeft);
+      // The transcript centers inside its native scrollbar-reduced viewport.
+      // Align the Composer to that measured column, not the wider bottom zone.
+      const composerGeometry = steerPreviewColumn(rect, contentOrigin, 0);
+      for (const [name, value] of Object.entries(composerGeometry)) {
+        const pixel = `${value}px`;
+        if (zone.style.getPropertyValue(`--composer-column-${name}`) !== pixel)
+          zone.style.setProperty(`--composer-column-${name}`, pixel);
+      }
+      if (!tray || tray.offsetWidth <= 0) return;
+      const origin = contentOrigin + tray.clientLeft;
       const geometry = steerPreviewColumn(
         rect,
         origin,
@@ -1088,7 +1097,7 @@ function ThreadViewContent({
     const scrollport = column.closest(".messages");
     if (scrollport) observer.observe(scrollport);
     observer.observe(zone);
-    observer.observe(tray);
+    if (tray) observer.observe(tray);
     return () => observer.disconnect();
   });
   const composerTextareaRef = useRef<ComposerInput>(null);

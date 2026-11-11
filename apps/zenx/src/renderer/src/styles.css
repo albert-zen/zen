@@ -13310,3 +13310,14 @@ button:disabled {
     border-color: var(--color-border-subtle);
   }
 }
+
+/* Native transcript gutters can move the centered column by half a scrollbar.
+   Use its actual box for the desktop Composer, including split-pane layouts. */
+@media (min-width: 961px) {
+  .thread-view .bottom-zone > .composer {
+    margin-inline: 0;
+    left: var(--composer-column-left, 0px);
+    width: var(--composer-column-width, 100%);
+    max-width: var(--conversation-width);
+  }
+}

@@ -179,3 +179,43 @@ test("approval coexistence opens the real compact Queue disclosure before judgin
   assert(source.indexOf('await save("pending-approval"', edit) > edit);
   assert.doesNotMatch(source, /setAttribute\(|\.click\(|\.focus\(/);
 });
+
+test("observer measures both production virtual and legacy content columns, not only the absent legacy node", async () => {
+  const { JSDOM } = await import("jsdom");
+  for (const klass of [
+    "virtual-transcript-header",
+    "virtual-transcript-row",
+    "messages-inner",
+  ]) {
+    const dom = new JSDOM(
+      `<div class="thread-view"><div class="messages"><div class="${klass}"></div></div></div>`,
+      { runScripts: "outside-only" },
+    );
+    try {
+      dom.window.document.elementFromPoint = () => null;
+      const observed = dom.window.eval(`(${observeReading.toString()})()`);
+      assert(observed.column);
+      assert.equal(observed.columnKind, klass);
+      assert.equal(
+        observed.column.rect.width,
+        0,
+        "DOM structure test, not pixel evidence",
+      );
+      assert.equal(observed.messageScrollbarWidth, 0);
+    } finally {
+      dom.window.close();
+    }
+  }
+});
+
+test("the observed five-pixel native-scrollbar drift still fails shared-column alignment", () => {
+  const s = state();
+  s.column = box(366.5, 1166.5);
+  s.thread = box(264, 1279);
+  s.composer = box(371.5, 1171.5);
+  s.table = box(366.5, 1166.5);
+  s.code = box(366.5, 1166.5);
+  assert.throws(() => verifyReading(s), /shared column alignment/);
+  s.column = null;
+  assert.throws(() => verifyReading(s), /reading column respects/);
+});
