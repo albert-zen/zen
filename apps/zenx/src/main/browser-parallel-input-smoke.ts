@@ -1,3 +1,4 @@
+import { observeFixtureResponseTiming } from "./browser-fixture-response-timing.js";
 import {
   browserExtensionsFixturePath,
   browserExtensionsFixtureBody,
@@ -3467,8 +3468,13 @@ async function main(): Promise<void> {
   let browserRpc: Rpc | undefined,
     userRpc: Rpc | undefined,
     agentRpc: Rpc | undefined;
+  const extensionResponseTiming: unknown[] = [];
   const server = createServer((request, response) => {
     if (request.url?.startsWith(browserExtensionsFixturePath)) {
+      observeFixtureResponseTiming(response, (event) => {
+        if (extensionResponseTiming.length < 24)
+          extensionResponseTiming.push(event);
+      });
       response.setHeader("content-type", "application/json");
       response.setHeader("cache-control", "no-store");
       response.end(browserExtensionsFixtureBody);
@@ -4231,6 +4237,7 @@ async function main(): Promise<void> {
         reports,
         phase,
         transportDiagnostics,
+        extensionResponseTiming,
         transportDropped,
         remoteFrameFailure,
         ownedBrowser: {
