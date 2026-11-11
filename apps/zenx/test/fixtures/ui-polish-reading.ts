@@ -170,6 +170,9 @@ export function readReadingRequest(
 export const readingBridgeReads = new Set([
   "computerReadiness.get",
   "chromeBridge.get",
+  // FleetComposerSurface reads the local synthetic device list on mount. This
+  // is not a wildcard for remote catalogs, thread creation or fleet writes.
+  "fleet.status",
   "panels.onOpen",
   "protocol.getStatus",
   "protocol.getPendingApprovals",
@@ -203,21 +206,38 @@ export const readingBridgeReads = new Set([
   "workspaceBrowser.onChanged",
   "workspaceBrowser.onFocusAddress",
 ]);
-export function guardReadingBridge<T extends object>(bridge: T, path = ""): T {
-  return new Proxy(bridge, {
+export function guardReadingBridge<T extends object>(
+  bridge: T,
+  path = "",
+  cache = new WeakMap<object, Map<string, object>>(),
+): T {
+  const known = cache.get(bridge)?.get(path);
+  if (known) return known as T;
+  // Production effects depend on bridge identity. A fresh proxy on each read
+  // would repeatedly rerun FleetComposerSurface's [api] startup effect.
+  const methods = new Map<PropertyKey, { source: unknown; guarded: unknown }>();
+  const proxy = new Proxy(bridge, {
     get(target, key, receiver) {
       const value = Reflect.get(target, key, receiver);
       const name = path ? `${path}.${String(key)}` : String(key);
       if (typeof value === "function") {
-        if (!readingBridgeReads.has(name))
-          return () => {
-            throw new Error(`Reading bridge denied: ${name}`);
-          };
-        return value.bind(target);
+        const method = methods.get(key);
+        if (method?.source === value) return method.guarded;
+        const guarded = readingBridgeReads.has(name)
+          ? value.bind(target)
+          : () => {
+              throw new Error(`Reading bridge denied: ${name}`);
+            };
+        methods.set(key, { source: value, guarded });
+        return guarded;
       }
       return value && typeof value === "object"
-        ? guardReadingBridge(value, name)
+        ? guardReadingBridge(value, name, cache)
         : value;
     },
   });
+  const paths = cache.get(bridge) ?? new Map<string, object>();
+  paths.set(path, proxy);
+  cache.set(bridge, paths);
+  return proxy;
 }

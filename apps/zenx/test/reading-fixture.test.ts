@@ -137,3 +137,76 @@ test("reading integrates the production App and read-only navigation Information
   assert.match(source, /else createRoot.*render\(<App \/>\)/);
   assert.match(source, /readNavigationQuestions/);
 });
+
+test("App startup may read synthetic fleet status without admitting remote or mutating fleet operations", async () => {
+  let reads = 0,
+    otherCalls = 0;
+  const snapshot = {
+    revision: 1,
+    config: { version: 1, devices: [] },
+    host: { enabled: false, hostId: "synthetic-host", clients: [] },
+  };
+  const guarded = guardReadingBridge({
+    fleet: {
+      status: async () => {
+        reads++;
+        return snapshot;
+      },
+      catalog: () => otherCalls++,
+      threadCreate: () => otherCalls++,
+      update: () => otherCalls++,
+    },
+  });
+  assert.equal(await guarded.fleet.status(), snapshot);
+  assert.equal(reads, 1);
+  for (const invoke of [
+    () => guarded.fleet.catalog(),
+    () => guarded.fleet.threadCreate(),
+    () => guarded.fleet.update(),
+  ])
+    assert.throws(invoke, /Reading bridge denied: fleet\./);
+  assert.equal(otherCalls, 0);
+  const source = await readFile(
+    new URL("./fixtures/ui-polish-visual.tsx", import.meta.url),
+    "utf8",
+  );
+  const implementation = source.slice(
+    source.indexOf("fleet: {"),
+    source.indexOf("catalog: async"),
+  );
+  assert.match(implementation, /status: async \(\) =>/);
+  assert.match(
+    implementation,
+    /Synthetic QA target; no connection is attempted/,
+  );
+  assert.match(implementation, /host: \{ enabled: false/);
+  assert.doesNotMatch(
+    implementation,
+    /fetch\(|WebSocket|executeCommand|threadCreate/,
+  );
+});
+
+test("read bridge preserves effect dependencies without leaking permissions through aliases", async () => {
+  const source = { status: async () => ({ config: { devices: [] } }) };
+  const bridge = guardReadingBridge({ fleet: source, unknown: source });
+  assert.equal(
+    bridge.fleet,
+    bridge.fleet,
+    "[api] remains stable between component renders",
+  );
+  assert.equal(
+    bridge.fleet.status,
+    bridge.fleet.status,
+    "bound subscriptions/read methods retain identity",
+  );
+  assert.notEqual(
+    bridge.fleet,
+    bridge.unknown,
+    "same object at another path retains that path's permissions",
+  );
+  assert.throws(
+    () => bridge.unknown.status(),
+    /Reading bridge denied: unknown.status/,
+  );
+  assert.deepEqual(await bridge.fleet.status(), { config: { devices: [] } });
+});
