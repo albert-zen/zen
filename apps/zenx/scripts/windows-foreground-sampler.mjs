@@ -20,10 +20,14 @@ Add-Type -TypeDefinition ([System.IO.File]::ReadAllText($SourcePath)) -OutputAss
 `;
 const sampleScript = `param([string] $AssemblyPath)
 $ErrorActionPreference = "Stop"
+[Console]::Error.WriteLine("ZEN_FOREGROUND_STAGE:started")
 Add-Type -Path $AssemblyPath
+[Console]::Error.WriteLine("ZEN_FOREGROUND_STAGE:assembly-loaded")
 $window = [ForegroundWitness]::GetForegroundWindow()
+[Console]::Error.WriteLine("ZEN_FOREGROUND_STAGE:window-read")
 [uint32]$owner = 0
 [void][ForegroundWitness]::GetWindowThreadProcessId($window, [ref]$owner)
+[Console]::Error.WriteLine("ZEN_FOREGROUND_STAGE:owner-read")
 @{pid=$owner;hwnd=$window.ToInt64().ToString()} | ConvertTo-Json -Compress
 `;
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -68,6 +72,8 @@ export async function createWindowsForegroundSampler({
     const evidence = {
       setupElapsedMs: performance.now() - setupStarted,
       sampleElapsedMs: [],
+      failedSamples: [],
+      failedSamplesDropped: 0,
     };
     return {
       evidence,
@@ -79,7 +85,30 @@ export async function createWindowsForegroundSampler({
           "Foreground sampler assembly changed",
         );
         const sampleStarted = performance.now();
-        const { stdout } = await invoke(samplePath, [assemblyPath], 5000);
+        let stdout;
+        try {
+          ({ stdout } = await invoke(samplePath, [assemblyPath], 5000));
+        } catch (error) {
+          const stages = String(error?.stderr ?? "")
+            .split(/\r?\n/u)
+            .filter((line) =>
+              /^ZEN_FOREGROUND_STAGE:(started|assembly-loaded|window-read|owner-read)$/u.test(
+                line,
+              ),
+            )
+            .slice(0, 4)
+            .map((line) => line.slice("ZEN_FOREGROUND_STAGE:".length));
+          if (evidence.failedSamples.length < 8)
+            evidence.failedSamples.push({
+              elapsedMs: performance.now() - sampleStarted,
+              budgetMs: 5000,
+              killed: error?.killed === true,
+              signal: error?.signal === "SIGTERM" ? "SIGTERM" : null,
+              stages,
+            });
+          else evidence.failedSamplesDropped++;
+          throw error;
+        }
         if (evidence.sampleElapsedMs.length < 64)
           evidence.sampleElapsedMs.push(performance.now() - sampleStarted);
         const sample = JSON.parse(stdout.trim());
