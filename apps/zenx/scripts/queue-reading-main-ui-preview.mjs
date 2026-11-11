@@ -6,6 +6,7 @@ export function observeQueueReading() {
     const r = e.getBoundingClientRect(),
       style = getComputedStyle(e);
     return {
+      id: e.id,
       rect: {
         x: r.x,
         y: r.y,
@@ -41,6 +42,9 @@ export function observeQueueReading() {
       outline: style.outlineStyle,
       outlineWidth: parseFloat(style.outlineWidth),
       disabled: !!e.disabled,
+      position: style.position,
+      controls: e.getAttribute("aria-controls"),
+      expanded: e.getAttribute("aria-expanded"),
     };
   };
   const tray = document.querySelector(".pending-tray"),
@@ -64,6 +68,19 @@ export function observeQueueReading() {
     composer: target(".composer"),
     editor: target('.composer [contenteditable="true"], .composer textarea'),
     edit: target(".queue-row-edit:not(:disabled)"),
+    returnAction: target('[data-queue-control="reading-return"]'),
+    returnFooter: target(".queue-reading-return"),
+    lastRow: target(
+      ".queue-shelf:has(> .queue-reading-return) .queue-shelf-list > .queue-row:last-child",
+    ),
+    rowActions: [
+      ...document.querySelectorAll(".pending-tray .queue-row button"),
+    ].map((button) => ({
+      control: button.getAttribute("data-queue-control"),
+      classes: button.className,
+      disabled: button.disabled,
+      tabIndex: button.tabIndex,
+    })),
     bodyReading: [
       ...document.querySelectorAll(".pending-tray .queue-row-content"),
     ].map((e) => {
@@ -88,6 +105,7 @@ export function observeQueueReading() {
       id: document.activeElement?.id,
       classes: document.activeElement?.className,
       focusVisible: document.activeElement?.matches(":focus-visible"),
+      inQueueRow: !!document.activeElement?.closest(".queue-row"),
     },
     documentFocused: document.hasFocus(),
   };
@@ -97,7 +115,14 @@ export function verifyQueueReading(s, baseline, expanded, focus) {
     s.bodyReading.length > 0,
     "Observe real queued-message body content, not an empty tray",
   );
-  assert(s.toggle?.visible && s.toggle.hit, "Reading toggle remains reachable");
+  assert(s.toggle, "Original header reading toggle remains present");
+  // At the trailing return, require the focused footer's real hit target below.
+  // The sticky header's geometry remains recorded, not a second focus contract.
+  if (focus !== "returnAction")
+    assert(
+      s.toggle.visible && s.toggle.hit,
+      "Reading toggle remains reachable",
+    );
   assert.equal(s.expanded, String(expanded));
   assert(
     s.controls && s.controls === s.trayId,
@@ -157,6 +182,97 @@ export function verifyQueueReading(s, baseline, expanded, focus) {
       );
   }
 }
+
+export function verifyQueueReturn(s, baseline, expanded, atReturn = false) {
+  assert(
+    baseline.rowActions.length > 0,
+    "Fixture includes actual per-message actions",
+  );
+  assert.deepEqual(
+    s.rowActions,
+    baseline.rowActions,
+    "Return shortcut does not remove or retab message actions",
+  );
+  if (!expanded) {
+    assert.equal(
+      s.returnAction,
+      null,
+      "Default/collapsed state has no extra return control",
+    );
+    assert.equal(
+      s.returnFooter,
+      null,
+      "Default/collapsed state has no footer space cost",
+    );
+    return;
+  }
+  assert(
+    s.returnAction && s.returnFooter && s.lastRow,
+    "Expanded footer follows actual queue rows",
+  );
+  assert.equal(s.returnAction.controls, s.trayId);
+  assert.equal(s.returnAction.expanded, "true");
+  assert(
+    ["static", "relative"].includes(s.returnFooter.position),
+    "Return is ordinary flow, not a sticky or floating overlay",
+  );
+  assert(s.returnFooter.rect.height > 0, "Record real footer space cost");
+  assert(
+    s.returnFooter.rect.y >= s.lastRow.rect.bottom - 1,
+    "Footer does not cover the last message row",
+  );
+  if (atReturn)
+    assert(
+      s.returnFooter.rect.bottom <= s.composer.rect.y + 1,
+      "Visible return footer stays above the Composer",
+    );
+}
+
+export async function tabToQueueControl({
+  send,
+  observe,
+  evaluate,
+  evidence,
+  options,
+  selector,
+  step,
+  direction = "forward",
+}) {
+  const trace = {
+    step,
+    theme: options.theme,
+    selector,
+    direction,
+    limit: 80,
+    steps: 0,
+    matched: false,
+    before: await observe(),
+    observations: [],
+  };
+  (evidence.queueReadingTabAttempts ??= []).push(trace);
+  for (let i = 0; i < 80; i++) {
+    for (const type of ["rawKeyDown", "keyUp"])
+      await send("Input.dispatchKeyEvent", {
+        type,
+        key: "Tab",
+        code: "Tab",
+        windowsVirtualKeyCode: 9,
+        modifiers: direction === "backward" ? 8 : 0,
+      });
+    const s = await observe();
+    trace.steps = i + 1;
+    trace.observations.push(s);
+    if (
+      await evaluate(
+        `document.activeElement?.matches(${JSON.stringify(selector)})`,
+      )
+    ) {
+      trace.matched = true;
+      return trace;
+    }
+  }
+  throw Error(`Native Tab failed: ${step}`);
+}
 export async function captureQueueReading({
   send,
   evaluate,
@@ -200,39 +316,29 @@ export async function captureQueueReading({
     await capture(`${prefix}-${step}`, options, "pending");
     return s;
   };
-  const tab = async (selector, step, direction = "forward") => {
-    const trace = { step, direction, limit: 80, observations: [] };
-    (evidence.queueReadingTabAttempts ??= []).push(trace);
-    for (let i = 0; i < 80; i++) {
-      for (const type of ["rawKeyDown", "keyUp"])
-        await send("Input.dispatchKeyEvent", {
-          type,
-          key: "Tab",
-          code: "Tab",
-          windowsVirtualKeyCode: 9,
-          modifiers: direction === "backward" ? 8 : 0,
-        });
-      const s = await observe();
-      trace.observations.push(s);
-      if (
-        await evaluate(
-          `document.activeElement?.matches(${JSON.stringify(selector)})`,
-        )
-      )
-        return;
-    }
-    throw Error(`Native Tab failed: ${step}`);
-  };
+  const tab = (selector, step, direction = "forward") =>
+    tabToQueueControl({
+      send,
+      observe,
+      evaluate,
+      evidence,
+      options,
+      selector,
+      step,
+      direction,
+    });
   try {
     await wait("!!document.querySelector('.queue-reading-toggle')");
     const baseline = await save("rest");
     verifyQueueReading(baseline, baseline, false);
+    verifyQueueReturn(baseline, baseline, false);
     await click(".queue-reading-toggle");
     await wait(
       "document.querySelector('.queue-reading-toggle')?.getAttribute('aria-expanded')==='true'",
     );
     const expanded = await save("expanded");
     verifyQueueReading(expanded, baseline, true);
+    verifyQueueReturn(expanded, baseline, true);
     assert(
       expanded.readableRows >= baseline.readableRows,
       "More space does not reduce visible rows",
@@ -244,13 +350,27 @@ export async function captureQueueReading({
       "composer",
     );
     verifyQueueReading(await save("composer-focus"), baseline, true, "editor");
-    await tab(".queue-reading-toggle:focus-visible", "toggle", "backward");
-    verifyQueueReading(
-      await save("collapse-toggle-focus"),
-      baseline,
-      true,
-      "toggle",
+    const returnTrace = await tab(
+      '[data-queue-control="reading-return"]:focus-visible',
+      "reading-return",
+      "backward",
     );
+    assert(
+      !returnTrace.observations.some((s) => s.active.inQueueRow),
+      "Reverse Tab reaches the trailing return before per-message actions",
+    );
+    const returnState = await save("collapse-return-focus");
+    verifyQueueReading(returnState, baseline, true, "returnAction");
+    verifyQueueReturn(returnState, baseline, true, true);
+    const trip = {
+      theme: options.theme,
+      backwardTabs: returnTrace.steps,
+      footerHeight: returnState.returnFooter.rect.height,
+      footerToComposerGap:
+        returnState.composer.rect.y - returnState.returnFooter.rect.bottom,
+      returnedToComposer: false,
+    };
+    (evidence.queueReadingReturnTrips ??= []).push(trip);
     for (const type of ["keyDown", "keyUp"])
       await send("Input.dispatchKeyEvent", {
         type,
@@ -260,14 +380,12 @@ export async function captureQueueReading({
         ...(type === "keyDown" ? { text: "\r", unmodifiedText: "\r" } : {}),
       });
     await wait(
-      "document.querySelector('.queue-reading-toggle')?.getAttribute('aria-expanded')==='false'",
+      "document.querySelector('.queue-reading-toggle')?.getAttribute('aria-expanded')==='false' && !document.querySelector('[data-queue-control=\"reading-return\"]') && document.activeElement?.matches('.composer [contenteditable=\"true\"], .composer textarea')",
     );
-    verifyQueueReading(
-      await save("collapsed-focus"),
-      baseline,
-      false,
-      "toggle",
-    );
+    const collapsed = await save("collapsed-composer-focus");
+    verifyQueueReading(collapsed, baseline, false, "editor");
+    verifyQueueReturn(collapsed, baseline, false);
+    trip.returnedToComposer = collapsed.editor.focused;
   } catch (error) {
     (evidence.queueReadingFailures ??= []).push({
       theme: options.theme,
