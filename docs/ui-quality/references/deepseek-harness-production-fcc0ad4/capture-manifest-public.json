@@ -1,0 +1,76 @@
+{
+  "fixtureSha256": "08921A6636E1693F762E70F805E5CA9FF2523ECF1313AE5B4F70ABFF9F29AC62",
+  "version": "0.2.2-rc.1-fcc0ad4",
+  "screenshots": [
+    {
+      "width": 1234,
+      "height": 675,
+      "file": "main-conversation-dark.jpg",
+      "sha256": "1F5ABAEB583F820268899B0BD01D193CFBA0DB52E1D3656E0744A9212EE50DA1"
+    },
+    {
+      "width": 1234,
+      "height": 675,
+      "file": "subagents-dark.jpg",
+      "sha256": "1B5C125D83755E17A62144C3B8EDF67526FF074925E3862299AFC1312E2F2776"
+    },
+    {
+      "width": 1234,
+      "height": 675,
+      "file": "subagent-sidebar-dark.jpg",
+      "sha256": "6AEC34E2E984C02192482B73A9C5A432307682DFB1AE66E80A6DA57917A17CA4"
+    }
+  ],
+  "repository": "https://github.com/deepseek-ai/deepseek-harness",
+  "tree": "6cccb3ee8c1501c9d623258a660f7413761dd0f0",
+  "sourceClean": true,
+  "timingsSeconds": {
+    "preview": 118.7250159,
+    "artifacts": 338.8209328,
+    "install": 526.6
+  },
+  "capture": {
+    "browser": "Microsoft Edge through supported browser tooling",
+    "locale": "zh",
+    "theme": "dark",
+    "cropped": false,
+    "viewport": {
+      "width": 1234,
+      "height": 675,
+      "devicePixelRatio": 2
+    },
+    "uiOperations": [
+      "Dismiss nonbinding preview notice",
+      "Select WebWorker Preview Showcase",
+      "Open subagent list",
+      "Open Review preview architecture in right sidebar"
+    ],
+    "date": "2026-11-11",
+    "format": "JPEG"
+  },
+  "node": "24.15.0",
+  "fixture": "source-owned vfs-example",
+  "artifacts": [
+    {
+      "file": "apps\\web\\dist\\preview.html",
+      "sha256": "D3A981E4BE92563D754A46C749AAA968D3B72A9E8FCB65FA81BDA3ED6FDCD4FC"
+    },
+    {
+      "file": "apps\\web\\dist\\preview\\vfs-image.tar.gz",
+      "sha256": "C6D98E074FDF3EC82C20502808BFA8D0E46AD649231687A9997E91EC611201D1"
+    },
+    {
+      "file": "apps\\web\\dist\\preview\\fixtures.json",
+      "sha256": "59CA7F3E416A3846460AE7EA5AA5C2BAC9B55ABB24B08AF89D366EBC80D8CF09"
+    }
+  ],
+  "limits": [
+    "Real production UI rendering using bundled synthetic history, not a live model run",
+    "No account or model credentials entered; no message sent",
+    "Artifacts-only build, not a full functional test suite",
+    "These screenshots are separate from unversioned official website artwork",
+    "Single desktop dark viewport, not light/mobile coverage"
+  ],
+  "commit": "fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159",
+  "pnpm": "11.28.5"
+}
