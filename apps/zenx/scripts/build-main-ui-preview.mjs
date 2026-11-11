@@ -46,6 +46,8 @@ const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const git = (...args) =>
   execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
 const sources = new Set([
+  "apps/zenx/scripts/queue-reading-main-ui-preview.mjs",
+  "apps/zenx/test/queue-reading-main-ui-preview.test.mjs",
   "package-lock.json",
   "apps/zenx/scripts/build-main-ui-preview.mjs",
   "apps/zenx/scripts/capture-main-ui-preview.mjs",

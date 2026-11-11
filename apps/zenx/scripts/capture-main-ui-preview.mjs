@@ -1,3 +1,4 @@
+import { captureQueueReading } from "./queue-reading-main-ui-preview.mjs";
 /** One sandboxed Chrome, bounded scenes; no aggregate CI dependency or browser download. */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -29,7 +30,9 @@ assert.equal(process.platform, "linux", "Existing Ubuntu Chrome required.");
 const started = performance.now();
 const root = path.resolve(fileURLToPath(new URL("../../..", import.meta.url)));
 const directory = path.resolve(process.argv[2] ?? ".main-ui-preview");
-const pointer = process.argv[3] ?? "fine";
+const captureProfile = process.argv[3] ?? "fine";
+const desktopQueue = captureProfile === "desktop-queue";
+const pointer = desktopQueue ? "fine" : captureProfile;
 assert(["fine", "coarse"].includes(pointer), "Pointer must be fine or coarse");
 const coarse = pointer === "coarse";
 const evidenceFile = coarse ? "evidence-coarse.json" : "evidence.json";
@@ -81,6 +84,7 @@ const evidence = {
   scope:
     "Fast production-component rendering only. All content and services are synthetic. Not native Electron, OS capture, live Host, end-to-end acceptance or a full regression run.",
   pointer,
+  captureProfile,
   browserSandboxDisabled: false,
   externalRequests: [],
   rendererErrors: [],
@@ -402,6 +406,12 @@ try {
       onlyScene: "pending",
     },
   ];
+  if (desktopQueue)
+    assert.deepEqual(
+      Object.keys(source.scenes),
+      ["pending"],
+      "Desktop queue requires only the pending bundle",
+    );
   const cases = coarse
     ? [
         {
@@ -422,7 +432,9 @@ try {
         },
       ]
     : fineCases;
-  for (const options of cases) {
+  for (const options of desktopQueue
+    ? cases.filter((c) => c.width === 1280 && c.height === 900)
+    : cases) {
     await send("Emulation.setDeviceMetricsOverride", {
       width: options.width,
       height: options.height,
@@ -504,6 +516,18 @@ try {
         await wait(
           "(document.querySelector('.queue-row-edit')?.getBoundingClientRect().width??0)>0",
         );
+      }
+      if (desktopQueue) {
+        await captureQueueReading({
+          send,
+          evaluate,
+          wait,
+          click,
+          capture,
+          evidence,
+          options,
+        });
+        continue;
       }
       await capture(`${scene}-${options.name}`, options, scene);
       if (scene === "pending") {
