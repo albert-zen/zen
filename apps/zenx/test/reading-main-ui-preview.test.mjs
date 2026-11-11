@@ -167,3 +167,15 @@ test("dedicated profile is desktop-only, source-bound and independent of aggrega
   for (const path of readingPaths) assert(readingPathsChanged([path]));
   assert.equal(readingPathsChanged(["docs/ui-quality/evidence.png"]), false);
 });
+
+test("approval coexistence opens the real compact Queue disclosure before judging its actions", async () => {
+  const source = await read("../scripts/reading-main-ui-preview.mjs");
+  assert.match(source, /getAttribute\('aria-expanded'\) === 'false'/);
+  const disclosure = source.indexOf('await click(".queue-shelf-toggle")');
+  const edit = source.indexOf(
+    "await wait(\"!!document.querySelector('.queue-row-edit:not(:disabled)')\")",
+  );
+  assert(disclosure > 0 && edit > disclosure);
+  assert(source.indexOf('await save("pending-approval"', edit) > edit);
+  assert.doesNotMatch(source, /setAttribute\(|\.click\(|\.focus\(/);
+});

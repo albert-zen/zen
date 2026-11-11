@@ -308,6 +308,15 @@ export async function captureDesktopReading({
     await wait(
       "!!document.querySelector('.approval-request-card') && !!document.querySelector('.queue-shelf')",
     );
+    // Approval coexistence intentionally starts the compact Queue collapsed.
+    // Open its real disclosure before judging message actions, never alter DOM.
+    if (
+      await evaluate(
+        "document.querySelector('.queue-shelf-toggle')?.getAttribute('aria-expanded') === 'false'",
+      )
+    )
+      await click(".queue-shelf-toggle");
+    await wait("!!document.querySelector('.queue-row-edit:not(:disabled)')");
     await scroll();
     await save("pending-approval", { pending: true });
     await openInformation();

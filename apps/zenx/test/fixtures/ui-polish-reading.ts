@@ -165,6 +165,13 @@ export function readReadingRequest(
   throw new Error(`Unsupported read-only reading protocol: ${method}`);
 }
 
+/** AuxiliaryPanel reads existing tabs on mount. The reading scene has none. */
+export function readingBrowserCommand(...args: unknown[]) {
+  if (args.length !== 2 || args[0] !== "thread-1" || args[1] !== "list")
+    throw new Error("Unsupported read-only reading browser command");
+  return [];
+}
+
 // These methods only expose deterministic fixture values or no-op subscriptions.
 // Every other callable bridge surface is denied before reaching its implementation.
 export const readingBridgeReads = new Set([
@@ -203,6 +210,7 @@ export const readingBridgeReads = new Set([
   "workspaceFiles.list",
   "workspaceFiles.read",
   "browserObservation.subscribe",
+  "workspaceBrowser.command", // Implementation validates exact owner + list only.
   "workspaceBrowser.onChanged",
   "workspaceBrowser.onFocusAddress",
 ]);

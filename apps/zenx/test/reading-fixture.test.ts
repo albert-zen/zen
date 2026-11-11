@@ -8,6 +8,7 @@ import {
   readingMarkdown,
   readingRecovery,
   readingApprovals,
+  readingBrowserCommand,
   readReadingRequest,
 } from "./fixtures/ui-polish-reading.js";
 const base: Thread = {
@@ -209,4 +210,45 @@ test("read bridge preserves effect dependencies without leaking permissions thro
     /Reading bridge denied: unknown.status/,
   );
   assert.deepEqual(await bridge.fleet.status(), { config: { devices: [] } });
+});
+
+test("AuxiliaryPanel startup admits only the exact synthetic thread tab-list read", async () => {
+  const bridge = guardReadingBridge({
+    workspaceBrowser: {
+      command: readingBrowserCommand,
+      mount: () => assert.fail("No browser view may mount"),
+    },
+  });
+  assert.deepEqual(bridge.workspaceBrowser.command("thread-1", "list"), []);
+  for (const args of [
+    [],
+    ["other", "list"],
+    ["thread-1", "list", "tab"],
+    ["thread-1", "list", undefined],
+    ...[
+      "new",
+      "close",
+      "navigate",
+      "materialize",
+      "take-control",
+      "return-control",
+      "reload",
+    ].map((op) => ["thread-1", op]),
+  ])
+    assert.throws(
+      () => bridge.workspaceBrowser.command(...args),
+      /read-only reading browser command/,
+    );
+  assert.throws(() => bridge.workspaceBrowser.mount(), /Reading bridge denied/);
+  const source = await readFile(
+    new URL("../src/renderer/src/auxiliary-panel.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /api.command\(threadId, "list"\)/);
+  const fixture = await readFile(
+    new URL("./fixtures/ui-polish-visual.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(fixture, /tabId !== undefined \|\| url !== undefined/);
+  assert.match(fixture, /return readingBrowserCommand\(threadId, command\)/);
 });

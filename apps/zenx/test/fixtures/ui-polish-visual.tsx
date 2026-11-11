@@ -22,6 +22,7 @@ import {
   guardReadingBridge,
   readReadingRequest,
   readingApprovals,
+  readingBrowserCommand,
 } from "./ui-polish-reading.js";
 import type { NativeInformationApi } from "../../src/native-information.js";
 import "../../src/renderer/src/theme.css";
@@ -179,6 +180,11 @@ const zenx = {
       tabId?: string,
       url?: string,
     ) => {
+      if (readingScene) {
+        if (tabId !== undefined || url !== undefined)
+          throw new Error("Reading browser list accepts no tab or URL");
+        return readingBrowserCommand(threadId, command);
+      }
       if (command === "new")
         previewTabs.push({
           id: crypto.randomUUID(),
