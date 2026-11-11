@@ -267,7 +267,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - Trigger/Room 输入以独立 Host 来源展示，不呈现成人类消息；来源的精确 ID 放详情。Host 与 Agent 排队输入可取消，不提供仅人类输入支持的 Edit；人类 queue 的编辑能力保持。
 - 第一层只显示既有 primary orb，不新增常驻展开按钮。orb 位于 Composer 最右侧，与右下圆角保持既有关系；hover 与 keyboard focus 打开同一个主题化非模态面板。primary 点击始终直接发送或中断，面板顶部只出现一次当前动作与后果说明，运行中其他动作只显示真实 modifier-Enter shortcut，不发明 modifier-click 或新的发送行为。
 - primary orb 保持 44px hit target 与既有较小可见圆。触摸点击直接执行当前 Send / Stop，不拦截为展开，也不添加常驻触摸选项按钮。面板内所有动作的 hit target 至少 44px 高。
-- 面板不冒充 tooltip 或纯 ARIA menu：它包含可聚焦的命令与已有全局偏好 Select，使用 nonmodal dialog。Arrow Up/Down 从 orb 进入面板，Tab 按普通控件顺序导航；primary disabled 时同一命中区域保留键盘可达性以编辑偏好。Escape 关闭并把面板拥有的焦点还给 orb（disabled 时为同位置的焦点区），普通 hover/focus 不抢焦点。真实 hover bridge 与短离开延迟覆盖 pointer gap；在面板内聚焦后保持可用，outside interaction 或 Escape 可关闭。Turn/context 变化丢弃旧动作，保留草稿；持续 hover 可以显示新的当前动作，但不得保留或执行旧 Turn 的动作。
+- 面板不冒充 tooltip 或纯 ARIA menu：它包含可聚焦的命令与已有全局偏好 Select，使用 nonmodal dialog。Arrow Up/Down 从 orb 进入面板，Tab 按普通控件顺序导航；首项 Shift+Tab 关闭面板回到 orb，末项 Tab 关闭并前往 orb 之后的下一个可达页面控件，不在面板内首尾循环；嵌套 Select 保留自身键盘行为；primary disabled 时同一命中区域保留键盘可达性以编辑偏好。Escape 关闭并把面板拥有的焦点还给 orb（disabled 时为同位置的焦点区），普通 hover/focus 不抢焦点。真实 hover bridge 与短离开延迟覆盖 pointer gap；在面板内聚焦后保持可用，outside interaction 或 Escape 可关闭。Turn/context 变化丢弃旧动作，保留草稿；持续 hover 可以显示新的当前动作，但不得保留或执行旧 Turn 的动作。
 - Running 且无内容时 primary 保持红色 Stop / interrupt；纯空白文字按 Empty 处理。沿用既有 draft 判定：附件也是内容，因此只有附件时仍为发送动作，不能为了显示 Stop 丢弃附件。
 - Default while running 只在面板 footer 中编辑，复用共享 Select、主题、键盘与失败反馈；选择偏好从不发送消息，保存失败保留权威旧值，晚到回复不能覆盖更新的 Settings notification。
 - 状态切换不引发 Composer 几何跳动；按钮保持清晰图标、准确 `aria-label` / tooltip 和适合当前输入方式的 hit target。

@@ -4715,6 +4715,110 @@ test("turn transition restores nested preference focus without stealing outside 
   });
 });
 
+for (const disabled of [false, true]) {
+  for (const preference of [false, true]) {
+    for (const backwards of [false, true]) {
+      test(`send panel Tab exits without cycling (disabled=${disabled}, preference=${preference}, backwards=${backwards})`, async () => {
+        await withDom(async (root) => {
+          const { ComposerSendControl } =
+            await import("../src/renderer/src/ComposerSendControl.js");
+          await act(async () =>
+            root.render(
+              createElement(
+                "div",
+                null,
+                createElement(
+                  "button",
+                  { "aria-label": "Before send" },
+                  "Before",
+                ),
+                createElement(ComposerSendControl, {
+                  mode: "soft",
+                  running: true,
+                  hasDraft: true,
+                  disabled,
+                  sendDisabled: disabled,
+                  primaryMode: "steer",
+                  primaryLabel: "Steer now",
+                  compact: false,
+                  onPrimary: () => assert.fail("Tab must not submit"),
+                  onSend: () => assert.fail("Tab must not submit"),
+                  onStop: () => assert.fail("Tab must not stop"),
+                  onModeChange:
+                    preference || disabled
+                      ? async () => assert.fail("Tab must not save")
+                      : undefined,
+                }),
+                createElement("button", { hidden: true }, "Hidden"),
+                createElement("button", { disabled: true }, "Disabled"),
+                createElement(
+                  "button",
+                  { "aria-label": "After send" },
+                  "After",
+                ),
+              ),
+            ),
+          );
+          await act(async () => openSendOptions());
+          const panel = requiredElement(".composer-send-popover");
+          const buttons = [
+            ...panel.querySelectorAll<HTMLButtonElement>(
+              "button:not(:disabled)",
+            ),
+          ].filter((button) => button.tabIndex >= 0);
+          assert.ok(buttons.length > 0);
+          if (buttons.length > 2) {
+            const interior = buttons[1]!;
+            const interiorTab = new window.KeyboardEvent("keydown", {
+              key: "Tab",
+              shiftKey: backwards,
+              bubbles: true,
+              cancelable: true,
+            });
+            await act(async () => {
+              interior.focus();
+              interior.dispatchEvent(interiorTab);
+            });
+            assert.equal(
+              interiorTab.defaultPrevented,
+              false,
+              "interior Tab keeps native traversal",
+            );
+            assert.ok(document.querySelector(".composer-send-popover"));
+          }
+          const edge = backwards ? buttons[0]! : buttons.at(-1)!;
+          const event = new window.KeyboardEvent("keydown", {
+            key: "Tab",
+            shiftKey: backwards,
+            bubbles: true,
+            cancelable: true,
+          });
+          await act(async () => {
+            edge.focus();
+            edge.dispatchEvent(event);
+          });
+          assert.equal(event.defaultPrevented, true);
+          const destination = backwards
+            ? requiredElement(
+                disabled ? ".composer-send-control" : ".action-orb",
+              )
+            : requiredElement('[aria-label="After send"]');
+          assert.equal(document.activeElement, destination);
+          await act(
+            async () => new Promise((resolve) => setTimeout(resolve, 20)),
+          );
+          assert.equal(
+            document.activeElement,
+            destination,
+            "closing auto-focus must not steal the exit destination",
+          );
+          assert.equal(document.querySelector(".composer-send-popover"), null);
+        });
+      });
+    }
+  }
+}
+
 // Radix restores focus after its closing FocusScope has unmounted.
 async function waitForSendFocus(label: string): Promise<void> {
   const deadline = Date.now() + 1000;

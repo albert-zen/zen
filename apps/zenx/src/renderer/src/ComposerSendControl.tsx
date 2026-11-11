@@ -54,6 +54,44 @@ function intentIcon(intent: ComposerIntent): IconName {
           : "send";
 }
 
+// The Send surface is a nonmodal dialog, not a cycling menu. Radix Popover's
+// internal FocusScope loops even in nonmodal mode, so handle only its two Tab
+// boundaries and leave interior/nested Select keyboard handling untouched.
+function sendTabStops(root: ParentNode): HTMLElement[] {
+  return Array.from(
+    root.querySelectorAll<HTMLElement>(
+      'button, a[href], input, select, textarea, [tabindex], [contenteditable="true"]',
+    ),
+  )
+    .filter((element) => {
+      if (
+        element.tabIndex < 0 ||
+        element.matches(':disabled, input[type="hidden"]') ||
+        element.closest("[hidden], [inert], [data-radix-focus-guard]")
+      )
+        return false;
+      for (
+        let current: HTMLElement | null = element;
+        current;
+        current = current.parentElement
+      ) {
+        const style = getComputedStyle(current);
+        if (
+          style.display === "none" ||
+          style.visibility === "hidden" ||
+          style.visibility === "collapse"
+        )
+          return false;
+      }
+      return true;
+    })
+    .sort(
+      (left, right) =>
+        (left.tabIndex > 0 ? left.tabIndex : Infinity) -
+        (right.tabIndex > 0 ? right.tabIndex : Infinity),
+    );
+}
+
 /** Presentation only: sending and saving preferences keep their existing owners. */
 export function ComposerSendControl({
   mode,
@@ -294,6 +332,33 @@ export function ComposerSendControl({
         onFocusOutside={(event) => {
           if (anchor.current?.contains(event.target as Node))
             event.preventDefault();
+        }}
+        onKeyDown={(event) => {
+          if (
+            event.key !== "Tab" ||
+            event.altKey ||
+            event.ctrlKey ||
+            event.metaKey ||
+            !panel.current?.contains(event.target as Node)
+          )
+            return;
+          const stops = sendTabStops(panel.current);
+          const edge = event.shiftKey ? stops[0] : stops.at(-1);
+          if (event.target !== edge) return;
+          const origin = primary.current?.disabled
+            ? anchor.current
+            : primary.current;
+          if (!origin) return;
+          const outside = sendTabStops(document).filter(
+            (element) => !panel.current?.contains(element),
+          );
+          const originIndex = outside.indexOf(origin);
+          const destination = event.shiftKey
+            ? origin
+            : (outside[originIndex + 1] ?? outside[0] ?? origin);
+          event.preventDefault();
+          close();
+          destination.focus();
         }}
         onEscapeKeyDown={() => {
           close(true);
