@@ -30,3 +30,10 @@ test("prose hierarchy keeps endpoint rhythm and themed structured results", () =
   assert.match(section, /font-size: 17px;/u);
   assert.match(section, /border-color: var\(--color-border-subtle\);/u);
 });
+
+test("desktop approval and Composer share measured column alignment", () => {
+  assert.match(
+    css,
+    /\.thread-view \.bottom-zone > \.composer,\s*\.thread-view \.bottom-zone > \.approval-request-card\s*\{\s*position: relative;\s*margin-inline: 0;\s*left: var\(--composer-column-left, 0px\);\s*width: var\(--composer-column-width, 100%\);/u,
+  );
+});

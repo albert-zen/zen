@@ -994,6 +994,7 @@ export const en = {
   describeOutcome:
     "Describe the outcome you want. ZenX will use this Thread’s workspace, model, and permission policy.",
   backToLive: "Back to live",
+  readingEarlierMessages: "Reading earlier messages",
   queuedCount_one: "{{count}} queued",
   queuedCount_other: "{{count}} queued",
   cancelQueuedMessage: "Cancel queued message {{number}}",
@@ -2080,6 +2081,7 @@ export const zhCN = {
   describeOutcome:
     "描述你想要的结果。ZenX 将使用此会话的工作区、模型和权限策略。",
   backToLive: "返回实时内容",
+  readingEarlierMessages: "正在阅读较早内容",
   queuedCount_one: "{{count}} 条排队中",
   queuedCount_other: "{{count}} 条排队中",
   cancelQueuedMessage: "取消第 {{number}} 条排队消息",

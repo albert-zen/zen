@@ -1101,6 +1101,17 @@ function ThreadViewContent({
     return () => observer.disconnect();
   });
   const composerTextareaRef = useRef<ComposerInput>(null);
+  const returnToLive = () => {
+    const scroll = scrollRef.current;
+    if (scroll === null) return;
+    shouldFollowRef.current = true;
+    document.getSelection()?.removeAllRanges();
+    scroll.scrollTo({ top: scroll.scrollHeight, behavior: "auto" });
+    observedScrollTop.current = scroll.scrollTop;
+    setAtLive(true);
+    saveReadingPosition();
+  };
+
   const pastedSelection = useRef<{ scope: string; caret: number } | null>(null);
   useLayoutEffect(() => {
     const pending = pastedSelection.current;
@@ -2428,20 +2439,7 @@ function ThreadViewContent({
         }}
       />
       {atLive || transcriptRows.length === 0 ? null : (
-        <button
-          className="back-live"
-          type="button"
-          onClick={() => {
-            const scroll = scrollRef.current;
-            if (scroll === null) return;
-            shouldFollowRef.current = true;
-            document.getSelection()?.removeAllRanges();
-            scroll.scrollTo({ top: scroll.scrollHeight, behavior: "auto" });
-            observedScrollTop.current = scroll.scrollTop;
-            setAtLive(true);
-            saveReadingPosition();
-          }}
-        >
+        <button className="back-live" type="button" onClick={returnToLive}>
           <Icon name="arrow-down" size={14} />
           {i18n.t("shell:backToLive")}
         </button>
@@ -2777,6 +2775,22 @@ function ThreadViewContent({
             primary();
           }}
         >
+          {atLive || transcriptRows.length === 0 ? null : (
+            <div className="composer-reading-position">
+              <span>{i18n.t("shell:readingEarlierMessages")}</span>
+              <button
+                type="button"
+                className="quiet-button"
+                onClick={() => {
+                  returnToLive();
+                  composerTextareaRef.current?.focus({ preventScroll: true });
+                }}
+              >
+                <Icon name="arrow-down" size={14} />
+                {i18n.t("shell:backToLive")}
+              </button>
+            </div>
+          )}
           {skillError !== null && (
             <p role="alert" className="settings-error">
               {skillError}

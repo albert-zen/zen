@@ -1,0 +1,27 @@
+/* History return belongs to the writing surface, not over a sentence. */
+.composer-reading-position {
+  display: none;
+}
+@media (min-width: 961px) {
+  .thread-view > .back-live {
+    display: none;
+  }
+  .composer-reading-position {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 0 16px;
+    padding: 8px 0 6px;
+    border-bottom: 1px solid var(--color-border-subtle);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+  }
+  .composer-reading-position .quiet-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    color: var(--color-text-secondary);
+  }
+}

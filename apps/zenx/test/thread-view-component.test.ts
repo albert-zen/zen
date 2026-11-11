@@ -5950,3 +5950,59 @@ test("local sending presentation hides draft framing but keeps readable skill an
   assert.doesNotMatch(html, /\[skill:11111111/);
   assert.doesNotMatch(html, /data-sent-message-id/);
 });
+
+test("desktop reading return preserves live scrolling and returns keyboard focus to the draft", async () => {
+  const { recoveryScenario } =
+    await import("./fixtures/loop-recovery-scenario.js");
+  await withDom(async (root) => {
+    await act(async () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer: editComposer(emptyComposerState(), "Keep this draft"),
+          thread: recoveryScenario("completed"),
+          onDraftChange: () => assert.fail("return must not edit"),
+          onInterrupt: () => assert.fail("return must not interrupt"),
+          onRespondToApproval: noop,
+          onSubmit: () => assert.fail("return must not send"),
+        }),
+      ),
+    );
+    const scroll = requiredElement(".messages");
+    Object.defineProperties(scroll, {
+      scrollHeight: { configurable: true, value: 1600 },
+      clientHeight: { configurable: true, value: 700 },
+      scrollTop: { configurable: true, writable: true, value: 200 },
+    });
+    let destination: ScrollToOptions | undefined;
+    scroll.scrollTo = ((options: ScrollToOptions) => {
+      destination = options;
+      scroll.scrollTop = 900;
+    }) as typeof scroll.scrollTo;
+    await act(async () =>
+      scroll.dispatchEvent(
+        new window.WheelEvent("wheel", {
+          deltaY: -40,
+          bubbles: true,
+        }),
+      ),
+    );
+    const button = requiredButton(".composer-reading-position button");
+    assert.equal(button.textContent?.includes("Back to live"), true);
+    assert.equal(button.closest(".composer") !== null, true);
+    await act(async () => {
+      button.focus();
+      button.click();
+    });
+    assert.deepEqual(destination, { top: 1600, behavior: "auto" });
+    assert.equal(document.querySelector(".composer-reading-position"), null);
+    assert.equal(
+      document.activeElement,
+      document.querySelector(".composer textarea"),
+    );
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>(".composer textarea")?.value,
+      "Keep this draft",
+    );
+  });
+});

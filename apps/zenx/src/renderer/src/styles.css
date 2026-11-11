@@ -1,3 +1,4 @@
+@import "./conversation-reading-position.css";
 @import "./TraceInspector.css";
 @import "./app-shot.css";
 @import "./answered-question.css";
@@ -13314,7 +13315,9 @@ button:disabled {
 /* Native transcript gutters can move the centered column by half a scrollbar.
    Use its actual box for the desktop Composer, including split-pane layouts. */
 @media (min-width: 961px) {
-  .thread-view .bottom-zone > .composer {
+  .thread-view .bottom-zone > .composer,
+  .thread-view .bottom-zone > .approval-request-card {
+    position: relative;
     margin-inline: 0;
     left: var(--composer-column-left, 0px);
     width: var(--composer-column-width, 100%);
