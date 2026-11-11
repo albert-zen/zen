@@ -252,3 +252,106 @@ test("AuxiliaryPanel startup admits only the exact synthetic thread tab-list rea
   assert.match(fixture, /tabId !== undefined \|\| url !== undefined/);
   assert.match(fixture, /return readingBrowserCommand\(threadId, command\)/);
 });
+
+test("synthetic Host replacement emits only ordered lifecycle events and updates the snapshot once", async () => {
+  const { createReadingApprovalFixture } =
+    await import("./fixtures/ui-polish-reading.js");
+  const fixture = createReadingApprovalFixture(true);
+  const initial = fixture.getPendingApprovals()[0]!;
+  assert.equal(initial.requestId, "reading-synthetic-approval");
+  assert.equal(
+    initial.params.approvalScope,
+    undefined,
+    "Original request keeps the full existing scope UI",
+  );
+  const events: { type: string; event: unknown }[] = [];
+  fixture.onApprovalResolved((event) =>
+    events.push({ type: "resolved", event }),
+  );
+  fixture.onApprovalRequest((event) =>
+    events.push({ type: "requested", event }),
+  );
+  const record = fixture.replaceRequest();
+  assert.deepEqual(record, {
+    kind: "synthetic-host-request-replacement",
+    oldRequestId: initial.requestId,
+    newRequestId: "reading-synthetic-approval-once",
+    threadId: "thread-1",
+    approvalScope: "once",
+    approvalTarget: {
+      key: "synthetic-reading-target",
+      label: "Synthetic reading-layout preview only",
+    },
+  });
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ["resolved", "requested"],
+  );
+  assert.deepEqual(events[0]!.event, {
+    requestId: initial.requestId,
+    threadId: "thread-1",
+    decision: null,
+  });
+  const [next] = fixture.getPendingApprovals();
+  assert.deepEqual(events[1]!.event, next);
+  assert.equal(next!.params.approvalScope, "once");
+  assert.deepEqual(next!.params.approvalTarget, record.approvalTarget);
+  assert.equal(next!.params.itemId, "reading-display-only-once");
+  assert.throws(() => fixture.replaceRequest(), /unreplaced pending fixture/);
+  assert.equal(events.length, 2);
+  assert.doesNotMatch(
+    createReadingApprovalFixture.toString(),
+    /respondToApproval|protocol|fetch|WebSocket|allow|deny/,
+  );
+});
+
+test("approval fixture subscriptions unsubscribe and snapshots/listeners cannot mutate Host state", async () => {
+  const { createReadingApprovalFixture } =
+    await import("./fixtures/ui-polish-reading.js");
+  const fixture = createReadingApprovalFixture(true);
+  const offRequest = fixture.onApprovalRequest(() =>
+    assert.fail("unsubscribed request"),
+  );
+  const offResolved = fixture.onApprovalResolved(() =>
+    assert.fail("unsubscribed resolution"),
+  );
+  offRequest();
+  offRequest();
+  offResolved();
+  offResolved();
+  fixture.getPendingApprovals()[0]!.requestId = "mutated snapshot";
+  fixture.onApprovalRequest((event) => {
+    event.requestId = "mutated listener";
+  });
+  fixture.replaceRequest();
+  assert.equal(
+    fixture.getPendingApprovals()[0]!.requestId,
+    "reading-synthetic-approval-once",
+  );
+  const empty = createReadingApprovalFixture(false);
+  assert.deepEqual(empty.getPendingApprovals(), []);
+  assert.throws(() => empty.replaceRequest(), /unreplaced pending fixture/);
+});
+
+test("replacement hook remains reading-only and never relaxes approval response guard", async () => {
+  const fixture = await readFile(
+    new URL("./fixtures/ui-polish-visual.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    fixture,
+    /readingScene\s*\?\s*createReadingApprovalFixture\(readingPending\)\s*:\s*null/,
+  );
+  assert.match(fixture, /if \(readingApprovalFixture\)/);
+  assert.match(
+    fixture,
+    /__readingApprovalFixture: \{\s*replaceRequest: readingApprovalFixture.replaceRequest/,
+  );
+  const guarded = guardReadingBridge({
+    protocol: { respondToApproval: () => assert.fail("No decision") },
+  });
+  assert.throws(
+    () => guarded.protocol.respondToApproval(),
+    /Reading bridge denied/,
+  );
+});

@@ -3,6 +3,8 @@ import { test } from "node:test";
 import { readFile } from "node:fs/promises";
 import {
   observeReading,
+  verifyApprovalMode,
+  tabToApprovalToggle,
   verifyReading,
   scrollReadingTo,
   readingPathsChanged,
@@ -218,4 +220,120 @@ test("the observed five-pixel native-scrollbar drift still fails shared-column a
   assert.throws(() => verifyReading(s), /shared column alignment/);
   s.column = null;
   assert.throws(() => verifyReading(s), /reading column respects/);
+});
+
+const approvalState = (reading = false) => ({
+  approvalToggle: {
+    ...box(),
+    expanded: String(!reading),
+    controls: "region",
+    focused: true,
+    focusVisible: true,
+    outline: "solid",
+    outlineWidth: 2,
+  },
+  approvalControlledRegion: true,
+  approvalReading: reading,
+  draft: "synthetic draft",
+  composer: box(),
+  approval: { ...box(), rect: { ...box().rect, height: reading ? 100 : 250 } },
+  approvalRequestId: "same",
+  approvalBody: reading ? null : box(),
+  approvalSummary: reading ? box() : null,
+  allow: reading ? null : box(),
+  deny: reading ? null : box(),
+  approvalSummaryText: reading
+    ? "run_code · Remembered permission · Waiting for your review. No decision has been made."
+    : null,
+  conversationUncoveredHeight: reading ? 400 : 250,
+});
+test("explicit approval reading preserves scope, no-decision and focus while default and restore keep full review", () => {
+  const full = approvalState();
+  verifyApprovalMode(full, { reading: false });
+  verifyApprovalMode(approvalState(true), {
+    reading: true,
+    baseline: full,
+    focus: true,
+  });
+  verifyApprovalMode(approvalState(), {
+    reading: false,
+    baseline: full,
+    focus: true,
+  });
+  for (const fault of [
+    "decision",
+    "scope",
+    "pending",
+    "focus",
+    "draft",
+    "no-gain",
+    "owner",
+  ]) {
+    const s = approvalState(true);
+    if (fault === "decision") s.allow = box();
+    if (fault === "scope")
+      s.approvalSummaryText = "run_code Waiting for your review. No decision";
+    if (fault === "pending")
+      s.approvalSummaryText = "run_code Remembered permission";
+    if (fault === "focus") s.approvalToggle.focusVisible = false;
+    if (fault === "draft") s.draft = "changed";
+    if (fault === "no-gain") s.conversationUncoveredHeight = 250;
+    if (fault === "owner") s.approvalToggle.controls = "wrong-region";
+    assert.throws(
+      () =>
+        verifyApprovalMode(s, { reading: true, baseline: full, focus: true }),
+      undefined,
+      fault,
+    );
+  }
+});
+test("approval disclosure search uses native bounded Tab pairs and observed focus", async () => {
+  const evidence = {},
+    calls = [];
+  let n = 0;
+  const result = await tabToApprovalToggle({
+    send: async (...a) => calls.push(a),
+    evaluate: async () => ({
+      matched: ++n === 2,
+      tag: "BUTTON",
+      id: "synthetic",
+    }),
+    evidence,
+    theme: "dark",
+  });
+  assert.equal(result.steps, 2);
+  assert.equal(result.observations.length, 2);
+  assert(result.matched);
+  assert.equal(calls.length, 4);
+  assert(
+    calls.every(([m, p]) => m === "Input.dispatchKeyEvent" && p.key === "Tab"),
+  );
+  assert.deepEqual(
+    calls.map(([, p]) => p.type),
+    ["rawKeyDown", "keyUp", "rawKeyDown", "keyUp"],
+  );
+});
+test("approval trip adds exactly three frames per theme and never invokes a decision", async () => {
+  const h = await read("../scripts/reading-main-ui-preview.mjs"),
+    w = await read("../../../.github/workflows/desktop-reading-ui.yml");
+  for (const step of [
+    "approval-explicit-reading",
+    "approval-restored",
+    "approval-new-request",
+  ])
+    assert(h.includes(`"${step}"`));
+  assert.match(h, /synthetic-host-request-replacement/);
+  assert.doesNotMatch(
+    h,
+    /click\([^\n]*(?:approval-request-allow|approval-request-deny)|respondToApproval\(/,
+  );
+  assert.match(h, /dispatchNavigationKey\(send, "Enter", "Enter", 13\)/);
+  for (const file of [
+    "ApprovalRequestCard.tsx",
+    "approval-request.css",
+    "i18n/shell.ts",
+  ]) {
+    assert(h.includes(file));
+    assert(w.includes(file));
+  }
 });

@@ -489,3 +489,97 @@ test("late approval success also preserves selection in queued text outside the 
     assert.equal(window.getSelection()?.toString(), text);
   });
 });
+
+test("explicit reading mode preserves pending identity and cannot approve from its summary", async () => {
+  await withRuntimeDom(async (h) => {
+    const approvals = [request("reading-request")];
+    const options = {
+      approvals,
+      onRespondToApproval: async () =>
+        assert.fail("layout change must not decide"),
+    };
+    await h.render(runtimeThread(), options);
+    const fullCode = document.querySelector(
+      ".approval-request-preview code",
+    )!.textContent;
+    const toggle = await press(".approval-reading-toggle");
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+    assert.equal(document.activeElement, toggle);
+    assert.equal(document.querySelector(".approval-request-allow"), null);
+    assert.equal(document.querySelector(".approval-request-deny"), null);
+    assert.match(
+      document.querySelector(".approval-reading-summary")!.textContent!,
+      /Waiting for your review.*No decision/u,
+    );
+    assert.ok(document.querySelector(card("reading-request")));
+    await press(".approval-reading-toggle");
+    assert.equal(document.activeElement, toggle);
+    assert.equal(toggle.getAttribute("aria-expanded"), "true");
+    assert.equal(
+      document.querySelector(".approval-request-preview code")!.textContent,
+      fullCode,
+    );
+    assert.ok(document.querySelector(".approval-request-allow"));
+    await press(".approval-reading-toggle");
+    await h.render(runtimeThread(), {
+      ...options,
+      approvals: [request("new-request")],
+    });
+    assert.equal(
+      document.querySelector(".approval-reading-summary"),
+      null,
+      "new request must open for review rather than inherit a collapsed summary",
+    );
+    assert.ok(document.querySelector(".approval-request-preview"));
+  });
+});
+
+test("responding approval cannot be collapsed into reading mode", async () => {
+  await withRuntimeDom(async (h) => {
+    await h.render(runtimeThread(), {
+      approvals: [{ ...request("responding"), status: "responding" }],
+    });
+    assert.equal(button(".approval-reading-toggle").disabled, true);
+    assert.ok(document.querySelector(".approval-request-preview"));
+  });
+});
+
+test("reading disclosure keeps a stable controlled region and explicit duration alongside target", async () => {
+  await withRuntimeDom(async (h) => {
+    for (const once of [false, true]) {
+      await h.render(runtimeThread(), {
+        approvals: [
+          {
+            ...request(`scope-${once}`),
+            params: {
+              ...runtimeApproval.params,
+              approvalScope: once
+                ? "once"
+                : runtimeApproval.params.approvalScope,
+              approvalTarget: {
+                key: "browser-instance:a",
+                label: "Edge abcd1234",
+              },
+            },
+          },
+        ],
+      });
+      const toggle = button(".approval-reading-toggle");
+      const controlledId = toggle.getAttribute("aria-controls");
+      assert.ok(controlledId);
+      const region = document.getElementById(controlledId);
+      assert.ok(region?.querySelector(".approval-request-preview"));
+      await press(".approval-reading-toggle");
+      assert.equal(document.getElementById(controlledId), region);
+      assert.match(
+        region!.textContent!,
+        once ? /One-time approval/ : /Remembered permission/,
+      );
+      assert.match(region!.textContent!, /Edge abcd1234/);
+      assert.equal(region!.querySelector(".approval-request-allow"), null);
+      await press(".approval-reading-toggle");
+      assert.equal(document.getElementById(controlledId), region);
+      assert.ok(region!.querySelector(".approval-request-allow"));
+    }
+  });
+});

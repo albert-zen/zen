@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { dispatchNavigationKey } from "./navigation-main-ui-preview.mjs";
 
 /** Read-only measurements of production App/Markdown/Information/pending surfaces. */
 export function observeReading() {
@@ -40,6 +41,13 @@ export function observeReading() {
       overflowX: style.overflowX,
       overflowY: style.overflowY,
       disabled: !!e.disabled,
+      id: e.id,
+      controls: e.getAttribute("aria-controls"),
+      expanded: e.getAttribute("aria-expanded"),
+      focused: document.activeElement === e,
+      focusVisible: e.matches(":focus-visible"),
+      outline: style.outlineStyle,
+      outlineWidth: parseFloat(style.outlineWidth),
     };
   };
   const names = {
@@ -66,6 +74,9 @@ export function observeReading() {
     queue: ".queue-shelf",
     queueEdit: ".queue-row-edit:not(:disabled)",
     approval: ".approval-request-card",
+    approvalToggle: ".approval-request-card .approval-reading-toggle",
+    approvalSummary: ".approval-request-card .approval-reading-summary",
+    approvalBody: ".approval-request-card .approval-request-body",
     allow: ".approval-request-card .approval-request-allow",
     deny: ".approval-request-card .approval-request-deny",
     informationEntry: ".information-toolbar button",
@@ -75,8 +86,25 @@ export function observeReading() {
   const targets = Object.fromEntries(
     Object.entries(names).map(([key, selector]) => [key, read(selector)]),
   );
+  const card = document.querySelector(names.approval);
+  const toggle = document.querySelector(names.approvalToggle);
+  const region = document.getElementById(toggle?.getAttribute("aria-controls"));
+  const editor = document.querySelector(names.editor);
   return {
     ...targets,
+    approvalRequestId: card?.getAttribute("data-approval-request") ?? null,
+    approvalReading: card?.getAttribute("data-reading") === "true",
+    approvalControlledRegion: !!region && !!card?.contains(region),
+    approvalSummaryText:
+      document.querySelector(names.approvalSummary)?.textContent ?? null,
+    approvalScopeText:
+      document.querySelector(".approval-request-card .approval-request-scope")
+        ?.textContent ?? null,
+    draft: editor
+      ? "value" in editor
+        ? editor.value
+        : editor.textContent
+      : null,
     columnKind: document.querySelector(names.column)?.className ?? null,
     messageScrollbarWidth: targets.messages
       ? targets.messages.offsetWidth -
@@ -106,7 +134,7 @@ export function observeReading() {
 
 export function verifyReading(
   s,
-  { information = false, pending = false } = {},
+  { information = false, pending = false, approvalReading = false } = {},
 ) {
   assert(!s.horizontalOverflow, "Whole app stays within the desktop viewport");
   for (const tag of [
@@ -181,7 +209,9 @@ export function verifyReading(
           s[name].rect.right <= s.column.rect.right + 2,
         `${name} fits the same reading width`,
       );
-    for (const name of ["queueEdit", "allow", "deny"])
+    for (const name of approvalReading
+      ? ["queueEdit"]
+      : ["queueEdit", "allow", "deny"])
       assert(
         s[name]?.visible && s[name].hit && !s[name].disabled,
         `${name} remains available without a side-effecting click`,
@@ -191,6 +221,89 @@ export function verifyReading(
       !s.queue && !s.approval,
       "Normal reading does not inject pending chrome",
     );
+}
+
+export function verifyApprovalMode(
+  s,
+  { reading, baseline, focus = false } = {},
+) {
+  assert(
+    s.approvalToggle?.visible &&
+      s.approvalToggle.hit &&
+      !s.approvalToggle.disabled,
+    "Approval disclosure stays available",
+  );
+  assert(
+    s.approvalControlledRegion,
+    "Disclosure owns its actual stable content region",
+  );
+  assert.equal(s.approvalToggle.expanded, String(!reading));
+  assert.equal(s.approvalReading, reading);
+  if (baseline) {
+    assert.equal(
+      s.draft,
+      baseline.draft,
+      "Reading and request changes preserve the draft",
+    );
+    assert(
+      s.composer.rect.height >= baseline.composer.rect.height - 1,
+      "Reading does not shrink Composer",
+    );
+  }
+  if (focus)
+    assert(
+      s.approvalToggle.focused &&
+        s.approvalToggle.focusVisible &&
+        s.approvalToggle.outline !== "none" &&
+        s.approvalToggle.outlineWidth > 0,
+      "Native keyboard toggle keeps visible focus",
+    );
+  if (reading) {
+    assert(
+      s.approvalSummary?.visible && !s.approvalBody && !s.allow && !s.deny,
+      "Summary contains no approval decision controls or hidden full body",
+    );
+    assert.match(s.approvalSummaryText, /run_code/);
+    assert.match(s.approvalSummaryText, /Remembered permission/);
+    assert.match(
+      s.approvalSummaryText,
+      /Waiting for your review.*No decision/s,
+    );
+    if (baseline) {
+      assert.equal(s.approvalRequestId, baseline.approvalRequestId);
+      assert.equal(s.approvalToggle.controls, baseline.approvalToggle.controls);
+      assert(
+        s.approval.rect.height < baseline.approval.rect.height,
+        "Explicit reading actually reduces the card height",
+      );
+      assert(
+        s.conversationUncoveredHeight > baseline.conversationUncoveredHeight,
+        "Explicit reading gains real conversation space",
+      );
+    }
+  } else
+    assert(
+      !s.approvalSummary && s.approvalBody && s.allow && s.deny,
+      "Default or restored request exposes the full review and decisions",
+    );
+}
+
+export async function tabToApprovalToggle({ send, evaluate, evidence, theme }) {
+  const attempt = { theme, steps: 0, matched: false, observations: [] };
+  (evidence.approvalReadingKeyAttempts ??= []).push(attempt);
+  for (let i = 0; i < 80; i++) {
+    await dispatchNavigationKey(send, "Tab", "Tab", 9);
+    attempt.steps = i + 1;
+    const observation = await evaluate(
+      "({matched: document.activeElement?.matches('.approval-reading-toggle:focus-visible'), tag: document.activeElement?.tagName, id: document.activeElement?.id, classes: document.activeElement?.className})",
+    );
+    attempt.observations.push(observation);
+    if (observation.matched) {
+      attempt.matched = true;
+      return attempt;
+    }
+  }
+  throw Error("Native Tab did not reach approval reading disclosure");
 }
 
 /** Native wheel only. Observe each outcome; never rewrite scrollTop or DOM. */
@@ -330,7 +443,85 @@ export async function captureDesktopReading({
     await save("pending-approval", { pending: true });
     await openInformation();
     await scroll();
-    await save("pending-information", { pending: true, information: true });
+    const fullApproval = await save("pending-information", {
+      pending: true,
+      information: true,
+    });
+    verifyApprovalMode(fullApproval, { reading: false });
+    await tabToApprovalToggle({
+      send,
+      evaluate,
+      evidence,
+      theme: options.theme,
+    });
+    await dispatchNavigationKey(send, "Enter", "Enter", 13);
+    await wait(
+      "document.querySelector('.approval-request-card')?.getAttribute('data-reading') === 'true'",
+    );
+    const summary = await save("approval-explicit-reading", {
+      pending: true,
+      information: true,
+      approvalReading: true,
+    });
+    verifyApprovalMode(summary, {
+      reading: true,
+      baseline: fullApproval,
+      focus: true,
+    });
+    await dispatchNavigationKey(send, "Enter", "Enter", 13);
+    await wait("!document.querySelector('.approval-reading-summary')");
+    const restored = await save("approval-restored", {
+      pending: true,
+      information: true,
+    });
+    verifyApprovalMode(restored, {
+      reading: false,
+      baseline: fullApproval,
+      focus: true,
+    });
+    assert.equal(restored.approvalRequestId, fullApproval.approvalRequestId);
+    assert.equal(
+      restored.approvalToggle.controls,
+      fullApproval.approvalToggle.controls,
+    );
+    await dispatchNavigationKey(send, "Enter", "Enter", 13);
+    await wait("!!document.querySelector('.approval-reading-summary')");
+    await click('.composer [contenteditable="true"], .composer textarea');
+    // Synthetic Host lifecycle event, NOT a keyboard action or approval response.
+    const hostEvent = await evaluate(
+      "window.__readingApprovalFixture.replaceRequest()",
+    );
+    (evidence.approvalReadingHostEvents ??= []).push({
+      theme: options.theme,
+      ...hostEvent,
+    });
+    await wait(
+      `document.querySelector('.approval-request-card')?.getAttribute('data-approval-request') === ${JSON.stringify(hostEvent.newRequestId)}`,
+    );
+    const newer = await save("approval-new-request", {
+      pending: true,
+      information: true,
+    });
+    verifyApprovalMode(newer, { reading: false, baseline: fullApproval });
+    assert.equal(hostEvent.kind, "synthetic-host-request-replacement");
+    assert.equal(hostEvent.oldRequestId, fullApproval.approvalRequestId);
+    assert.equal(newer.approvalRequestId, hostEvent.newRequestId);
+    assert.notEqual(newer.approvalRequestId, fullApproval.approvalRequestId);
+    assert(
+      newer.editor.focused,
+      "New request does not take focus from Composer",
+    );
+    assert.match(newer.approvalScopeText, /once|one.time|this call/i);
+    (evidence.approvalReadingTrips ??= []).push({
+      theme: options.theme,
+      defaultCardHeight: fullApproval.approval.rect.height,
+      summaryCardHeight: summary.approval.rect.height,
+      defaultReadingHeight: fullApproval.conversationUncoveredHeight,
+      summaryReadingHeight: summary.conversationUncoveredHeight,
+      restoredRequestId: restored.approvalRequestId,
+      newRequestId: newer.approvalRequestId,
+      composerFocusRetained: newer.editor.focused,
+    });
   } catch (error) {
     (evidence.readingFailures ??= []).push({
       theme: options.theme,
@@ -350,6 +541,9 @@ export const readingPaths = [
   "apps/zenx/src/renderer/src/Markdown.tsx",
   "apps/zenx/src/renderer/src/ThreadView.tsx",
   "apps/zenx/src/renderer/src/App.tsx",
+  "apps/zenx/src/renderer/src/ApprovalRequestCard.tsx",
+  "apps/zenx/src/renderer/src/approval-request.css",
+  "apps/zenx/src/renderer/src/i18n/shell.ts",
   "apps/zenx/src/renderer/src/queued-messages.css",
   "apps/zenx/test/fixtures/ui-polish-visual.tsx",
   "apps/zenx/test/fixtures/ui-polish-reading.ts",

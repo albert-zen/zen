@@ -1,5 +1,8 @@
 import type { Thread } from "../../src/protocol-client/index.js";
-import type { ApprovalRequestEvent } from "../../src/main/app-server-manager.js";
+import type {
+  ApprovalRequestEvent,
+  ApprovalResolvedEvent,
+} from "../../src/main/app-server-manager.js";
 import { nativeRecoveryForThread } from "../native-recovery-fixture.js";
 import { readNavigationQuestions } from "./ui-polish-visual-navigation.js";
 
@@ -248,4 +251,66 @@ export function guardReadingBridge<T extends object>(
   paths.set(path, proxy);
   cache.set(bridge, paths);
   return proxy;
+}
+
+/** Simulated Host lifecycle only, never a user decision or an operation. */
+export function createReadingApprovalFixture(pending: boolean) {
+  let snapshot = readingApprovals(pending);
+  let replaced = false;
+  const requests = new Set<(event: ApprovalRequestEvent) => void>();
+  const resolutions = new Set<(event: ApprovalResolvedEvent) => void>();
+  return {
+    getPendingApprovals: (): ApprovalRequestEvent[] =>
+      structuredClone(snapshot),
+    onApprovalRequest: (listener: (event: ApprovalRequestEvent) => void) => {
+      requests.add(listener);
+      return () => {
+        requests.delete(listener);
+      };
+    },
+    onApprovalResolved: (listener: (event: ApprovalResolvedEvent) => void) => {
+      resolutions.add(listener);
+      return () => {
+        resolutions.delete(listener);
+      };
+    },
+    replaceRequest: () => {
+      if (!pending || replaced)
+        throw new Error(
+          "Synthetic approval replacement requires an unreplaced pending fixture",
+        );
+      const old = snapshot[0]!;
+      const next: ApprovalRequestEvent = {
+        ...structuredClone(old),
+        requestId: "reading-synthetic-approval-once",
+        params: {
+          ...structuredClone(old.params),
+          itemId: "reading-display-only-once",
+          approvalScope: "once",
+          approvalTarget: {
+            key: "synthetic-reading-target",
+            label: "Synthetic reading-layout preview only",
+          },
+        },
+      };
+      replaced = true;
+      snapshot = [next];
+      const resolved: ApprovalResolvedEvent = {
+        requestId: old.requestId,
+        threadId: old.params.threadId,
+        decision: null,
+      };
+      for (const listener of [...resolutions])
+        listener(structuredClone(resolved));
+      for (const listener of [...requests]) listener(structuredClone(next));
+      return {
+        kind: "synthetic-host-request-replacement" as const,
+        oldRequestId: old.requestId,
+        newRequestId: next.requestId,
+        threadId: next.params.threadId,
+        approvalScope: "once" as const,
+        approvalTarget: { ...next.params.approvalTarget! },
+      };
+    },
+  };
 }

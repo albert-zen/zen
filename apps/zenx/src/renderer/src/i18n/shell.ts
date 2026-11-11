@@ -454,6 +454,8 @@ export const en = {
   queueWaiting: "Waiting to send",
 
   approvalScopeLabel: "Permission scope",
+  approvalOnceShortScope: "One-time approval",
+  approvalRememberedShortScope: "Remembered permission",
   approvalOnceScope: "This call and its nested operations only",
   approvalCapabilityScope: "Remember this tool capability",
   approvalTargetRemembered:
@@ -994,6 +996,10 @@ export const en = {
   describeOutcome:
     "Describe the outcome you want. ZenX will use this Thread’s workspace, model, and permission policy.",
   backToLive: "Back to live",
+  reviewApproval: "Review request",
+  readConversation: "Read conversation",
+  approvalWaitingForReview:
+    "Waiting for your review. No decision has been made.",
   readingEarlierMessages: "Reading earlier messages",
   queuedCount_one: "{{count}} queued",
   queuedCount_other: "{{count}} queued",
@@ -1562,6 +1568,8 @@ export const zhCN = {
   queueWaiting: "等待发送",
 
   approvalScopeLabel: "权限范围",
+  approvalOnceShortScope: "仅本次授权",
+  approvalRememberedShortScope: "持续记住权限",
   approvalOnceScope: "仅本次调用及其嵌套操作",
   approvalCapabilityScope: "记住此工具能力",
   approvalTargetRemembered:
@@ -2081,6 +2089,9 @@ export const zhCN = {
   describeOutcome:
     "描述你想要的结果。ZenX 将使用此会话的工作区、模型和权限策略。",
   backToLive: "返回实时内容",
+  reviewApproval: "查看审批",
+  readConversation: "阅读对话",
+  approvalWaitingForReview: "仍在等待你审阅，尚未作出决定。",
   readingEarlierMessages: "正在阅读较早内容",
   queuedCount_one: "{{count}} 条排队中",
   queuedCount_other: "{{count}} 条排队中",

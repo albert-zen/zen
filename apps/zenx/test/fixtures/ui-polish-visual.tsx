@@ -21,7 +21,7 @@ import { readNavigationQuestions } from "./ui-polish-visual-navigation.js";
 import {
   guardReadingBridge,
   readReadingRequest,
-  readingApprovals,
+  createReadingApprovalFixture,
   readingBrowserCommand,
 } from "./ui-polish-reading.js";
 import type { NativeInformationApi } from "../../src/native-information.js";
@@ -31,6 +31,9 @@ Object.assign(globalThis, { React });
 const params = new URLSearchParams(location.search);
 const readingScene = params.get("scene") === "reading";
 const readingPending = readingScene && params.get("pending") === "1";
+const readingApprovalFixture = readingScene
+  ? createReadingApprovalFixture(readingPending)
+  : null;
 const projectlessScene = params.get("scene") === "projectless";
 document.documentElement.dataset.appearance = params.get("theme") ?? "light";
 document.documentElement.dataset.platform = params.get("platform") ?? "win32";
@@ -218,7 +221,7 @@ const zenx = {
       reconnected: false,
     }),
     getPendingApprovals: async () =>
-      readingScene ? readingApprovals(readingPending) : [],
+      readingApprovalFixture?.getPendingApprovals() ?? [],
     request: async (method: string, params?: unknown) => {
       if (method === "model/list") return { data: [model()], nextCursor: null };
       return await options.request(method, params);
@@ -227,8 +230,18 @@ const zenx = {
       if (readingScene)
         throw new Error("Reading preview cannot respond to approvals");
     },
-    onApprovalRequest: () => () => undefined,
-    onApprovalResolved: () => () => undefined,
+    onApprovalRequest: (
+      listener: Parameters<
+        ReturnType<typeof createReadingApprovalFixture>["onApprovalRequest"]
+      >[0],
+    ) =>
+      readingApprovalFixture?.onApprovalRequest(listener) ?? (() => undefined),
+    onApprovalResolved: (
+      listener: Parameters<
+        ReturnType<typeof createReadingApprovalFixture>["onApprovalResolved"]
+      >[0],
+    ) =>
+      readingApprovalFixture?.onApprovalResolved(listener) ?? (() => undefined),
     onStatus: () => () => undefined,
     onNotification: () => () => undefined,
   },
@@ -635,6 +648,12 @@ Object.assign(window, {
   __uiPolishTelemetry: uiPolishTelemetry,
   __sideChatFixture: sideChatFixture,
 });
+if (readingApprovalFixture)
+  Object.assign(window, {
+    __readingApprovalFixture: {
+      replaceRequest: readingApprovalFixture.replaceRequest,
+    },
+  });
 localStorage.setItem("zenx-sidebar-mode", "projects");
 const scene = params.get("scene") ?? "welcome";
 

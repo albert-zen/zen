@@ -5,6 +5,9 @@ on:
       - .github/workflows/desktop-reading-ui.yml
       - apps/zenx/src/renderer/src/Markdown.tsx
       - apps/zenx/src/renderer/src/App.tsx
+      - apps/zenx/src/renderer/src/ApprovalRequestCard.tsx
+      - apps/zenx/src/renderer/src/approval-request.css
+      - apps/zenx/src/renderer/src/i18n/shell.ts
       - apps/zenx/src/renderer/src/theme.css
       - apps/zenx/src/renderer/src/queued-messages.css
       - apps/zenx/src/renderer/src/ThreadView.tsx
