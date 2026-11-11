@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFile } from "node:fs/promises";
 import {
+  informationDockReady,
   observeReading,
   verifyApprovalMode,
   tabToApprovalToggle,
@@ -360,4 +361,41 @@ test("reading capture requires request wording from the production permission la
     capture,
     /assert\.match\(s\.approvalSummaryText, \/Remembered permission\/\)/,
   );
+});
+
+test("Information readiness follows the sole expanded toggle and visible dock, never a duplicate close control", async () => {
+  const dock = {
+    id: "information-1",
+    hidden: false,
+    getBoundingClientRect: () => ({ width: 340, height: 300 }),
+  };
+  let expanded = true;
+  let controls = "information-1";
+  let mounted = true;
+  const toggle = { disabled: false, getAttribute: () => controls };
+  const root = {
+    querySelector: (selector) =>
+      selector === ".information-dock"
+        ? mounted
+          ? dock
+          : null
+        : expanded
+          ? toggle
+          : null,
+  };
+  assert.equal(informationDockReady(root), true);
+  expanded = false;
+  assert.equal(informationDockReady(root), false);
+  expanded = true;
+  controls = "another-owner";
+  assert.equal(informationDockReady(root), false);
+  controls = dock.id;
+  dock.hidden = true;
+  assert.equal(informationDockReady(root), false);
+  dock.hidden = false;
+  mounted = false;
+  assert.equal(informationDockReady(root), false);
+  const source = await read("../scripts/reading-main-ui-preview.mjs");
+  assert.match(source, /informationDockReady\.toString\(\)/);
+  assert.doesNotMatch(source, /information-dismiss-toolbar/);
 });

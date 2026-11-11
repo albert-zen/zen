@@ -2,6 +2,21 @@ import assert from "node:assert/strict";
 import { dispatchNavigationKey } from "./navigation-main-ui-preview.mjs";
 
 /** Read-only measurements of production App/Markdown/Information/pending surfaces. */
+/** Wait for the actual desktop surface and its sole, expanded entry. */
+export function informationDockReady(root) {
+  const dock = root.querySelector(".information-dock");
+  const toggle = root.querySelector(
+    '.information-toolbar button[aria-expanded="true"]',
+  );
+  if (!dock || !toggle || dock.hidden || toggle.disabled) return false;
+  const rect = dock.getBoundingClientRect();
+  return (
+    rect.width > 0 &&
+    rect.height > 0 &&
+    toggle.getAttribute("aria-controls") === dock.id
+  );
+}
+
 export function observeReading() {
   const read = (selector) => {
     const e = document.querySelector(selector);
@@ -393,9 +408,7 @@ export async function captureDesktopReading({
     scrollReadingTo({ send, evaluate, evidence, theme: options.theme, target });
   const openInformation = async () => {
     await click(".information-toolbar button");
-    await wait(
-      "!!document.querySelector('.information-dock .information-dismiss-toolbar button')",
-    );
+    await wait(`(${informationDockReady.toString()})(document)`);
   };
   try {
     await openThread();
