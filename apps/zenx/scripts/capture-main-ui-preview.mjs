@@ -152,7 +152,7 @@ try {
     ],
     { stdio: ["ignore", "ignore", "pipe"] },
   );
-  lifecycle = observePreviewChrome(child, profile, { timeoutMs: 20_000 });
+  lifecycle = observePreviewChrome(child, profile);
   socket = await lifecycle.connect();
   let id = 0;
   socket.on("message", (data) => {
