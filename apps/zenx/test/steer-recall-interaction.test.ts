@@ -1195,3 +1195,93 @@ test("held headings stay neutral across owners, recovery and languages without r
     }
   });
 });
+
+test("pending controls retain bilingual names, disclosure focus and inert disabled recall", async () => {
+  await withRuntimeDom(async () => {
+    const thread = staged();
+    const items = thread.canonicalItems!;
+    let requests = 0;
+    protocol(async () => {
+      requests++;
+      throw new Error("Unexpected request from disabled recall or disclosure");
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const originalLanguage = i18n.language;
+    try {
+      for (const language of ["en", "zh"]) {
+        await act(async () => {
+          await i18n.changeLanguage(language);
+        });
+        for (const count of [1, 2]) {
+          for (const restorable of [true, false]) {
+            await act(async () => {
+              root.render(
+                createElement(PendingSteerPanel, {
+                  threadId: thread.id,
+                  items,
+                  pending: pendingSteerMessages(items).slice(0, count),
+                  runningTurnId: null,
+                  onRestore: restorable ? () => true : undefined,
+                }),
+              );
+            });
+            const toggle = container.querySelector<HTMLButtonElement>(
+              ".queue-shelf-toggle",
+            )!;
+            const recall = container.querySelector<HTMLButtonElement>(
+              ".queue-header-action",
+            )!;
+            assert.equal(
+              recall.title,
+              i18n.t(
+                count === 1 ? "shell:steerRecallOne" : "shell:steerRecallAll",
+              ),
+            );
+            assert.equal(
+              recall.textContent?.trim(),
+              i18n.t(
+                count === 1
+                  ? "shell:steerRecallOneShort"
+                  : "shell:steerRecallAllShort",
+              ),
+            );
+            assert.equal(recall.disabled, !restorable);
+            if (!restorable) {
+              await act(async () => recall.click());
+              assert.equal(requests, 0);
+            }
+            toggle.focus();
+            for (const expanded of [false, true]) {
+              await act(async () => toggle.click());
+              assert.equal(document.activeElement, toggle);
+              assert.equal(
+                toggle.getAttribute("aria-expanded"),
+                String(expanded),
+              );
+              assert.equal(
+                toggle.getAttribute("aria-label"),
+                i18n.t(
+                  expanded
+                    ? "shell:queueHideMessages"
+                    : "shell:queueShowMessages",
+                ),
+              );
+              const details = document.getElementById(
+                toggle.getAttribute("aria-controls")!,
+              );
+              assert.ok(details);
+              assert.equal(details.hidden, !expanded);
+              assert.equal(requests, 0);
+            }
+          }
+        }
+      }
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      await i18n.changeLanguage(originalLanguage);
+    }
+  });
+});

@@ -292,6 +292,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - 普通消息、Steer 与 Queue 复用正文展示语义：Markdown、typed 引用胶囊、原生结构化问题回答气泡与独立图片行保持可读，图片预览可以关闭并归还焦点。问题呈现只取可信 questionReply 与原始问题，不从相似文字猜测结构。
 - 活动 Turn 内将用户 Queue 转为 Steer 是 Host 的原子晋升：保留 queued ID、client ID 与完整输入，通过 canonical 晋升事实增加 revision 并移入上层。发送回执不等于模型已消费，晋升后的 pending Steer 仍可通过整批原子撤回恢复输入；消费/撤回竞态拒绝时不得假装撤回成功。
 - Queue 保留编辑、删除、向上/向下排序与转 Steer；排序提交完整且有序的 Queue 身份/revision 快照，Host 持久化顺序事实，包含用户、Agent 与 Host 队列行且排除 Steer。Renderer 等 canonical 更新后改序，不乐观移位。快照变化或消息已保留用于处理时明确报告冲突。
+- Queue 的可用行操作保留完整 token 对比，不因鼠标尚未悬停而额外变淡；不可用的编辑、取消与排序使用 disabled token。进行中的编辑/取消保留可读的状态文字、原位置与禁用交互，不把“正在处理”误呈现成空闲不可用。既有 44px 命中区域、tooltip、可访问名称与键盘焦点不变。
 - 操作发送中、只读核实、回执待投影与结果未知时锁定冲突动作。未知态保留原请求身份，允许只读检查精确 canonical receipt，不以重新发送、取消或重建消息代替核验。锁与反馈按 Thread 隔离，切换 Thread、卸载 viewport 与迟到回执不得影响新 Thread 或新草稿。
 - Interrupt / Interrupt & Send 仍是 Composer 的独立中断操作，不进入待发送区的第三组，也不与转 Steer 混用。
 
@@ -1017,6 +1018,8 @@ the same 1000- and 5000-Turn histories, delayed/rejected admission, newer drafts
 attachments, both ACK/event orders and exactly one canonical user message.
 
 ### Editable conversation information
+
+Subagent rows in the information panel wrap long conversation names, including archived names, rather than hiding distinguishing words behind an ellipsis. Status remains a separate, non-shrinking label; wrapping does not change the navigation target, archive visibility or sidebar preference. The panel's existing scroll surface contains long lists.
 
 Thread and actual Room owners share the same native information layout. PAW uses its existing Room binding and never a third owner. The default typed components are lineage, triggers, background commands and the legacy default Board, with Room members added for Room owners. Thread-source defaults in a Room use only its actual current assistant member; an empty Room never invents one. Provider availability is independent of component placement. The unimplemented PR/artifact types remain valid in saved layouts, but do not appear in the ordinary view or Add menu; Customize still shows their unavailable explanation and Remove action. Reading never migrates their saved placement. Ordinary view shows a card only when its own provider reports actual content. Empty or initially unavailable Board, lineage, trigger, shell and Room-member cards stay out of view; Configure retains their placement controls and available diagnostics. Empty/collapsed providers stay mounted for bounded read-only observation, so content appears automatically. A failed refresh preserves already observed content and its error, rather than converting failure into an empty result. New Thread/Room owners and retired provider admissions never reuse another source’s visibility.
 

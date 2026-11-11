@@ -277,7 +277,9 @@
   color: var(--color-text-muted) !important;
 }
 
-.queue-row-edit:disabled {
+.queue-row-edit:disabled,
+.queue-row-cancel:disabled,
+.queue-row-move:disabled {
   color: var(--color-text-disabled) !important;
 }
 
@@ -378,18 +380,6 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .queue-row-edit:not(:focus-visible):not(.is-pending),
-  .queue-row-cancel:not(:focus-visible):not(.is-pending) {
-    opacity: 0.55;
-  }
-
-  .queue-row:hover .queue-row-edit,
-  .queue-row:focus-within .queue-row-edit,
-  .queue-row:hover .queue-row-cancel,
-  .queue-row:focus-within .queue-row-cancel {
-    opacity: 1;
-  }
-
   .queue-shelf button:not(:disabled):hover,
   .queue-preview.is-expandable:hover {
     background: var(--color-surface-hover);

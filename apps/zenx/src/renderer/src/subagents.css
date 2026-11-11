@@ -119,11 +119,11 @@
 .subagent-tree-title {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 .subagent-tree-status {
+  flex-shrink: 0;
   font-size: var(--font-size-caption);
   color: var(--text-2);
 }
