@@ -60,24 +60,23 @@ test("native recovery projects full answer and exactly two real queue items only
     const projected = projectNativeThread(recovery.thread);
     assert.equal(projected.queuedMessages?.length, pending ? 2 : 0);
     assert.equal(projected.turns.length, 1);
-    assert.equal(projected.turns[0].status, "completed");
-    const answer = projected.turns[0].items.find(
-      (item) => item.type === "agentMessage",
-    );
+    const turn = projected.turns[0];
+    assert(turn);
+    assert.equal(turn.status, "completed");
+    const answer = turn.items.find((item) => item.type === "agentMessage");
     assert(answer && answer.type === "agentMessage");
     assert.equal(answer.text, readingMarkdown);
     assert.equal(recovery.thread.sandbox, "read-only");
   }
   const first = readingRecovery(base, true);
-  first.thread.items.pop();
-  assert.equal(
-    readingRecovery(base, true).thread.items.length,
-    first.thread.items.length + 1,
-  );
+  const second = readingRecovery(base, true);
+  assert.notEqual(second.thread.items, first.thread.items);
+  assert.deepEqual(second.thread.items, first.thread.items);
 });
 test("typed approval is synthetic, stable and opt-in, not an execution", () => {
   assert.deepEqual(readingApprovals(false), []);
   const [approval] = readingApprovals(true);
+  assert(approval);
   assert.equal(approval.params.threadId, base.id);
   assert.match(approval.params.reason!, /Do not approve/);
   assert.deepEqual(readingApprovals(true), [approval]);

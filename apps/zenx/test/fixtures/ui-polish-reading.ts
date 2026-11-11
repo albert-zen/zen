@@ -96,19 +96,24 @@ export function readingRecovery(base: Thread, pending: boolean) {
     { sandbox: "read-only", approvalPolicy: "on-request" },
   );
   if (pending) {
-    recovery.thread.items.push(
-      ...[
-        "Compare the paragraph and table spacing.",
-        "Summarize the reading-position observations.",
-      ].map((text, index) => ({
-        id: `reading-queue-${index + 1}`,
-        type: "user_message_queued" as const,
-        threadId: base.id,
-        clientId: `reading-client-${index + 1}`,
-        createdAt: `2026-10-15T03:00:0${index + 1}.000Z`,
-        input: [{ type: "text" as const, text }],
-      })),
-    );
+    const queuedItems = [
+      "Compare the paragraph and table spacing.",
+      "Summarize the reading-position observations.",
+    ].map((text, index) => ({
+      id: `reading-queue-${index + 1}`,
+      type: "user_message_queued" as const,
+      threadId: base.id,
+      clientId: `reading-client-${index + 1}`,
+      createdAt: `2026-10-15T03:00:0${index + 1}.000Z`,
+      input: [{ type: "text" as const, text }],
+    }));
+    return {
+      ...recovery,
+      thread: {
+        ...recovery.thread,
+        items: [...recovery.thread.items, ...queuedItems],
+      },
+    };
   }
   return recovery;
 }
