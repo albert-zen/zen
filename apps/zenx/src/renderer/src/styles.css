@@ -1222,6 +1222,24 @@ button:disabled {
 .thread-row.selected::before {
   content: none;
 }
+/* Current-thread aliases retain navigation semantics but not two primary fills.
+   If the Project/Pinned location is collapsed or absent, Recent stays primary. */
+.sidebar:has(
+    .project-group .thread-row.selected,
+    .pinned-thread-group .thread-row.selected
+  )
+  .recent-thread-group
+  .thread-row.selected {
+  background: var(--surface-wash);
+}
+.sidebar:has(
+    .project-group .thread-row.selected,
+    .pinned-thread-group .thread-row.selected
+  )
+  .recent-thread-group
+  .thread-row.selected:hover {
+  background: var(--surface-wash-strong);
+}
 .thread-row.inbox {
   min-height: 80px;
   gap: 5px;
