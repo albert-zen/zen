@@ -128,14 +128,19 @@ export function PluginInformationHost({
         visibleBottom(titlebar),
         resourceOpen ? visibleBottom(heading) : 0,
       );
+      const triggerBottom = trigger.current?.getBoundingClientRect().bottom;
       const next = {
         headerBottom,
         available:
           !resourceOpen || panel?.dataset.expanded !== "true" || primaryActive,
         // Render must not synchronously flush the transcript's dirty layout,
         // including when Radix keeps the information popover closed.
-        triggerBottom: trigger.current?.getBoundingClientRect().bottom,
-        top: Math.max(0, headerBottom - bounds.top) + 12,
+        triggerBottom,
+        // The measured entry can extend beyond a short/absent title row.
+        // Keep the dock's close control below it, as the popover already does.
+        top:
+          Math.max(0, Math.max(headerBottom, triggerBottom ?? 0) - bounds.top) +
+          12,
         right: resourceWidth + 12,
         // Our responsive allocation, not a value copied from a reference app:
         // a 340px card, 24px gutters and at least 556px for the conversation.
