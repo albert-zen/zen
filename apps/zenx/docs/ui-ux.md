@@ -1346,3 +1346,12 @@ When a request competes with the transcript, queue and Information panel, let th
 ### Desktop supporting-rail hierarchy
 
 Sidebar and docked Information are supporting rails around the primary conversation canvas. Sidebar section labels, project labels, selected conversation identities and secondary model/status text retain distinct roles without removing aliases or changing navigation. Empty-project spacing is quieter, not hidden. Docked Information uses the sidebar-tone host with clearly titled, lightly bounded content widgets, distinguishing the panel identity, widget identity and secondary customization controls. Preserve theme tokens, widget order, customization/disclosure behavior, focus rings and all statuses; this is not an opportunity to erase archived or inactive data. Compare whole light/dark screenshots with long identities, expanded/collapsed navigation and the real Information dock. Reference direction comes from the observed Codex/Claude/Linear navigation hierarchy and T3/DSH content-led workspace, not an assertion that unlike screenshots are equivalent.
+
+
+### Desktop conversation canvas and information (2026-11-11 correction)
+
+The desktop Information region belongs to the conversation, not the sidebar. Both use the same `--color-surface-main` canvas; do not wrap Information in a sidebar-colored shell with nested white cards. The neutral default light/dark surfaces follow the inspected T3 Code proposal `6f13f36f` canvas (#f5f5f5/#151515); optional user color themes and status/accent meaning remain intact. T3 is a visual reference, not copied runtime authority.
+
+The existing Information toggle is the single desktop show/hide control; Escape within the dock still returns focus there. Do not repeat Close information or an Information heading in the dock. Customization stays available as a labeled icon at the top content row. Subagents creation belongs beside its heading, never a separate action-only row when embedded. The standalone plugin retains its own heading/action. Group separation uses space and a subtle separator, not outer plus inner card borders. Native scrollbars have a transparent track and quiet narrow thumb; keyboard scrolling, focus and forced-colors usability remain available.
+
+Evidence must include matching light/dark main conversation with Information open, not tests alone. Check long names and multiple actual cards before claiming that density is resolved. This supersedes the earlier supporting-rails recommendation to add sidebar backgrounds, boxed widgets, and a 14px Information heading.

@@ -388,7 +388,6 @@ export function PluginInformationHost({
             maxHeight: `calc(100% - ${layout.top + 12}px)`,
           }}
         >
-          {closeControl}
           {tabs}
           {surface}
         </aside>

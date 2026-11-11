@@ -12,7 +12,7 @@ const section = css.slice(
 test("desktop reading hierarchy is scoped and retains shared history/Composer alignment", () => {
   assert.match(section, /@media \(min-width: 961px\)/u);
   assert.match(section, /--conversation-width: 800px;/u);
-  assert.match(section, /background: var\(--color-surface\);/u);
+  assert.match(section, /background: var\(--color-surface-main\);/u);
   assert.match(section, /\.thread-view \.bottom-zone::before/u);
   assert.doesNotMatch(
     section,

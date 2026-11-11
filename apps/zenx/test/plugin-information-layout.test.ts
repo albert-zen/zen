@@ -263,7 +263,11 @@ test("Board uses one toggle and explicit close, measures Browser coexistence and
       document.querySelector(".information-dock"),
       "wide chat reserves a docked card",
     );
-    await click(".information-dock .information-dismiss-toolbar button");
+    assert.equal(
+      document.querySelector(".information-dock .information-dismiss-toolbar"),
+      null,
+    );
+    await click(".information-toolbar button");
     assert.equal(document.querySelector(".information-dock"), null);
     assert.equal(document.activeElement, trigger);
     await click(".information-toolbar button");

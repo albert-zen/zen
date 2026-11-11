@@ -1252,12 +1252,28 @@ test("embedded lineage keeps its creation action but leaves the heading to the o
     { report() {}, manageMode: false, embedded: true },
   );
   try {
+    const host = f.dom.window.document.getElementById("root")!;
+    const widget = f.dom.window.document.createElement("section");
+    widget.className = "information-widget";
+    host.before(widget);
+    widget.innerHTML =
+      '<header><span class="information-widget-inline-actions"></span></header>';
+    widget.append(host);
     await f.render("parent");
     assert.equal(
       f.dom.window.document.querySelector(
         ".subagents-panel > header > strong",
       ) === null,
       true,
+    );
+    assert.equal(
+      f.dom.window.document.querySelector(".subagents-panel > header"),
+      null,
+    );
+    assert.ok(
+      f.dom.window.document.querySelector(
+        ".information-widget > header .subagent-create-button",
+      ),
     );
     assert.ok(f.button("New side chat"));
     assert.match(

@@ -14,25 +14,21 @@ test("supporting rails distinguish information hierarchy without changing naviga
   );
   assert.match(
     section,
-    /\.information-dock\s*\{\s*background: var\(--color-surface-sidebar\);/u,
+    /\.information-dock\s*\{\s*background: var\(--color-surface-main\);/u,
   );
   assert.match(
     section,
-    /\.information-dock \.information-widget\s*\{[^}]*background: var\(--color-surface\);/u,
+    /\.information-dock \.information-widget\s*\{[^}]*background: transparent;/u,
   );
   assert.doesNotMatch(
     section,
-    /display:\s*none|visibility:\s*hidden|opacity:|position:\s*absolute|pointer-events:\s*none/u,
+    /display:\s*none|visibility:\s*hidden|opacity:|pointer-events:\s*none/u,
   );
 });
 test("supporting rail changes preserve native colors and primary reading geometry", () => {
   assert.doesNotMatch(
     section,
     /#[0-9a-f]{3,8}\b|--conversation-width|\.bottom-zone|\.messages/u,
-  );
-  assert.match(
-    section,
-    /\.information-settings-toolbar > span\s*\{[^}]*font-size: 14px;[^}]*font-weight: 600;/u,
   );
   assert.match(
     section,

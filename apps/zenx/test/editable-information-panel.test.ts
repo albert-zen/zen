@@ -719,10 +719,11 @@ const emptyExplanation = () => document.querySelector(".information-empty");
 const informationHeading = () =>
   document.querySelector('[role="heading"][aria-level="2"]');
 
-test("information heading and guidance orient empty views without hiding attention or stopping providers", async () => {
+test("information stays free of a redundant heading and retains accessible customization and empty guidance", async () => {
   const f = await fixture();
   try {
-    assert.equal(informationHeading()?.textContent, "Information");
+    assert.equal(informationHeading(), null);
+    assert.ok(document.querySelector(".information-customize[aria-label]"));
     assert.equal(emptyExplanation(), null);
     f.setHasTriggers(false);
     await f.focus();
@@ -731,7 +732,8 @@ test("information heading and guidance orient empty views without hiding attenti
     assert.ok(f.row("triggers"), "empty providers remain mounted");
     await f.click("Customize information");
     assert.equal(emptyExplanation(), null, "editing keeps its own diagnostics");
-    assert.equal(informationHeading()?.textContent, "Information");
+    assert.equal(informationHeading(), null);
+    assert.ok(document.querySelector(".information-customize[aria-label]"));
     await f.click("Done");
     assert.ok(emptyExplanation());
     f.setHasTriggers(true);
@@ -743,7 +745,7 @@ test("information heading and guidance orient empty views without hiding attenti
     await act(async () => {
       await i18n.changeLanguage("zh");
     });
-    assert.equal(informationHeading()?.textContent, "资料");
+    assert.equal(informationHeading(), null);
     assert.match(
       emptyExplanation()?.textContent ?? "",
       /通过管理显示或添加组件/,
@@ -761,7 +763,8 @@ test("empty guidance waits for the current owner's layout and never replaces rea
     assert.ok(emptyExplanation());
     const release = f.holdRead();
     await f.switchThread("next-owner");
-    assert.equal(informationHeading()?.textContent, "Information");
+    assert.equal(informationHeading(), null);
+    assert.ok(document.querySelector(".information-customize[aria-label]"));
     assert.equal(
       emptyExplanation(),
       null,
@@ -787,7 +790,8 @@ test("empty guidance waits for the current owner's layout and never replaces rea
     f.api.read = originalRead;
     await f.render();
     assert.equal(emptyExplanation(), null);
-    assert.equal(informationHeading()?.textContent, "Information");
+    assert.equal(informationHeading(), null);
+    assert.ok(document.querySelector(".information-customize[aria-label]"));
     await act(async () => {
       releaseInitial();
       await new Promise((resolve) => setTimeout(resolve, 30));

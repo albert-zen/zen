@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import React, {
@@ -545,12 +546,34 @@ function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
       </ul>
     );
   };
+  const panelRef = useRef<HTMLElement>(null);
+  const [actionsHost, setActionsHost] = useState<Element | null>(null);
   const tree = render(parent, new Set([parent]));
   const information = useContext(SubagentsInformationVisibilityContext);
+  const createControl = (
+    <CreateSideChat
+      key={parent}
+      sdk={sdk}
+      parent={parent}
+      onCreated={refresh}
+    />
+  );
   const hasArchived = all.some(
     (entry) => entry.archived && entry.parentThreadId === parent,
   );
   const visible = !!tree || hasArchived || error !== null;
+  useLayoutEffect(() => {
+    setActionsHost(
+      information?.embedded
+        ? (panelRef.current
+            ?.closest(".information-widget")
+            ?.querySelector(
+              ":scope > header > .information-widget-inline-actions",
+            ) ?? null)
+        : null,
+    );
+  }, [information?.embedded, visible, information?.manageMode]);
+
   useEffect(() => {
     information?.report(visible);
   }, [information, visible]);
@@ -562,20 +585,20 @@ function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
   if (information && !information.manageMode && !visible) return null;
   return (
     <section
+      ref={panelRef}
       className="subagents-panel"
       aria-label={i18n.t("panels:subagentConversations")}
     >
-      <header>
-        {!information?.embedded && (
-          <strong>{i18n.t("panels:subagents")}</strong>
-        )}
-        <CreateSideChat
-          key={parent}
-          sdk={sdk}
-          parent={parent}
-          onCreated={refresh}
-        />
-      </header>
+      {actionsHost ? (
+        createPortal(createControl, actionsHost)
+      ) : (
+        <header>
+          {!information?.embedded && (
+            <strong>{i18n.t("panels:subagents")}</strong>
+          )}
+          {createControl}
+        </header>
+      )}
       {error ? (
         <p role="alert">
           {error}

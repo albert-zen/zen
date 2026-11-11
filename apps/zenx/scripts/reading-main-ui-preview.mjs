@@ -81,7 +81,7 @@ export function observeReading() {
     deny: ".approval-request-card .approval-request-deny",
     informationEntry: ".information-toolbar button",
     dock: ".information-dock",
-    informationClose: ".information-dock .information-dismiss-toolbar button",
+    informationClose: '.information-toolbar button[aria-expanded="true"]',
   };
   const targets = Object.fromEntries(
     Object.entries(names).map(([key, selector]) => [key, read(selector)]),
@@ -189,7 +189,7 @@ export function verifyReading(
   if (information) {
     assert(
       s.dock?.visible && s.informationClose?.visible && s.informationClose.hit,
-      "Real desktop Information dock and close control are reachable",
+      "Real desktop Information dock and its single toggle are reachable",
     );
     assert(
       s.thread.rect.right <= s.dock.rect.x + 1,

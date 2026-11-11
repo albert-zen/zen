@@ -531,19 +531,15 @@ function InformationPanel({
         </div>
       ) : null}
       <div className="information-settings-toolbar">
-        <span role="heading" aria-level={2}>
-          {t("informationComponents")}
-        </span>
         <button
           type="button"
-          className="quiet-button information-customize"
+          className="icon-button information-customize"
           aria-label={t(editing ? "informationDone" : "informationCustomize")}
           title={t(editing ? "informationDone" : "informationCustomize")}
           aria-pressed={editing}
           onClick={() => setEditing((value) => !value)}
         >
           <Icon name={editing ? "check" : "compose"} size={14} />
-          {t(editing ? "informationDone" : "informationManage")}
         </button>
       </div>
       {error ? (
@@ -769,6 +765,7 @@ function InformationPanel({
                     />
                     <h3>{title(widget)}</h3>
                   </button>
+                  <span className="information-widget-inline-actions" />
                   {editing ? (
                     <div className="information-widget-actions">
                       <button
