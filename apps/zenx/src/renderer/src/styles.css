@@ -5788,6 +5788,11 @@ button:disabled {
   .directory-picker-backdrop {
     padding: 0;
   }
+  .ui-dialog.directory-picker-shell {
+    /* A definite shell height lets the list use the remaining grid track.
+       The shared native-titlebar max-height still bounds this dialog. */
+    height: min(680px, calc(100dvh - 32px));
+  }
   .directory-picker-dialog {
     width: 100%;
     height: 100%;
@@ -5796,7 +5801,7 @@ button:disabled {
     border-radius: 0;
   }
   .directory-picker-body {
-    min-height: min(280px, 40dvh);
+    min-height: 0;
     flex-direction: column;
   }
   .directory-picker-body > nav {
@@ -6065,6 +6070,15 @@ button:disabled {
   }
   .plugin-boundary small {
     grid-column: 2;
+  }
+}
+@media (min-width: 360px) and (max-width: 640px) {
+  .directory-picker-dialog > footer {
+    /* Keep the target and actions visible without spending a second row on
+       actions; long paths retain their own focusable scrolling area. */
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 8px;
   }
 }
 

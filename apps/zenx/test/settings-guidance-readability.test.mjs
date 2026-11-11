@@ -57,3 +57,28 @@ test("foreground control keeps its label and switch together across widths", () 
     /(?:max-height|overflow:\s*hidden|white-space:\s*nowrap)/u,
   );
 });
+
+test("narrow directory layout allocates remaining height to the scrollable list", () => {
+  const shell = css.match(
+    /\.ui-dialog\.directory-picker-shell\s*\{([^}]*height:[^}]*)\}/u,
+  )?.[1];
+  const bodies = [...css.matchAll(/\.directory-picker-body\s*\{([^}]*)\}/gu)];
+  const narrowBody = bodies.find(([, rule]) =>
+    /flex-direction:\s*column/u.test(rule),
+  )?.[1];
+  const list = css.match(/\.directory-picker-list\s*\{([^}]*)\}/u)?.[1];
+  const footer = css.match(
+    /@media \(min-width: 360px\) and \(max-width: 640px\)\s*\{\s*\.directory-picker-dialog > footer\s*\{([^}]*)\}/u,
+  )?.[1];
+  assert.ok(shell);
+  assert.match(shell, /height:\s*min\(680px, calc\(100dvh - 32px\)\)/u);
+  assert.ok(narrowBody);
+  assert.match(narrowBody, /min-height:\s*0/u);
+  assert.doesNotMatch(narrowBody, /\d+(?:dvh|vh|px)/u);
+  assert.ok(list);
+  assert.match(list, /flex:\s*1/u);
+  assert.match(list, /min-height:\s*0/u);
+  assert.match(list, /overflow-y:\s*auto/u);
+  assert.ok(footer);
+  assert.match(footer, /grid-template-columns:\s*minmax\(0, 1fr\) auto auto/u);
+});

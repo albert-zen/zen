@@ -8,6 +8,28 @@ import { i18n } from "../../src/renderer/src/i18n.js";
 const query = new URLSearchParams(location.search);
 let failSnapshot = query.get("directoryFailure") === "1";
 const calls: string[] = [];
+const density = query.get("directoryDensity") === "1";
+const densityDirectories = [
+  "Apps",
+  "Archive",
+  "Design explorations",
+  "Documentation and onboarding",
+  "Experiments",
+  "Internationalization 中文排版检查",
+  "Research notes",
+  "Shared components",
+  "Synthetic workspace with a deliberately long project folder name",
+  "Web",
+].map((name, index) => ({
+  name,
+  path:
+    index === 0
+      ? `/synthetic/${"long-project-name-".repeat(20)}`
+      : `/synthetic/folder-${index + 1}`,
+}));
+const directories = density
+  ? densityDirectories
+  : [{ name: "Empty", path: "/synthetic/empty" }];
 Object.assign(window.zenx.settings, {
   getDirectoryBrowser: async () => {
     calls.push("snapshot");
@@ -24,21 +46,28 @@ Object.assign(window.zenx.settings, {
   },
   listDirectory: async (directory: string) => {
     calls.push(`list:${directory}`);
-    if (!["/synthetic", "/synthetic/empty"].includes(directory))
+    if (
+      !["/synthetic", ...directories.map((entry) => entry.path)].includes(
+        directory,
+      )
+    )
       throw new Error("Directory outside synthetic fixture");
     return {
       path: directory,
       parent: directory === "/synthetic" ? null : "/synthetic",
       breadcrumbs: [
         { label: "Synthetic", path: "/synthetic" },
-        ...(directory.endsWith("/empty")
-          ? [{ label: "Empty", path: directory }]
+        ...(directory !== "/synthetic"
+          ? [
+              {
+                label: directories.find((entry) => entry.path === directory)!
+                  .name,
+                path: directory,
+              },
+            ]
           : []),
       ],
-      directories:
-        directory === "/synthetic"
-          ? [{ name: "Empty", path: "/synthetic/empty" }]
-          : [],
+      directories: directory === "/synthetic" ? directories : [],
     };
   },
 });

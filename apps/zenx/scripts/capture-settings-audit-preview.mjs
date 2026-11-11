@@ -17,6 +17,7 @@ assert.equal(
 );
 assert.equal(process.platform, "linux", "This fixture targets Ubuntu CI.");
 const directory = path.resolve(process.argv[2] ?? ".settings-audit-preview");
+const densityLongPath = `/synthetic/${"long-project-name-".repeat(20)}`;
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const evidence = {
   scope:
@@ -33,6 +34,13 @@ const measure = `(() => {
   const editor=document.querySelector('.provider-editor');
   const scroll=document.querySelector('#root[hidden] ~ div .page-scroll') ?? document.querySelector('.page-scroll');
   const active=document.activeElement;
+  const list=document.querySelector('.directory-picker-list');
+  const selection=document.querySelector('#directory-picker-selection');
+  const listRect=rect(list);
+  const rows=[...document.querySelectorAll('.directory-picker-list [data-index]')];
+  const visibleIn=(outer, inner) => !!outer && !!inner && inner.width > 0 && inner.height > 0 && inner.x >= outer.x - 1 && inner.right <= outer.right + 1 && inner.y >= outer.y - 1 && inner.bottom <= outer.bottom + 1;
+  const viewportRect={x:0,y:0,width:innerWidth,height:innerHeight,right:innerWidth,bottom:innerHeight};
+
   return {viewport:{width:innerWidth,height:innerHeight}, editor:rect(editor), editorRole:editor?.getAttribute('role'), focusInEditor:!!editor?.contains(active), focus:{tag:active?.tagName,text:active?.textContent?.slice(0,120),label:active?.getAttribute('aria-label'),id:active?.id},
     scroll:{top:scroll?.scrollTop,height:scroll?.clientHeight,total:scroll?.scrollHeight},
     providerCards:document.querySelectorAll('.provider-profile-card').length, modelRows:document.querySelectorAll('.provider-model-row').length,
@@ -50,6 +58,22 @@ const measure = `(() => {
       current: '.directory-picker-breadcrumbs [aria-current=location]', selection: '#directory-picker-selection'
     }).map(([key, selector]) => [key, rect(document.querySelector(selector))])),
     breadcrumbsOverflow: (() => { const e = document.querySelector(".directory-picker-breadcrumbs"); return !!e && e.scrollWidth > e.clientWidth; })(),
+    directoryGeometry: {
+      platform:document.documentElement.dataset.platform,
+      path:{scrollTop:selection?.scrollTop,clientHeight:selection?.clientHeight,scrollHeight:selection?.scrollHeight,focused:active===selection,text:selection?.textContent,title:selection?.title},
+      viewport: viewportRect, list: listRect, clientHeight:list?.clientHeight, scrollHeight:list?.scrollHeight, scrollTop:list?.scrollTop,
+      fullyVisibleRows:rows.filter(row => visibleIn(listRect,rect(row)) && visibleIn(viewportRect,rect(row))).map(row => Number(row.dataset.index)),
+      rowRects:rows.map(rect), focusedIndex:active?.getAttribute('data-index'),
+      focusRect:rect(active), focusVisible:!!active?.matches(':focus-visible'),
+      focusInsideList:!!list?.contains(active), focusFullyVisible:visibleIn(listRect,rect(active)) && visibleIn(viewportRect,rect(active)),
+      focusOutline:active ? getComputedStyle(active).outline : null, focusBoxShadow:active ? getComputedStyle(active).boxShadow : null,
+      footer:rect(document.querySelector('.directory-picker-dialog footer')),
+      cancel:rect(document.querySelector('.directory-picker-dialog footer .secondary-button')),
+      add:rect(document.querySelector('.directory-picker-dialog footer .primary-button')),
+      addDisabled:document.querySelector('.directory-picker-dialog footer .primary-button')?.disabled,
+      addDescription:document.querySelector('.directory-picker-dialog footer .primary-button')?.getAttribute('aria-describedby'),
+      pageScrollTop:document.scrollingElement?.scrollTop,
+    },
     directory:{dialog:rect(document.querySelector(".directory-picker-shell")),path:document.querySelector(".directory-picker-dialog footer strong")?.textContent,rows:document.querySelectorAll(".directory-picker-list [data-index]").length,error:document.querySelector(".directory-picker-error")?.textContent,focusInside:!!document.querySelector(".directory-picker-shell")?.contains(active),calls:window.__directoryAudit?.calls},
   };
 })()`;
@@ -273,7 +297,7 @@ try {
           contains(r.directoryBody, r.browser),
           "Directory browser stays in body",
         );
-        if (options.width <= 720) {
+        if (options.width <= 640) {
           assert.ok(
             r.browser.width >= r.directoryBody.width - 2,
             "Narrow directory browser uses body width",
@@ -307,6 +331,146 @@ try {
             r.selection && r.selection.bottom <= options.height,
             "Folder to add remains within viewport",
           );
+        }
+      }
+      if (/^2[4-9]-directory-density/u.test(name)) {
+        const geometry = observation.directoryGeometry;
+        const viewport = geometry.viewport;
+        assert.ok(
+          contains(viewport, observation.directory.dialog),
+          "Dialog stays in viewport",
+        );
+        assert.ok(
+          contains(viewport, geometry.footer),
+          "Footer stays in viewport",
+        );
+        assert.ok(
+          contains(viewport, geometry.cancel),
+          "Cancel remains visible",
+        );
+        assert.ok(contains(viewport, geometry.add), "Add remains visible");
+        assert.ok(
+          contains(viewport, r.selection),
+          "Current add path remains visible",
+        );
+        assert.ok(
+          contains(r.browser, geometry.list),
+          "Directory list stays inside browser",
+        );
+        assert.equal(
+          observation.overflow,
+          false,
+          "No horizontal page overflow",
+        );
+        assert.equal(geometry.addDisabled, false);
+        assert.equal(geometry.addDescription, "directory-picker-selection");
+        if (viewport.width <= 640) {
+          for (const target of [
+            geometry.cancel,
+            geometry.add,
+            ...geometry.rowRects,
+          ]) {
+            assert.ok(
+              target.width >= 44 && target.height >= 44,
+              "Narrow directory action is at least 44px",
+            );
+          }
+        }
+        if (["linux", "win32"].includes(geometry.platform)) {
+          assert.ok(
+            observation.directory.dialog.y >= 44,
+            "Native-platform dialog avoids the 44px titlebar",
+          );
+        }
+        if (name.includes("long-path")) {
+          assert.equal(
+            geometry.path.focused,
+            true,
+            "Tab reaches the full path",
+          );
+          assert.ok(
+            geometry.path.scrollHeight > geometry.path.clientHeight,
+            "Long path has internal overflow",
+          );
+          assert.ok(
+            geometry.path.scrollTop > 0,
+            "End actually scrolls the full path",
+          );
+          assert.ok(
+            geometry.path.scrollTop + geometry.path.clientHeight >=
+              geometry.path.scrollHeight - 1,
+            "End reveals the tail of the full path",
+          );
+          assert.equal(
+            geometry.path.text,
+            densityLongPath,
+            "Path text is complete",
+          );
+          assert.equal(geometry.path.title, densityLongPath);
+          assert.ok(
+            contains(viewport, geometry.list),
+            "Empty list stays visible",
+          );
+        } else {
+          assert.ok(
+            geometry.focusInsideList && geometry.focusFullyVisible,
+            "Keyboard focus stays visible inside list",
+          );
+        }
+        assert.equal(
+          geometry.focusVisible,
+          true,
+          "Keyboard navigation retains focus-visible",
+        );
+        assert.equal(
+          observation.directory.path,
+          name.includes("child") || name.includes("long-path")
+            ? densityLongPath
+            : "/synthetic",
+        );
+        if (!name.includes("child") && !name.includes("long-path")) {
+          assert.equal(observation.directory.rows, 10);
+          assert.ok(
+            geometry.fullyVisibleRows.length > 0,
+            "List exposes complete rows",
+          );
+          assert.equal(
+            geometry.focusedIndex,
+            name.includes("-end") ? "9" : "0",
+          );
+          if (viewport.bottom === 480) {
+            assert.ok(
+              geometry.scrollHeight > geometry.clientHeight,
+              "Short viewport uses internal list overflow",
+            );
+          }
+          if (
+            name.includes("-end") &&
+            geometry.scrollHeight > geometry.clientHeight
+          ) {
+            assert.ok(
+              geometry.scrollTop > 0,
+              "End actually scrolls the overflowing list",
+            );
+          }
+          if (name.includes("-home") || name.includes("-back")) {
+            // Minimum browsing area for this fixed ordinary-path sample only,
+            // not a score or a constraint on separate long-path fixtures.
+            const minimumRows =
+              viewport.width === 390 && viewport.height === 640
+                ? 5
+                : viewport.width === 390 && viewport.height === 480
+                  ? 2
+                  : 1;
+            assert.ok(
+              geometry.fullyVisibleRows.length >= minimumRows,
+              `Ordinary-path density fixture exposes at least ${minimumRows} complete rows at the top`,
+            );
+            assert.ok(
+              geometry.scrollTop <= 1,
+              "Home/return restores top of list",
+            );
+          }
         }
       }
       receipt.states.push({ name, filename, observation });
@@ -654,6 +818,77 @@ try {
       "list:/synthetic",
     ]);
     await capture("23-directory-cancel");
+    // Reuse only the production directory journey at short height, not Settings.
+    for (const short of [false, true]) {
+      await send("Emulation.setDeviceMetricsOverride", {
+        width: short ? 390 : options.width,
+        height: short ? 480 : options.height,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+      const densityUrl = `${url}/settings-audit.html?${new URLSearchParams({ lang: options.lang, theme: options.theme, scene: "directory", directoryDensity: "1" })}`;
+      await send("Page.navigate", { url: densityUrl });
+      await waitFor("!!document.querySelector('#directory-audit-open')");
+      await evaluate("document.fonts.ready");
+      await clickSelector("#directory-audit-open");
+      await waitFor(
+        "document.querySelectorAll('.directory-picker-list [data-index]').length === 10",
+      );
+      const suffix = short ? "-short-390x480" : "";
+      // Genuine keyboard events switch modality; no focus()/scrollTop injection.
+      await key("End", "End", 35);
+      await waitFor(
+        "document.activeElement?.getAttribute('data-index') === '9'",
+      );
+      await capture("24-directory-density-end" + suffix);
+      await key("Home", "Home", 36);
+      await waitFor(
+        "document.activeElement?.getAttribute('data-index') === '0'",
+      );
+      await capture("25-directory-density-home" + suffix);
+      await key("Enter", "Enter", 13);
+      await waitFor(
+        `document.querySelector('#directory-picker-selection')?.textContent === ${JSON.stringify(densityLongPath)}`,
+      );
+      await capture("26-directory-density-child" + suffix);
+      await key("Tab", "Tab", 9);
+      await waitFor(
+        "document.activeElement?.id === 'directory-picker-selection'",
+      );
+      await key("End", "End", 35);
+      await waitFor(
+        "(() => { const path = document.querySelector('#directory-picker-selection'); return path.scrollTop > 0 && path.scrollTop + path.clientHeight >= path.scrollHeight - 1; })()",
+      );
+      await capture("28-directory-density-long-path-end" + suffix);
+      await key("Home", "Home", 36);
+      await waitFor(
+        "document.querySelector('#directory-picker-selection').scrollTop <= 1",
+      );
+      (receipt.longPathHome ??= []).push({
+        short,
+        observation: await evaluate(measure),
+      });
+      await key("Tab", "Tab", 9, 8);
+      await waitFor(
+        "document.activeElement === document.querySelector('.directory-picker-list')",
+      );
+      await key("Backspace", "Backspace", 8);
+      await waitFor(
+        "document.querySelectorAll('.directory-picker-list [data-index]').length === 10 && document.activeElement?.getAttribute('data-index') === '0'",
+      );
+      await capture("27-directory-density-back" + suffix);
+      // Backspace at the synthetic root is safe and must not issue another read.
+      await key("Backspace", "Backspace", 8);
+      assert.deepEqual(await evaluate("window.__directoryAudit.calls"), [
+        "snapshot",
+        "list:/synthetic",
+        `list:${densityLongPath}`,
+        "list:/synthetic",
+      ]);
+      await key("Escape", "Escape", 27);
+      await waitFor("!document.querySelector('.directory-picker-shell')");
+      await waitFor("document.activeElement?.id === 'directory-audit-open'");
+    }
     receipt.status = "captured";
   }
   assert.equal(evidence.rendererErrors.length, 0, "No renderer exceptions.");
