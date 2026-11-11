@@ -40,6 +40,7 @@
 }
 
 .queue-shelf:where(:not(.steer-shelf)) button,
+.queue-reading-return button,
 .steer-shelf button:where(:not(.image-thumbnail)) {
   border: 0;
   background: transparent;
@@ -54,6 +55,7 @@
 }
 
 .queue-shelf button:focus-visible,
+.queue-reading-return button:focus-visible,
 .queue-preview:focus-visible,
 .queue-row-error:focus-visible,
 .queue-shelf-details:focus-visible {
@@ -763,6 +765,10 @@
   }
   .pending-tray:has(> .queue-shelf[data-reading-expanded="true"]) {
     max-height: min(480px, 55dvh);
+    /* The bottom zone reserves a conversation lane. Its Composer and return
+       are fixed-size siblings; only the message viewport yields when their
+       combined height reaches that existing cap. */
+    flex-shrink: 1;
   }
 }
 
@@ -788,6 +794,10 @@
 
 .queue-reading-return-host {
   display: none;
+  flex: 0 0 auto;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+  line-height: 1.5;
 }
 @media (min-width: 961px) {
   .queue-reading-return-host:not(:empty) {

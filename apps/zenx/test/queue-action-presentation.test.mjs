@@ -151,3 +151,13 @@ test("reading return stays desktop-only and in ordinary flow", () => {
     false,
   );
 });
+
+test("expanded tray yields to Composer and return within the existing bottom-zone budget", () => {
+  assert.match(
+    source,
+    /\.pending-tray:has\(> \.queue-shelf\[data-reading-expanded="true"\]\)\s*\{[^}]*flex-shrink: 1;/u,
+  );
+  assert.match(source, /\.queue-reading-return-host\s*\{[^}]*flex: 0 0 auto;/u);
+  assert.match(source, /\.queue-reading-return button,/u);
+  assert.match(source, /\.queue-reading-return button:focus-visible,/u);
+});
