@@ -58,3 +58,21 @@ On the development workspace with existing dependencies, all three bundles took
 infrastructure contract tests took 0.11 s. This measures build only, not capture,
 remote dependency installation or runner queueing. Actual remote timings belong
 to each run's receipts; a configured workflow alone is not screenshot evidence.
+
+## Verified hosted run
+
+The first independent run,
+[42971059510](https://github.com/albert-zen/zen/actions/runs/42971059510), captured
+15 PNGs from commit `9fdddf7ce8eae212938903bec78eaf371713b59d` (tree
+`9141c42cd8194b5d141984c80fa8a737d5cecc96`). From job startup to artifact upload it
+took **58.0 seconds**, including npm installation and CJK fonts. The renderer
+build took **12.47 seconds** and capture **20.39 seconds**. This does not include
+runner queue time and is a measured run, not a future SLA.
+
+All 265 recorded project source hashes, three HTML hashes and 15 PNG hashes were
+verified after download. There were no renderer exceptions or external requests;
+the browser sandbox remained enabled. The initial run did not record pointer
+media capabilities, so its hover images do not prove the fine-pointer CSS branch.
+The follow-up capture explicitly emulates and asserts desktop pointer/hover
+capabilities, records them per case, and requires the target to match `:hover`.
+Native Tab already establishes and verifies `:focus-visible` before focus shots.

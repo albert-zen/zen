@@ -120,6 +120,8 @@ try {
     chrome,
     [
       "--headless=new",
+      // Explicit desktop device emulation, not a browser security change.
+      "--blink-settings=primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2",
       "--disable-dev-shm-usage",
       "--no-first-run",
       "--no-default-browser-check",
@@ -201,7 +203,7 @@ try {
     const observation = await evaluate(`(() => {
       const rect=e=>{if(!e)return null;const r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};
       const selectors={sidebar:'.sidebar',thread:'.thread-view',composer:'.composer',information:'.editable-information-panel',pending:'.queue-shelf',agentName:'.subagent-tree-title'};
-      return {url:location.href,viewport:{width:innerWidth,height:innerHeight},overflow:document.documentElement.scrollWidth>innerWidth,visibleText:document.body.innerText.slice(0,12000),geometry:Object.fromEntries(Object.entries(selectors).map(([k,s])=>[k,rect(document.querySelector(s))])),names:[...document.querySelectorAll('.subagent-tree-title')].map(e=>({text:e.textContent,rect:rect(e),scrollWidth:e.scrollWidth,clientWidth:e.clientWidth})),buttons:[...document.querySelectorAll('.queue-shelf button')].map(e=>({label:e.getAttribute('aria-label'),disabled:e.disabled,rect:rect(e),color:getComputedStyle(e).color,background:getComputedStyle(e).backgroundColor})),active:{tag:document.activeElement?.tagName,label:document.activeElement?.getAttribute('aria-label')}};
+      return {url:location.href,input:{finePointer:matchMedia('(pointer:fine)').matches,hover:matchMedia('(hover:hover)').matches},viewport:{width:innerWidth,height:innerHeight},overflow:document.documentElement.scrollWidth>innerWidth,visibleText:document.body.innerText.slice(0,12000),geometry:Object.fromEntries(Object.entries(selectors).map(([k,s])=>[k,rect(document.querySelector(s))])),names:[...document.querySelectorAll('.subagent-tree-title')].map(e=>({text:e.textContent,rect:rect(e),scrollWidth:e.scrollWidth,clientWidth:e.clientWidth})),buttons:[...document.querySelectorAll('.queue-shelf button')].map(e=>({label:e.getAttribute('aria-label'),disabled:e.disabled,rect:rect(e),color:getComputedStyle(e).color,background:getComputedStyle(e).backgroundColor})),active:{tag:document.activeElement?.tagName,label:document.activeElement?.getAttribute('aria-label')}};
     })()`);
     const result = await send("Page.captureScreenshot", {
       format: "png",
@@ -267,6 +269,13 @@ try {
       await wait(
         `location.href===${JSON.stringify(url)} && !!document.querySelector('#root > *')`,
       );
+      assert.equal(
+        await evaluate(
+          "matchMedia('(pointer:fine)').matches && matchMedia('(hover:hover)').matches",
+        ),
+        true,
+        "Explicit desktop pointer and hover media capabilities",
+      );
       if (scene === "main") {
         await click(".thread-row");
         await wait(
@@ -302,6 +311,13 @@ try {
           type: "mouseMoved",
           ...action,
         });
+        assert.equal(
+          await evaluate(
+            "document.querySelector('.queue-row-edit:not(:disabled)').matches(':hover')",
+          ),
+          true,
+          "Actual pointer hover on the editable queue action",
+        );
         await capture(`${scene}-${options.name}-hover`, options, scene);
         // Native Tab, not DOM focus(), is what establishes :focus-visible.
         let focused = false;

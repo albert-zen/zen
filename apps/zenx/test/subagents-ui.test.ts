@@ -429,6 +429,133 @@ test("the panel renders direct and nested descendants and explicitly reveals arc
   }
 });
 
+for (const language of ["en", "zh-CN"]) {
+  test(`long English and Chinese subagent names preserve status, routes and independent visibility (${language})`, async () => {
+    const activeId = "child/English name?branch=one#detail";
+    const nestedId = "child/中文名称?branch=two#详情";
+    const archivedId = "archived/中文 English?view=other#history";
+    const englishName = `Interface review ${"UnbrokenProjectIdentifier".repeat(8)} final recommendations`;
+    const chineseName = "主对话资料卡与侧边栏的长名称检查".repeat(8);
+    const archivedName = `归档研究 ${englishName} ${chineseName}`;
+    const children = [
+      summary(activeId, "parent", { name: englishName, status: "active" }),
+      summary(nestedId, activeId, { name: chineseName }),
+      summary(archivedId, "parent", {
+        name: archivedName,
+        archived: true,
+        status: "active",
+      }),
+    ];
+    const changes: Array<[string, boolean]> = [];
+    const sidebar = {
+      visibleSubagentThreadIds: [] as string[],
+      setVisible: async (id: string, visible: boolean) => {
+        changes.push([id, visible]);
+        sidebar.visibleSubagentThreadIds = visible ? [id] : [];
+      },
+    };
+    const f = await fixture(undefined, sidebar);
+    const document = f.dom.window.document;
+    const rows = () => [
+      ...document.querySelectorAll<HTMLButtonElement>(".subagent-tree-row"),
+    ];
+    const route = (id: string) =>
+      `/threads/${encodeURIComponent(id)}?view=panel`;
+    try {
+      await act(async () => i18n.changeLanguage(language));
+      await f.render("parent", "panel", children);
+      assert.deepEqual(
+        rows().map(
+          (row) => row.querySelector(".subagent-tree-title")?.textContent,
+        ),
+        [englishName, chineseName],
+      );
+      assert.equal(
+        rows()[0]!.querySelector(".subagent-tree-status")?.textContent,
+        i18n.t("shell:working"),
+      );
+      assert.equal(
+        rows()[1]!.querySelector(".subagent-tree-status")?.textContent,
+        i18n.t("panels:idleStatus"),
+      );
+      for (const row of rows()) await f.click(row);
+      assert.deepEqual(f.routes, [route(activeId), route(nestedId)]);
+
+      const archivedToggle = document.querySelector<HTMLInputElement>(
+        ".subagent-archived-toggle input[type='checkbox']",
+      );
+      assert.ok(archivedToggle);
+      assert.equal(archivedToggle.checked, false);
+      assert.equal(
+        archivedToggle.labels?.[0]?.textContent,
+        i18n.t("panels:showArchived"),
+      );
+      await f.click(archivedToggle);
+      assert.equal(archivedToggle.checked, true);
+      const archivedRow = rows()[2]!;
+      assert.equal(archivedRow.type, "button");
+      assert.equal(
+        archivedRow.querySelector(".subagent-tree-title")?.textContent,
+        archivedName,
+      );
+      const status = archivedRow.querySelector(".subagent-tree-status");
+      assert.equal(status?.textContent, i18n.t("panels:archivedStatus"));
+      assert.equal(status?.parentElement, archivedRow);
+      assert.equal(status?.closest(".subagent-tree-title"), null);
+
+      const sidebarLabel = i18n.t("shell:showSubagentInSidebar", {
+        title: archivedName,
+      });
+      const sidebarToggle = f.button(sidebarLabel);
+      assert.equal(sidebarToggle.getAttribute("role"), "switch");
+      assert.equal(sidebarToggle.getAttribute("aria-checked"), "false");
+      assert.equal(sidebarToggle.closest(".subagent-tree-row"), null);
+      assert.equal(
+        sidebarToggle.closest(".subagent-tree-entry"),
+        archivedRow.parentElement,
+      );
+      sidebarToggle.focus();
+      await f.click(sidebarToggle);
+      await f.render("parent", "panel", children);
+      assert.equal(document.activeElement, sidebarToggle);
+      assert.equal(sidebarToggle.getAttribute("aria-checked"), "true");
+      assert.deepEqual(changes, [[archivedId, true]]);
+      assert.deepEqual(f.routes, [route(activeId), route(nestedId)]);
+      assert.equal(
+        document.querySelectorAll('[role="switch"][aria-checked="true"]')
+          .length,
+        1,
+      );
+      await f.click(rows()[2]!);
+      assert.deepEqual(f.routes, [
+        route(activeId),
+        route(nestedId),
+        route(archivedId),
+      ]);
+
+      await f.click(archivedToggle);
+      assert.equal(rows().length, 2);
+      await f.click(archivedToggle);
+      assert.equal(
+        rows()[2]!.querySelector(".subagent-tree-title")?.textContent,
+        archivedName,
+      );
+      assert.equal(f.button(sidebarLabel).getAttribute("aria-checked"), "true");
+      assert.deepEqual(
+        changes,
+        [[archivedId, true]],
+        "Show archived does not change sidebar preference",
+      );
+      assert.ok(f.calls.every((call) => call.commandId === "list"));
+      // JSDOM verifies full text and action boundaries, not actual wrapping,
+      // status visibility, hit-target geometry or the panel's scroll height.
+    } finally {
+      await f.close();
+      await i18n.changeLanguage("en");
+    }
+  });
+}
+
 test("the plugin provides only the Subagents panel, with no under-title directory strip", async () => {
   const f = await fixture();
   try {

@@ -12,6 +12,10 @@ test("fast capture preserves browser sandbox and requires actual CI", async () =
   assert.match(capture, /browserSandboxDisabled: false/u);
   assert.match(capture, /Page\.captureScreenshot/u);
   assert.match(capture, /Input\.dispatchMouseEvent/u);
+  assert.match(capture, /primaryPointerType=4.*primaryHoverType=2/u);
+  assert.ok(capture.includes("matchMedia('(pointer:fine)').matches"));
+  assert.ok(capture.includes("matchMedia('(hover:hover)').matches"));
+  assert.ok(capture.includes("matches(':hover')"));
 });
 test("bundle source and screenshot receipts bind actual production scenes", async () => {
   const build = await load("../scripts/build-main-ui-preview.mjs");
