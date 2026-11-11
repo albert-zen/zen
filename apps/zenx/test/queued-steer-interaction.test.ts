@@ -25,6 +25,11 @@ test("steer now targets the same queued identity once, leaves draft intact and a
         });
       },
     });
+    const sendNow =
+      document.querySelector<HTMLButtonElement>(".queue-row-steer")!;
+    assert.equal(sendNow.textContent, "Send now");
+    assert.match(sendNow.getAttribute("aria-label")!, /1/);
+    assert.equal(sendNow.querySelector("svg"), null);
     const button = await h.click(".queue-row-steer");
     await act(async () => button.click());
     assert.equal(calls.length, 1);

@@ -417,6 +417,7 @@
 }
 
 .queue-row-steer {
+  white-space: nowrap;
   color: var(--color-text-primary) !important;
 }
 .queue-row-steer:disabled {
@@ -626,6 +627,11 @@
   padding: 0 0 6px;
 }
 .pending-tray .queue-shelf-header {
+  /* Keep delivery timing attached to the group while keyboard focus scrolls. */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--color-surface-inset);
   min-height: 32px;
   flex-wrap: wrap;
 }
@@ -715,4 +721,9 @@
     min-height: 28px;
     padding: 4px;
   }
+}
+
+/* Focus scrolling must leave room for the sticky group heading. */
+.pending-tray {
+  scroll-padding-block-start: 64px;
 }

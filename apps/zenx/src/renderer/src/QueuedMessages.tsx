@@ -774,7 +774,7 @@ function QueuedMessageRow({
               {steering ? (
                 <span role="status">{t(steeringStatus)}</span>
               ) : (
-                <Icon name="send" size={15} />
+                <span>{t("queueSendNow")}</span>
               )}
             </button>
           )}

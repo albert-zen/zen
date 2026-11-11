@@ -68,3 +68,23 @@ test("queue action colors distinguish available, disabled and pending without ex
     dom.window.close();
   }
 });
+
+test("pending group timing stays sticky with space reserved for keyboard focus", () => {
+  const dom = new JSDOM(
+    `<style>${source}</style><div class="pending-tray"><section class="queue-shelf"><div class="queue-shelf-header">After this turn · 2 messages</div></section></div>`,
+  );
+  try {
+    const heading = dom.window.getComputedStyle(
+      dom.window.document.querySelector(".queue-shelf-header"),
+    );
+    assert.equal(heading.position, "sticky");
+    assert.equal(heading.top, "0px");
+    assert.equal(heading.zIndex, "1");
+    const tray = dom.window.getComputedStyle(
+      dom.window.document.querySelector(".pending-tray"),
+    );
+    assert.equal(tray.scrollPaddingBlockStart, "64px");
+  } finally {
+    dom.window.close();
+  }
+});
