@@ -341,7 +341,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - Account 额度卡按当前 ZenX 登录账户的真实订阅接口窗口显示剩余/已用及本地重置时间，按返回时长命名；缺失窗口与空分组不渲染，窗口内未知值不补0。进入账户页或登录成功后查询，可显式刷新；失败清空旧值，退出或切换账户使迟到响应失效，不混入 API 余额。
 - Models & providers 中解释 Default / Title 新会话用途、既有会话不受影响及 Provider 管理的说明，使用共享 13px label 字级和 secondary 文字色；它们是决策说明，不降为 disabled / muted 状态。状态标记、禁用控件和错误仍保留各自语义，不以全局提亮替代层级。
 - Settings 的二态开关复用 plugin-switch，Agentic compaction、RTK、前台控制与外观开关保持同一命中区、焦点与禁用样式。共享 Select/Combobox 保留键盘和选择语义，使用统一主题浮层、箭头与留白，字段说明在对应控件下方。
-- General 的运行中发送选项始终显示 Enter/发送按钮采用该选择、既有排队消息不变的说明；可展开的键盘快捷键按当前本地草稿说明 Cmd/Ctrl+Enter 的既有行为及 Shift+Enter 换行，不改变发送语义或自动保存。前台接管的作用、默认关闭与 Apply 生效边界保持直接可见，并作为开关的可访问说明。两处决策说明沿用共享 13px secondary 层级，不与 disabled 状态混淆。
+- General 的运行中发送选项始终显示 Enter/发送按钮采用该选择、既有排队消息不变的说明；可展开的键盘快捷键按当前本地草稿说明 Cmd/Ctrl+Enter 的既有行为及 Shift+Enter 换行，不改变发送语义或自动保存。前台接管的作用、默认关闭与 Apply 生效边界保持直接可见，并作为开关的可访问说明。窄屏下设置标签与开关仍在同一行，影响说明紧接其后；开启/关闭文字描述当前草稿值，不宣称权限已保存或被策略禁止。两处决策说明沿用共享 13px secondary 层级，不与 disabled 状态混淆。
 - Z05 UI 至多配置一个 OpenAI subscription profile；Account 的登录、登出与手动 code
   始终路由到这个 profile，而不是假定固定 ID。删除它会清理 profile-scoped OAuth credential，
   但不会恢复或改写历史 Thread。
@@ -389,6 +389,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - 动画遵守 `prefers-reduced-motion`。
 - Projects 或其他可折叠区域必须始终有可恢复入口，不能通过连续折叠留下无法退出的空 Sidebar。
 - Directory picker 的 Back、Backspace、根目录和空 selection 状态都必须安全，不得因缺失 focus/ref 崩溃。
+- Directory picker 的子目录行是打开目录的导航动作，不以持久选中色冒充将添加的目标；当前路径由面包屑和“要添加的文件夹”明确表达，Add 的可访问说明包含该路径。初次读取没有地点或路径时不占用空导航栏；窄屏地点导航横向排列，长路径可聚焦检查，错误文字可换行，不改变读取、重试或选择语义。
 
 ## 6. Plugin contribution UI
 

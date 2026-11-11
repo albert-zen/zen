@@ -468,6 +468,8 @@ export const en = {
   "settingsView.shortcutQueueTogether": "Queue messages together",
   "settingsView.shortcutNewLine": "Add a new line",
   "settingsView.foregroundComputerControl": "Foreground computer control",
+  "settingsView.foregroundControlOn": "On",
+  "settingsView.foregroundControlOff": "Off",
   "nativeCrossDeviceTools.title": "Native cross-device tools",
   "nativeCrossDeviceTools.description":
     "Let agents discover and directly call native tools on paired ZenX devices, subject to the target device's separate tools grant.",
@@ -1824,6 +1826,8 @@ export const zhCN: Record<keyof typeof en, string> = {
   "settingsView.shortcutQueueTogether": "将消息一起排队",
   "settingsView.shortcutNewLine": "添加新行",
   "settingsView.foregroundComputerControl": "前台电脑控制",
+  "settingsView.foregroundControlOn": "开启",
+  "settingsView.foregroundControlOff": "关闭",
   "nativeCrossDeviceTools.title": "原生跨端工具调用",
   "nativeCrossDeviceTools.description":
     "允许智能体发现并直接调用已配对 ZenX 设备上的原生工具，仍需目标设备单独授予工具权限。",

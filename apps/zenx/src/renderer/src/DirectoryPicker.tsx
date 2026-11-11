@@ -166,42 +166,49 @@ export function DirectoryPicker({
           </button>
         </header>
         <div className="directory-picker-body">
-          <nav aria-label={i18n.t("shell:startingLocations")}>
-            {snapshot?.locations.map((location) => (
-              <button
-                type="button"
-                key={`${location.label}:${location.path}`}
-                onClick={() => void open(location.path)}
-              >
-                <Icon name="folder" size={14} />
-                <span>{location.label}</span>
-              </button>
-            ))}
-          </nav>
-          <div className="directory-picker-browser">
-            <div
-              className="directory-picker-breadcrumbs"
-              aria-label={i18n.t("shell:currentFolderPath")}
-            >
-              <button
-                type="button"
-                disabled={listing?.parent == null || loading}
-                onClick={() => listing?.parent && void open(listing.parent)}
-                aria-label={i18n.t("shell:openParentFolder")}
-              >
-                <Icon name="chevron-left" size={14} />
-              </button>
-              {listing?.breadcrumbs.map((crumb) => (
+          {!!snapshot?.locations.length && (
+            <nav aria-label={i18n.t("shell:startingLocations")}>
+              {snapshot?.locations.map((location) => (
                 <button
                   type="button"
-                  key={crumb.path}
-                  title={crumb.path}
-                  onClick={() => void open(crumb.path)}
+                  key={`${location.label}:${location.path}`}
+                  onClick={() => void open(location.path)}
                 >
-                  {crumb.label}
+                  <Icon name="folder" size={14} />
+                  <span>{location.label}</span>
                 </button>
               ))}
-            </div>
+            </nav>
+          )}
+          <div className="directory-picker-browser">
+            {listing && (
+              <div
+                className="directory-picker-breadcrumbs"
+                aria-label={i18n.t("shell:currentFolderPath")}
+              >
+                <button
+                  type="button"
+                  disabled={listing?.parent == null || loading}
+                  onClick={() => listing?.parent && void open(listing.parent)}
+                  aria-label={i18n.t("shell:openParentFolder")}
+                >
+                  <Icon name="chevron-left" size={14} />
+                </button>
+                {listing?.breadcrumbs.map((crumb) => (
+                  <button
+                    type="button"
+                    key={crumb.path}
+                    title={crumb.path}
+                    aria-current={
+                      crumb.path === listing.path ? "location" : undefined
+                    }
+                    onClick={() => void open(crumb.path)}
+                  >
+                    {crumb.label}
+                  </button>
+                ))}
+              </div>
+            )}
             <div
               className="directory-picker-list"
               ref={listRef}
@@ -235,10 +242,12 @@ export function DirectoryPicker({
                   <button
                     type="button"
                     data-index={index}
-                    data-active={index === activeIndex}
                     key={`${entry.name}:${entry.path}`}
                     tabIndex={index === activeIndex ? 0 : -1}
                     title={entry.path}
+                    aria-label={i18n.t("shell:openFolder", {
+                      name: entry.name,
+                    })}
                     onFocus={() => setActiveIndex(index)}
                     onClick={() => void open(entry.path)}
                   >
@@ -253,8 +262,12 @@ export function DirectoryPicker({
         </div>
         <footer>
           <div>
-            <span>{i18n.t("shell:currentSelection")}</span>
-            <strong title={listing?.path}>
+            <span>{i18n.t("shell:folderToAdd")}</span>
+            <strong
+              id="directory-picker-selection"
+              title={listing?.path}
+              tabIndex={listing ? 0 : undefined}
+            >
               {listing?.path ?? i18n.t("shell:noFolderSelected")}
             </strong>
           </div>
@@ -265,6 +278,7 @@ export function DirectoryPicker({
             className="primary-button"
             type="button"
             disabled={listing === null || loading || error !== null}
+            aria-describedby="directory-picker-selection"
             onClick={() => listing && onSelect(listing.path)}
           >
             {i18n.t("shell:addFolder")}

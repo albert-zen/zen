@@ -5292,10 +5292,10 @@ button:disabled {
 }
 .directory-picker-body {
   min-height: 340px;
-  display: grid;
-  grid-template-columns: 150px minmax(0, 1fr);
+  display: flex;
 }
 .directory-picker-body > nav {
+  flex: 0 0 150px;
   min-width: 0;
   overflow-y: auto;
   padding: 12px 9px;
@@ -5320,13 +5320,23 @@ button:disabled {
   background: var(--surface-3);
   color: var(--text);
 }
+.directory-picker-body > nav button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.directory-picker-body > nav button svg {
+  flex-shrink: 0;
+}
 .directory-picker-browser {
+  flex: 1;
   min-width: 0;
   min-height: 0;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
 }
 .directory-picker-breadcrumbs {
+  flex-shrink: 0;
   min-width: 0;
   min-height: 48px;
   display: flex;
@@ -5348,11 +5358,12 @@ button:disabled {
   font-size: var(--font-size-caption);
 }
 .directory-picker-breadcrumbs button:hover:not(:disabled),
-.directory-picker-breadcrumbs button:last-child {
+.directory-picker-breadcrumbs button[aria-current="location"] {
   color: var(--text);
   background: var(--surface-3);
 }
 .directory-picker-list {
+  flex: 1;
   min-height: 0;
   overflow-y: auto;
   padding: 8px;
@@ -5379,9 +5390,14 @@ button:disabled {
   font-size: var(--font-size-caption);
   text-align: left;
 }
-.directory-picker-list > button:hover,
-.directory-picker-list > button[data-active="true"] {
-  background: var(--accent-soft);
+.directory-picker-list > button:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.directory-picker-list > button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: var(--surface-3);
   color: var(--text);
 }
 .directory-picker-list > button span {
@@ -5399,6 +5415,7 @@ button:disabled {
 }
 .directory-picker-error p {
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 .directory-picker-error button {
   min-height: 32px;
@@ -5426,13 +5443,14 @@ button:disabled {
   text-transform: uppercase;
 }
 .directory-picker-dialog > footer strong {
-  overflow: hidden;
+  max-height: 4.5em;
+  overflow: auto;
   color: var(--text-2);
   font-family: ui-monospace, "Cascadia Code", monospace;
   font-size: var(--font-size-caption);
   font-weight: 450;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 .markdown-body {
   min-width: 0;
@@ -5778,7 +5796,36 @@ button:disabled {
     border-radius: 0;
   }
   .directory-picker-body {
-    grid-template-columns: 96px minmax(0, 1fr);
+    min-height: min(280px, 40dvh);
+    flex-direction: column;
+  }
+  .directory-picker-body > nav {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    padding: 4px 8px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .directory-picker-body > nav button {
+    width: auto;
+    max-width: 100%;
+    min-height: 44px;
+    flex: 0 0 auto;
+  }
+  .directory-picker-breadcrumbs button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .directory-picker-list > button,
+  .directory-picker-error button,
+  .directory-picker-dialog > footer > button {
+    min-height: 44px;
+  }
+  .directory-picker-error {
+    margin: 8px;
+    padding: 16px;
   }
   .directory-picker-dialog > header,
   .directory-picker-dialog > footer {
@@ -9479,6 +9526,27 @@ button:disabled {
   flex: 1 1 160px;
   margin: 0;
   overflow-wrap: anywhere;
+}
+
+/* Keep the setting and its switch paired at every width. */
+.settings-view .settings-foreground-control .settings-card-head,
+.settings-view .settings-foreground-control .settings-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+.settings-view .settings-foreground-control .settings-card-head {
+  align-items: start;
+}
+.settings-view .settings-foreground-control .settings-row > button {
+  align-self: center;
+  justify-self: end;
+}
+.settings-foreground-control-body {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
 }
 
 /* Settings use one spacing rhythm across navigation, sections, and fields. */

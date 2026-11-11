@@ -375,6 +375,19 @@ test("General guidance and production directory portal use synthetic read-only j
       assert.ok(
         document.querySelector("#foreground-control-help").textContent.trim(),
       );
+      const foreground = document.querySelector(".settings-foreground-control");
+      assert.equal(
+        foreground
+          .querySelector("[role=switch]")
+          .getAttribute("aria-describedby"),
+        "foreground-control-risk foreground-control-help",
+      );
+      assert.ok(
+        foreground.contains(document.querySelector("#foreground-control-risk")),
+      );
+      assert.ok(
+        foreground.contains(document.querySelector("#foreground-control-help")),
+      );
       dom.window.close();
       dom = boot("scene=directory&directoryFailure=1");
       document = dom.window.document;
@@ -400,9 +413,29 @@ test("General guidance and production directory portal use synthetic read-only j
         ).disabled,
         true,
       );
+      assert.equal(document.querySelector(".directory-picker-body nav"), null);
+      assert.equal(
+        document.querySelector(".directory-picker-breadcrumbs"),
+        null,
+      );
       document.querySelector(".directory-picker-error button").click();
       await waitFor(() =>
         document.querySelector('.directory-picker-list [data-index="0"]'),
+      );
+      assert.ok(
+        document.querySelector(
+          '.directory-picker-breadcrumbs [aria-current="location"]',
+        ),
+      );
+      assert.equal(
+        document
+          .querySelector(".directory-picker-dialog footer .primary-button")
+          .getAttribute("aria-describedby"),
+        "directory-picker-selection",
+      );
+      assert.equal(
+        document.querySelector('.directory-picker-list [data-active="true"]'),
+        null,
       );
       document.querySelector('.directory-picker-list [data-index="0"]').click();
       await waitFor(

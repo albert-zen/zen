@@ -43,6 +43,13 @@ const measure = `(() => {
     dialogs:document.querySelectorAll('[role="dialog"]').length,
     overflow:document.documentElement.scrollWidth>innerWidth,
     calls:window.__settingsAudit.calls,
+    responsive: Object.fromEntries(Object.entries({
+      foregroundCard: '.settings-foreground-control', foregroundLabel: '.settings-foreground-control-body strong',
+      foregroundSwitch: '.settings-foreground-control [role=switch]', risk: '#foreground-control-risk', help: '#foreground-control-help',
+      directoryBody: '.directory-picker-body', browser: '.directory-picker-browser', locations: '.directory-picker-body nav',
+      current: '.directory-picker-breadcrumbs [aria-current=location]', selection: '#directory-picker-selection'
+    }).map(([key, selector]) => [key, rect(document.querySelector(selector))])),
+    breadcrumbsOverflow: (() => { const e = document.querySelector(".directory-picker-breadcrumbs"); return !!e && e.scrollWidth > e.clientWidth; })(),
     directory:{dialog:rect(document.querySelector(".directory-picker-shell")),path:document.querySelector(".directory-picker-dialog footer strong")?.textContent,rows:document.querySelectorAll(".directory-picker-list [data-index]").length,error:document.querySelector(".directory-picker-error")?.textContent,focusInside:!!document.querySelector(".directory-picker-shell")?.contains(active),calls:window.__directoryAudit?.calls},
   };
 })()`;
@@ -235,11 +242,74 @@ try {
     const capture = async (name) => {
       await delay(150);
       const filename = `${options.name}-${name}.png`;
-      receipt.states.push({
-        name,
-        filename,
-        observation: await evaluate(measure),
-      });
+      const observation = await evaluate(measure);
+      const r = observation.responsive;
+      const contains = (outer, inner) =>
+        outer &&
+        inner &&
+        inner.width > 0 &&
+        inner.x >= outer.x - 1 &&
+        inner.right <= outer.right + 1 &&
+        inner.y >= outer.y - 1 &&
+        inner.bottom <= outer.bottom + 1;
+      if (name === "16-general-foreground-description") {
+        assert.ok(r.foregroundLabel && r.foregroundSwitch);
+        assert.ok(
+          Math.min(r.foregroundLabel.bottom, r.foregroundSwitch.bottom) >
+            Math.max(r.foregroundLabel.y, r.foregroundSwitch.y),
+          "Label and switch share a row",
+        );
+        assert.ok(
+          contains(r.foregroundCard, r.risk),
+          "Risk stays inside permission card",
+        );
+        assert.ok(
+          contains(r.foregroundCard, r.help),
+          "Help stays inside permission card",
+        );
+      }
+      if (/^1[789]-directory/u.test(name)) {
+        assert.ok(
+          contains(r.directoryBody, r.browser),
+          "Directory browser stays in body",
+        );
+        if (options.width <= 720) {
+          assert.ok(
+            r.browser.width >= r.directoryBody.width - 2,
+            "Narrow directory browser uses body width",
+          );
+        }
+        if (name === "17-directory-initial-failure") {
+          assert.equal(
+            r.locations,
+            null,
+            "Failed initial snapshot has no empty location rail",
+          );
+          assert.equal(
+            r.current,
+            null,
+            "Failed initial snapshot claims no current directory",
+          );
+        } else {
+          assert.ok(r.current, "Current directory is identified");
+          if (!observation.breadcrumbsOverflow) {
+            assert.ok(
+              contains(r.browser, r.current),
+              "Current directory cue remains visible in browser",
+            );
+          }
+          assert.equal(
+            observation.directory.path,
+            name === "19-directory-empty" ? "/synthetic/empty" : "/synthetic",
+            "Footer identifies the actual folder to add",
+          );
+          assert.ok(
+            r.selection && r.selection.bottom <= options.height,
+            "Folder to add remains within viewport",
+          );
+        }
+      }
+      receipt.states.push({ name, filename, observation });
       await screenshot(filename);
     };
     await send("Emulation.setDeviceMetricsOverride", {

@@ -4244,49 +4244,56 @@ function GeneralPanel({
           </dl>
         </details>
       </section>
-      <div className="page-card settings-card">
+      <section
+        className="page-card settings-card settings-foreground-control"
+        aria-labelledby="foreground-control-title"
+      >
         <div className="settings-card-head">
           <div>
-            <h3>{t("settingsView.foregroundComputerControl")}</h3>
-            <p>
+            <h3 id="foreground-control-title">
+              {t("settingsView.foregroundComputerControl")}
+            </h3>
+            <p className="settings-guidance">
               {t("settingsView.highImpactAccessToTheDesktopYouAreActively")}
             </p>
           </div>
           <span className="status-muted">
             {draft.computerForegroundControlEnabled === true
-              ? t("settingsView.optedIn")
-              : t("settingsView.blocked")}
+              ? t("settingsView.foregroundControlOn")
+              : t("settingsView.foregroundControlOff")}
           </span>
         </div>
-        <div className="settings-row">
-          <div>
-            <strong>{t("settingsView.allowForegroundTakeover")}</strong>
-            <span id="foreground-control-risk" className="settings-guidance">
-              {t("settingsView.thisLetsZenxAgentsMoveThePointerTypeKeys")}
-            </span>
+        <div className="settings-foreground-control-body">
+          <div className="settings-row">
+            <div>
+              <strong>{t("settingsView.allowForegroundTakeover")}</strong>
+            </div>
+            <button
+              className="plugin-switch"
+              type="button"
+              role="switch"
+              aria-label={t("settingsView.allowForegroundComputerControl")}
+              aria-describedby="foreground-control-risk foreground-control-help"
+              aria-checked={draft.computerForegroundControlEnabled === true}
+              onClick={() =>
+                setDraft({
+                  ...draft,
+                  computerForegroundControlEnabled:
+                    draft.computerForegroundControlEnabled !== true,
+                })
+              }
+            />
           </div>
-          <button
-            className="plugin-switch"
-            type="button"
-            role="switch"
-            aria-label={t("settingsView.allowForegroundComputerControl")}
-            aria-describedby="foreground-control-risk foreground-control-help"
-            aria-checked={draft.computerForegroundControlEnabled === true}
-            onClick={() =>
-              setDraft({
-                ...draft,
-                computerForegroundControlEnabled:
-                  draft.computerForegroundControlEnabled !== true,
-              })
-            }
-          />
+          <p id="foreground-control-risk" className="settings-guidance">
+            {t("settingsView.thisLetsZenxAgentsMoveThePointerTypeKeys")}
+          </p>
+          <p id="foreground-control-help" className="settings-guidance">
+            {t(
+              "settingsView.offByDefaultBrowserAutomationAndBackgroundSafeComputer",
+            )}
+          </p>
         </div>
-        <p id="foreground-control-help" className="settings-guidance">
-          {t(
-            "settingsView.offByDefaultBrowserAutomationAndBackgroundSafeComputer",
-          )}
-        </p>
-      </div>
+      </section>
       <div className="page-card settings-card">
         <h3>{t("settingsView.executionAndPermissions")}</h3>
         <div className="form-grid">

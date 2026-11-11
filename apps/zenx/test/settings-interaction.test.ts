@@ -2444,11 +2444,32 @@ test("General requires an explicit risk-labeled opt-in for foreground computer t
       control.getAttribute("aria-describedby"),
       "foreground-control-risk foreground-control-help",
     );
+    const card = control.closest(".settings-foreground-control");
+    const actionRow = control.closest(".settings-row");
+    assert.ok(card);
+    assert.ok(actionRow);
+    assert.equal(card.querySelector(".status-muted")?.textContent, "Off");
+    assert.equal(
+      card.getAttribute("aria-labelledby"),
+      "foreground-control-title",
+    );
+    assert.match(actionRow.textContent ?? "", /Allow foreground takeover/u);
+    assert.equal(card.querySelectorAll('[role="switch"]').length, 1);
     for (const id of ["foreground-control-risk", "foreground-control-help"]) {
       const description = document.getElementById(id);
       assert.ok(description);
       assert.ok(description.classList.contains("settings-guidance"));
       assert.equal(description.closest("details"), null);
+      assert.equal(
+        description.closest(".settings-foreground-control") === card,
+        true,
+      );
+      assert.equal(actionRow.contains(description), false);
+      assert.equal(
+        description.closest(".settings-foreground-control-body") ===
+          card.querySelector(".settings-foreground-control-body"),
+        true,
+      );
     }
     assert.match(
       document.body.textContent ?? "",
@@ -2461,6 +2482,8 @@ test("General requires an explicit risk-labeled opt-in for foreground computer t
 
     await click(control);
     assert.equal(control.getAttribute("aria-checked"), "true");
+    assert.equal(card.querySelector(".status-muted")?.textContent, "On");
+    assert.equal(saved.length, 0);
     await click(exactButtonRequired("Apply"));
     assert.equal(saved[0]?.computerForegroundControlEnabled, true);
 

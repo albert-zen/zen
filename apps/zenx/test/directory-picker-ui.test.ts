@@ -172,9 +172,86 @@ test("directory picker retries an initial browser failure without dismissal", as
   try {
     await waitFor(() => document.querySelector('[role="alert"]'));
     assert.equal(button("Add folder").disabled, true);
+    assert.equal(document.querySelector(".directory-picker-body > nav"), null);
+    assert.equal(document.querySelector(".directory-picker-breadcrumbs"), null);
     await click(button("Try again"));
     await waitFor(() => currentSelection() === "/docs");
     assert.equal(attempts, 2);
+    assert.equal(button("Add folder").disabled, false);
+    assert.equal(document.querySelector(".directory-picker-body > nav"), null);
+  } finally {
+    await unmountPicker(harness);
+    harness.dom.window.close();
+  }
+});
+
+test("focused children are navigation actions, while Add uses the current folder", async () => {
+  const harness = await mountPicker(async () =>
+    listing("/docs", "/", ["Alpha", "Beta"]),
+  );
+  try {
+    await waitFor(() => findButton("Alpha"));
+    assert.equal(ariaButton("Open folder Alpha"), button("Alpha"));
+    assert.equal(button("Alpha").hasAttribute("aria-selected"), false);
+    assert.equal(button("Alpha").hasAttribute("data-active"), false);
+    assert.equal(
+      document.querySelector('[aria-current="location"]')?.textContent,
+      "docs",
+    );
+    await pressKey(harness.dom, button("Alpha"), "ArrowDown");
+    assert.equal(document.activeElement, button("Beta"));
+    assert.equal(currentSelection(), "/docs");
+    const description = button("Add folder").getAttribute("aria-describedby");
+    assert.ok(description);
+    assert.equal(document.getElementById(description)?.textContent, "/docs");
+    await click(button("Add folder"));
+    assert.deepEqual(harness.selected(), ["/docs"]);
+  } finally {
+    await unmountPicker(harness);
+    harness.dom.window.close();
+  }
+});
+
+test("long paths remain complete and cannot be added during navigation", async () => {
+  const path = `/docs/${"long-project-name-".repeat(20)}`;
+  const pending = deferred<DirectoryListing>();
+  const harness = await mountPicker(
+    async (directory) =>
+      directory === path
+        ? listing(path, "/docs", ["Child"])
+        : await pending.promise,
+    { locations: [], initialPath: path },
+  );
+  try {
+    await waitFor(() => findButton("Child"));
+    assert.equal(currentSelection(), path);
+    const pathPreview = document.getElementById("directory-picker-selection");
+    assert.ok(pathPreview);
+    assert.equal(pathPreview.tabIndex, 0);
+    await act(async () => pathPreview.focus());
+    assert.equal(document.activeElement, pathPreview);
+    assert.equal(pathPreview.textContent, path);
+    assert.equal(
+      document.querySelector("footer strong")?.getAttribute("title"),
+      path,
+    );
+    assert.equal(
+      ariaButton("Open folder Child").getAttribute("title"),
+      `${path}/Child`,
+    );
+    await click(button("Child"));
+    assert.equal(button("Add folder").disabled, true);
+    assert.equal(ariaButton("Open parent folder").disabled, true);
+    assert.equal(
+      document
+        .querySelector(".directory-picker-list")
+        ?.getAttribute("aria-busy"),
+      "true",
+    );
+    await click(button("Add folder"));
+    assert.deepEqual(harness.selected(), []);
+    await act(async () => pending.resolve(listing(`${path}/Child`, path, [])));
+    await waitFor(() => currentSelection() === `${path}/Child`);
     assert.equal(button("Add folder").disabled, false);
   } finally {
     await unmountPicker(harness);

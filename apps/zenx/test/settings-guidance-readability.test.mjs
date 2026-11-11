@@ -38,3 +38,22 @@ test("General keyboard guidance wraps without fixed row heights or clipping", ()
     /(?:max-height|overflow:\s*hidden|white-space:\s*nowrap)/u,
   );
 });
+
+test("foreground control keeps its label and switch together across widths", () => {
+  const row = css.match(
+    /\.settings-view \.settings-foreground-control \.settings-row\s*\{([^}]*)\}/u,
+  )?.[1];
+  const body = css.match(
+    /\.settings-foreground-control-body\s*\{([^}]*)\}/u,
+  )?.[1];
+  assert.ok(row);
+  assert.ok(body);
+  assert.match(row, /display:\s*grid/u);
+  assert.match(row, /grid-template-columns:\s*minmax\(0, 1fr\) auto/u);
+  assert.match(row, /align-items:\s*center/u);
+  assert.match(body, /display:\s*grid/u);
+  assert.doesNotMatch(
+    row + body,
+    /(?:max-height|overflow:\s*hidden|white-space:\s*nowrap)/u,
+  );
+});
