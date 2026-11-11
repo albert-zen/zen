@@ -2775,22 +2775,6 @@ function ThreadViewContent({
             primary();
           }}
         >
-          {atLive || transcriptRows.length === 0 ? null : (
-            <div className="composer-reading-position">
-              <span>{i18n.t("shell:readingEarlierMessages")}</span>
-              <button
-                type="button"
-                className="quiet-button"
-                onClick={() => {
-                  returnToLive();
-                  composerTextareaRef.current?.focus({ preventScroll: true });
-                }}
-              >
-                <Icon name="arrow-down" size={14} />
-                {i18n.t("shell:backToLive")}
-              </button>
-            </div>
-          )}
           {skillError !== null && (
             <p role="alert" className="settings-error">
               {skillError}
@@ -3097,6 +3081,27 @@ function ThreadViewContent({
               )}
             </div>
             <div className="composer-actions">
+              {atLive || transcriptRows.length === 0 ? null : (
+                <div
+                  className="composer-reading-position"
+                  role="group"
+                  aria-label={i18n.t("shell:readingEarlierMessages")}
+                >
+                  <button
+                    type="button"
+                    className="quiet-button"
+                    onClick={() => {
+                      returnToLive();
+                      composerTextareaRef.current?.focus({
+                        preventScroll: true,
+                      });
+                    }}
+                  >
+                    <Icon name="arrow-down" size={14} />
+                    {i18n.t("shell:backToLive")}
+                  </button>
+                </div>
+              )}
               <ComposerSendControl
                 mode={composerSendMode}
                 running={runningTurn !== null}

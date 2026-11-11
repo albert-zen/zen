@@ -5990,6 +5990,14 @@ test("desktop reading return preserves live scrolling and returns keyboard focus
     const button = requiredButton(".composer-reading-position button");
     assert.equal(button.textContent?.includes("Back to live"), true);
     assert.equal(button.closest(".composer") !== null, true);
+    assert.ok(
+      button.closest(".composer-actions"),
+      "history return reuses the existing rail instead of adding a header row",
+    );
+    assert.equal(
+      button.closest(".composer-reading-position")?.getAttribute("aria-label"),
+      "Reading earlier messages",
+    );
     await act(async () => {
       button.focus();
       button.click();
