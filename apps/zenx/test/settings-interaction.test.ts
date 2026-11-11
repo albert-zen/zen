@@ -2374,7 +2374,8 @@ test("General keeps send guidance concise and exposes current keyboard behavior 
     const control = await labeledSelect("Send while a reply is running");
     assert.ok(control);
     const help = document.getElementById("composer-send-help");
-    assert.ok(help?.classList.contains("settings-guidance"));
+    assert.ok(help);
+    assert.ok(help.classList.contains("settings-guidance"));
     assert.match(
       help.textContent ?? "",
       /Messages already queued stay unchanged/u,
@@ -2445,7 +2446,8 @@ test("General requires an explicit risk-labeled opt-in for foreground computer t
     );
     for (const id of ["foreground-control-risk", "foreground-control-help"]) {
       const description = document.getElementById(id);
-      assert.ok(description?.classList.contains("settings-guidance"));
+      assert.ok(description);
+      assert.ok(description.classList.contains("settings-guidance"));
       assert.equal(description.closest("details"), null);
     }
     assert.match(

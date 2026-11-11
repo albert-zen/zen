@@ -7,3 +7,23 @@ package-lock.json
 
 # Reviewed raw CI bytes; SHA-256 includes the original CRLF line endings.
 vendor/winapp-0.3.1/packages.lock.json
+
+# Frozen PR #755 review/score evidence; manifest.json records these exact bytes.
+# Preserve original review text and the published evidence SHA-256 values.
+docs/ui-quality/evidence/pr755-settings-20261110/scores.json
+docs/ui-quality/evidence/pr755-settings-20261110/SCORES.md
+docs/ui-quality/reviews/pr755-settings-20261110/context-sol-review-20261110.md
+docs/ui-quality/reviews/pr755-settings-20261110/context-terra-review-20261110.md
+docs/ui-quality/reviews/pr755-settings-20261110/models-sol-review-20261110.md
+docs/ui-quality/reviews/pr755-settings-20261110/models-sol-review-v2-20261110.md
+docs/ui-quality/reviews/pr755-settings-20261110/models-terra-review-20261110.md
+docs/ui-quality/reviews/pr755-settings-20261110/models-terra-v2-review-20261110.md
+docs/ui-quality/reviews/pr755-settings-20261110/plugins-sol-review-20261110.md
+docs/ui-quality/reviews/pr755-settings-20261110/plugins-terra-review-20261110.md
+docs/ui-quality/reviews/pr755-settings-20261110/ui-information-native-sol-review-20261110.md
+docs/ui-quality/reviews/pr755-settings-20261110/ui-information-native-terra-review-20261110.md
+docs/ui-quality/reviews/pr755-settings-20261110/ui-information-neutral-pair-sol-review-20261110.md
+docs/ui-quality/reviews/pr755-settings-20261110/ui-information-neutral-pair-terra-review-20261110.md
+docs/ui-quality/reviews/pr755-settings-20261110/ui-native-settings-preview-sol-review-20261110.md
+docs/ui-quality/reviews/pr755-settings-20261110/ui-native-settings-preview-terra-review-20261110.md
+docs/ui-quality/reviews/pr755-settings-20261110/ui-settings-baseline-sol-review-20261110.md

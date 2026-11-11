@@ -98,9 +98,9 @@ test("native source button targets exact canonical call and retires owner on swi
     IS_REACT_ACT_ENVIRONMENT: true,
   });
   const root = createRoot(document.getElementById("root")!);
-  let observed: Parameters<MessageSourceNavigator> | undefined;
+  const observed: Parameters<MessageSourceNavigator>[] = [];
   const navigate: MessageSourceNavigator = async (...args) => {
-    observed = args;
+    observed.push(args);
   };
   const projection = project("owner", "owner", false, [
     message("A"),
@@ -136,21 +136,24 @@ test("native source button targets exact canonical call and retires owner on swi
     );
     const buttons = document.querySelectorAll<HTMLButtonElement>("button");
     assert.equal(buttons.length, 2);
-    assert.equal(observed, undefined);
+    assert.equal(observed.length, 0);
     buttons[1]!.focus();
     assert.equal(document.activeElement, buttons[1]);
     // Native button activation uses the same click path for keyboard and pointer.
     await act(async () => buttons[1]!.click());
-    assert.deepEqual(observed?.[0], {
+    assert.equal(observed.length, 1);
+    const [navigation] = observed;
+    assert.ok(navigation);
+    assert.deepEqual(navigation[0], {
       kind: "thread",
       id: "sender",
       sourceTool: { itemId: "tool-A", callId: "call-A" },
     });
-    assert.equal(observed?.[1].threadId, "owner");
-    assert.equal(observed?.[1].isCurrent(), true);
+    assert.equal(navigation[1].threadId, "owner");
+    assert.equal(navigation[1].isCurrent(), true);
     await act(async () => root.render(render("different")));
     assert.equal(document.querySelectorAll("button").length, 0);
-    assert.equal(observed?.[1].isCurrent(), false);
+    assert.equal(navigation[1].isCurrent(), false);
   } finally {
     await act(async () => root.unmount());
     dom.window.close();
