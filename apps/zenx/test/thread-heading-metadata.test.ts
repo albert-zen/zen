@@ -95,10 +95,12 @@ test("long cwd and custom source labels are separate bounded siblings with full 
   const dom = new JSDOM(renderToStaticMarkup(tree));
   const row = dom.window.document.querySelector(".thread-heading-metadata")!;
   assert.equal(row.children.length, 2);
-  assert.equal(row.children[0].className, "thread-heading-cwd");
-  assert.equal(row.children[0].textContent, cwd);
-  assert.equal(row.children[0].getAttribute("title"), cwd);
-  const source = row.children[1];
+  const [cwdLabel, source] = row.children;
+  assert.ok(cwdLabel);
+  assert.ok(source);
+  assert.equal(cwdLabel.className, "thread-heading-cwd");
+  assert.equal(cwdLabel.textContent, cwd);
+  assert.equal(cwdLabel.getAttribute("title"), cwd);
   assert.equal(source.tagName, "BUTTON");
   assert.equal(source.textContent, `Copied from ${title}`);
   assert.equal(source.getAttribute("title"), source.textContent);

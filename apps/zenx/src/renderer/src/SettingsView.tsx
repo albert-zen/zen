@@ -1681,7 +1681,7 @@ function ModelsPanel({
         <div className="settings-card-head">
           <div>
             <h3>{t("settingsView.defaultModels")}</h3>
-            <p>
+            <p className="settings-guidance">
               {t("settingsView.chooseAModelForNewConversationsAndAnotherFor")}
             </p>
           </div>
@@ -1701,7 +1701,7 @@ function ModelsPanel({
             onChange={(titleModel) => setDraft({ ...draft, titleModel })}
           />
         </div>
-        <p className="settings-note">
+        <p className="settings-note settings-guidance">
           {t("settingsView.existingConversationsKeepTheirModelYouCanChangeIt")}
         </p>
       </div>
@@ -1715,7 +1715,9 @@ function ModelsPanel({
             <h3 id="provider-list-title">
               {t("settingsView.providerProfiles")}
             </h3>
-            <p>{t("settingsView.manageEachConnectionAndItsAvailableModels")}</p>
+            <p className="settings-guidance">
+              {t("settingsView.manageEachConnectionAndItsAvailableModels")}
+            </p>
           </div>
           {editor === null ? (
             <div className="provider-section-actions">

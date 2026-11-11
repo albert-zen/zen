@@ -4849,7 +4849,7 @@ button:disabled {
   background: var(--surface-code);
   color: var(--text-3);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 8px;
+  font-size: var(--font-size-caption);
   letter-spacing: 0.03em;
 }
 .plugin-status.status-installed,
@@ -4964,6 +4964,9 @@ button:disabled {
   flex-direction: column;
   gap: 4px;
 }
+.plugin-title-line {
+  flex-wrap: wrap;
+}
 .plugin-title-line h3,
 .plugin-lifecycle-copy p {
   margin: 0;
@@ -4984,7 +4987,7 @@ button:disabled {
   border: 1px solid var(--border-control);
   border-radius: 999px;
   color: var(--text-3);
-  font-size: 8px;
+  font-size: var(--font-size-caption);
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -9444,6 +9447,13 @@ button:disabled {
   padding-block: 6px;
 }
 
+/* Decision guidance is readable body-support text, not disabled metadata. */
+.settings-panel .settings-guidance {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-label);
+  line-height: 1.5;
+}
+
 /* Settings use one spacing rhythm across navigation, sections, and fields. */
 .settings-view {
   --settings-gap-field: 6px;
@@ -13068,4 +13078,44 @@ button:disabled {
   content: "";
   flex: 1;
   border-top: 1px solid var(--border);
+}
+
+/* Native, bounded loaded-history summary; never plugin transcript data. */
+.information-communications {
+  min-width: 0;
+}
+.information-communications h4 {
+  margin: 12px 0 4px;
+  font-size: inherit;
+}
+.information-communications-scope {
+  color: var(--text-secondary);
+}
+.information-communications ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.information-communications li {
+  min-width: 0;
+  margin-top: 10px;
+}
+.information-communications li p {
+  margin: 4px 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.information-communications .information-communications-excerpt {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-text-primary);
+}
+.information-communications .message-source-link {
+  max-width: 100%;
+  min-width: 0;
+}
+.information-communications .message-source-link span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

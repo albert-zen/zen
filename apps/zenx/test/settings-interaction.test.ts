@@ -616,6 +616,37 @@ test("Models lists every profile and keeps duplicate model IDs distinguishable a
   }
 });
 
+test("Models gives decision guidance its own readable tier without elevating status metadata", async () => {
+  const harness = await mountSettings("models", {
+    initialSettings: multiProviderSettings,
+  });
+  try {
+    await waitFor(() => exactButton("Add provider"));
+    const guidance = [...document.querySelectorAll(".settings-guidance")];
+    assert.equal(guidance.length, 3);
+    assert.ok(guidance.every((node) => node.tagName === "P"));
+    assert.match(
+      guidance.map((node) => node.textContent).join("\n"),
+      /new conversations/u,
+    );
+    assert.match(
+      guidance.map((node) => node.textContent).join("\n"),
+      /Existing conversations keep their model/u,
+    );
+    assert.match(
+      guidance.map((node) => node.textContent).join("\n"),
+      /Manage each connection/u,
+    );
+    assert.equal(
+      document.querySelector(".status-muted.settings-guidance"),
+      null,
+    );
+    assert.equal(document.querySelector("button.settings-guidance"), null);
+  } finally {
+    await unmount(harness);
+  }
+});
+
 test("Provider discovery starts text-only and manual overrides persist", async () => {
   const discovered = {
     ...model("alpha-vision"),

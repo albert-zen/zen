@@ -1,3 +1,5 @@
+import { InformationCommunications } from "./InformationCommunications.js";
+import type { InformationCommunications as CommunicationsProjection } from "./information-communications.js";
 import React, {
   memo,
   useCallback,
@@ -28,6 +30,7 @@ import { localErrorDetail } from "../../local-error-detail.js";
 import type { InformationType } from "../../information-layout.js";
 
 type ConversationInformationProps = {
+  communications?: CommunicationsProjection;
   threadId: string;
   threads: readonly NativeThreadSummary[];
   snapshot: ZenXPluginSnapshot;
@@ -67,6 +70,7 @@ export function ConversationInformationCards(
 /** Bounded projections with explicit native trigger controls; canonical summary/admission/attention changes still render. */
 function ConversationInformationContent({
   threadId,
+  communications,
   threads,
   snapshot,
   registry,
@@ -128,10 +132,15 @@ function ConversationInformationContent({
     (triggers.length > 0 ||
       !!triggerError ||
       (admissionId !== null && state.status === "error"));
+  const communicationsVisible =
+    communications?.ownerThreadId === threadId &&
+    communications.messages.length > 0;
   const visible =
     !!attention ||
     triggersVisible ||
-    (show("lineage") && !!subagents && lineageVisible) ||
+    (show("lineage") &&
+      !!subagents &&
+      (lineageVisible || communicationsVisible)) ||
     (show("shell") && shellVisible);
   useEffect(() => {
     onVisibilityChange?.(visible);
@@ -282,7 +291,7 @@ function ConversationInformationContent({
       {show("lineage") && subagents ? (
         <section
           className="conversation-information-section"
-          hidden={!lineageVisible && !manageMode}
+          hidden={!lineageVisible && !communicationsVisible && !manageMode}
         >
           <SubagentsInformationVisibilityContext.Provider
             value={lineageVisibility}
@@ -299,6 +308,10 @@ function ConversationInformationContent({
               readHandle={window.zenx.plugins.readHandle}
             />
           </SubagentsInformationVisibilityContext.Provider>
+          <InformationCommunications
+            ownerThreadId={threadId}
+            projection={communications}
+          />
         </section>
       ) : show("lineage") && manageMode ? (
         <p role="status">{t("unavailable")}</p>

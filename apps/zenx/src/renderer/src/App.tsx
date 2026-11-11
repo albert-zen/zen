@@ -1,3 +1,4 @@
+import { projectInformationCommunications } from "./information-communications.js";
 import { withAppShotContext } from "./app-shot-draft.js";
 import { UserQuestionCards } from "./UserQuestionCards.js";
 import { createUserQuestionStore } from "./user-question-state.js";
@@ -2110,6 +2111,25 @@ function AppContent() {
       : null;
   const selectedRoom = roomConversations.rooms.find(
     (room) => room.id === selectedRoomId,
+  );
+  const informationCommunicationsKey = JSON.stringify(
+    projectInformationCommunications(
+      page === "agent" && !selectedRoomId && newThreadDraft === null
+        ? selectedThreadId
+        : null,
+      threadDetail?.id,
+      threadLoading || !!threadError,
+      threadDetail?.canonicalItems,
+    ),
+  );
+  const informationCommunications = useMemo(
+    () =>
+      informationCommunicationsKey
+        ? (JSON.parse(informationCommunicationsKey) as ReturnType<
+            typeof projectInformationCommunications
+          >)
+        : undefined,
+    [informationCommunicationsKey],
   );
   const informationOwnerKey = selectedRoomId
     ? `room:${selectedRoomId}`
@@ -4832,6 +4852,7 @@ function AppContent() {
                       attention={
                         !selectedRoomId ? questionAttention : undefined
                       }
+                      communications={informationCommunications}
                       threads={informationThreads}
                       roomMembers={selectedRoom?.members}
                       snapshot={pluginSnapshot}

@@ -1,4 +1,8 @@
 export const en = {
+  informationReceivedAgents: "Received from agents",
+  informationReceivedLoaded: "Up to 3 recent messages in loaded history",
+  informationReceivedSource: "From {{name}} · View source",
+  informationUnnamedAgent: "Unnamed agent",
   informationSaving:
     "Saving the retained edit. Closing this panel will not repeat it.",
   informationComponents: "Information",
@@ -1156,6 +1160,10 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  informationReceivedAgents: "来自 Agent 的消息",
+  informationReceivedLoaded: "已加载历史中最近的至多 3 条消息",
+  informationReceivedSource: "来自 {{name}} · 查看来源",
+  informationUnnamedAgent: "未命名 Agent",
   informationSaving: "正在保存保留的修改，关闭面板不会重复提交。",
   informationComponents: "资料",
   informationEmptyHint: "可用资料会显示在这里。可通过管理显示或添加组件。",

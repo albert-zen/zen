@@ -6726,7 +6726,9 @@ test("message source reads and opens its exact canonical thread without sending,
     request: async (method, params) => {
       calls.push({ method, params });
       if (method === "zen/thread/read")
-        return { thread: { id: "exact/source", archived: false } };
+        // A valid read includes a canonical item array, even when empty.
+        // This scenario asserts Thread navigation, not sending-call positioning.
+        return { thread: { id: "exact/source", archived: false, items: [] } };
       if (method === "zen/thread/resume")
         return resumed(
           (params as { threadId: string }).threadId === "thread-1"
@@ -7044,7 +7046,7 @@ test("side conversation message source stays in the side panel and preserves the
     request: async (method, params) => {
       const id = (params as { threadId: string }).threadId;
       if (method === "zen/thread/read")
-        return { thread: { id, archived: false } };
+        return { thread: { id, archived: false, items: [] } };
       if (method === "zen/thread/resume") {
         resumes.push(id);
         const value =
@@ -7109,8 +7111,12 @@ test("side conversation message source stays in the side panel and preserves the
 });
 for (const olderFirst of [true, false]) {
   test(`newer message source intent wins when older request finishes ${olderFirst ? "first" : "last"}`, async () => {
-    const first = deferred<{ thread: { id: string; archived: boolean } }>();
-    const second = deferred<{ thread: { id: string; archived: boolean } }>();
+    const first = deferred<{
+      thread: { id: string; archived: boolean; items: [] };
+    }>();
+    const second = deferred<{
+      thread: { id: string; archived: boolean; items: [] };
+    }>();
     const resumes: string[] = [];
     const thread = sourceNavigationThread();
     const original = thread.turns[0]!.items[0]! as any;
@@ -7147,9 +7153,13 @@ for (const olderFirst of [true, false]) {
       await act(async () => links[0]!.click());
       await act(async () => links[1]!.click());
       const finishFirst = () =>
-        first.resolve({ thread: { id: "exact/source", archived: false } });
+        first.resolve({
+          thread: { id: "exact/source", archived: false, items: [] },
+        });
       const finishSecond = () =>
-        second.resolve({ thread: { id: "second/source", archived: false } });
+        second.resolve({
+          thread: { id: "second/source", archived: false, items: [] },
+        });
       await act(async () => (olderFirst ? finishFirst() : finishSecond()));
       await act(async () => (olderFirst ? finishSecond() : finishFirst()));
       assert.equal(

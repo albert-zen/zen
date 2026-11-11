@@ -4,23 +4,23 @@ This preserves recorded scores, not a new review. No reviewer average, rubric co
 
 ## Frozen Appearance mapping
 
-| Candidate | Source | Images | Review identity |
-| --- | --- | --- | --- |
-| A | c4fb90f3; exact source hashes in capture manifest | fresh-A-* | Not supplied |
-| B / Q | 403584e4 / remote bc79a78a | fresh-B-* / Q-* | B original reviewer unknown |
-| P | ab52d87f / remote 448a50a0 | P-* | Primary and challenge identities not supplied |
-| R | 292a768e / remote fed20ea7 | R-* | Same primary/challenge follow-up addenda |
+| Candidate | Source                                            | Images          | Review identity                               |
+| --------- | ------------------------------------------------- | --------------- | --------------------------------------------- |
+| A         | c4fb90f3; exact source hashes in capture manifest | fresh-A-*       | Not supplied                                  |
+| B / Q     | 403584e4 / remote bc79a78a                        | fresh-B-* / Q-* | B original reviewer unknown                   |
+| P         | ab52d87f / remote 448a50a0                        | P-*             | Primary and challenge identities not supplied |
+| R         | 292a768e / remote fed20ea7                        | R-*             | Same primary/challenge follow-up addenda      |
 
 Images are production SettingsView in sandboxed native Electron with synthetic local ports, not whole-App/Host acceptance. Both P-focus files duplicate P-dark exactly; R-narrow-top duplicates R-dark and proves no narrow layout. All original hashes and source mapping are in capture-manifest.json.
 
 ## Original A/B shared assessment, scale 0–4
 
-| State | Hierarchy | Readability | Color | Materials | Attention | Layout |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Appearance light | 3 | 3 | 3 | 3 | 2 | 3 |
-| Appearance dark | 3 | 2 | 3 | 3 | 2 | 3 |
-| Account light | 3 | 3 | 3 | 3 | 3 | 3 |
-| Account dark | 3 | 2 | 3 | 3 | 3 | 3 |
+| State            | Hierarchy | Readability | Color | Materials | Attention | Layout |
+| ---------------- | --------: | ----------: | ----: | --------: | --------: | -----: |
+| Appearance light |         3 |           3 |     3 |         3 |         2 |      3 |
+| Appearance dark  |         3 |           2 |     3 |         3 |         2 |      3 |
+| Account light    |         3 |           3 |     3 |         3 |         3 |      3 |
+| Account dark     |         3 |           2 |     3 |         3 |         3 |      3 |
 
 These describe near-identical A/B states, not separate scores that can be subtracted. B's single observed focus control scored 3/4; A focus was unobserved. Reviewer identity remains blank.
 
@@ -28,12 +28,12 @@ The independent primary and challenge reports each give P and Q 3/4 in their sco
 
 ## Reference-project comparison cells
 
-| Round | Reference project | Separate dimension scores | Evidence limit |
-| --- | --- | --- | --- |
-| Appearance A/B | Linear, Vercel, Codex | | General principles, not matched reference-image scores |
-| Appearance P/Q/R | Public design principles | | No separately scored reference UI |
-| qa6 | General references | | Equivalent reference screenshots not supplied |
-| qa7 | Codex official article; T3 PR #25251 | | Three original public images inspected, but no separate competitor dimension scores recorded |
+| Round            | Reference project                    | Separate dimension scores | Evidence limit                                                                               |
+| ---------------- | ------------------------------------ | ------------------------- | -------------------------------------------------------------------------------------------- |
+| Appearance A/B   | Linear, Vercel, Codex                |                           | General principles, not matched reference-image scores                                       |
+| Appearance P/Q/R | Public design principles             |                           | No separately scored reference UI                                                            |
+| qa6              | General references                   |                           | Equivalent reference screenshots not supplied                                                |
+| qa7              | Codex official article; T3 PR #25251 |                           | Three original public images inspected, but no separate competitor dimension scores recorded |
 
 No third-party reference images are redistributed in this package. Cite official URLs instead. Future independent reviewers should receive matched evidence and the same anchored dimensions; retain their separate results and leave unseen dimensions empty. Historical reference scores cannot be invented retroactively.
 

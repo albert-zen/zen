@@ -1,3 +1,4 @@
+import type { InformationCommunications } from "./information-communications.js";
 import React, {
   memo,
   useCallback,
@@ -39,6 +40,7 @@ export interface InformationReceipt {
   resourceThreadId?: string;
 }
 type Props = {
+  communications?: InformationCommunications;
   owner: BoardConversation;
   threads: readonly NativeThreadSummary[];
   snapshot: ZenXPluginSnapshot;
@@ -90,6 +92,7 @@ export function EditableInformationPanel(props: Props) {
 }
 function InformationPanel({
   owner,
+  communications,
   threads,
   snapshot,
   registry,
@@ -488,6 +491,13 @@ function InformationPanel({
       <ConversationInformationCards
         key={contentKey(widget)}
         threadId={threadId!}
+        communications={
+          owner.kind === "thread" &&
+          owner.threadId === threadId &&
+          communications?.ownerThreadId === owner.threadId
+            ? communications
+            : undefined
+        }
         threads={threads}
         snapshot={snapshot}
         registry={registry}
