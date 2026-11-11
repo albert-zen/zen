@@ -94,14 +94,30 @@ test("desktop queue actions reserve space for visible send text without shrinkin
     source,
     /@media \(pointer: fine\) and \(min-width: 481px\)\s*\{\s*\.pending-tray \.queue-row-actions\s*\{\s*max-width: 192px;/u,
   );
-  assert.match(
-    source,
-    /@media \(max-width: 480px\)\s*\{\s*\.pending-tray \.queue-row-actions\s*\{\s*max-width: 88px;/u,
-  );
+
   assert.match(
     source,
     /\.pending-tray \.queue-row-actions\s*\{[^}]*flex-wrap: wrap;/u,
   );
   // Media query matching and resulting row height are browser acceptance, not
   // simulated by JSDOM. The interaction suite covers exact handlers and focus.
+});
+
+test("narrow queue separates reading and actions without hiding controls or growing short windows", () => {
+  assert.match(
+    source,
+    /@media \(max-width: 480px\)\s*\{\s*\.pending-tray \.queue-row-main\s*\{\s*flex-direction: column;/u,
+  );
+  assert.match(
+    source,
+    /\.pending-tray \.queue-row-content,\s*\.pending-tray \.queue-row-actions\s*\{\s*width: 100%;/u,
+  );
+  assert.match(
+    source,
+    /@media \(max-width: 480px\) and \(min-height: 700px\)\s*\{\s*\.pending-tray\s*\{\s*max-height: min\(360px, 40dvh\);/u,
+  );
+  assert.match(source, /max-height: min\(240px, 30dvh\);/u);
+  assert.doesNotMatch(source, /max-width: 88px;/u);
+  // Browser capture must check complete action rows, full-width message text,
+  // focus visibility, 390px light/dark, and coarse-pointer 44px targets.
 });

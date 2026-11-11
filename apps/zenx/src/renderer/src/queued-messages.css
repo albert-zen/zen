@@ -695,8 +695,24 @@
   justify-content: flex-end;
 }
 @media (max-width: 480px) {
+  .pending-tray .queue-row-main {
+    flex-direction: column;
+  }
+  .pending-tray .queue-row-content,
   .pending-tray .queue-row-actions {
-    max-width: 88px;
+    width: 100%;
+  }
+  .pending-tray .queue-row-actions {
+    max-width: none;
+    padding-top: 0;
+    gap: 4px;
+  }
+}
+/* Use available height in tall narrow windows, not when a keyboard or short
+   viewport needs that space for the Composer and approval decisions. */
+@media (max-width: 480px) and (min-height: 700px) {
+  .pending-tray {
+    max-height: min(360px, 40dvh);
   }
 }
 .queue-move-up {

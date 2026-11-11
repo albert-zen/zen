@@ -27,7 +27,9 @@ socket operation is a boundary, not a reason to disable the sandbox or spoof
 `GITHUB_ACTIONS`. The automated capture intentionally runs only in Actions:
 
 ```sh
-node apps/zenx/scripts/capture-main-ui-preview.mjs /tmp/zenx-preview
+node apps/zenx/scripts/capture-main-ui-preview.mjs /tmp/zenx-preview fine
+# A second independent sandboxed Chrome session, pending bundle required:
+node apps/zenx/scripts/capture-main-ui-preview.mjs /tmp/zenx-preview coarse
 ```
 
 PR source changes trigger the standalone workflow immediately. It does not wait
@@ -47,10 +49,34 @@ not mislabeled as committed evidence. Capture refuses source or bundle drift.
 Artifacts retain PNG, HTML and bounded diagnostics for seven days.
 
 Default coverage is desktop light/dark (1280 × 900) and narrow light (760 × 900).
-Pending additionally covers narrow dark and compact light/dark (390 × 900), all
-with a fine pointer and hover. The 390px cases exercise the <=480px CSS rule;
-760px is not a substitute, and none of these cases proves touch/coarse input.
-The pending-only selection produces 18 PNGs; all three scenes produce 24.
+Pending additionally covers narrow dark and compact light/dark (390 × 900), plus
+short compact light/dark (390 × 600). The fine-pointer capture produces 24 pending
+PNGs, or 30 with all three scenes. The 390px cases exercise the <=480px CSS rule;
+760px is not a substitute.
+
+A second, independently launched Chrome session captures eight pending PNGs at
+390 × 600 in light/dark with coarse-pointer/no-hover emulation. It asserts actual
+`pointer: coarse`, `hover: none`, absence of fine-pointer/hover, and positive touch
+points before continuing. Input uses CDP touch start/end, not a mouse click
+renamed as touch. It records default, native keyboard queue focus, Composer touch
+focus and Composer keyboard focus. There is no coarse hover screenshot. The
+combined planned output is 32 pending PNGs or 38 with all three scenes. These
+counts are coverage configuration, not proof the first hosted run succeeded.
+
+Both input profiles check short-window Composer editor and primary-action
+viewport containment and center hit tests. Coarse additionally checks all
+rendered Queue button targets and the primary action are at least 44 × 44 CSS
+pixels. The screenshot and observation are saved before these assertions fail,
+so a regression retains evidence. No Send/Stop action is activated. Synthetic
+DOM tests exercise the real observation and assertion logic, including failures,
+but do not supply browser geometry evidence.
+
+`evidence.json` retains fine-input results; `evidence-coarse.json` separately
+retains coarse results, and `coarse/` keeps its process diagnostics. Neither
+profile overwrites the other's screenshots or lifecycle logs. Coarse capture is
+only scheduled when pending is bundled. The short viewport is not an actual
+software keyboard, device safe area, mobile browser or physical touchscreen;
+OS-level keyboard resizing and touch journeys remain separate acceptance.
 
 Each pending image records actual row/body/action rectangles, body width ratio,
 horizontal overflow, action line count, scroll offsets, rows geometrically inside
