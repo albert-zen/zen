@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import {
   Popover,
   PopoverAnchor,
@@ -180,6 +180,15 @@ export function ComposerSendControl({
       focusFirstAction();
     }
   };
+  // Presence retains the closed surface during its exit animation. Return focus
+  // at logical close, not at eventual animation unmount, so a later Tab cannot
+  // be stolen by delayed auto-focus.
+  useLayoutEffect(() => {
+    if (!open && focusRequest.current === "return") {
+      (primary.current?.disabled ? anchor.current : primary.current)?.focus();
+      focusRequest.current = null;
+    }
+  }, [open]);
   useEffect(() => () => clearTimeout(timer.current), []);
   // A changed turn/context invalidates the old action surface, never the draft.
   useEffect(() => {
@@ -291,6 +300,9 @@ export function ComposerSendControl({
       <PopoverContent
         id={`${id}-panel`}
         ref={panel}
+        // Keep the exit animation visible, but remove its retained DOM from
+        // native Tab, pointer activation and the accessibility tree immediately.
+        inert={!open}
         className="composer-send-popover"
         align="end"
         side="top"

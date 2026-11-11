@@ -4819,6 +4819,97 @@ for (const disabled of [false, true]) {
   }
 }
 
+test("closed send animation is inert immediately and cannot restore focus late", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    const original = globalThis.getComputedStyle;
+    const originalCss = globalThis.CSS;
+    Object.assign(globalThis, { CSS: { escape: (value: string) => value } });
+    // Retain the real Radix Presence/FocusScope until an explicit animationend.
+    // JSDOM has no CSS animation engine; this models the live computed name only.
+    globalThis.getComputedStyle = ((element: Element) => {
+      const style = original(element);
+      if (!element.classList.contains("composer-send-popover")) return style;
+      return new Proxy(style, {
+        get(target, key) {
+          if (key === "animationName")
+            return element.getAttribute("data-state") === "closed"
+              ? "ui-exit"
+              : "ui-enter";
+          return Reflect.get(target, key);
+        },
+      });
+    }) as typeof getComputedStyle;
+    try {
+      await act(async () =>
+        root.render(
+          createElement(
+            "div",
+            null,
+            createElement(ComposerSendControl, {
+              mode: "soft",
+              running: true,
+              hasDraft: true,
+              disabled: false,
+              sendDisabled: false,
+              primaryMode: "steer",
+              primaryLabel: "Steer now",
+              compact: false,
+              onPrimary: () => assert.fail("Escape must not send"),
+              onSend: () => assert.fail("Escape must not send"),
+              onStop: () => assert.fail("Escape must not stop"),
+            }),
+            createElement("button", { id: "after-send" }, "After send"),
+          ),
+        ),
+      );
+      await act(async () => openSendOptions());
+      const panel = requiredElement(".composer-send-popover");
+      assert.equal(panel.hasAttribute("inert"), false);
+      await act(async () => {
+        panel.querySelector<HTMLButtonElement>("button")!.focus();
+        document.activeElement!.dispatchEvent(
+          new window.KeyboardEvent("keydown", {
+            key: "Escape",
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      });
+      assert.equal(panel.isConnected, true, "exit animation remains mounted");
+      assert.equal(panel.dataset.state, "closed");
+      assert.equal(
+        panel.hasAttribute("inert"),
+        true,
+        "closed DOM is not interactive",
+      );
+      assert.equal(
+        document.activeElement,
+        requiredElement(".action-orb"),
+        "Escape restores focus without waiting for animationend",
+      );
+      const next = requiredElement("#after-send");
+      await act(async () => next.focus());
+      await act(async () => {
+        const end = new window.Event("animationend", { bubbles: true });
+        Object.defineProperty(end, "animationName", { value: "ui-exit" });
+        panel.dispatchEvent(end);
+      });
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+      assert.equal(
+        document.activeElement,
+        next,
+        "unmount cannot steal later focus",
+      );
+      assert.equal(document.querySelector(".composer-send-popover"), null);
+    } finally {
+      globalThis.getComputedStyle = original;
+      Object.assign(globalThis, { CSS: originalCss });
+    }
+  });
+});
+
 // Radix restores focus after its closing FocusScope has unmounted.
 async function waitForSendFocus(label: string): Promise<void> {
   const deadline = Date.now() + 1000;
