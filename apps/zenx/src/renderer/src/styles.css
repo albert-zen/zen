@@ -13324,3 +13324,75 @@ button:disabled {
     max-width: var(--conversation-width);
   }
 }
+
+/* Desktop supporting rails: readable identities and quiet grouping around the
+   primary conversation canvas, without changing routes or disclosure state. */
+@media (min-width: 961px) {
+  .sidebar .sidebar-view-head {
+    color: var(--color-text-secondary);
+    padding-block: 8px;
+  }
+  .sidebar .sidebar-view-head span,
+  .sidebar .projects-section-toggle,
+  .sidebar .sidebar-section-toggle {
+    font-weight: 600;
+    letter-spacing: 0.015em;
+  }
+  .sidebar .project-header {
+    color: var(--color-text-secondary);
+  }
+  .sidebar .project-toggle {
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .sidebar .thread-title {
+    line-height: 1.5;
+  }
+  .sidebar .thread-row.selected .thread-title {
+    font-weight: 600;
+  }
+  .sidebar .project-group + .project-group {
+    margin-top: 10px;
+  }
+  .sidebar .project-empty {
+    padding-block: 2px;
+    line-height: 1.5;
+  }
+  .information-dock {
+    background: var(--color-surface-sidebar);
+    border-radius: 12px;
+  }
+  .information-dock .information-dismiss-toolbar {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--color-border-subtle);
+  }
+  .information-dock .editable-information-panel {
+    padding: 4px 12px 12px;
+  }
+  .information-dock .information-settings-toolbar {
+    min-height: 42px;
+    border-bottom: 0;
+  }
+  .information-dock .information-settings-toolbar > span {
+    color: var(--color-text-primary);
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .information-dock .information-widget {
+    margin-top: 8px;
+    padding: 8px 12px 12px;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 10px;
+    background: var(--color-surface);
+  }
+  .information-dock .information-widget-disclosure h3 {
+    color: var(--color-text-primary);
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.5;
+  }
+  .information-dock .information-widget > header {
+    min-height: 34px;
+    margin-bottom: 6px;
+  }
+}

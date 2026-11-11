@@ -7,6 +7,7 @@ const css = readFileSync(
 );
 const section = css.slice(
   css.indexOf("/* Desktop conversation reading hierarchy:"),
+  css.indexOf("/* Desktop supporting rails:"),
 );
 test("desktop reading hierarchy is scoped and retains shared history/Composer alignment", () => {
   assert.match(section, /@media \(min-width: 961px\)/u);
