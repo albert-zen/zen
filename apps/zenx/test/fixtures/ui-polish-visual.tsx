@@ -18,11 +18,18 @@ import { nativeRecoveryForThread } from "../native-recovery-fixture.js";
 import { encodeModelKey } from "../../../../src/protocol/model-key.js";
 import { createUiPolishTitleBridge } from "./ui-polish-title-bridge.js";
 import { readNavigationQuestions } from "./ui-polish-visual-navigation.js";
+import {
+  guardReadingBridge,
+  readReadingRequest,
+  readingApprovals,
+} from "./ui-polish-reading.js";
 import type { NativeInformationApi } from "../../src/native-information.js";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
 Object.assign(globalThis, { React });
 const params = new URLSearchParams(location.search);
+const readingScene = params.get("scene") === "reading";
+const readingPending = readingScene && params.get("pending") === "1";
 const projectlessScene = params.get("scene") === "projectless";
 document.documentElement.dataset.appearance = params.get("theme") ?? "light";
 document.documentElement.dataset.platform = params.get("platform") ?? "win32";
@@ -65,6 +72,8 @@ const sideChatFixture = {
 const options = {
   request: async (method: string, request?: unknown) => {
     uiPolishTelemetry.protocolCalls.push(method);
+    if (readingScene)
+      return readReadingRequest(method, request, thread(), readingPending);
     if (
       params.get("scene") === "navigation" &&
       method === "zen/thread/questions/list"
@@ -202,12 +211,16 @@ const zenx = {
       type: "ready",
       reconnected: false,
     }),
-    getPendingApprovals: async () => [],
+    getPendingApprovals: async () =>
+      readingScene ? readingApprovals(readingPending) : [],
     request: async (method: string, params?: unknown) => {
       if (method === "model/list") return { data: [model()], nextCursor: null };
       return await options.request(method, params);
     },
-    respondToApproval: async () => undefined,
+    respondToApproval: async () => {
+      if (readingScene)
+        throw new Error("Reading preview cannot respond to approvals");
+    },
     onApprovalRequest: () => () => undefined,
     onApprovalResolved: () => () => undefined,
     onStatus: () => () => undefined,
@@ -501,14 +514,22 @@ Object.assign(zenx, {
   },
 });
 // Launcher mode mounts the real admitted Subagents/Triggers UI on a synthetic bridge.
-if (params.has("launchers") || params.has("conversationTabs")) {
+if (readingScene || params.has("launchers") || params.has("conversationTabs")) {
   Object.assign(zenx.plugins, {
     get: async () => workspaceLauncherSnapshot,
     executeCommand: async (pluginId: string, command: string) => {
+      if (
+        readingScene &&
+        !(pluginId === "zenx-subagents" && command === "list")
+      )
+        throw new Error("Reading preview only admits subagent list");
       if (pluginId === "zenx-subagents") {
         if (command === "list")
           return {
-            threads: params.has("conversationTabs") ? sideConversations : [],
+            threads:
+              readingScene || params.has("conversationTabs")
+                ? sideConversations
+                : [],
           };
         if (command === "create") {
           uiPolishTelemetry.sideChatCreateCommandCalls += 1;
@@ -537,7 +558,7 @@ if (params.has("launchers") || params.has("conversationTabs")) {
     readHandle: async () => null,
   });
 }
-if (params.get("scene") === "navigation") {
+if (params.get("scene") === "navigation" || readingScene) {
   // Observe native input only on navigation controls, never collect editor text.
   for (const type of ["keydown", "keypress", "keyup", "click"]) {
     document.addEventListener(type, (event) => {
@@ -601,7 +622,9 @@ if (params.get("scene") === "navigation") {
   };
   Object.assign(zenx, { information });
 }
-Object.defineProperty(window, "zenx", { value: zenx });
+Object.defineProperty(window, "zenx", {
+  value: readingScene ? guardReadingBridge(zenx) : zenx,
+});
 Object.assign(window, {
   __uiPolishTelemetry: uiPolishTelemetry,
   __sideChatFixture: sideChatFixture,

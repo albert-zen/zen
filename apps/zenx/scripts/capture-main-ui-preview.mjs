@@ -1,3 +1,4 @@
+import { captureDesktopReading } from "./reading-main-ui-preview.mjs";
 import { captureQueueReading } from "./queue-reading-main-ui-preview.mjs";
 /** One sandboxed Chrome, bounded scenes; no aggregate CI dependency or browser download. */
 import assert from "node:assert/strict";
@@ -32,7 +33,9 @@ const root = path.resolve(fileURLToPath(new URL("../../..", import.meta.url)));
 const directory = path.resolve(process.argv[2] ?? ".main-ui-preview");
 const captureProfile = process.argv[3] ?? "fine";
 const desktopQueue = captureProfile === "desktop-queue";
-const pointer = desktopQueue ? "fine" : captureProfile;
+const desktopReading = captureProfile === "desktop-reading";
+const desktopOnly = desktopQueue || desktopReading;
+const pointer = desktopOnly ? "fine" : captureProfile;
 assert(["fine", "coarse"].includes(pointer), "Pointer must be fine or coarse");
 const coarse = pointer === "coarse";
 const evidenceFile = coarse ? "evidence-coarse.json" : "evidence.json";
@@ -412,6 +415,12 @@ try {
       ["pending"],
       "Desktop queue requires only the pending bundle",
     );
+  if (desktopReading)
+    assert.deepEqual(
+      Object.keys(source.scenes),
+      ["reading"],
+      "Desktop reading requires only the production App reading bundle",
+    );
   const cases = coarse
     ? [
         {
@@ -432,7 +441,7 @@ try {
         },
       ]
     : fineCases;
-  for (const options of desktopQueue
+  for (const options of desktopOnly
     ? cases.filter((c) => c.width === 1280 && c.height === 900)
     : cases) {
     await send("Emulation.setDeviceMetricsOverride", {
@@ -453,6 +462,7 @@ try {
         lang: options.lang,
         platform: "linux",
       });
+      if (scene === "reading") query.set("scene", "reading");
       if (scene === "information") query.set("scene", "lineage");
       if (scene === "navigation") {
         query.set("scene", "navigation");
@@ -480,6 +490,23 @@ try {
         true,
         `Actual ${pointer} pointer and hover media capabilities`,
       );
+      if (scene === "reading") {
+        assert(
+          desktopReading,
+          "Reading journey requires its desktop-only profile",
+        );
+        await captureDesktopReading({
+          send,
+          evaluate,
+          wait,
+          click,
+          capture,
+          evidence,
+          options,
+          url,
+        });
+        continue;
+      }
       if (scene === "navigation") {
         await captureDesktopNavigation({
           send,

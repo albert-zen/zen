@@ -12,6 +12,11 @@ const root = path.resolve(fileURLToPath(new URL("../../..", import.meta.url)));
 const output = path.resolve(process.argv[2] ?? ".main-ui-preview");
 const selection = process.argv[3] ?? "all";
 const entries = {
+  reading: {
+    entry: "apps/zenx/test/fixtures/ui-polish-visual.tsx",
+    scope:
+      "Production App/Markdown/Information/Queue/Approval/Composer. Rich synthetic read-only conversation, desktop only; no real tool, account, approval decision or filesystem access.",
+  },
   main: {
     entry: "apps/zenx/test/fixtures/ui-polish-visual.tsx",
     scope:
@@ -35,7 +40,7 @@ const entries = {
 };
 assert(
   selection === "all" || Object.hasOwn(entries, selection),
-  "Scene must be all, main, navigation, pending or information",
+  "Scene must be all, main, navigation, reading, pending or information",
 );
 // Keep the ordinary three-surface loop unchanged; the longer native navigation
 // journey is explicitly selected when its affected states need verification.
@@ -46,6 +51,9 @@ const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const git = (...args) =>
   execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
 const sources = new Set([
+  "apps/zenx/scripts/reading-main-ui-preview.mjs",
+  "apps/zenx/test/reading-main-ui-preview.test.mjs",
+  ".github/workflows/desktop-reading-ui.yml",
   "apps/zenx/scripts/queue-reading-main-ui-preview.mjs",
   "apps/zenx/test/queue-reading-main-ui-preview.test.mjs",
   "package-lock.json",

@@ -1,0 +1,77 @@
+name: Desktop conversation reading preview
+on:
+  pull_request:
+    paths:
+      - .github/workflows/desktop-reading-ui.yml
+      - apps/zenx/src/renderer/src/Markdown.tsx
+      - apps/zenx/src/renderer/src/App.tsx
+      - apps/zenx/src/renderer/src/theme.css
+      - apps/zenx/src/renderer/src/queued-messages.css
+      - apps/zenx/src/renderer/src/ThreadView.tsx
+      - apps/zenx/src/renderer/src/styles.css
+      - apps/zenx/test/fixtures/ui-polish-visual.tsx
+      - apps/zenx/test/fixtures/ui-polish-reading.ts
+      - apps/zenx/test/reading-fixture.test.ts
+      - apps/zenx/scripts/build-main-ui-preview.mjs
+      - apps/zenx/scripts/capture-main-ui-preview.mjs
+      - apps/zenx/scripts/reading-main-ui-preview.mjs
+      - apps/zenx/test/reading-main-ui-preview.test.mjs
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: desktop-reading-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  preview:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Select this commit only
+        id: selection
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { appendFileSync } from 'node:fs';
+          import { readingPathsChanged } from './apps/zenx/scripts/reading-main-ui-preview.mjs';
+          const changed = execFileSync('git', ['diff', '--name-only', 'HEAD^', 'HEAD'], {encoding:'utf8'}).trim().split('\n');
+          const needed = process.env.GITHUB_EVENT_NAME === 'workflow_dispatch' || readingPathsChanged(changed);
+          appendFileSync(process.env.GITHUB_OUTPUT, `needsCapture=${needed}\n`);
+          NODE
+      - uses: actions/setup-node@v4
+        if: steps.selection.outputs.needsCapture == 'true'
+        with:
+          node-version: 22
+          cache: npm
+      - if: steps.selection.outputs.needsCapture == 'true'
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        timeout-minutes: 3
+      - if: steps.selection.outputs.needsCapture == 'true'
+        run: node apps/zenx/scripts/prepare-legend-list.mjs
+      - name: CJK fonts
+        if: steps.selection.outputs.needsCapture == 'true'
+        run: |
+          if [ -z "$(fc-list :lang=zh family)" ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+          fi
+      - if: steps.selection.outputs.needsCapture == 'true'
+        run: node --import tsx --test apps/zenx/test/reading-main-ui-preview.test.mjs apps/zenx/test/reading-fixture.test.ts
+      - if: steps.selection.outputs.needsCapture == 'true'
+        run: node apps/zenx/scripts/build-main-ui-preview.mjs "${{ runner.temp }}/desktop-reading" reading
+        timeout-minutes: 2
+      - if: steps.selection.outputs.needsCapture == 'true'
+        run: node apps/zenx/scripts/capture-main-ui-preview.mjs "${{ runner.temp }}/desktop-reading" desktop-reading
+        timeout-minutes: 2
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.selection.outputs.needsCapture == 'true'
+        with:
+          name: desktop-reading-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/desktop-reading/*
+          if-no-files-found: warn
+          retention-days: 7
