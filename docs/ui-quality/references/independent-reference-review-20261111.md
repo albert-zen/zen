@@ -8,9 +8,9 @@
 |Claude Code|8|7|9|9|7|
 |T3 Code|8|7|8|8|8|
 |DeepSeek Harness|8|8|8|9|8|
-|Linear|未评|未评|未评|未评|未评|
+|Linear（右侧新版深色Sidebar局部）|8|6|9|9|7|
 
-Linear官方对应图本轮无法读取；不沿用旧分冒充复评、不推断缺失画面。历史Linear原图与旧评分在PR保留，标明历史版本。
+Linear补评：随后通过浏览器实际查看官方文章中的宣传对照图，仅评右侧新版深色Sidebar局部。底部存在展示渐隐，未做交互实测，不将局部图推广为完整应用验收。评审员为定位读过历史评分，但未看到目标分数；不能称对历史评分完全盲评。历史Linear原图与旧评分保留，标明原版本。
 
 ## Codex：官方视频20秒帧
 ![Codex](https://github.com/albert-zen/zen/blob/00b9c3f54844ef13567f9ec6c2e702d4fc04b3b9/docs/ui-quality/references/official-desktop-demos-20261111/proactive-20s.png?raw=true)
@@ -32,3 +32,8 @@ Linear官方对应图本轮无法读取；不沿用旧分冒充复评、不推�
 ![DSH子智能体](https://github.com/albert-zen/zen/blob/4a1e1d8d4bf1510d08c379fe1bbce85a6dec0757/docs/ui-quality/references/deepseek-harness-production-fcc0ad4/subagents-dark.jpg?raw=true)
 ![DSH双栏](https://github.com/albert-zen/zen/blob/4a1e1d8d4bf1510d08c379fe1bbce85a6dec0757/docs/ui-quality/references/deepseek-harness-production-fcc0ad4/subagent-sidebar-dark.jpg?raw=true)
 实际生产UI预览，合成数据，非真实账号/模型工作负载。图中主对话、popover和父子双栏为不同场景。
+
+## Linear：官方设计更新图右侧局部
+[官方文章](https://linear.app/now/behind-the-latest-design-refresh)
+![Linear官方前后对照，仅右侧新版深色Sidebar参与本次评分](https://webassets.linear.app/images/ornj730p/production/b6d6be14c96978b10553cfb9205be1065087e793-3904x2720.png?auto=format&dpr=2&q=95)
+层级8／可读6／注意9／一致9／交互发现7。宣传对照图，底部渐隐、无实际键盘或指针交互验证；不是完整应用表现。
