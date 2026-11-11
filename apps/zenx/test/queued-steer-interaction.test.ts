@@ -522,13 +522,17 @@ test("desktop reading expansion is explicit, non-mutating, focus-stable and Thre
       '[data-queue-control="reading-return"]',
     )!;
     assert.ok(returnControl);
-    const queueButtons = [
-      ...document.querySelectorAll<HTMLButtonElement>(".queue-shelf button"),
-    ];
     assert.equal(
-      queueButtons.at(-1),
-      returnControl,
-      "reverse navigation from Composer reaches the return before row actions",
+      tray.contains(returnControl),
+      false,
+      "return control is outside the scrolling viewport",
+    );
+    const returnHost = document.querySelector(".queue-reading-return-host")!;
+    assert.equal(returnHost.contains(returnControl), true);
+    assert.equal(
+      tray.nextElementSibling,
+      returnHost,
+      "ordinary reverse navigation reaches the return before queue rows",
     );
     assert.equal(returnControl.getAttribute("aria-controls"), tray.id);
     await act(async () => {

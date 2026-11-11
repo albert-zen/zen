@@ -766,7 +766,9 @@
   }
 }
 
-/* End-of-reading return: ordinary reverse Tab from the Composer reaches this
+/* End-of-reading return lives outside the tray scroller, without overlay.
+   Empty hosts have no box, so the collapsed layout is unchanged.
+   End-of-reading return: ordinary reverse Tab from the Composer reaches this
    before individual message actions. No actions are removed from tab order. */
 .queue-reading-return {
   display: none;
@@ -775,7 +777,25 @@
   .queue-reading-return {
     display: flex;
     justify-content: flex-end;
-    padding: 6px 10px;
-    border-top: 1px solid var(--border-soft);
+    padding: 0 10px;
+    min-height: 32px;
+  }
+}
+
+.queue-reading-return-host:empty {
+  display: none;
+}
+
+.queue-reading-return-host {
+  display: none;
+}
+@media (min-width: 961px) {
+  .queue-reading-return-host:not(:empty) {
+    display: block;
+  }
+}
+@media (min-width: 961px) and (pointer: fine) {
+  .queue-reading-return .queue-header-action {
+    min-height: 32px;
   }
 }

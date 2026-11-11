@@ -6,6 +6,7 @@ import type { AnsweredQuestionPresentation } from "./answered-question-presentat
 import { MessageSourceLink } from "./message-source-navigation.js";
 import { HostMessageContent } from "./HostMessageContent.js";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { QueuedCancellationTarget } from "../../../../../src/app-server.js";
 import type { AttachmentRef } from "../../../../../src/attachment.js";
@@ -67,6 +68,7 @@ export interface QueuedMessagesProps {
   /** Share the Composer tray's one scrolling surface. */
   integrated?: boolean;
   viewportId?: string;
+  readingReturnHost?: HTMLElement | null;
   editableIds?: ReadonlySet<string>;
   /** Saving rows may reopen their existing read-only edit session. */
   editingIds?: ReadonlySet<string>;
@@ -116,6 +118,7 @@ function QueueShelf({
   compact = false,
   integrated = false,
   viewportId,
+  readingReturnHost,
   editableIds,
   editingIds,
   onEdit,
@@ -467,32 +470,35 @@ function QueueShelf({
           </button>
         ) : null}
       </div>
-      {integrated && readingExpanded ? (
-        <div className="queue-reading-return">
-          <button
-            type="button"
-            className="queue-header-action"
-            data-queue-control="reading-return"
-            aria-controls={viewportId}
-            aria-expanded={true}
-            aria-label={t("queueReduceReadingArea")}
-            onClick={() => {
-              setReadingExpanded(false);
-              // This footer disappears on collapse; return to writing rather
-              // than losing focus or traversing every message action again.
-              if (focusComposer) focusComposer();
-              else
-                rootRef.current
-                  ?.querySelector<HTMLElement>(
-                    '[data-queue-control="reading-space"]',
-                  )
-                  ?.focus();
-            }}
-          >
-            {t("queueLessSpace")}
-          </button>
-        </div>
-      ) : null}
+      {integrated && readingExpanded && readingReturnHost
+        ? createPortal(
+            <div className="queue-reading-return">
+              <button
+                type="button"
+                className="queue-header-action"
+                data-queue-control="reading-return"
+                aria-controls={viewportId}
+                aria-expanded={true}
+                aria-label={t("queueReduceReadingArea")}
+                onClick={() => {
+                  setReadingExpanded(false);
+                  // This footer disappears on collapse; return to writing rather
+                  // than losing focus or traversing every message action again.
+                  if (focusComposer) focusComposer();
+                  else
+                    rootRef.current
+                      ?.querySelector<HTMLElement>(
+                        '[data-queue-control="reading-space"]',
+                      )
+                      ?.focus();
+                }}
+              >
+                {t("queueLessSpace")}
+              </button>
+            </div>,
+            readingReturnHost,
+          )
+        : null}
     </section>
   );
 }

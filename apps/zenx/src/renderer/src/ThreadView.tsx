@@ -1045,6 +1045,8 @@ function ThreadViewContent({
   const bottomZoneRef = useRef<HTMLDivElement>(null);
   const pendingTrayRef = useRef<HTMLDivElement>(null);
   const pendingTrayId = useId();
+  const [queueReadingReturnHost, setQueueReadingReturnHost] =
+    useState<HTMLDivElement | null>(null);
   // Align the shared content box, not its border or native scrollbar, with
   // the real transcript column. Both groups keep one scrolling owner.
   useLayoutEffect(() => {
@@ -2527,6 +2529,7 @@ function ThreadViewContent({
                 <QueuedMessages
                   integrated
                   viewportId={pendingTrayId}
+                  readingReturnHost={queueReadingReturnHost}
                   threadId={thread.id}
                   messages={(thread.queuedMessages ?? []).map((message) => ({
                     ...message,
@@ -2701,6 +2704,10 @@ function ThreadViewContent({
                 />
               ) : null}
             </div>
+            <div
+              className="queue-reading-return-host"
+              ref={setQueueReadingReturnHost}
+            />
           </MessageQuoteSourceContext.Provider>
         </MessageLinkContext.Provider>
         {composer.compaction?.status === "failed" ||

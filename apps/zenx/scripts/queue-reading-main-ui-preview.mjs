@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 export function observeQueueReading() {
   const target = (selector) => {
-    const e = document.querySelector(selector);
+    const e =
+      typeof selector === "string"
+        ? document.querySelector(selector)
+        : selector;
     if (!e) return null;
     const r = e.getBoundingClientRect(),
       style = getComputedStyle(e);
@@ -43,19 +46,51 @@ export function observeQueueReading() {
       outlineWidth: parseFloat(style.outlineWidth),
       disabled: !!e.disabled,
       position: style.position,
+      display: style.display,
+      overflowY: style.overflowY,
+      scrollsVertical:
+        /auto|scroll/.test(style.overflowY) &&
+        e.scrollHeight > e.clientHeight + 1,
       controls: e.getAttribute("aria-controls"),
       expanded: e.getAttribute("aria-expanded"),
     };
   };
-  const tray = document.querySelector(".pending-tray"),
-    toggle = document.querySelector(".queue-reading-toggle");
+  const toggle = document.querySelector(".queue-reading-toggle"),
+    tray = document.getElementById(toggle?.getAttribute("aria-controls")),
+    returnAction = document.querySelector(
+      '[data-queue-control="reading-return"]',
+    ),
+    returnOwner = document.getElementById(
+      returnAction?.getAttribute("aria-controls"),
+    ),
+    returnFooter = returnAction?.closest(".queue-reading-return"),
+    returnHost = tray?.nextElementSibling?.matches(".queue-reading-return-host")
+      ? tray.nextElementSibling
+      : null,
+    queue = toggle?.closest(".queue-shelf"),
+    composer = tray?.closest(".bottom-zone")?.querySelector(".composer");
   const r = tray?.getBoundingClientRect();
+  const bottomZone = target(tray?.closest(".bottom-zone"));
+  const conversation = target(
+    tray?.closest(".thread-view")?.querySelector(".messages"),
+  );
+  const rows = [...(tray?.querySelectorAll(".queue-row") ?? [])];
   return {
     toggle: target(".queue-reading-toggle"),
     expanded: toggle?.getAttribute("aria-expanded"),
     controls: toggle?.getAttribute("aria-controls"),
     trayId: tray?.id,
-    tray: target(".pending-tray"),
+    tray: target(tray),
+    bottomZone,
+    conversation,
+    conversationUncoveredHeight:
+      conversation && bottomZone
+        ? Math.max(
+            0,
+            Math.min(conversation.rect.bottom, bottomZone.rect.y) -
+              Math.max(0, conversation.rect.y),
+          )
+        : null,
     scrollTop: tray?.scrollTop,
     scrollHeight: tray?.scrollHeight,
     scrollContainers: [...(tray?.querySelectorAll("*") ?? [])]
@@ -65,38 +100,71 @@ export function observeQueueReading() {
           e.scrollHeight > e.clientHeight + 1,
       )
       .map((e) => e.className),
-    composer: target(".composer"),
-    editor: target('.composer [contenteditable="true"], .composer textarea'),
-    edit: target(".queue-row-edit:not(:disabled)"),
-    returnAction: target('[data-queue-control="reading-return"]'),
-    returnFooter: target(".queue-reading-return"),
-    lastRow: target(
-      ".queue-shelf:has(> .queue-reading-return) .queue-shelf-list > .queue-row:last-child",
+    composer: target(composer),
+    editor: target(
+      composer?.querySelector('[contenteditable="true"], textarea'),
     ),
-    rowActions: [
-      ...document.querySelectorAll(".pending-tray .queue-row button"),
-    ].map((button) => ({
-      control: button.getAttribute("data-queue-control"),
-      classes: button.className,
-      disabled: button.disabled,
-      tabIndex: button.tabIndex,
-    })),
-    bodyReading: [
-      ...document.querySelectorAll(".pending-tray .queue-row-content"),
-    ].map((e) => {
+    edit: target(queue?.querySelector(".queue-row-edit:not(:disabled)")),
+    returnAction: target(returnAction),
+    returnFooter: target(returnFooter),
+    returnHost: target(returnHost),
+    returnPlacement: {
+      ownerMatchesTray:
+        !!returnOwner && returnOwner === tray && tray.matches(".pending-tray"),
+      outsideTray: !!returnHost && !tray.contains(returnHost),
+      followsTray: !!returnHost && tray.nextElementSibling === returnHost,
+      footerInHost: !!returnFooter && returnFooter.parentElement === returnHost,
+      beforeComposer:
+        !!returnHost &&
+        !!composer &&
+        !!(
+          returnHost.compareDocumentPosition(composer) &
+          Node.DOCUMENT_POSITION_FOLLOWING
+        ),
+    },
+    // Queue ownership comes from its original header inside the aria-controlled
+    // tray, not from the portalled footer or the earlier Steer shelf.
+    lastRow: target(
+      tray?.contains(queue)
+        ? queue.querySelector(".queue-shelf-list > .queue-row:last-child")
+        : null,
+    ),
+    rowActions: [...(tray?.querySelectorAll(".queue-row button") ?? [])].map(
+      (button) => ({
+        control: button.getAttribute("data-queue-control"),
+        classes: button.className,
+        disabled: button.disabled,
+        tabIndex: button.tabIndex,
+      }),
+    ),
+    bodyReading: [...(tray?.querySelectorAll(".queue-row-content") ?? [])].map(
+      (e) => {
+        const b = e.getBoundingClientRect();
+        return {
+          height: b.height,
+          width: b.width,
+          visibleHeight: r
+            ? Math.max(0, Math.min(b.bottom, r.bottom) - Math.max(b.y, r.y))
+            : 0,
+          horizontalOverflow: e.scrollWidth > e.clientWidth + 1,
+        };
+      },
+    ),
+    fullyVisibleRows: rows.filter((e) => {
       const b = e.getBoundingClientRect();
-      return {
-        height: b.height,
-        width: b.width,
-        visibleHeight: r
-          ? Math.max(0, Math.min(b.bottom, r.bottom) - Math.max(b.y, r.y))
-          : 0,
-        horizontalOverflow: e.scrollWidth > e.clientWidth + 1,
-      };
-    }),
-    readableRows: [
-      ...document.querySelectorAll(".pending-tray .queue-row"),
-    ].filter((e) => {
+      // Include native clipping/sticky occlusion, not only geometric containment.
+      return (
+        r &&
+        b.width > 0 &&
+        b.height > 2 &&
+        b.y >= r.y &&
+        b.bottom <= r.bottom &&
+        [b.y + 1, b.y + b.height / 2, b.bottom - 1].every((y) =>
+          e.contains(document.elementFromPoint(b.x + b.width / 2, y)),
+        )
+      );
+    }).length,
+    readableRows: rows.filter((e) => {
       const b = e.getBoundingClientRect();
       return r && b.bottom > r.y && b.y < r.bottom;
     }).length,
@@ -183,7 +251,7 @@ export function verifyQueueReading(s, baseline, expanded, focus) {
   }
 }
 
-export function verifyQueueReturn(s, baseline, expanded, atReturn = false) {
+export function verifyQueueReturn(s, baseline, expanded) {
   assert(
     baseline.rowActions.length > 0,
     "Fixture includes actual per-message actions",
@@ -204,28 +272,64 @@ export function verifyQueueReturn(s, baseline, expanded, atReturn = false) {
       null,
       "Default/collapsed state has no footer space cost",
     );
+    assert(
+      s.returnHost && s.returnHost.rect.height === 0,
+      "Empty return host has no collapsed space cost",
+    );
     return;
   }
   assert(
-    s.returnAction && s.returnFooter && s.lastRow,
-    "Expanded footer follows actual queue rows",
+    s.returnAction && s.returnFooter && s.returnHost && s.lastRow,
+    "Expanded return and actual controlled Queue are observed",
+  );
+  assert(
+    [
+      "ownerMatchesTray",
+      "outsideTray",
+      "followsTray",
+      "footerInHost",
+      "beforeComposer",
+    ].every((key) => s.returnPlacement?.[key] === true),
+    "Return belongs to the actual tray and its adjacent external host before Composer",
+  );
+  assert(
+    s.returnAction.visible &&
+      s.returnAction.hit &&
+      !s.returnAction.disabled &&
+      s.returnFooter.visible &&
+      s.returnHost.visible,
+    "External return is visible and hittable immediately, not only after keyboard scrolling",
   );
   assert.equal(s.returnAction.controls, s.trayId);
   assert.equal(s.returnAction.expanded, "true");
   assert(
-    ["static", "relative"].includes(s.returnFooter.position),
+    [s.returnFooter, s.returnHost].every((t) =>
+      ["static", "relative"].includes(t.position),
+    ),
     "Return is ordinary flow, not a sticky or floating overlay",
   );
   assert(s.returnFooter.rect.height > 0, "Record real footer space cost");
   assert(
-    s.returnFooter.rect.y >= s.lastRow.rect.bottom - 1,
-    "Footer does not cover the last message row",
+    s.returnHost.rect.y >= s.tray.rect.bottom - 1 &&
+      s.returnFooter.rect.y >= s.returnHost.rect.y - 1 &&
+      s.returnFooter.rect.bottom <= s.returnHost.rect.bottom + 1,
+    "External footer starts after the tray viewport and stays within its own host",
   );
-  if (atReturn)
-    assert(
-      s.returnFooter.rect.bottom <= s.composer.rect.y + 1,
-      "Visible return footer stays above the Composer",
-    );
+  assert(
+    s.returnHost.rect.bottom <= s.composer.rect.y + 1,
+    "Return host stays above the Composer without overlay",
+  );
+  assert(
+    s.bottomZone &&
+      s.returnHost.rect.y >= s.bottomZone.rect.y - 1 &&
+      s.returnHost.rect.bottom <= s.bottomZone.rect.bottom + 1,
+    "Return host is fully inside the bottom-zone clipping boundary",
+  );
+  assert(
+    s.bottomZone &&
+      (!s.bottomZone.scrollsVertical || baseline.bottomZone.scrollsVertical),
+    "External return does not introduce whole bottom-zone scrolling",
+  );
 }
 
 export async function tabToQueueControl({
@@ -287,7 +391,9 @@ export async function captureQueueReading({
     const { root } = await send("DOM.getDocument", { depth: 0 });
     const { nodeId } = await send("DOM.querySelector", {
       nodeId: root.nodeId,
-      selector: ".pending-tray",
+      selector: await evaluate(
+        `'.pending-tray#' + CSS.escape(document.querySelector('.queue-reading-toggle').getAttribute('aria-controls'))`,
+      ),
     });
     const { node } = await send("DOM.describeNode", { nodeId });
     return node.backendNodeId;
@@ -361,11 +467,17 @@ export async function captureQueueReading({
     );
     const returnState = await save("collapse-return-focus");
     verifyQueueReading(returnState, baseline, true, "returnAction");
-    verifyQueueReturn(returnState, baseline, true, true);
+    verifyQueueReturn(returnState, baseline, true);
     const trip = {
       theme: options.theme,
       backwardTabs: returnTrace.steps,
       footerHeight: returnState.returnFooter.rect.height,
+      returnHostHeight: returnState.returnHost.rect.height,
+      fullyVisibleRows: returnState.fullyVisibleRows,
+      bottomZoneHeight: returnState.bottomZone.rect.height,
+      conversationHeight: returnState.conversation?.rect.height ?? null,
+      conversationUncoveredHeight: returnState.conversationUncoveredHeight,
+      initialReturnHittable: expanded.returnAction.hit,
       footerToComposerGap:
         returnState.composer.rect.y - returnState.returnFooter.rect.bottom,
       returnedToComposer: false,
