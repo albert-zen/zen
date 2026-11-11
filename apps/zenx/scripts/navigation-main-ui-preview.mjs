@@ -11,6 +11,29 @@ export const navigationSelectors = {
 export const navigationDraft =
   "Keep this synthetic draft while checking navigation.";
 
+/** Enter needs Chromium's character-producing path for native button activation.
+ * Keep Escape/other nonprinting keys raw; never substitute a DOM click. */
+export async function dispatchNavigationKey(
+  send,
+  key,
+  code,
+  windowsVirtualKeyCode,
+) {
+  await send("Input.dispatchKeyEvent", {
+    type: key === "Enter" ? "keyDown" : "rawKeyDown",
+    key,
+    code,
+    windowsVirtualKeyCode,
+    ...(key === "Enter" ? { text: "\r", unmodifiedText: "\r" } : {}),
+  });
+  await send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key,
+    code,
+    windowsVirtualKeyCode,
+  });
+}
+
 /** Read-only browser observation; tests exercise its shape, not simulated layout. */
 export function observeNavigation() {
   const read = (selector) => {
@@ -75,6 +98,9 @@ export function observeNavigation() {
       : null,
     informationTitleCount: document.querySelectorAll(".subagent-tree-title")
       .length,
+    questionReadErrors: [
+      ...document.querySelectorAll(".user-question-read-error"),
+    ].map((element) => element.textContent),
     telemetry: window.__uiPolishTelemetry,
   };
 }
@@ -85,6 +111,11 @@ export function assertNavigationState(state, { mode, focus, baseline } = {}) {
     state.draft,
     navigationDraft,
     "Navigation preserves the unsent draft",
+  );
+  assert.deepEqual(
+    state.questionReadErrors,
+    [],
+    "Read-only question fixture loads without a visible error",
   );
   assert.equal(
     state.telemetry.informationUpdates,
@@ -212,13 +243,18 @@ export async function captureDesktopNavigation({
 }) {
   const s = navigationSelectors;
   const key = async (key, code, windowsVirtualKeyCode) => {
-    for (const type of ["rawKeyDown", "keyUp"])
-      await send("Input.dispatchKeyEvent", {
-        type,
-        key,
-        code,
-        windowsVirtualKeyCode,
-      });
+    const attempt = {
+      key,
+      code,
+      windowsVirtualKeyCode,
+      before: await evaluate(`(${observeNavigation.toString()})()`),
+    };
+    (evidence.navigationKeyAttempts ??= []).push(attempt);
+    await dispatchNavigationKey(send, key, code, windowsVirtualKeyCode);
+    await evaluate(
+      "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))",
+    );
+    attempt.after = await evaluate(`(${observeNavigation.toString()})()`);
   };
   const away = () =>
     send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 700, y: 220 });

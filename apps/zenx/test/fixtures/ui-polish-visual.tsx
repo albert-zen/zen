@@ -17,6 +17,7 @@ import { AuxiliaryPanel } from "../../src/renderer/src/auxiliary-panel.js";
 import { nativeRecoveryForThread } from "../native-recovery-fixture.js";
 import { encodeModelKey } from "../../../../src/protocol/model-key.js";
 import { createUiPolishTitleBridge } from "./ui-polish-title-bridge.js";
+import { readNavigationQuestions } from "./ui-polish-visual-navigation.js";
 import type { NativeInformationApi } from "../../src/native-information.js";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
@@ -46,6 +47,12 @@ const uiPolishTelemetry = {
   sideChatCreateCommandCalls: 0,
   informationReads: [] as { kind: string; id: string }[],
   informationUpdates: 0,
+  navigationInputEvents: [] as {
+    type: string;
+    target: string;
+    key?: string;
+    trusted: boolean;
+  }[],
 };
 // Deterministic holds for the Side chat UI acceptance scene only. No Host/model calls.
 const sideChatFixture = {
@@ -58,6 +65,11 @@ const sideChatFixture = {
 const options = {
   request: async (method: string, request?: unknown) => {
     uiPolishTelemetry.protocolCalls.push(method);
+    if (
+      params.get("scene") === "navigation" &&
+      method === "zen/thread/questions/list"
+    )
+      return readNavigationQuestions(request);
     if (
       method === "zen/thread/resume" ||
       method === "zen/thread/resume-window"
@@ -526,6 +538,31 @@ if (params.has("launchers") || params.has("conversationTabs")) {
   });
 }
 if (params.get("scene") === "navigation") {
+  // Observe native input only on navigation controls, never collect editor text.
+  for (const type of ["keydown", "keypress", "keyup", "click"]) {
+    document.addEventListener(type, (event) => {
+      const element =
+        event.target instanceof Element ? event.target.closest("button") : null;
+      const target = element?.matches(".information-toolbar button")
+        ? "entry"
+        : element?.matches(".information-dismiss-toolbar button")
+          ? "close"
+          : element?.matches(".projects-section-toggle")
+            ? "projects"
+            : element?.matches(".recent-thread-group .thread-row")
+              ? "recent"
+              : null;
+      if (!target) return;
+      uiPolishTelemetry.navigationInputEvents.push({
+        type,
+        target,
+        ...(event instanceof KeyboardEvent ? { key: event.key } : {}),
+        trusted: event.isTrusted,
+      });
+      if (uiPolishTelemetry.navigationInputEvents.length > 80)
+        uiPolishTelemetry.navigationInputEvents.shift();
+    });
+  }
   // Read-only synthetic Host data. Opening/closing/focus remain production App UI.
   const information: NativeInformationApi = {
     read: async (owner) => {

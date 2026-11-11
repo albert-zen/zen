@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import {
   assertNavigationState,
+  dispatchNavigationKey,
   navigationDraft,
   observeNavigation,
 } from "../scripts/navigation-main-ui-preview.mjs";
@@ -44,6 +45,64 @@ const state = () => ({
   popover: null,
   composer: target(),
   informationTitleCount: 2,
+  questionReadErrors: [],
+});
+
+test("Enter uses native character-producing CDP events; Escape stays nonprinting", async () => {
+  for (const [key, code, number] of [
+    ["Enter", "Enter", 13],
+    ["Escape", "Escape", 27],
+  ]) {
+    const calls = [];
+    await dispatchNavigationKey(
+      async (...args) => calls.push(args),
+      key,
+      code,
+      number,
+    );
+    assert.equal(calls.length, 2);
+    assert(calls.every(([method]) => method === "Input.dispatchKeyEvent"));
+    assert.deepEqual(calls[0][1], {
+      type: key === "Enter" ? "keyDown" : "rawKeyDown",
+      key,
+      code,
+      windowsVirtualKeyCode: number,
+      ...(key === "Enter" ? { text: "\r", unmodifiedText: "\r" } : {}),
+    });
+    assert.deepEqual(calls[1][1], {
+      type: "keyUp",
+      key,
+      code,
+      windowsVirtualKeyCode: number,
+    });
+  }
+});
+
+test("navigation question fixture returns a real empty native page only for the exact owner", async () => {
+  const { tsImport } = await import("tsx/esm/api");
+  const { readNavigationQuestions } = await tsImport(
+    "./fixtures/ui-polish-visual-navigation.ts",
+    import.meta.url,
+  );
+  assert.deepEqual(readNavigationQuestions({ threadId: "thread-1" }), {
+    questions: [],
+    totalPending: 0,
+  });
+  for (const request of [
+    undefined,
+    "thread-1",
+    [],
+    {},
+    { threadId: "other" },
+    { threadId: "thread-1", afterQuestionCallItemId: "unexpected" },
+  ])
+    assert.throws(
+      () => readNavigationQuestions(request),
+      /Unexpected synthetic/,
+    );
+  const bad = state();
+  bad.questionReadErrors = ["Loading failed"];
+  assert.throws(() => assertNavigationState(bad), /visible error/);
 });
 
 test("normal titlebar dock accepts clear entry/close, real content and preserved draft", () => {
