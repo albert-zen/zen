@@ -17,6 +17,10 @@ on:
       - apps/zenx/test/reading-fixture.test.ts
       - apps/zenx/scripts/build-main-ui-preview.mjs
       - apps/zenx/scripts/capture-main-ui-preview.mjs
+      - apps/zenx/scripts/prepare-preview-fonts.mjs
+      - apps/zenx/scripts/preview-font-probe.mjs
+      - apps/zenx/scripts/preview-fonts-OFL.txt
+      - apps/zenx/test/preview-fonts.test.mjs
       - apps/zenx/scripts/reading-main-ui-preview.mjs
       - apps/zenx/test/reading-main-ui-preview.test.mjs
   workflow_dispatch:
@@ -56,19 +60,30 @@ jobs:
         timeout-minutes: 3
       - if: steps.selection.outputs.needsCapture == 'true'
         run: node apps/zenx/scripts/prepare-legend-list.mjs
-      - name: CJK fonts
+      - name: Restore pinned official CJK font data
+        if: steps.selection.outputs.needsCapture == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/preview-fonts/*.ttc
+            ${{ runner.temp }}/preview-fonts/OFL.txt
+          key: zenx-noto-cjk-523d033d6cb47f4a80c58a35753646f5c3608a78-v1
+      - name: Verify or fetch pinned CJK fonts
         if: steps.selection.outputs.needsCapture == 'true'
         run: |
-          if [ -z "$(fc-list :lang=zh family)" ]; then
-            sudo apt-get update -qq
-            sudo apt-get install -y --no-install-recommends fonts-noto-cjk
-          fi
+          mkdir -p "${{ runner.temp }}/desktop-reading"
+          trap 'cp "${{ runner.temp }}/preview-fonts/fonts.json" "${{ runner.temp }}/desktop-reading/font-environment.json"' EXIT
+          node apps/zenx/scripts/prepare-preview-fonts.mjs "${{ runner.temp }}/preview-fonts" --allow-download
+        timeout-minutes: 2
       - if: steps.selection.outputs.needsCapture == 'true'
-        run: node --import tsx --test apps/zenx/test/reading-main-ui-preview.test.mjs apps/zenx/test/reading-fixture.test.ts
+        run: node --import tsx --test apps/zenx/test/preview-fonts.test.mjs apps/zenx/test/reading-main-ui-preview.test.mjs apps/zenx/test/reading-fixture.test.ts
       - if: steps.selection.outputs.needsCapture == 'true'
         run: node apps/zenx/scripts/build-main-ui-preview.mjs "${{ runner.temp }}/desktop-reading" reading
         timeout-minutes: 2
       - if: steps.selection.outputs.needsCapture == 'true'
+        env:
+          FONTCONFIG_FILE: ${{ runner.temp }}/preview-fonts/fonts.conf
+          ZENX_PREVIEW_FONT_RECEIPT: ${{ runner.temp }}/preview-fonts/fonts.json
         run: node apps/zenx/scripts/capture-main-ui-preview.mjs "${{ runner.temp }}/desktop-reading" desktop-reading
         timeout-minutes: 2
       - uses: actions/upload-artifact@v4

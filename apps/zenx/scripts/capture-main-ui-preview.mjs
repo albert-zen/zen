@@ -1,3 +1,5 @@
+import { fontProbeHTML, probePreviewFonts } from "./preview-font-probe.mjs";
+import { fontRevision, fontAssets } from "./prepare-preview-fonts.mjs";
 import { captureDesktopReading } from "./reading-main-ui-preview.mjs";
 import { captureQueueReading } from "./queue-reading-main-ui-preview.mjs";
 /** One sandboxed Chrome, bounded scenes; no aggregate CI dependency or browser download. */
@@ -81,6 +83,7 @@ if (source.scenes.information) {
   );
   files.set("/plugin-frame.html", bytes);
 }
+if (desktopReading) files.set("/font-probe.html", Buffer.from(fontProbeHTML));
 const evidence = {
   schemaVersion: 1,
   source,
@@ -130,6 +133,30 @@ try {
     evidence.cjkFonts.length,
     "CJK fonts must be available; do not publish tofu screenshots",
   );
+  if (desktopReading) {
+    assert(
+      process.env.ZENX_PREVIEW_FONT_RECEIPT,
+      "Reading preview requires a pinned font receipt",
+    );
+    evidence.fontEnvironment = JSON.parse(
+      await readFile(process.env.ZENX_PREVIEW_FONT_RECEIPT, "utf8"),
+    );
+    assert.equal(evidence.fontEnvironment.status, "ready");
+    assert.equal(evidence.fontEnvironment.revision, fontRevision);
+    for (const asset of fontAssets) {
+      const recorded = evidence.fontEnvironment.assets.find(
+        (entry) => entry.name === asset.name,
+      );
+      assert.equal(recorded?.sha256, asset.sha256);
+      assert.equal(recorded?.coverageVerified, true);
+      // Do not trust a stale/copied preparation receipt after font files change.
+      const fontPath = path.join(
+        path.dirname(process.env.ZENX_PREVIEW_FONT_RECEIPT),
+        asset.name,
+      );
+      assert.equal(hash(await readFile(fontPath)), asset.sha256);
+    }
+  }
   server = createServer((req, res) => {
     const bytes = files.get(new URL(req.url, "http://localhost").pathname);
     if (!bytes) {
@@ -262,6 +289,23 @@ try {
     return false;
   };
   lifecycle.captureStarted();
+  if (desktopReading) {
+    await send("Emulation.setDeviceMetricsOverride", {
+      width: 1280,
+      height: 900,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    evidence.fontProbe = await probePreviewFonts(send, evaluate, origin);
+    const probe = await send("Page.captureScreenshot", {
+      format: "png",
+      captureBeyondViewport: false,
+    });
+    const bytes = Buffer.from(probe.data, "base64");
+    await writeFile(path.join(directory, "font-probe.png"), bytes);
+    evidence.fontProbe.screenshot = "font-probe.png";
+    evidence.fontProbe.sha256 = hash(bytes);
+  }
   const capture = async (name, options, scene) => {
     await evaluate(
       "document.fonts.ready.then(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))))",

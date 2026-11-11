@@ -535,6 +535,10 @@ export async function captureDesktopReading({
 }
 
 export const readingPaths = [
+  "apps/zenx/scripts/prepare-preview-fonts.mjs",
+  "apps/zenx/scripts/preview-font-probe.mjs",
+  "apps/zenx/scripts/preview-fonts-OFL.txt",
+  "apps/zenx/test/preview-fonts.test.mjs",
   ".github/workflows/desktop-reading-ui.yml",
   "apps/zenx/src/renderer/src/styles.css",
   "apps/zenx/src/renderer/src/theme.css",

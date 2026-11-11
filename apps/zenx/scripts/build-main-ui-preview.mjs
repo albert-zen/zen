@@ -51,6 +51,10 @@ const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const git = (...args) =>
   execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
 const sources = new Set([
+  "apps/zenx/scripts/prepare-preview-fonts.mjs",
+  "apps/zenx/scripts/preview-font-probe.mjs",
+  "apps/zenx/scripts/preview-fonts-OFL.txt",
+  "apps/zenx/test/preview-fonts.test.mjs",
   "apps/zenx/scripts/reading-main-ui-preview.mjs",
   "apps/zenx/test/reading-main-ui-preview.test.mjs",
   ".github/workflows/desktop-reading-ui.yml",
