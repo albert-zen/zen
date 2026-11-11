@@ -461,8 +461,12 @@ export const en = {
   "settingsView.guideTheCurrentReplyDefault":
     "Guide the current reply (default)",
   "settingsView.interruptAndSend": "Interrupt and send",
-  "settingsView.enterAndTheSendButtonUseThisChoiceCmd":
-    "Enter and the send button use this choice. Cmd/Ctrl+Enter guides the current reply when a queue option is selected, or queues messages together otherwise. Shift+Enter adds a new line. This setting does not change messages already queued.",
+  "settingsView.sendModeGuidance":
+    "Enter and the send button use this choice. Messages already queued stay unchanged.",
+  "settingsView.keyboardShortcuts": "Keyboard shortcuts",
+  "settingsView.shortcutGuideCurrentReply": "Guide the current reply",
+  "settingsView.shortcutQueueTogether": "Queue messages together",
+  "settingsView.shortcutNewLine": "Add a new line",
   "settingsView.foregroundComputerControl": "Foreground computer control",
   "nativeCrossDeviceTools.title": "Native cross-device tools",
   "nativeCrossDeviceTools.description":
@@ -1813,8 +1817,12 @@ export const zhCN: Record<keyof typeof en, string> = {
   "settingsView.runEachQueuedMessageSeparately": "分别运行每个排队的消息",
   "settingsView.guideTheCurrentReplyDefault": "引导当前回复（默认）",
   "settingsView.interruptAndSend": "中断并发送",
-  "settingsView.enterAndTheSendButtonUseThisChoiceCmd":
-    "Enter键和发送按钮使用此选项。Cmd/Ctrl + Enter在选择队列选项时引导当前回复，否则将消息排在一起。Shift + Enter可添加新行。此设置不会更改已排队的消息。",
+  "settingsView.sendModeGuidance":
+    "Enter 键和发送按钮使用此选项。已排队的消息保持不变。",
+  "settingsView.keyboardShortcuts": "键盘快捷键",
+  "settingsView.shortcutGuideCurrentReply": "引导当前回复",
+  "settingsView.shortcutQueueTogether": "将消息一起排队",
+  "settingsView.shortcutNewLine": "添加新行",
   "settingsView.foregroundComputerControl": "前台电脑控制",
   "nativeCrossDeviceTools.title": "原生跨端工具调用",
   "nativeCrossDeviceTools.description":

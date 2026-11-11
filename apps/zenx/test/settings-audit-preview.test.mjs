@@ -310,3 +310,148 @@ test("Metadata preview changes existing input only and preserves unknown/manual 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("General guidance and production directory portal use synthetic read-only journeys in both locales", async () => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "zenx-settings-journeys-"),
+  );
+  let dom;
+  try {
+    await execute(
+      process.execPath,
+      [
+        new URL("../scripts/build-settings-audit-preview.mjs", import.meta.url)
+          .pathname,
+        directory,
+      ],
+      { maxBuffer: 2 * 1024 * 1024 },
+    );
+    const html = await readFile(
+      path.join(directory, "settings-audit.html"),
+      "utf8",
+    );
+    for (const lang of ["en", "zh-CN"]) {
+      const errors = [];
+      const virtualConsole = new VirtualConsole();
+      virtualConsole.on("jsdomError", (error) => {
+        if (
+          error.type !== "css-parsing" &&
+          !error.message.includes("Could not parse CSS stylesheet")
+        )
+          errors.push(String(error));
+      });
+      const boot = (suffix) =>
+        new JSDOM(html, {
+          url: `http://localhost/settings-audit.html?lang=${lang}&${suffix}`,
+          runScripts: "dangerously",
+          pretendToBeVisual: true,
+          virtualConsole,
+          beforeParse(window) {
+            window.structuredClone = structuredClone;
+            window.matchMedia = () => ({
+              matches: false,
+              addEventListener() {},
+              removeEventListener() {},
+            });
+            window.HTMLElement.prototype.scrollIntoView = () => undefined;
+            window.ResizeObserver = class {
+              observe() {}
+              unobserve() {}
+              disconnect() {}
+            };
+          },
+        });
+      dom = boot("");
+      let document = dom.window.document;
+      await waitFor(() => document.querySelector("#settings-tab-general"));
+      document.querySelector("#settings-tab-general").click();
+      await waitFor(() =>
+        document.querySelector("details.settings-send-shortcuts"),
+      );
+      const details = document.querySelector("details.settings-send-shortcuts");
+      assert.equal(details.open, false);
+      details.querySelector("summary").click();
+      assert.equal(details.open, true);
+      assert.ok(
+        document.querySelector("#foreground-control-help").textContent.trim(),
+      );
+      dom.window.close();
+      dom = boot("scene=directory&directoryFailure=1");
+      document = dom.window.document;
+      await waitFor(() => document.querySelector("#directory-audit-open"));
+      const launch = document.querySelector("#directory-audit-open");
+      launch.focus();
+      launch.click();
+      await waitFor(() =>
+        document.querySelector(".directory-picker-error button"),
+      );
+      assert.ok(
+        document.querySelector('[role="dialog"].directory-picker-shell'),
+      );
+      assert.equal(
+        document
+          .querySelector("#root")
+          .contains(document.querySelector(".directory-picker-shell")),
+        false,
+      );
+      assert.equal(
+        document.querySelector(
+          ".directory-picker-dialog footer .primary-button",
+        ).disabled,
+        true,
+      );
+      document.querySelector(".directory-picker-error button").click();
+      await waitFor(() =>
+        document.querySelector('.directory-picker-list [data-index="0"]'),
+      );
+      document.querySelector('.directory-picker-list [data-index="0"]').click();
+      await waitFor(
+        () =>
+          document.querySelector(".directory-picker-dialog footer strong")
+            ?.textContent === "/synthetic/empty",
+      );
+      assert.equal(
+        document.querySelectorAll(".directory-picker-list [data-index]").length,
+        0,
+      );
+      document.querySelector(".directory-picker-breadcrumbs button").click();
+      await waitFor(() =>
+        document.querySelector('.directory-picker-list [data-index="0"]'),
+      );
+      document.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+        }),
+      );
+      await waitFor(() => !document.querySelector(".directory-picker-shell"));
+      await waitFor(() => document.activeElement === launch);
+      launch.click();
+      await waitFor(() =>
+        document.querySelector('.directory-picker-list [data-index="0"]'),
+      );
+      document
+        .querySelector(".directory-picker-dialog footer .secondary-button")
+        .click();
+      await waitFor(() => !document.querySelector(".directory-picker-shell"));
+      assert.deepEqual(
+        [...dom.window.__directoryAudit.calls],
+        [
+          "snapshot",
+          "snapshot",
+          "list:/synthetic",
+          "list:/synthetic/empty",
+          "list:/synthetic",
+          "snapshot",
+          "list:/synthetic",
+        ],
+      );
+      assert.deepEqual(errors, []);
+      dom.window.close();
+      dom = undefined;
+    }
+  } finally {
+    dom?.window.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

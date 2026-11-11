@@ -2361,6 +2361,69 @@ test("General explicitly enables and disables native cross-device tools through 
   }
 });
 
+test("General keeps send guidance concise and exposes current keyboard behavior on demand", async () => {
+  const { i18n } = await import("../src/renderer/src/i18n.js");
+  const saved: ZenXSettingsUpdate[] = [];
+  const harness = await mountSettings("general", {
+    save: async (update) => {
+      saved.push(update);
+      return { ...settings, profile: { ...settings.profile, ...update } };
+    },
+  });
+  try {
+    const control = await labeledSelect("Send while a reply is running");
+    assert.ok(control);
+    const help = document.getElementById("composer-send-help");
+    assert.ok(help?.classList.contains("settings-guidance"));
+    assert.match(
+      help.textContent ?? "",
+      /Messages already queued stay unchanged/u,
+    );
+    const disclosure = document.querySelector<HTMLDetailsElement>(
+      ".settings-send-shortcuts",
+    );
+    assert.ok(disclosure);
+    assert.equal(disclosure.open, false);
+    const summary = disclosure.querySelector("summary");
+    assert.ok(summary);
+    summary.focus();
+    await click(summary);
+    assert.equal(disclosure.open, true);
+    assert.equal(document.activeElement === summary, true);
+    assert.deepEqual(
+      [...disclosure.querySelectorAll("dt")].map((node) => node.textContent),
+      ["Cmd/Ctrl+Enter", "Shift+Enter"],
+    );
+    for (const mode of ["batch", "queue", "soft", "hard"] as const) {
+      await changeControl(control, mode);
+      assert.equal(
+        disclosure.querySelector("dd")?.textContent?.trim(),
+        mode === "batch" || mode === "queue"
+          ? "Guide the current reply"
+          : "Queue messages together",
+      );
+    }
+    assert.equal(saved.length, 0);
+    await act(async () => {
+      await i18n.changeLanguage("zh-CN");
+    });
+    assert.equal(summary.textContent, "键盘快捷键");
+    assert.match(help.textContent ?? "", /已排队的消息保持不变/u);
+    assert.equal(
+      disclosure.querySelector("dd")?.textContent?.trim(),
+      "将消息一起排队",
+    );
+    await click(summary);
+    assert.equal(disclosure.open, false);
+    assert.equal(saved.length, 0);
+  } finally {
+    await act(async () => {
+      await i18n.changeLanguage("en");
+    });
+    await unmount(harness);
+  }
+});
+
 test("General requires an explicit risk-labeled opt-in for foreground computer takeover", async () => {
   const saved: ZenXSettingsUpdate[] = [];
   const harness = await mountSettings("general", {
@@ -2376,6 +2439,15 @@ test("General requires an explicit risk-labeled opt-in for foreground computer t
       ),
     );
     assert.equal(control.getAttribute("aria-checked"), "false");
+    assert.equal(
+      control.getAttribute("aria-describedby"),
+      "foreground-control-risk foreground-control-help",
+    );
+    for (const id of ["foreground-control-risk", "foreground-control-help"]) {
+      const description = document.getElementById(id);
+      assert.ok(description?.classList.contains("settings-guidance"));
+      assert.equal(description.closest("details"), null);
+    }
     assert.match(
       document.body.textContent ?? "",
       /move the pointer, type keys, change focus, or scroll the app you are currently using/u,

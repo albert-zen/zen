@@ -19,7 +19,7 @@ const result = await build({
     minify: true,
     cssCodeSplit: false,
     lib: {
-      entry: path.join(root, "scripts/settings-audit-preview.tsx"),
+      entry: path.join(root, "test/fixtures/settings-audit-journeys.tsx"),
       name: "SettingsAuditPreview",
       formats: ["iife"],
     },
@@ -57,6 +57,9 @@ const sources = [
   "src/renderer/src/language.ts",
   "src/renderer/src/language-preference.ts",
   "scripts/settings-audit-preview.tsx",
+  "test/fixtures/settings-audit-journeys.tsx",
+  "src/renderer/src/DirectoryPicker.tsx",
+  "src/renderer/src/i18n/shell.ts",
   "scripts/build-settings-audit-preview.mjs",
   "scripts/capture-settings-audit-preview.mjs",
 ];
@@ -68,8 +71,11 @@ await writeFile(
         cwd: root,
         encoding: "utf8",
       }).trim(),
+      bundleSha256: createHash("sha256")
+        .update(await readFile(path.join(directory, "settings-audit.html")))
+        .digest("hex"),
       scope:
-        "Actual production SettingsView and theme/styles; four synthetic providers, one with twelve models. Synthetic discovery returns one known and one unknown capability record. No Host, credentials, user profile, network or persistence. Settings-only scaffold, not App or first-launch onboarding. Linux Chrome input, not native Electron acceptance.",
+        "Actual production SettingsView and theme/styles; four synthetic providers, one with twelve models. Synthetic discovery returns one known and one unknown capability record. No Host, credentials, user profile, network or persistence. Settings and separately labeled DirectoryPicker scaffolds with synthetic directory responses, not App or first-launch onboarding. Linux Chrome input, not native Electron acceptance.",
       sources: Object.fromEntries(
         await Promise.all(
           sources.map(async (source) => [
@@ -87,7 +93,7 @@ await writeFile(
 );
 await writeFile(
   path.join(directory, "README.txt"),
-  `Settings audit evidence. Actual production SettingsView and styles with synthetic services. No Host, credentials, private profile, provider requests or persistence. Model discovery is synthetic and does not establish endpoint metadata quality. Mutations and image probes reject. This is not App integration, first-launch onboarding, native Electron or a full accessibility test. source.json identifies the source commit and hashes. measurements.json records observations, not desired-UX assertions. Screenshot labels match recorded states. The self-contained HTML CSP blocks networking. CI capture retains the browser sandbox.
+  `Settings audit evidence. Actual production SettingsView and styles with synthetic services. DirectoryPicker uses a separate QA-only launcher and synthetic directory API; it does not prove App navigation or filesystem integration. No Host, credentials, private profile, provider requests or persistence. Model discovery is synthetic and does not establish endpoint metadata quality. Mutations and image probes reject. This is not App integration, first-launch onboarding, native Electron or a full accessibility test. source.json identifies the source commit and hashes. measurements.json records observations, not desired-UX assertions. Screenshot labels match recorded states. The self-contained HTML CSP blocks networking. CI capture retains the browser sandbox.
 `,
 );
 console.log(`Built Settings audit preview at ${directory}`);

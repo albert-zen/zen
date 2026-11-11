@@ -1,5 +1,6 @@
 /** Uses the existing Ubuntu CI Chrome, never a user profile or downloaded browser. */
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -19,9 +20,10 @@ const directory = path.resolve(process.argv[2] ?? ".settings-audit-preview");
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const evidence = {
   scope:
-    "Actual production SettingsView; synthetic providers/catalog only. No Host, credentials, private settings, live provider, Host mutations or persistence. Deferred Save uses a synthetic Promise only. Settings scaffold, not full App/onboarding/native Electron. Observations are not desired-UX assertions.",
+    "Actual production SettingsView and separately launched production DirectoryPicker; synthetic providers/catalog/directory responses only. No Host, credentials, private settings, live provider, Host mutations or persistence. Deferred Save uses a synthetic Promise only. Settings and QA-only directory launcher scaffolds, not full App navigation/onboarding/native Electron or filesystem integration. Observations are not desired-UX assertions.",
   browserSandboxDisabled: false,
   cases: [],
+  screenshots: {},
   rendererErrors: [],
   externalRequests: [],
 };
@@ -29,7 +31,7 @@ const evidence = {
 const measure = `(() => {
   const rect = e => { if (!e) return null; const r=e.getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom}; };
   const editor=document.querySelector('.provider-editor');
-  const scroll=document.querySelector('.page-scroll');
+  const scroll=document.querySelector('#root[hidden] ~ div .page-scroll') ?? document.querySelector('.page-scroll');
   const active=document.activeElement;
   return {viewport:{width:innerWidth,height:innerHeight}, editor:rect(editor), editorRole:editor?.getAttribute('role'), focusInEditor:!!editor?.contains(active), focus:{tag:active?.tagName,text:active?.textContent?.slice(0,120),label:active?.getAttribute('aria-label'),id:active?.id},
     scroll:{top:scroll?.scrollTop,height:scroll?.clientHeight,total:scroll?.scrollHeight},
@@ -41,6 +43,7 @@ const measure = `(() => {
     dialogs:document.querySelectorAll('[role="dialog"]').length,
     overflow:document.documentElement.scrollWidth>innerWidth,
     calls:window.__settingsAudit.calls,
+    directory:{dialog:rect(document.querySelector(".directory-picker-shell")),path:document.querySelector(".directory-picker-dialog footer strong")?.textContent,rows:document.querySelectorAll(".directory-picker-list [data-index]").length,error:document.querySelector(".directory-picker-error")?.textContent,focusInside:!!document.querySelector(".directory-picker-shell")?.contains(active),calls:window.__directoryAudit?.calls},
   };
 })()`;
 
@@ -83,6 +86,14 @@ try {
     .filter(Boolean);
 
   const html = await readFile(path.join(directory, "settings-audit.html"));
+  evidence.source = JSON.parse(
+    await readFile(path.join(directory, "source.json"), "utf8"),
+  );
+  assert.equal(
+    createHash("sha256").update(html).digest("hex"),
+    evidence.source.bundleSha256,
+    "Capture matches built bundle",
+  );
   server = createServer((req, res) => {
     if (
       new URL(req.url, "http://localhost").pathname !== "/settings-audit.html"
@@ -155,10 +166,11 @@ try {
       format: "png",
       captureBeyondViewport: false,
     });
-    await writeFile(
-      path.join(directory, name),
-      Buffer.from(result.data, "base64"),
-    );
+    const bytes = Buffer.from(result.data, "base64");
+    await writeFile(path.join(directory, name), bytes);
+    evidence.screenshots[name] = createHash("sha256")
+      .update(bytes)
+      .digest("hex");
   };
   const waitFor = async (expression) => {
     for (let attempt = 0; attempt < 200; attempt++) {
@@ -462,6 +474,116 @@ try {
       "document.querySelector('.provider-model-row').scrollIntoView({block:'start'})",
     );
     await capture("13-existing-row-input-filled");
+    // General uses the actual Settings route; DirectoryPicker has a labeled
+    // test-only launcher because SettingsView does not own that navigation.
+    await navigate();
+    await clickSelector("#settings-tab-general");
+    await waitFor(
+      "!!document.querySelector('details.settings-send-shortcuts')",
+    );
+    assert.equal(
+      await evaluate(
+        "document.querySelector('details.settings-send-shortcuts').open",
+      ),
+      false,
+    );
+    await evaluate(
+      "document.querySelector('details.settings-send-shortcuts').scrollIntoView({block:'center'})",
+    );
+    await capture("14-general-shortcuts-collapsed");
+    await clickSelector("details.settings-send-shortcuts summary");
+    assert.equal(
+      await evaluate(
+        "document.querySelector('details.settings-send-shortcuts').open",
+      ),
+      true,
+    );
+    await key("Enter", "Enter", 13);
+    await waitFor(
+      "!document.querySelector('details.settings-send-shortcuts').open",
+    );
+    await key("Enter", "Enter", 13);
+    await waitFor(
+      "document.querySelector('details.settings-send-shortcuts').open",
+    );
+    await capture("15-general-shortcuts-expanded");
+    await evaluate(
+      "document.querySelector('#foreground-control-risk').scrollIntoView({block:'center'})",
+    );
+    assert.ok(
+      await evaluate(
+        "!!document.querySelector('#foreground-control-help')?.textContent.trim()",
+      ),
+    );
+    await capture("16-general-foreground-description");
+    const directoryUrl = `${url}/settings-audit.html?${new URLSearchParams({ lang: options.lang, theme: options.theme, scene: "directory", directoryFailure: "1" })}`;
+    await send("Page.navigate", { url: directoryUrl });
+    await waitFor("!!document.querySelector('#directory-audit-open')");
+    await evaluate("document.fonts.ready");
+    await clickSelector("#directory-audit-open");
+    await waitFor("!!document.querySelector('.directory-picker-error button')");
+    assert.ok(
+      await evaluate(
+        "!!document.querySelector('[role=dialog].directory-picker-shell') && !document.querySelector('#root').contains(document.querySelector('.directory-picker-shell'))",
+      ),
+    );
+    assert.equal(
+      await evaluate(
+        "document.querySelector('.directory-picker-dialog footer .primary-button').disabled",
+      ),
+      true,
+    );
+    await key("Tab", "Tab", 9);
+    assert.ok(
+      await evaluate(
+        "document.querySelector('.directory-picker-shell').contains(document.activeElement)",
+      ),
+      "Tab remains inside actual modal",
+    );
+    await capture("17-directory-initial-failure");
+    await clickSelector(".directory-picker-error button");
+    await waitFor(
+      "!!document.querySelector('.directory-picker-list [data-index=\"0\"]')",
+    );
+    await capture("18-directory-retry-success");
+    await clickSelector('.directory-picker-list [data-index="0"]');
+    await waitFor(
+      "document.querySelector('.directory-picker-dialog footer strong')?.textContent === '/synthetic/empty'",
+    );
+    assert.equal(
+      await evaluate(
+        "document.querySelectorAll('.directory-picker-list [data-index]').length",
+      ),
+      0,
+    );
+    await capture("19-directory-empty");
+    await clickSelector(".directory-picker-breadcrumbs button");
+    await waitFor(
+      "document.querySelector('.directory-picker-dialog footer strong')?.textContent === '/synthetic'",
+    );
+    await capture("20-directory-parent");
+    await key("Escape", "Escape", 27);
+    await waitFor("!document.querySelector('.directory-picker-shell')");
+    await waitFor("document.activeElement?.id === 'directory-audit-open'");
+    await capture("21-directory-escape-focus");
+    await key("Enter", "Enter", 13);
+    await waitFor(
+      "!!document.querySelector('.directory-picker-list [data-index=\"0\"]')",
+    );
+    await capture("22-directory-keyboard-reopen");
+    await clickSelector(".directory-picker-dialog footer .secondary-button");
+    await waitFor("!document.querySelector('.directory-picker-shell')");
+    await waitFor("document.activeElement?.id === 'directory-audit-open'");
+    assert.deepEqual(await evaluate("window.__directoryAudit.calls"), [
+      "snapshot",
+      "snapshot",
+      "list:/synthetic",
+      "list:/synthetic/empty",
+      "list:/synthetic",
+      "snapshot",
+      "list:/synthetic",
+    ]);
+    await capture("23-directory-cancel");
     receipt.status = "captured";
   }
   assert.equal(evidence.rendererErrors.length, 0, "No renderer exceptions.");

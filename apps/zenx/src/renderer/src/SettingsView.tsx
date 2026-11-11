@@ -4221,10 +4221,28 @@ function GeneralPanel({
             </option>
             <option value="hard">{t("settingsView.interruptAndSend")}</option>
           </Select>
-          <small id="composer-send-help" className="settings-note">
-            {t("settingsView.enterAndTheSendButtonUseThisChoiceCmd")}
+          <small id="composer-send-help" className="settings-guidance">
+            {t("settingsView.sendModeGuidance")}
           </small>
         </label>
+        <details className="settings-explanation settings-guidance settings-send-shortcuts">
+          <summary>{t("settingsView.keyboardShortcuts")}</summary>
+          <dl>
+            <div>
+              <dt>Cmd/Ctrl+Enter</dt>
+              <dd>
+                {draft.composerSendMode === "batch" ||
+                draft.composerSendMode === "queue"
+                  ? t("settingsView.shortcutGuideCurrentReply")
+                  : t("settingsView.shortcutQueueTogether")}
+              </dd>
+            </div>
+            <div>
+              <dt>Shift+Enter</dt>
+              <dd>{t("settingsView.shortcutNewLine")}</dd>
+            </div>
+          </dl>
+        </details>
       </section>
       <div className="page-card settings-card">
         <div className="settings-card-head">
@@ -4243,7 +4261,7 @@ function GeneralPanel({
         <div className="settings-row">
           <div>
             <strong>{t("settingsView.allowForegroundTakeover")}</strong>
-            <span>
+            <span id="foreground-control-risk" className="settings-guidance">
               {t("settingsView.thisLetsZenxAgentsMoveThePointerTypeKeys")}
             </span>
           </div>
@@ -4252,6 +4270,7 @@ function GeneralPanel({
             type="button"
             role="switch"
             aria-label={t("settingsView.allowForegroundComputerControl")}
+            aria-describedby="foreground-control-risk foreground-control-help"
             aria-checked={draft.computerForegroundControlEnabled === true}
             onClick={() =>
               setDraft({
@@ -4262,7 +4281,7 @@ function GeneralPanel({
             }
           />
         </div>
-        <p className="settings-note">
+        <p id="foreground-control-help" className="settings-guidance">
           {t(
             "settingsView.offByDefaultBrowserAutomationAndBackgroundSafeComputer",
           )}

@@ -9454,6 +9454,33 @@ button:disabled {
   line-height: 1.5;
 }
 
+.settings-send-shortcuts {
+  margin: 6px 0 0;
+}
+.settings-send-shortcuts dl {
+  display: grid;
+  gap: 8px;
+  margin: 4px 0 0;
+}
+.settings-send-shortcuts dl > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 16px;
+  row-gap: 2px;
+}
+.settings-send-shortcuts dt {
+  flex: 0 0 132px;
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+.settings-send-shortcuts dd {
+  min-width: 0;
+  flex: 1 1 160px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 /* Settings use one spacing rhythm across navigation, sections, and fields. */
 .settings-view {
   --settings-gap-field: 6px;
