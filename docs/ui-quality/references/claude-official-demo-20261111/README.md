@@ -11,5 +11,6 @@ These unedited screenshots show the official interactive marketing demo with sam
 - product-demo-conversation.jpg: demo session 'Add a dark mode toggle to settings'; sidebar, code edit, additional commands, final response and PR/CI status card.
 
 SHA256 provenance:
+
 - product-demo-explanation.jpg: bb60899eb8ba59d2d0dd735fcc9115f7d04604146accdec11c2a090f9faa60cd (76305 bytes)
 - product-demo-conversation.jpg: 54d5c9fb43653e065da230a02b031ec53708570245d4cd0188fdef0d6388fe7a (72896 bytes)
