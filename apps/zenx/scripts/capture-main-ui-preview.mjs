@@ -17,6 +17,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { once } from "node:events";
 import { observePreviewChrome } from "./preview-browser-lifecycle.mjs";
+import { captureDesktopNavigation } from "./navigation-main-ui-preview.mjs";
 
 // Do not spoof this guard to retry a denied local browser/socket operation.
 assert.equal(
@@ -430,12 +431,21 @@ try {
     });
     for (const scene of Object.keys(source.scenes)) {
       if (options.onlyScene && scene !== options.onlyScene) continue;
+      if (
+        scene === "navigation" &&
+        (coarse || options.width !== 1280 || options.height !== 900)
+      )
+        continue;
       const query = new URLSearchParams({
         theme: options.theme,
         lang: options.lang,
         platform: "linux",
       });
       if (scene === "information") query.set("scene", "lineage");
+      if (scene === "navigation") {
+        query.set("scene", "navigation");
+        query.set("conversationTabs", "true");
+      }
       if (scene === "pending") {
         query.set("many", "");
         if (options.width < 1000) query.set("narrow", "");
@@ -458,7 +468,19 @@ try {
         true,
         `Actual ${pointer} pointer and hover media capabilities`,
       );
-      if (scene === "main") {
+      if (scene === "navigation") {
+        await captureDesktopNavigation({
+          send,
+          evaluate,
+          wait,
+          click,
+          tabTo,
+          capture,
+          evidence,
+          options,
+        });
+        continue;
+      } else if (scene === "main") {
         await click(".thread-row");
         await wait(
           "!!document.querySelector('#thread-browser-toggle') && !!document.querySelector('.composer')",

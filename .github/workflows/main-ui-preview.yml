@@ -9,13 +9,14 @@ on:
       - apps/zenx/scripts/preview-browser-lifecycle.mjs
       - apps/zenx/test/fixtures/ui-polish-visual*
       - apps/zenx/test/fixtures/queue-steer-visual.tsx
+      - apps/zenx/test/*main-ui-preview.test.mjs
       - package-lock.json
   workflow_dispatch:
     inputs:
       scene:
         description: Render only the changed surface, or all three
         type: choice
-        options: [all, main, pending, information]
+        options: [all, main, navigation, pending, information]
         default: all
 permissions:
   contents: read
@@ -49,7 +50,7 @@ jobs:
             sudo apt-get install -y --no-install-recommends fonts-noto-cjk
           fi
       - name: Validate fast preview contracts
-        run: node --test apps/zenx/test/main-ui-preview.test.mjs
+        run: node --test apps/zenx/test/main-ui-preview.test.mjs apps/zenx/test/navigation-main-ui-preview.test.mjs
       - name: Bundle only selected production renderer fixtures
         id: bundle
         timeout-minutes: 2

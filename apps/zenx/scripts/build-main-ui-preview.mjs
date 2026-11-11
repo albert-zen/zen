@@ -17,6 +17,11 @@ const entries = {
     scope:
       "Production App, Sidebar and ThreadView. Synthetic bridge and conversation. No Host, native Electron, live account or real filesystem acceptance.",
   },
+  navigation: {
+    entry: "apps/zenx/test/fixtures/ui-polish-visual.tsx",
+    scope:
+      "Production App titlebar, Information host/cards and Sidebar. Native pointer/keyboard navigation on a read-only synthetic bridge. Desktop only; no native Electron or real Host acceptance.",
+  },
   pending: {
     entry: "apps/zenx/test/fixtures/queue-steer-visual.tsx",
     scope:
@@ -30,9 +35,12 @@ const entries = {
 };
 assert(
   selection === "all" || Object.hasOwn(entries, selection),
-  "Scene must be all, main, pending or information",
+  "Scene must be all, main, navigation, pending or information",
 );
-const selected = selection === "all" ? Object.keys(entries) : [selection];
+// Keep the ordinary three-surface loop unchanged; the longer native navigation
+// journey is explicitly selected when its affected states need verification.
+const selected =
+  selection === "all" ? ["main", "pending", "information"] : [selection];
 await mkdir(output, { recursive: true });
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const git = (...args) =>
@@ -41,6 +49,7 @@ const sources = new Set([
   "package-lock.json",
   "apps/zenx/scripts/build-main-ui-preview.mjs",
   "apps/zenx/scripts/capture-main-ui-preview.mjs",
+  "apps/zenx/scripts/navigation-main-ui-preview.mjs",
   "apps/zenx/scripts/preview-browser-lifecycle.mjs",
 ]);
 const scenes = {};

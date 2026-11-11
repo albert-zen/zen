@@ -17,6 +17,7 @@ import { AuxiliaryPanel } from "../../src/renderer/src/auxiliary-panel.js";
 import { nativeRecoveryForThread } from "../native-recovery-fixture.js";
 import { encodeModelKey } from "../../../../src/protocol/model-key.js";
 import { createUiPolishTitleBridge } from "./ui-polish-title-bridge.js";
+import type { NativeInformationApi } from "../../src/native-information.js";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
 Object.assign(globalThis, { React });
@@ -43,6 +44,8 @@ const uiPolishTelemetry = {
   machineCatalogCalls: 0,
   machineThreadCreateCalls: 0,
   sideChatCreateCommandCalls: 0,
+  informationReads: [] as { kind: string; id: string }[],
+  informationUpdates: 0,
 };
 // Deterministic holds for the Side chat UI acceptance scene only. No Host/model calls.
 const sideChatFixture = {
@@ -521,6 +524,45 @@ if (params.has("launchers") || params.has("conversationTabs")) {
     },
     readHandle: async () => null,
   });
+}
+if (params.get("scene") === "navigation") {
+  // Read-only synthetic Host data. Opening/closing/focus remain production App UI.
+  const information: NativeInformationApi = {
+    read: async (owner) => {
+      if (
+        typeof owner === "string" ||
+        owner.kind !== "thread" ||
+        owner.id !== "thread-1"
+      )
+        throw new Error("Unexpected synthetic information owner");
+      uiPolishTelemetry.informationReads.push({ ...owner });
+      return {
+        owner,
+        revision: 0,
+        basis: "synthetic-navigation",
+        members: [],
+        resourceThreadId: owner.id,
+        layout: {
+          version: 1,
+          widgets: [
+            {
+              id: "synthetic-lineage",
+              type: "lineage",
+              binding: { kind: "owner" },
+              visible: true,
+              collapsed: false,
+              config: {},
+            },
+          ],
+        },
+      };
+    },
+    update: async () => {
+      uiPolishTelemetry.informationUpdates += 1;
+      throw new Error("Navigation preview does not admit information edits");
+    },
+  };
+  Object.assign(zenx, { information });
 }
 Object.defineProperty(window, "zenx", { value: zenx });
 Object.assign(window, {
