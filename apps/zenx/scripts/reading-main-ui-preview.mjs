@@ -554,6 +554,7 @@ export const readingPaths = [
   "apps/zenx/test/preview-fonts.test.mjs",
   ".github/workflows/desktop-reading-ui.yml",
   "apps/zenx/src/renderer/src/styles.css",
+  "apps/zenx/src/renderer/src/scrollbar-visibility.ts",
   "apps/zenx/src/renderer/src/theme.css",
   "apps/zenx/src/renderer/src/Markdown.tsx",
   "apps/zenx/src/renderer/src/ThreadView.tsx",
