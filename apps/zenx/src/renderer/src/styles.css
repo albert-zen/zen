@@ -13348,6 +13348,8 @@ button:disabled {
   .thread-view .agent-copy .markdown-body td {
     padding: 10px 12px;
     border-color: var(--color-border-subtle);
+    /* Keep short result columns readable with border-box sizing. */
+    min-inline-size: calc(6ch + 26px);
   }
 }
 
