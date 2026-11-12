@@ -35,6 +35,23 @@ installScrollbarVisibility(document);
 Object.assign(globalThis, { React });
 const params = new URLSearchParams(location.search);
 const rails = supportingRailsData(params.get("rails"));
+const emptyProjectScene =
+  params.get("scene") === "reading" && params.get("emptyProjects") === "1";
+const emptyProjectKeys = [
+  "/work/zen",
+  "/work/design-system",
+  "/work/field-notes",
+  "/work/research",
+  "/work/delivery",
+];
+if (emptyProjectScene) {
+  for (const key of emptyProjectKeys)
+    localStorage.setItem(
+      `zenx.sidebar.expanded.${encodeURIComponent(`project:${key}`)}`,
+      "true",
+    );
+  localStorage.setItem("zenx.sidebar.expanded.projects", "true");
+}
 const readingScene = params.get("scene") === "reading";
 const resultScene = readingScene && params.get("results") === "1";
 const codeWrapScene = readingScene && params.get("codeWrap") === "1";
@@ -317,6 +334,17 @@ const zenx = {
             ...(projectlessScene
               ? [summary("projectless-existing", "Trip planning")]
               : []),
+            ...(emptyProjectScene
+              ? [
+                  {
+                    ...summary("thread-delivery", "Synthetic delivery check"),
+                    currentMetadata: {
+                      ...summary().currentMetadata,
+                      cwd: "/work/delivery",
+                    },
+                  },
+                ]
+              : []),
             ...(params.has("conversationTabs") ? sideConversations : []),
           ],
   },
@@ -359,7 +387,9 @@ const zenx = {
             {
               key: "/work/design-system",
               workspace: "/work/design-system",
-              name: "Design system",
+              name: emptyProjectScene
+                ? "Design system reference library and desktop component catalogue"
+                : "Design system",
               configured: true,
               isDefault: false,
               threadIds: [],
@@ -367,11 +397,33 @@ const zenx = {
             {
               key: "/work/field-notes",
               workspace: "/work/field-notes",
-              name: "Field notes",
+              name: emptyProjectScene
+                ? "资料整理与跨项目设计审查参考记录"
+                : "Field notes",
               configured: true,
               isDefault: false,
               threadIds: [],
             },
+            ...(emptyProjectScene
+              ? [
+                  {
+                    key: "/work/research",
+                    workspace: "/work/research",
+                    name: "Research",
+                    configured: true,
+                    isDefault: false,
+                    threadIds: [],
+                  },
+                  {
+                    key: "/work/delivery",
+                    workspace: "/work/delivery",
+                    name: "Delivery",
+                    configured: true,
+                    isDefault: false,
+                    threadIds: ["thread-delivery"],
+                  },
+                ]
+              : []),
           ],
       unavailableThreadIds: [],
       ...(projectlessScene
@@ -385,6 +437,9 @@ const zenx = {
       profile: {
         onboardingComplete: true,
         pinnedThreadIds: [],
+        ...(emptyProjectScene
+          ? { sidebarOrder: { pinnedProjectKeys: ["/work/design-system"] } }
+          : {}),
         providerProfiles: [],
         workflowCommands: [
           {
@@ -403,6 +458,9 @@ const zenx = {
         profile: {
           onboardingComplete: true,
           pinnedThreadIds: [],
+          ...(emptyProjectScene
+            ? { sidebarOrder: { pinnedProjectKeys: ["/work/design-system"] } }
+            : {}),
           providerProfiles: [],
           workflowCommands: [
             {

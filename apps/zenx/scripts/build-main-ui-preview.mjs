@@ -58,6 +58,8 @@ const sources = new Set([
   "apps/zenx/scripts/preview-fonts-OFL.txt",
   "apps/zenx/test/preview-fonts.test.mjs",
   "apps/zenx/scripts/reading-main-ui-preview.mjs",
+  "apps/zenx/scripts/empty-project-main-ui-preview.mjs",
+  "apps/zenx/test/empty-project-main-ui-preview.test.mjs",
   "apps/zenx/scripts/result-reading-main-ui-preview.mjs",
   "apps/zenx/test/result-reading-main-ui-preview.test.mjs",
   "apps/zenx/test/fixtures/result-reading-content.ts",
