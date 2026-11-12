@@ -716,7 +716,6 @@ export const en = {
   noProjectsFound: "No projects found",
   noProjectsYet: "No projects yet",
   noThreadsYet: "No threads yet.",
-  emptyProjectStatus: "No threads",
   openAccessibilitySettings: "Open Accessibility settings",
   openBrowserSettings: "Open Browser settings",
   openBrowserSettingsToApplyConnectedChromeThenRestartZenx:
@@ -1820,7 +1819,6 @@ export const zhCN = {
   noProjectsFound: "未找到项目",
   noProjectsYet: "尚无项目",
   noThreadsYet: "尚无会话。",
-  emptyProjectStatus: "无会话",
   openAccessibilitySettings: "打开辅助功能设置",
   openBrowserSettings: "打开浏览器设置",
   openBrowserSettingsToApplyConnectedChromeThenRestartZenx:
@@ -2241,4 +2239,3 @@ export const zhCN = {
   imageReaderUnavailable: "图片读取功能不可用",
   newThreadShortcut: "新建会话（{{shortcut}}）",
 } as const;
-
