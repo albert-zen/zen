@@ -1358,3 +1358,7 @@ Evidence must include matching light/dark main conversation with Information ope
 ### Desktop navigation density candidate
 
 Keep the existing detailed/compact preference, project disclosure state and both Projects/Recent routes. Detailed desktop rows retain provider identity and all status text; reduce only row whitespace (50px minimum, 5px vertical padding, 3px row gap). Empty projects remain visible and keep their existing expansion state, with smaller surrounding whitespace. Compact and Inbox layouts are unchanged. This is a source-tested candidate; long names, state badges, keyboard focus and dense lists still require rendered verification.
+
+### Docked subagent identity and status
+
+On desktop, the docked subagent row gives the full wrapping title its own text column and places status immediately below it, aligned to the title rather than competing for horizontal width. The icon stays at the title's start and the existing visibility control remains alongside the row. Keep all status labels, archived visibility, navigation actions, tree nesting and standalone panel layouts unchanged. This follows the title-first / secondary-metadata hierarchy observed in T3 and Codex, not an assertion of equivalent subagent controls. Validate long English/Chinese names, light/dark themes, and overall card height in the production-component preview; source tests alone do not establish improved visual quality.
