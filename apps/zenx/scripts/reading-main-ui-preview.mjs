@@ -680,6 +680,9 @@ export async function captureDesktopReading({
 }
 
 export const readingPaths = [
+  "apps/zenx/src/renderer/src/Sidebar.tsx",
+  "apps/zenx/test/sidebar-information-interaction.test.ts",
+  "apps/zenx/test/sidebar-name-preview.test.mjs",
   "apps/zenx/scripts/scrollbar-main-ui-preview.mjs",
   "apps/zenx/test/scrollbar-main-ui-preview.test.mjs",
   "apps/zenx/scripts/prepare-preview-fonts.mjs",

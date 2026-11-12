@@ -2061,6 +2061,7 @@ function ThreadRow({
     clearDetailsTimer();
     if (menuOpen) return;
     const open = () => {
+      menuFocusOrigin.current = "row";
       setDetailsOpen(true);
       void information?.refreshTriggers();
     };
