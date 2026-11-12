@@ -177,6 +177,128 @@ export async function probeCodeKeyboard({
   }
 }
 
+export function observeTableKeyboard() {
+  const wrapper = document.querySelector(".agent-copy .markdown-table-wrap");
+  const active = document.activeElement;
+  const ids = window.__zenTableKeyboardProbe;
+  if (active && !ids.nodes.has(active)) ids.nodes.set(active, ++ids.next);
+  return {
+    activeId: active ? ids.nodes.get(active) : null,
+    activeTag: active?.tagName ?? null,
+    wrapperFocused: !!wrapper && active === wrapper,
+    linkFocused:
+      !!wrapper && !!active?.matches("a[href]") && wrapper.contains(active),
+    focusVisible: active?.matches(":focus-visible") ?? false,
+    scrollLeft: wrapper?.scrollLeft ?? null,
+    scrollWidth: wrapper?.scrollWidth ?? null,
+    clientWidth: wrapper?.clientWidth ?? null,
+    text: wrapper?.textContent ?? null,
+    linkCount: wrapper?.querySelectorAll("a[href]").length ?? 0,
+    transcriptScrollTop: document.querySelector(".messages")?.scrollTop ?? null,
+    pageScrollX: scrollX,
+    pageScrollY: scrollY,
+    href: location.href,
+  };
+}
+
+export async function probeTableKeyboard({
+  send,
+  evaluate,
+  capture,
+  evidence,
+  options,
+  mode,
+}) {
+  const record = {
+    theme: options.theme,
+    mode,
+    outcome: "tab-limit",
+    observations: [],
+    arrowAttempts: [],
+  };
+  const observe = () => evaluate(`(${observeTableKeyboard.toString()})()`);
+  await evaluate(
+    "window.__zenTableKeyboardProbe = {nodes: new WeakMap(), next: 0}; true",
+  );
+  try {
+    const seen = new Set();
+    for (let index = 0; index <= 60; index++) {
+      const state = await observe();
+      record.observations.push(state);
+      if (seen.has(state.activeId)) {
+        record.outcome = record.arrowAttempts.length
+          ? "reachable-no-scroll"
+          : "tab-cycle-without-table-stop";
+        break;
+      }
+      seen.add(state.activeId);
+      if (state.wrapperFocused || state.linkFocused) {
+        await dispatchNavigationKey(send, "ArrowRight", "ArrowRight", 39);
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        const after = await observe();
+        record.arrowAttempts.push({ before: state, after });
+        if (after.scrollLeft > state.scrollLeft) {
+          record.outcome = state.wrapperFocused
+            ? "wrapper-reached-and-scrolled"
+            : "link-reached-and-scrolled";
+          break;
+        }
+      }
+      if (index < 60) await dispatchNavigationKey(send, "Tab", "Tab", 9);
+    }
+    const initial = record.observations[0];
+    record.overflow = initial.scrollWidth > initial.clientWidth + 1;
+    // No overflow is an observed control condition, not a scrolling failure.
+    if (!record.overflow)
+      record.outcome = record.arrowAttempts.length
+        ? "fits-with-table-stop"
+        : "fits-without-table-stop";
+    await capture(
+      `reading-${options.name}-table-keyboard-${mode}`,
+      options,
+      "reading",
+    );
+    (evidence.tableKeyboardCases ??= []).push(record);
+    return record;
+  } finally {
+    await evaluate("delete window.__zenTableKeyboardProbe");
+  }
+}
+
+export async function captureTableKeyboard({
+  send,
+  evaluate,
+  wait,
+  click,
+  capture,
+  evidence,
+  options,
+  url,
+  scrollToTop,
+}) {
+  for (const mode of ["plain", "links", "fit"]) {
+    const target = new URL(url);
+    target.searchParams.delete("codeWrap");
+    target.searchParams.delete("results");
+    target.searchParams.set("tableKeyboard", mode);
+    await send("Page.navigate", { url: target.href });
+    await wait(
+      `location.href===${JSON.stringify(target.href)} && !!document.querySelector('.thread-row')`,
+    );
+    await click('.project-group [data-thread-id="thread-1"] .thread-row');
+    await wait("!!document.querySelector('.agent-copy .markdown-table-wrap')");
+    await scrollToTop();
+    await probeTableKeyboard({
+      send,
+      evaluate,
+      capture,
+      evidence,
+      options,
+      mode,
+    });
+  }
+}
+
 export async function captureCodeWrap({
   send,
   evaluate,
@@ -188,7 +310,19 @@ export async function captureCodeWrap({
   url,
   scrollToTop,
 }) {
+  await captureTableKeyboard({
+    send,
+    evaluate,
+    wait,
+    click,
+    capture,
+    evidence,
+    options,
+    url,
+    scrollToTop,
+  });
   const target = new URL(url);
+  target.searchParams.delete("tableKeyboard");
   target.searchParams.set("codeWrap", "1");
   await send("Page.navigate", { url: target.href });
   await wait(

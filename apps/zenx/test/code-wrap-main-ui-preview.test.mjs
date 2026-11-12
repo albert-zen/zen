@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   captureCodeWrap,
   probeCodeKeyboard,
+  probeTableKeyboard,
   verifyCodeWrap,
 } from "../scripts/code-wrap-main-ui-preview.mjs";
 
@@ -86,7 +87,7 @@ test("baseline records a nonfatal keyboard probe then restores default and horiz
       calls.push(args);
     },
     evaluate: async (source) =>
-      source.includes("observeCodeKeyboard")
+      /observe(?:Code|Table)Keyboard/.test(source)
         ? { activeId: 1, preFocused: false }
         : s,
     wait: async () => {},
@@ -98,6 +99,9 @@ test("baseline records a nonfatal keyboard probe then restores default and horiz
     url: "http://127.0.0.1/reading.html?scene=reading",
   });
   assert.deepEqual(steps, [
+    "reading-desktop-light-table-keyboard-plain",
+    "reading-desktop-light-table-keyboard-links",
+    "reading-desktop-light-table-keyboard-fit",
     "reading-desktop-light-code-keyboard-scroll-probe",
     "reading-desktop-light-code-long-unwrapped",
     "reading-desktop-light-code-horizontal-scroll",
@@ -113,7 +117,7 @@ test("baseline records a nonfatal keyboard probe then restores default and horiz
   assert(calls.some(([method]) => method === "Input.dispatchKeyEvent"));
   assert.equal(
     calls.filter(([method]) => method === "Page.navigate").length,
-    2,
+    5,
   );
   assert.equal(evidence.codeKeyboardCases[0].outcome, "tab-cycle-without-pre");
   assert.equal(evidence.codeWrapCases.length, 2);
@@ -129,7 +133,10 @@ test("capture uses native keyboard paths and receipt hashes the new helper", asy
     assert(build.includes(file));
   const host = await read("./fixtures/ui-polish-visual.tsx");
   assert.match(host, /readingScene && params.get\("codeWrap"\) === "1"/);
-  assert.match(host, /codeWrapScene \? codeWrapMarkdown : undefined/);
+  assert.match(
+    host,
+    /codeWrapScene \? codeWrapMarkdown : tableKeyboardMarkdown/,
+  );
   assert.match(host, /synthetic-clipboard-only/);
 });
 
@@ -188,4 +195,106 @@ test("native pre probe distinguishes no entry, no scroll and successful scroll w
     ).length,
     60,
   );
+});
+
+test("table keyboard probe distinguishes link scrolling, wrapper scrolling, failure and fitting control", async () => {
+  const run = async (states) => {
+    let i = 0;
+    const calls = [],
+      evidence = {},
+      reads = [];
+    const result = await probeTableKeyboard({
+      send: async (...args) => calls.push(args),
+      evaluate: async (source) => {
+        reads.push(source);
+        return source.includes("observeTableKeyboard")
+          ? states[Math.min(i++, states.length - 1)]
+          : true;
+      },
+      capture: async () => {},
+      evidence,
+      options: { theme: "dark", name: "desktop-dark" },
+      mode: "links",
+    });
+    assert.equal(reads.at(-1), "delete window.__zenTableKeyboardProbe");
+    assert(!calls.some(([, p]) => p.key === "Enter"));
+    assert.equal(evidence.tableKeyboardCases[0], result);
+    return result;
+  };
+  const base = {
+    activeId: 1,
+    scrollWidth: 1300,
+    clientWidth: 800,
+    scrollLeft: 0,
+  };
+  const wrapper = { ...base, wrapperFocused: true, focusVisible: true };
+  const link = { ...base, linkFocused: true, focusVisible: true };
+  assert.equal(
+    (await run([wrapper, { ...wrapper, scrollLeft: 40 }])).outcome,
+    "wrapper-reached-and-scrolled",
+  );
+  assert.equal(
+    (await run([link, { ...link, scrollLeft: 40 }])).outcome,
+    "link-reached-and-scrolled",
+  );
+  assert.equal((await run([link, link, link])).outcome, "reachable-no-scroll");
+  assert.equal(
+    (await run([base, base])).outcome,
+    "tab-cycle-without-table-stop",
+  );
+  const fit = { ...base, scrollWidth: 300 };
+  assert.equal((await run([fit, fit])).outcome, "fits-without-table-stop");
+});
+
+test("table fixtures remain independent and restore the original code scene through navigation", async () => {
+  const host = await read("./fixtures/ui-polish-visual.tsx");
+  const capture = await read("../scripts/code-wrap-main-ui-preview.mjs");
+  assert.match(host, /readingScene && !codeWrapScene && !resultScene/);
+  assert.match(
+    host,
+    /codeWrapScene \? codeWrapMarkdown : tableKeyboardMarkdown/,
+  );
+  assert.match(host, /tableKeyboardMode === "fit" \? 2 : 16/);
+  assert.match(host, /https:\/\/example.com/);
+  assert.match(capture, /target.searchParams.delete\("tableKeyboard"\)/);
+  assert.doesNotMatch(
+    capture,
+    /\.focus\(|\.scrollLeft\s*=|setAttribute\("tabindex"/,
+  );
+});
+
+test("table query generator preserves old scenes and distinguishes only the intended link content", async () => {
+  const host = await read("./fixtures/ui-polish-visual.tsx");
+  const source = host.slice(
+    host.indexOf("const tableKeyboardMode"),
+    host.indexOf("// This opt-in synthetic probe"),
+  );
+  const generate = new Function(
+    "readingScene",
+    "codeWrapScene",
+    "resultScene",
+    "params",
+    source + "\nreturn tableKeyboardMarkdown;",
+  );
+  const mode = (value, code = false, results = false) =>
+    generate(
+      true,
+      code,
+      results,
+      new URLSearchParams(value ? { tableKeyboard: value } : {}),
+    );
+  assert.equal(mode(null), undefined);
+  assert.equal(mode("unknown"), undefined);
+  assert.equal(mode("links", true), undefined);
+  assert.equal(mode("links", false, true), undefined);
+  const plain = mode("plain"),
+    links = mode("links"),
+    fit = mode("fit");
+  assert.equal(
+    links.replace(/\[([^\]]+)\]\(https:\/\/example.com\/\)/g, "$1"),
+    plain,
+  );
+  assert.equal((links.match(/https:\/\/example.com/g) ?? []).length, 8);
+  assert.equal(plain.split("\n")[2].split("|").length - 2, 16);
+  assert.equal(fit.split("\n")[2].split("|").length - 2, 2);
 });

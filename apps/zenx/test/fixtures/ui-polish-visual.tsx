@@ -38,6 +38,31 @@ const rails = supportingRailsData(params.get("rails"));
 const readingScene = params.get("scene") === "reading";
 const resultScene = readingScene && params.get("results") === "1";
 const codeWrapScene = readingScene && params.get("codeWrap") === "1";
+// Independent synthetic keyboard probe; existing scenes retain their exact text.
+const tableKeyboardMode =
+  readingScene && !codeWrapScene && !resultScene
+    ? params.get("tableKeyboard")
+    : null;
+const tableKeyboardMarkdown = ["plain", "links", "fit"].includes(
+  tableKeyboardMode ?? "",
+)
+  ? (() => {
+      const count = tableKeyboardMode === "fit" ? 2 : 16;
+      const headers = Array.from({ length: count }, (_, i) => `Field ${i + 1}`);
+      const cells = headers.map((_, i) =>
+        tableKeyboardMode === "links" && i % 2 === 0
+          ? `[Read ${i + 1}](https://example.com/)`
+          : `Read ${i + 1}`,
+      );
+      return [
+        "# Synthetic table keyboard probe",
+        "",
+        `| ${headers.join(" | ")} |`,
+        `| ${headers.map(() => "---").join(" | ")} |`,
+        `| ${cells.join(" | ")} |`,
+      ].join("\n");
+    })()
+  : undefined;
 // This opt-in synthetic probe records writes only; it never reads or writes the OS clipboard.
 if (codeWrapScene) {
   const probe = {
@@ -113,7 +138,7 @@ const options = {
         request,
         thread(),
         readingPending,
-        codeWrapScene ? codeWrapMarkdown : undefined,
+        codeWrapScene ? codeWrapMarkdown : tableKeyboardMarkdown,
         resultScene,
       );
     if (
