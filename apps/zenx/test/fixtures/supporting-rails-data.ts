@@ -5,14 +5,24 @@ export function supportingRailsData(mode: string | null) {
   if (mode !== "long" && mode !== "collapsed") return null;
   const layout: InformationLayout = {
     version: 1,
-    widgets: ["lineage", "triggers"].map((type) => ({
-      id: `synthetic-rails-${type}`,
-      type: type as "lineage" | "triggers",
-      binding: { kind: "owner" },
-      visible: true,
-      collapsed: mode === "collapsed",
-      config: {},
-    })),
+    widgets: [
+      {
+        id: "synthetic-rails-lineage",
+        type: "lineage",
+        binding: { kind: "owner" },
+        visible: true,
+        collapsed: mode === "collapsed",
+        config: {},
+      },
+      {
+        id: "synthetic-rails-triggers",
+        type: "triggers",
+        binding: { kind: "owner" },
+        visible: true,
+        collapsed: mode === "collapsed",
+        config: { filter: "all", showPaused: true },
+      },
+    ],
   };
   return {
     project:

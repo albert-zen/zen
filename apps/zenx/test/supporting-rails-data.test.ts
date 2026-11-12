@@ -16,6 +16,10 @@ test("long scene has genuinely distinct cards, multilingual long names and inert
     ["lineage", "triggers"],
   );
   assert.ok(data.layout.widgets.every((w) => !w.collapsed && w.visible));
+  assert.deepEqual(data.layout.widgets[1]!.config, {
+    filter: "all",
+    showPaused: true,
+  });
   assert.ok(
     data.triggers.every(
       (t) => t.id.startsWith("synthetic-") && t.threadId === "thread-1",

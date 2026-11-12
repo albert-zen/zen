@@ -455,7 +455,7 @@ export async function captureDesktopReading({
       await openInformation();
       await scroll();
       await wait(
-        "document.querySelectorAll('.information-widget').length >= 2",
+        "Array.from(document.querySelectorAll('.information-widget')).filter(e => !e.hidden && e.getBoundingClientRect().height > 0).length >= 2",
       );
       await save(`supporting-rails-${rails}`, { information: true });
     }
