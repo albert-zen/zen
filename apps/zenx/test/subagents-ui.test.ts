@@ -1363,3 +1363,134 @@ test("ordinary Information retires old-owner lineage failures and ignores late r
     await f.close();
   }
 });
+
+for (const language of ["en", "zh-CN"] as const) {
+  test(`subagent question attention follows Host summaries independently of activity (${language})`, async () => {
+    const withQuestions = (
+      id: string,
+      count?: number,
+      active = false,
+    ): NativeThreadSummary => ({
+      ...summary(id, "parent", { status: active ? "active" : "idle" }),
+      ...(count === undefined
+        ? {}
+        : { userQuestionSummary: { openCount: count } }),
+    });
+    // A stale field on an unavailable payload must never produce attention.
+    const unavailable = {
+      threadId: "unavailable",
+      parentThreadId: "parent",
+      name: "unavailable",
+      archived: false,
+      status: "systemError",
+      error: "Synthetic unavailable",
+      createdAt: null,
+      updatedAt: null,
+      preview: "",
+      userQuestionSummary: { openCount: 9 },
+    } as NativeThreadSummary;
+    const children = [
+      withQuestions("idle-one", 1),
+      withQuestions("active-two", 2, true),
+      withQuestions("zero", 0),
+      withQuestions("legacy"),
+      unavailable,
+    ];
+    const visibilityChanges: unknown[] = [];
+    const f = await fixture(async () => ({ threads: children }), {
+      visibleSubagentThreadIds: [],
+      setVisible: async (...args) => {
+        visibilityChanges.push(args);
+      },
+    });
+    const row = (id: string) =>
+      [
+        ...f.dom.window.document.querySelectorAll<HTMLButtonElement>(
+          ".subagent-tree-row",
+        ),
+      ].find((node) => node.textContent?.startsWith(id))!;
+    try {
+      await act(async () => i18n.changeLanguage(language));
+      await f.render("parent", "panel", children);
+      const idle = language === "en" ? "Idle" : "空闲";
+      const working = language === "en" ? "Working" : "正在工作";
+      const badgeText = language === "en" ? "Asking" : "待回答";
+      assert.ok(row("idle-one").textContent?.includes(idle));
+      assert.ok(row("active-two").textContent?.includes(working));
+      for (const [id, count] of [
+        ["idle-one", 1],
+        ["active-two", 2],
+      ] as const) {
+        const badge = row(id).querySelector<HTMLElement>(
+          ".thread-asking-badge",
+        )!;
+        assert.equal(badge.textContent, badgeText);
+        assert.equal(badge.getAttribute("role"), "img");
+        assert.equal(
+          badge.getAttribute("aria-label"),
+          i18n.t("shell:threadAskingCount", { count }),
+        );
+        assert.equal(badge.title, badge.getAttribute("aria-label"));
+        assert.equal(badge.getAttribute("tabindex"), null);
+      }
+      for (const id of ["zero", "legacy", "unavailable"])
+        assert.equal(row(id).querySelector(".thread-asking-badge"), null);
+      const focused = row("idle-one");
+      focused.focus();
+      const beforeCalls = f.calls.length;
+      await f.render("parent", "panel", [
+        withQuestions("idle-one", 0),
+        ...children.slice(1),
+      ]);
+      assert.ok(
+        row("idle-one") === focused,
+        "Host update preserves the navigation node",
+      );
+      assert.ok(
+        f.dom.window.document.activeElement === focused,
+        "Host update preserves keyboard focus",
+      );
+      assert.equal(focused.querySelector(".thread-asking-badge"), null);
+      assert.ok(focused.textContent?.includes(idle));
+      assert.equal(
+        f.calls.length,
+        beforeCalls,
+        "summary updates must not query or mutate",
+      );
+      assert.equal(
+        f.dom.window.document.querySelectorAll(
+          '[role="switch"][aria-checked="true"]',
+        ).length,
+        0,
+      );
+      assert.deepEqual(visibilityChanges, []);
+      assert.deepEqual(f.routes, []);
+      await f.click(focused);
+      assert.deepEqual(f.routes, ["/threads/idle-one?view=panel"]);
+      const archived = {
+        ...withQuestions("archived-question", 1),
+        archived: true,
+      };
+      await f.render("parent", "panel", [archived]);
+      assert.equal(row("archived-question"), undefined);
+      await f.click(
+        f.dom.window.document.querySelector<HTMLInputElement>(
+          "input[type='checkbox']",
+        )!,
+      );
+      const archivedRow = row("archived-question");
+      assert.ok(
+        archivedRow.textContent?.includes(
+          language === "en" ? "Archived" : "已归档",
+        ),
+      );
+      assert.equal(
+        archivedRow.querySelector(".thread-asking-badge")?.textContent,
+        badgeText,
+      );
+    } finally {
+      await f.close();
+      await act(async () => i18n.changeLanguage("en"));
+    }
+  });
+}

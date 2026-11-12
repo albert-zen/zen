@@ -285,3 +285,14 @@
     min-height: 44px;
   }
 }
+
+/* Question attention accompanies activity; it never changes execution status. */
+.subagent-tree-status:has(.thread-asking-badge) {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  flex-shrink: 1;
+}

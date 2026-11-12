@@ -535,6 +535,21 @@ function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
                         : child.status === "systemError"
                           ? i18n.t("panels:unavailable")
                           : i18n.t("panels:idleStatus")}
+                    {child.status !== "systemError" &&
+                    (child.userQuestionSummary?.openCount ?? 0) > 0 ? (
+                      <span
+                        className="thread-asking-badge"
+                        role="img"
+                        aria-label={i18n.t("shell:threadAskingCount", {
+                          count: child.userQuestionSummary!.openCount,
+                        })}
+                        title={i18n.t("shell:threadAskingCount", {
+                          count: child.userQuestionSummary!.openCount,
+                        })}
+                      >
+                        {i18n.t("shell:threadAsking")}
+                      </span>
+                    ) : null}
                   </span>
                 </span>
               </button>
