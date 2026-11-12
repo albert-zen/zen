@@ -1366,3 +1366,5 @@ On desktop, the docked subagent row gives the full wrapping title its own text c
 ### Content-sized docked identity metadata
 
 In the desktop information dock, keep short subagent names and their status on one baseline when they fit. A name whose natural width fills the available column wraps at full column width, with status below it. Use content-sized wrapping, not language-specific character thresholds, clipped titles, or hidden statuses. Keep the top-aligned icon, existing visibility control and tree nesting. The identity wrapper uses display: contents outside the desktop dock so standalone panel and smaller-window layout remain unchanged. Validate short and long English/Chinese names in both themes, preserving the prior long-name reading space while measuring the actual ordinary-row height.
+
+When name and status share a line, the status aligns at the trailing edge of the identity column with a minimum 12px gap, so it is not read as the name's last word. Wrapped metadata stays at the title start. This addresses the anonymous screenshot review's concern about the initial 8px inline gap.

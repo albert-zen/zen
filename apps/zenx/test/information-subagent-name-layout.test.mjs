@@ -40,3 +40,8 @@ test("desktop dock lets full-width long titles wrap before status without fixed 
     /\.information-dock \.subagent-tree-status\s*\{[^}]*overflow-wrap: anywhere;[^}]*max-width: 100%;/,
   );
 });
+
+test("inline status stays in a distinct trailing metadata column", () => {
+  assert.match(rule, /justify-content: space-between;/);
+  assert.match(rule, /column-gap: 12px;/);
+});

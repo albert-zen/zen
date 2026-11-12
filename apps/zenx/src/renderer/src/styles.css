@@ -13497,7 +13497,8 @@ button:disabled {
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
-    column-gap: 8px;
+    justify-content: space-between;
+    column-gap: 12px;
     row-gap: 3px;
     min-width: 0;
   }
