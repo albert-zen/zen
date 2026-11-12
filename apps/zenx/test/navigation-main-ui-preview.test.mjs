@@ -37,9 +37,7 @@ const state = () => ({
   titlebar: target({
     rect: { x: 260, y: 40, right: 1280, bottom: 90, width: 1020 },
   }),
-  close: target({
-    rect: { x: 1100, y: 100, right: 1130, bottom: 130, width: 30, height: 30 },
-  }),
+  close: target(),
   chat: target({ rect: { right: 900 } }),
   dock: target({ rect: { x: 920 } }),
   popover: null,
@@ -120,7 +118,7 @@ test("a measured entry may extend below a short title row without a false failur
 });
 test("dock checks reject overlap, covered controls, missing content and clipped Composer", () => {
   for (const fault of [
-    "close-overlap",
+    "different-close-control",
     "entry-covered",
     "close-covered",
     "chat-covered",
@@ -130,7 +128,7 @@ test("dock checks reject overlap, covered controls, missing content and clipped 
     "no-read",
   ]) {
     const s = state();
-    if (fault === "close-overlap") s.close.rect.y = 79;
+    if (fault === "different-close-control") s.close.rect.y = 79;
     if (fault === "entry-covered") s.entry.centerHit = false;
     if (fault === "close-covered") s.close.centerHit = false;
     if (fault === "chat-covered") s.chat.rect.right = 930;
@@ -337,4 +335,13 @@ test("independent navigation workflow auto-triggers on related PR paths without 
     workflow,
     /desktop-navigation-\$\{\{ github.event.pull_request.head.sha \}\}/,
   );
+});
+
+test("desktop navigation retains only the production information toggle as close control", async () => {
+  const source = await readFile(
+    new URL("../scripts/navigation-main-ui-preview.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(source, /information-dismiss-toolbar/);
+  assert.match(source, /Information closes through the same titlebar toggle/);
 });

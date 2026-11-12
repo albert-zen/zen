@@ -35,3 +35,13 @@ test("supporting rail changes preserve native colors and primary reading geometr
     /\.information-widget-disclosure h3\s*\{[^}]*font-size: 13px;/u,
   );
 });
+
+test("empty attention does not reserve a separate customization row and preview uses production scrollbar lifecycle", () => {
+  assert.match(css, /information-attention:empty\s*\{\s*padding: 0;/);
+  assert.match(section, /information-attention:not\(:empty\)/);
+  const fixture = readFileSync(
+    new URL("./fixtures/ui-polish-visual.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(fixture, /installScrollbarVisibility\(document\)/);
+});

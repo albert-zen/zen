@@ -898,7 +898,7 @@ test("clear an effort-only override after its model loses selectable efforts", a
   }
 });
 
-test("the visible sidebar caption names the switch column once in English and Chinese", async () => {
+test("embedded sidebar caption remains accessible without a separate visible row in English and Chinese", async () => {
   const children = [summary("child", "parent"), summary("nested", "child")];
   const f = await fixture(
     async () => ({ threads: children }),
@@ -915,6 +915,7 @@ test("the visible sidebar caption names the switch column once in English and Ch
       const document = f.dom.window.document;
       const headings = document.querySelectorAll(".subagent-sidebar-heading");
       assert.equal(headings.length, 1);
+      assert.ok(headings[0]!.classList.contains("sr-only"));
       assert.equal(headings[0]!.textContent, caption);
       assert.equal(headings[0]!.closest("button"), null);
       assert.equal(

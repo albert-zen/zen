@@ -25,8 +25,11 @@ import {
   readingBrowserCommand,
 } from "./ui-polish-reading.js";
 import type { NativeInformationApi } from "../../src/native-information.js";
+import { installScrollbarVisibility } from "../../src/renderer/src/scrollbar-visibility.js";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
+// Match the production renderer startup; never hide scrollbars only for captures.
+installScrollbarVisibility(document);
 Object.assign(globalThis, { React });
 const params = new URLSearchParams(location.search);
 const readingScene = params.get("scene") === "reading";

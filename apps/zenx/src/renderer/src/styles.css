@@ -12955,6 +12955,9 @@ button:disabled {
 .information-attention {
   padding-block: 8px;
 }
+.information-attention:empty {
+  padding: 0;
+}
 .information-widget[draggable="true"] {
   cursor: grab;
 }
@@ -13409,7 +13412,7 @@ button:disabled {
     padding-right: 30px;
   }
   .information-dock
-    .editable-information-panel:has(> .information-attention)
+    .editable-information-panel:has(> .information-attention:not(:empty))
     .information-settings-toolbar {
     position: static;
   }

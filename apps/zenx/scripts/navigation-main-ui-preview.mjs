@@ -5,7 +5,7 @@ export const navigationSelectors = {
   recent: '.recent-thread-group [data-thread-id="thread-1"] .thread-row',
   projects: ".projects-section-toggle",
   entry: ".information-toolbar button",
-  close: ".information-dismiss-toolbar button",
+  close: '.information-toolbar button[aria-expanded="true"]',
   editor: '.composer [contenteditable="true"], .composer textarea',
 };
 export const navigationDraft =
@@ -80,7 +80,7 @@ export function observeNavigation() {
   );
   return {
     entry: read(".information-toolbar button"),
-    close: read(".information-dismiss-toolbar button"),
+    close: read('.information-toolbar button[aria-expanded="true"]'),
     titlebar: read(".window-titlebar-session"),
     dock: read(".information-dock"),
     popover: read(".information-popover"),
@@ -172,8 +172,9 @@ export function assertNavigationState(state, { mode, focus, baseline } = {}) {
       "Close remains reachable",
     );
     assert(
-      state.close.rect.y >= state.entry.rect.bottom,
-      "Dock close control clears the measured titlebar entry",
+      state.close.rect.x === state.entry.rect.x &&
+        state.close.rect.y === state.entry.rect.y,
+      "Information closes through the same titlebar toggle",
     );
     assert(
       state.chat.rect.right <= state.dock.rect.x + 1,
@@ -306,7 +307,7 @@ export async function captureDesktopNavigation({
   });
   await key("Enter", "Enter", 13);
   await wait(
-    "!!document.querySelector('.information-dock .information-dismiss-toolbar button')",
+    "!!document.querySelector('.information-dock') && document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded') === 'true'",
   );
   await click(s.close);
   await wait("!document.querySelector('.information-dock')");

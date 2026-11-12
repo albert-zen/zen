@@ -608,7 +608,9 @@ function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
         </p>
       ) : null}
       {tree && sidebar ? (
-        <div className="subagent-sidebar-heading">
+        <div
+          className={`subagent-sidebar-heading${information?.embedded ? " sr-only" : ""}`}
+        >
           {i18n.t("panels:subagentSidebarHeading")}
         </div>
       ) : null}
