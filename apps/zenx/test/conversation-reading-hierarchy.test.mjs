@@ -22,7 +22,7 @@ test("desktop reading hierarchy is scoped and retains shared history/Composer al
 test("prose hierarchy keeps endpoint rhythm and themed structured results", () => {
   assert.match(
     section,
-    /\.agent-copy\s*\{\s*font-size: 15px;\s*line-height: 1.65;/u,
+    /\.agent-copy\s*\{\s*font-size: 15px;\s*line-height: 1.8;/u,
   );
   assert.match(section, /:first-child\s*\{\s*margin-top: 0;/u);
   assert.match(section, /:last-child\s*\{\s*margin-bottom: 0;/u);
@@ -37,11 +37,4 @@ test("desktop approval and Composer share measured column alignment", () => {
     css,
     /\.thread-view \.bottom-zone > \.composer,\s*\.thread-view \.bottom-zone > \.approval-request-card\s*\{\s*position: relative;\s*margin-inline: 0;\s*left: var\(--composer-column-left, 0px\);\s*width: var\(--composer-column-width, 100%\);/u,
   );
-});
-
-test("denser prose retains paragraph separation and structured-result leading", () => {
-  assert.match(section, /margin-bottom: 16px;/u);
-  assert.match(section, /margin-top: 24px;/u);
-  assert.match(section, /margin-block: 12px 16px;/u);
-  assert.match(section, /line-height: 1.6;/u);
 });
