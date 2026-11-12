@@ -49,7 +49,7 @@
 
   /* Canonical semantic colors for the migrated v0 slice. */
   --color-scrollbar-thumb: rgb(255 255 255 / 8%);
-  --color-scrollbar-thumb-hover: rgb(255 255 255 / 18%);
+  --color-scrollbar-thumb-hover: rgb(255 255 255 / 32%);
   --color-canvas: #000000;
   --color-surface-sidebar: #000000;
   --color-surface-main: #151515;
