@@ -5567,6 +5567,16 @@ button:disabled {
   white-space: pre;
   overflow-wrap: normal;
 }
+.markdown-code[data-wrapped="true"] pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.markdown-code-wrap[aria-pressed="true"] {
+  color: var(--text-1);
+  background: var(--surface-wash-strong);
+  border-radius: 4px;
+}
+
 .markdown-code code {
   padding: 0;
   background: transparent;
