@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   captureCodeWrap,
+  probeCodeKeyboard,
   verifyCodeWrap,
 } from "../scripts/code-wrap-main-ui-preview.mjs";
 
@@ -75,7 +76,7 @@ test("browser assertions reject clipping, rewritten text, missing focus and chan
   }
 });
 
-test("baseline without the new control records default and real horizontal-wheel states only", async () => {
+test("baseline records a nonfatal keyboard probe then restores default and horizontal-wheel states", async () => {
   const calls = [],
     steps = [],
     evidence = {};
@@ -84,7 +85,10 @@ test("baseline without the new control records default and real horizontal-wheel
     send: async (...args) => {
       calls.push(args);
     },
-    evaluate: async () => s,
+    evaluate: async (source) =>
+      source.includes("observeCodeKeyboard")
+        ? { activeId: 1, preFocused: false }
+        : s,
     wait: async () => {},
     click: async () => {},
     scrollToTop: async () => {},
@@ -94,6 +98,7 @@ test("baseline without the new control records default and real horizontal-wheel
     url: "http://127.0.0.1/reading.html?scene=reading",
   });
   assert.deepEqual(steps, [
+    "reading-desktop-light-code-keyboard-scroll-probe",
     "reading-desktop-light-code-long-unwrapped",
     "reading-desktop-light-code-horizontal-scroll",
   ]);
@@ -105,7 +110,12 @@ test("baseline without the new control records default and real horizontal-wheel
         p.deltaX === 500,
     ),
   );
-  assert(!calls.some(([method]) => method === "Input.dispatchKeyEvent"));
+  assert(calls.some(([method]) => method === "Input.dispatchKeyEvent"));
+  assert.equal(
+    calls.filter(([method]) => method === "Page.navigate").length,
+    2,
+  );
+  assert.equal(evidence.codeKeyboardCases[0].outcome, "tab-cycle-without-pre");
   assert.equal(evidence.codeWrapCases.length, 2);
 });
 
@@ -121,4 +131,61 @@ test("capture uses native keyboard paths and receipt hashes the new helper", asy
   assert.match(host, /readingScene && params.get\("codeWrap"\) === "1"/);
   assert.match(host, /codeWrapScene \? codeWrapMarkdown : undefined/);
   assert.match(host, /synthetic-clipboard-only/);
+});
+
+test("native pre probe distinguishes no entry, no scroll and successful scroll without asserting away failures", async () => {
+  const run = async (states) => {
+    let index = 0;
+    const calls = [],
+      evidence = {},
+      reads = [];
+    const result = await probeCodeKeyboard({
+      send: async (...args) => calls.push(args),
+      evaluate: async (source) => {
+        reads.push(source);
+        return source.includes("observeCodeKeyboard")
+          ? states[Math.min(index++, states.length - 1)]
+          : true;
+      },
+      capture: async () => {},
+      evidence,
+      options: { theme: "dark", name: "desktop-dark" },
+    });
+    assert.equal(reads.at(-1), "delete window.__zenCodeKeyboardProbe");
+    assert.equal(evidence.codeKeyboardCases[0], result);
+    return { result, calls };
+  };
+  const ordinary = (activeId) => ({
+    activeId,
+    activeClass: "same-button-class",
+    preFocused: false,
+  });
+  const cycle = await run([ordinary(1), ordinary(2), ordinary(1)]);
+  assert.equal(cycle.result.outcome, "tab-cycle-without-pre");
+  assert.equal(cycle.result.observations.length, 3);
+  const focused = {
+    activeId: 3,
+    preFocused: true,
+    focusVisible: true,
+    scrollLeft: 0,
+  };
+  assert.equal(
+    (await run([ordinary(1), focused, { ...focused, scrollLeft: 40 }])).result
+      .outcome,
+    "reached-and-scrolled",
+  );
+  assert.equal(
+    (await run([focused, focused])).result.outcome,
+    "reached-no-scroll",
+  );
+  const limit = await run(Array.from({ length: 61 }, (_, i) => ordinary(i)));
+  assert.equal(limit.result.outcome, "tab-limit");
+  assert.equal(limit.result.observations.length, 61);
+  assert.equal(
+    limit.calls.filter(
+      ([method, p]) =>
+        method === "Input.dispatchKeyEvent" && p.type === "rawKeyDown",
+    ).length,
+    60,
+  );
 });

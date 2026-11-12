@@ -103,6 +103,80 @@ export function verifyCodeWrap(
   }
 }
 
+// Read-only element identity bookkeeping, never a product DOM/focus mutation.
+export function observeCodeKeyboard() {
+  const pre = document.querySelector(".agent-copy .markdown-code pre");
+  const active = document.activeElement;
+  const ids = window.__zenCodeKeyboardProbe;
+  if (active && !ids.nodes.has(active)) ids.nodes.set(active, ++ids.next);
+  return {
+    activeId: active ? ids.nodes.get(active) : null,
+    activeTag: active?.tagName ?? null,
+    activeClass:
+      typeof active?.className === "string" ? active.className : null,
+    preFocused: !!pre && active === pre,
+    focusVisible: pre?.matches(":focus-visible") ?? false,
+    scrollLeft: pre?.scrollLeft ?? null,
+    scrollWidth: pre?.scrollWidth ?? null,
+    clientWidth: pre?.clientWidth ?? null,
+    transcriptScrollTop: document.querySelector(".messages")?.scrollTop ?? null,
+    pageScrollX: scrollX,
+    pageScrollY: scrollY,
+  };
+}
+
+export async function probeCodeKeyboard({
+  send,
+  evaluate,
+  capture,
+  evidence,
+  options,
+}) {
+  const record = {
+    theme: options.theme,
+    outcome: "tab-limit",
+    observations: [],
+  };
+  const observe = () => evaluate(`(${observeCodeKeyboard.toString()})()`);
+  await evaluate(
+    "window.__zenCodeKeyboardProbe = {nodes: new WeakMap(), next: 0}; true",
+  );
+  try {
+    const seen = new Set();
+    for (let index = 0; index <= 60; index++) {
+      const state = await observe();
+      record.observations.push(state);
+      if (state.preFocused) {
+        record.beforeArrow = state;
+        await dispatchNavigationKey(send, "ArrowRight", "ArrowRight", 39);
+        // Native scrolling can animate; observe after a short bounded settle.
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        record.afterArrow = await observe();
+        record.outcome =
+          record.afterArrow.scrollLeft > state.scrollLeft
+            ? "reached-and-scrolled"
+            : "reached-no-scroll";
+        break;
+      }
+      if (seen.has(state.activeId)) {
+        record.outcome = "tab-cycle-without-pre";
+        break;
+      }
+      seen.add(state.activeId);
+      if (index < 60) await dispatchNavigationKey(send, "Tab", "Tab", 9);
+    }
+    await capture(
+      `reading-${options.name}-code-keyboard-scroll-probe`,
+      options,
+      "reading",
+    );
+    (evidence.codeKeyboardCases ??= []).push(record);
+    return record;
+  } finally {
+    await evaluate("delete window.__zenCodeKeyboardProbe");
+  }
+}
+
 export async function captureCodeWrap({
   send,
   evaluate,
@@ -152,6 +226,17 @@ export async function captureCodeWrap({
     await capture(`reading-${options.name}-code-${step}`, options, "reading");
     return state;
   };
+  await probeCodeKeyboard({ send, evaluate, capture, evidence, options });
+  // Restore through ordinary navigation, not focus/scroll DOM manipulation.
+  await send("Page.navigate", { url: target.href });
+  await wait(
+    `location.href===${JSON.stringify(target.href)} && !!document.querySelector('.thread-row')`,
+  );
+  await click('.project-group [data-thread-id="thread-1"] .thread-row');
+  await wait(
+    "!!document.querySelector('.markdown-code pre') && !!window.__codeWrapFixture",
+  );
+  await scrollToTop();
   const idle = await save("long-unwrapped", { wrapped: false });
   await send("Input.dispatchMouseEvent", {
     type: "mouseWheel",
