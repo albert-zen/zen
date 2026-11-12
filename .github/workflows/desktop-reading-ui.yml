@@ -3,6 +3,12 @@ on:
   pull_request:
     paths:
       - .github/workflows/desktop-reading-ui.yml
+      - apps/zenx/src/renderer/src/subagents-ui.tsx
+      - apps/zenx/src/renderer/src/subagents.css
+      - apps/zenx/test/subagents-ui.test.ts
+      - apps/zenx/scripts/child-question-main-ui-preview.mjs
+      - apps/zenx/test/fixtures/child-question-data.ts
+      - apps/zenx/test/child-question-main-ui-preview.test.ts
       - apps/zenx/src/renderer/src/Markdown.tsx
       - apps/zenx/src/renderer/src/App.tsx
       - apps/zenx/src/renderer/src/ApprovalRequestCard.tsx
@@ -79,7 +85,7 @@ jobs:
           node apps/zenx/scripts/prepare-preview-fonts.mjs "${{ runner.temp }}/preview-fonts" --allow-download
         timeout-minutes: 2
       - if: steps.selection.outputs.needsCapture == 'true'
-        run: node --import tsx --test apps/zenx/test/preview-fonts.test.mjs apps/zenx/test/reading-main-ui-preview.test.mjs apps/zenx/test/reading-fixture.test.ts apps/zenx/test/scrollbar-main-ui-preview.test.mjs
+        run: node --import tsx --test apps/zenx/test/preview-fonts.test.mjs apps/zenx/test/reading-main-ui-preview.test.mjs apps/zenx/test/reading-fixture.test.ts apps/zenx/test/scrollbar-main-ui-preview.test.mjs apps/zenx/test/subagents-ui.test.ts apps/zenx/test/child-question-main-ui-preview.test.ts
       - if: steps.selection.outputs.needsCapture == 'true'
         run: node apps/zenx/scripts/build-main-ui-preview.mjs "${{ runner.temp }}/desktop-reading" reading
         timeout-minutes: 2

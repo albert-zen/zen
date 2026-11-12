@@ -1,3 +1,4 @@
+import { createChildQuestionData } from "./child-question-data.js";
 import "../../src/renderer/src/shell-thread-panel.css";
 import "../../src/renderer/src/agent-readiness-notice.css";
 import "../../src/renderer/src/trigger-ui.css";
@@ -10,7 +11,7 @@ import { i18n } from "../../src/renderer/src/i18n.js";
 import { workspaceLauncherSnapshot } from "../workspace-launcher-snapshot.js";
 import React from "react";
 import { createRoot } from "react-dom/client";
-import type { NativeThreadSummary } from "../../../../src/thread-summary.js";
+import type { ThreadSummary } from "../../../../src/thread-summary.js";
 import type { Thread } from "../../src/protocol-client/index.js";
 import { App, WindowTitleBar } from "../../src/renderer/src/App.js";
 import { AuxiliaryPanel } from "../../src/renderer/src/auxiliary-panel.js";
@@ -52,6 +53,12 @@ if (emptyProjectScene) {
     );
   localStorage.setItem("zenx.sidebar.expanded.projects", "true");
 }
+const childQuestionScene =
+  params.get("scene") === "reading" && params.get("childQuestions") === "1";
+const childQuestionData = childQuestionScene
+  ? createChildQuestionData(summary)
+  : null;
+const questionListeners = new Set<(method: string, params: unknown) => void>();
 const readingScene = params.get("scene") === "reading";
 const resultScene = readingScene && params.get("results") === "1";
 const codeWrapScene = readingScene && params.get("codeWrap") === "1";
@@ -112,7 +119,7 @@ let compactions = 0;
 let previewTabs: import("../../src/main/workspace-browser.js").WorkspaceBrowserTab[] =
   [];
 
-const sideConversations = [
+const sideConversations = childQuestionData?.rows ?? [
   {
     ...summary("design-child", rails?.children[0] ?? "Design review"),
     parentThreadId: "thread-1",
@@ -323,7 +330,13 @@ const zenx = {
     ) =>
       readingApprovalFixture?.onApprovalResolved(listener) ?? (() => undefined),
     onStatus: () => () => undefined,
-    onNotification: () => () => undefined,
+    onNotification: (listener: (method: string, params: unknown) => void) => {
+      if (!childQuestionScene) return () => undefined;
+      questionListeners.add(listener);
+      return () => {
+        questionListeners.delete(listener);
+      };
+    },
   },
   threads: {
     list: async ({ archived }: { archived: boolean }) =>
@@ -345,7 +358,9 @@ const zenx = {
                   },
                 ]
               : []),
-            ...(params.has("conversationTabs") ? sideConversations : []),
+            ...(params.has("conversationTabs") || childQuestionScene
+              ? sideConversations
+              : []),
           ],
   },
   imageAttachments: {
@@ -379,7 +394,7 @@ const zenx = {
               isDefault: true,
               threadIds: [
                 "thread-1",
-                ...(params.has("conversationTabs")
+                ...(params.has("conversationTabs") || childQuestionScene
                   ? sideConversations.map((entry) => entry.threadId)
                   : []),
               ],
@@ -437,6 +452,13 @@ const zenx = {
       profile: {
         onboardingComplete: true,
         pinnedThreadIds: [],
+        ...(childQuestionData
+          ? {
+              visibleSubagentThreadIds: childQuestionData.rows.map(
+                (row) => row.threadId,
+              ),
+            }
+          : {}),
         ...(emptyProjectScene
           ? { sidebarOrder: { pinnedProjectKeys: ["/work/design-system"] } }
           : {}),
@@ -458,6 +480,13 @@ const zenx = {
         profile: {
           onboardingComplete: true,
           pinnedThreadIds: [],
+          ...(childQuestionData
+            ? {
+                visibleSubagentThreadIds: childQuestionData.rows.map(
+                  (row) => row.threadId,
+                ),
+              }
+            : {}),
           ...(emptyProjectScene
             ? { sidebarOrder: { pinnedProjectKeys: ["/work/design-system"] } }
             : {}),
@@ -792,6 +821,27 @@ Object.assign(window, {
   __uiPolishTelemetry: uiPolishTelemetry,
   __sideChatFixture: sideChatFixture,
 });
+if (childQuestionData) {
+  let watermark = 0;
+  Object.assign(window, {
+    __childQuestionFixture: {
+      clear() {
+        const receipt = childQuestionData.clear();
+        for (const threadId of receipt.threadIds) {
+          const event = {
+            processEpoch: "synthetic-child-question-host",
+            threadId,
+            watermark: ++watermark,
+            event: { type: "user_question_attention_invalidated", threadId },
+          } satisfies import("../../src/protocol-client/index.js").ServerNotificationParams["zen/thread/event"];
+          for (const listener of questionListeners)
+            listener("zen/thread/event", event);
+        }
+        return { ...receipt, listenerCount: questionListeners.size, watermark };
+      },
+    },
+  });
+}
 if (readingApprovalFixture)
   Object.assign(window, {
     __readingApprovalFixture: {
@@ -967,7 +1017,7 @@ function AuxiliaryFixture() {
 function summary(
   threadId = "thread-1",
   name = rails?.thread ?? "Thread one",
-): NativeThreadSummary {
+): ThreadSummary {
   return {
     threadId,
     currentMetadata: {

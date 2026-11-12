@@ -1,3 +1,4 @@
+import { captureChildQuestions } from "./child-question-main-ui-preview.mjs";
 import { captureEmptyProjects } from "./empty-project-main-ui-preview.mjs";
 import { captureResultReading } from "./result-reading-main-ui-preview.mjs";
 import { captureCodeWrap } from "./code-wrap-main-ui-preview.mjs";
@@ -661,6 +662,16 @@ export async function captureDesktopReading({
       "New request does not take focus from Composer",
     );
     assert.match(newer.approvalScopeText, /once|one.time|this call/i);
+    await captureChildQuestions({
+      send,
+      evaluate,
+      wait,
+      click,
+      capture,
+      evidence,
+      options,
+      url,
+    });
     await captureEmptyProjects({
       send,
       evaluate,
@@ -716,6 +727,12 @@ export async function captureDesktopReading({
 }
 
 export const readingPaths = [
+  "apps/zenx/src/renderer/src/subagents-ui.tsx",
+  "apps/zenx/src/renderer/src/subagents.css",
+  "apps/zenx/test/subagents-ui.test.ts",
+  "apps/zenx/scripts/child-question-main-ui-preview.mjs",
+  "apps/zenx/test/fixtures/child-question-data.ts",
+  "apps/zenx/test/child-question-main-ui-preview.test.ts",
   "apps/zenx/scripts/empty-project-main-ui-preview.mjs",
   "apps/zenx/test/empty-project-main-ui-preview.test.mjs",
   "apps/zenx/scripts/result-reading-main-ui-preview.mjs",
