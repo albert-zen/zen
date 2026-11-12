@@ -10745,6 +10745,7 @@ button:disabled {
 .thread-row-shell {
   --thread-state-space: 0px;
   --thread-shortcut-space: 0px;
+  --thread-menu-action-width: 28px;
   --thread-row-surface: var(--color-surface-sidebar);
   border-radius: 10px;
 }
@@ -10863,7 +10864,7 @@ button:disabled {
 .thread-row-shell:is(:hover, :focus-within, [data-menu-open="true"])
   .thread-status-rail
   .thread-menu-trigger {
-  width: 28px;
+  width: var(--thread-menu-action-width);
   visibility: visible;
   opacity: 1;
   pointer-events: auto;
@@ -13536,5 +13537,40 @@ button:disabled {
     white-space: normal;
     overflow-wrap: anywhere;
     max-width: 100%;
+  }
+}
+
+/* Preserve factual question attention when fine-pointer actions become visible.
+   Allocated menu space replaces the fade only on these interacting rows. */
+@media (min-width: 961px) and (hover: hover) and (pointer: fine) {
+  .thread-row-shell:has(> .thread-row .thread-asking-badge):is(
+      :hover,
+      :focus-within,
+      [data-menu-open="true"]
+    )
+    > .thread-row {
+    padding-inline-end: calc(
+      10px + var(--thread-state-space, 0px) + var(--thread-shortcut-space) +
+        var(--thread-menu-action-width)
+    );
+  }
+  .thread-row-shell:has(> .thread-row .thread-asking-badge):is(
+      :hover,
+      :focus-within,
+      [data-menu-open="true"]
+    )
+    > .thread-status-rail {
+    padding-inline-start: 0;
+    background: transparent;
+  }
+  @media (forced-colors: active) {
+    .thread-row-shell:has(> .thread-row .thread-asking-badge):is(
+        :hover,
+        :focus-within,
+        [data-menu-open="true"]
+      )
+      > .thread-status-rail {
+      background: Canvas;
+    }
   }
 }
