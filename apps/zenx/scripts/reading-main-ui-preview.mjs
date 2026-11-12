@@ -367,6 +367,103 @@ export async function scrollReadingTo({
   throw Error(`Native reading scroll did not reach ${target ?? "top"}`);
 }
 
+/** Verify the existing full-name route; no new product tooltip or DOM mutation. */
+export function verifySidebarName(state, expected, { keyboard = false } = {}) {
+  assert.equal(
+    state.text,
+    expected,
+    "The displayed detail contains the complete name",
+  );
+  assert(state.visible && !state.clipped, "Full name fits the visible popover");
+  if (keyboard)
+    assert(state.focusVisible, "Native keyboard focus remains visible");
+}
+
+export async function captureSidebarNames({
+  send,
+  evaluate,
+  wait,
+  capture,
+  evidence,
+  options,
+}) {
+  const row = '.project-group [data-thread-id="thread-1"] .thread-row';
+  const title = ".thread-information-title > span";
+  const project = ".project-group .project-more-trigger";
+  const full = await evaluate(
+    `({thread:document.querySelector(${JSON.stringify(row)} + ' .thread-title > span:first-child').textContent.trim(),project:document.querySelector('.project-group .project-toggle > span').textContent.trim()})`,
+  );
+  const key = (name, code, value) =>
+    dispatchNavigationKey(send, name, code, value);
+  const tabTo = async (selector) => {
+    for (let i = 0; i < 100; i++) {
+      await key("Tab", "Tab", 9);
+      if (
+        await evaluate(
+          `document.activeElement?.matches(${JSON.stringify(selector)})`,
+        )
+      )
+        return;
+    }
+    throw Error(`Native Tab did not reach ${selector}`);
+  };
+  const record = async (step, selector, expected, keyboard = false) => {
+    await wait(`!!document.querySelector(${JSON.stringify(selector)})`);
+    const state = await evaluate(`(() => {
+      const e=document.querySelector(${JSON.stringify(selector)}), r=e.getBoundingClientRect();
+      const focused=document.activeElement;
+      return {text:e.textContent.trim(),visible:r.width>0&&r.height>0&&r.x>=0&&r.y>=0&&r.right<=innerWidth&&r.bottom<=innerHeight,
+        clipped:e.scrollWidth>e.clientWidth+1||e.scrollHeight>e.clientHeight+1,
+        focusVisible:!!focused?.matches(':focus-visible'),focusedClass:focused?.className,
+        rect:{x:r.x,y:r.y,width:r.width,height:r.height},
+        selected:document.querySelector('.project-group .thread-row[aria-current="page"]')?.closest('[data-thread-id]')?.dataset.threadId};
+    })()`);
+    (evidence.sidebarNameCases ??= []).push({
+      step,
+      theme: options.theme,
+      ...state,
+    });
+    verifySidebarName(state, expected, { keyboard });
+    assert.equal(
+      state.selected,
+      "thread-1",
+      "Reading a name does not select a different conversation",
+    );
+    await capture(`reading-${options.name}-${step}`, options, "reading");
+  };
+  const point = await evaluate(
+    `(() => {const r=document.querySelector(${JSON.stringify(row)}).getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`,
+  );
+  await send("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  await record("long-name-hover", title, full.thread);
+  await send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: 700,
+    y: 200,
+  });
+  await tabTo(row);
+  await record("long-name-keyboard", title, full.thread, true);
+  await key("ArrowRight", "ArrowRight", 39);
+  await record("long-name-details-focus", title, full.thread, true);
+  await key("Escape", "Escape", 27);
+  await wait(
+    `!document.querySelector('.thread-information') && document.activeElement?.matches(${JSON.stringify(row)})`,
+  );
+  await tabTo(project);
+  await key("Enter", "Enter", 13);
+  await record(
+    "long-project-keyboard",
+    ".project-menu-summary > strong",
+    full.project,
+    true,
+  );
+  await key("Escape", "Escape", 27);
+  await wait(
+    `!document.querySelector('.project-menu') && document.activeElement?.matches(${JSON.stringify(project)})`,
+  );
+}
+
 export async function captureDesktopReading({
   send,
   evaluate,
@@ -458,6 +555,15 @@ export async function captureDesktopReading({
         "Array.from(document.querySelectorAll('.information-widget')).filter(e => !e.hidden && e.getBoundingClientRect().height > 0).length >= 2",
       );
       await save(`supporting-rails-${rails}`, { information: true });
+      if (rails === "long")
+        await captureSidebarNames({
+          send,
+          evaluate,
+          wait,
+          capture,
+          evidence,
+          options,
+        });
     }
     const pendingUrl = new URL(url);
     pendingUrl.searchParams.set("pending", "1");
