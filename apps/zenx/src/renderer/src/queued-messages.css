@@ -1,0 +1,811 @@
+.queue-shelf {
+  width: 100%;
+  max-width: var(--conversation-width);
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 6px auto -1px;
+  width: calc(100% - 16px);
+  max-width: calc(var(--conversation-width) - 16px);
+  /* Keep the layout footprint, but read as a quiet shelf above the input. */
+  border: 1px solid var(--color-border-subtle);
+  border-bottom: 0;
+  border-radius: 12px 12px 0 0;
+  background: var(--color-surface-inset);
+  box-shadow: none;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+  line-height: 1.5;
+}
+
+.queue-shelf + .composer {
+  border-top-left-radius: 12px;
+  border-top-right-radius: 12px;
+}
+
+.queue-shelf-header,
+.queue-shelf-actions {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.queue-shelf-header {
+  flex: 0 0 auto;
+  justify-content: space-between;
+  gap: 4px;
+  min-height: 36px;
+  padding: 0 6px;
+}
+
+.queue-shelf:where(:not(.steer-shelf)) button,
+.queue-reading-return button,
+.steer-shelf button:where(:not(.image-thumbnail)) {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.queue-shelf button:disabled {
+  cursor: default;
+  color: var(--color-text-disabled);
+}
+
+.queue-shelf button:focus-visible,
+.queue-reading-return button:focus-visible,
+.queue-preview:focus-visible,
+.queue-row-error:focus-visible,
+.queue-shelf-details:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: -2px;
+  border-radius: var(--radius-control);
+}
+
+.queue-shelf-toggle,
+.queue-header-action,
+.queue-view-all {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 8px;
+  border-radius: var(--radius-control);
+}
+
+.queue-shelf-toggle {
+  justify-content: flex-start;
+  white-space: nowrap;
+  font-weight: 500 !important;
+}
+
+.queue-header-action {
+  white-space: nowrap;
+}
+
+.queue-resume {
+  color: var(--color-text-primary) !important;
+}
+
+.queue-resume:disabled {
+  color: var(--color-text-muted) !important;
+}
+
+.queue-shelf.is-open .queue-shelf-chevron,
+.queue-preview.is-expanded .queue-preview-chevron,
+.queue-view-all[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.queue-shelf-details {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: min(252px, calc(30dvh + 36px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scroll-padding: 4px;
+}
+
+.queue-shelf-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 8px 4px;
+}
+
+.queue-row {
+  margin: 0;
+  padding: 0;
+}
+
+.queue-row + .queue-row {
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.queue-row-main {
+  display: flex;
+  align-items: flex-start;
+  min-height: 44px;
+  gap: 4px;
+}
+
+.queue-row-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.queue-row-content.has-images > .queue-preview {
+  padding-bottom: 4px;
+}
+
+.queue-preview {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  padding: 10px 8px;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-body);
+  line-height: 1.55;
+}
+
+.queue-preview.is-expandable {
+  padding-right: 24px;
+  cursor: pointer;
+}
+
+.queue-preview-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.queue-preview.is-expanded .queue-preview-text {
+  display: block;
+  overflow: visible;
+  -webkit-line-clamp: unset;
+}
+
+.queue-preview-chevron {
+  position: absolute;
+  top: 15px;
+  right: 5px;
+  color: var(--color-text-muted);
+}
+
+.queue-images {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+}
+
+.queue-image-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 0 8px 8px;
+}
+
+.queue-image-strip.is-only-content {
+  padding-top: 0;
+  padding-bottom: 6px;
+}
+
+.queue-image-gallery {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.queue-image-gallery .image-thumbnail,
+.queue-image-gallery .queue-images-more {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  background: var(--color-surface-inset);
+}
+
+.queue-image-gallery .image-placeholder {
+  min-height: 0;
+  height: 100%;
+  padding: 2px;
+  font-size: var(--font-size-caption);
+  line-height: 1.05;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.queue-image-gallery .queue-images-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.queue-images-more[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.queue-image-unavailable {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+  overflow-wrap: anywhere;
+}
+
+.queue-images.is-only-content {
+  margin-top: 0;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-body);
+}
+
+.queue-row-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+}
+
+.queue-row-steer,
+.queue-row-edit,
+.queue-row-move,
+.queue-row-cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 8px;
+  border-radius: var(--radius-control);
+  color: var(--color-text-muted) !important;
+}
+
+.queue-row-edit:disabled,
+.queue-row-cancel:disabled,
+.queue-row-move:disabled {
+  color: var(--color-text-disabled) !important;
+}
+
+.queue-row-edit.is-pending,
+.queue-row-cancel.is-pending {
+  white-space: nowrap;
+  color: var(--color-text-secondary) !important;
+}
+
+/* Approval coexists with a single 44px reading lane. Put a complete thumbnail
+   alongside the text/count instead of leaving a clipped strip below it. */
+.queue-shelf.is-compact .queue-row-content.has-images {
+  display: flex;
+  align-items: flex-start;
+}
+
+.queue-shelf.is-compact .queue-row-content.has-images > .queue-preview {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 6px 0 8px;
+}
+
+.queue-shelf.is-compact
+  .queue-row-content.has-images
+  > .queue-preview.is-expandable
+  .queue-preview-text {
+  padding-right: 14px;
+}
+
+.queue-shelf.is-compact .queue-preview-chevron {
+  top: 4px;
+}
+
+.queue-shelf.is-compact .queue-images {
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.queue-shelf.is-compact .queue-images > svg {
+  flex: 0 0 auto;
+}
+
+.queue-shelf.is-compact
+  .queue-row-content.has-images
+  > .queue-preview:not(.is-expanded)
+  .queue-preview-text {
+  -webkit-line-clamp: 1;
+}
+
+.queue-shelf.is-compact .queue-image-strip {
+  flex: 0 0 auto;
+  max-width: 94px;
+  padding: 0;
+}
+
+.queue-shelf.is-compact .queue-image-gallery {
+  max-width: 94px;
+}
+
+.queue-view-all {
+  display: flex;
+  width: calc(100% - 16px);
+  min-height: 36px;
+  margin: 0 8px;
+}
+
+.queue-row-error,
+.queue-resume-error {
+  margin: 0;
+  padding: 4px 8px 10px;
+  color: var(--color-status-danger);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.queue-resume-error {
+  padding-inline: 16px;
+  max-height: 76px;
+  overflow-y: auto;
+}
+
+.queue-hidden-failure {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  min-height: 44px;
+  padding: 4px 16px 10px;
+  color: var(--color-status-danger) !important;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.queue-hidden-failure svg {
+  flex: 0 0 auto;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .queue-shelf button:not(:disabled):hover,
+  .queue-preview.is-expandable:hover {
+    background: var(--color-surface-hover);
+    border-radius: var(--radius-control);
+  }
+}
+
+@media (pointer: coarse) {
+  .queue-view-all {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 480px) {
+  .queue-shelf-header {
+    padding-inline: 4px;
+    gap: 0;
+  }
+
+  .queue-header-action,
+  .queue-shelf-toggle {
+    padding-inline: 6px;
+  }
+
+  .queue-shelf-details {
+    max-height: min(212px, calc(28dvh + 36px));
+  }
+}
+
+@media (forced-colors: active) {
+  .queue-row-edit,
+  .queue-row-cancel {
+    opacity: 1 !important;
+  }
+}
+
+.queue-row-steer {
+  white-space: nowrap;
+  color: var(--color-text-primary) !important;
+}
+.queue-row-steer:disabled {
+  color: var(--color-text-disabled) !important;
+}
+.queue-row-steer.is-pending {
+  font-size: var(--font-size-caption);
+  white-space: nowrap;
+}
+.queue-shelf-toggle {
+  min-height: 36px;
+  font-size: var(--font-size-caption);
+}
+.queue-shelf .queue-preview {
+  font-size: var(--font-size-caption);
+  padding-block: 8px;
+}
+.queue-shelf .thread-message-sender {
+  display: inline;
+  color: var(--color-text-muted);
+}
+.queue-row-main {
+  align-items: center;
+}
+@media (max-width: 480px) {
+  .queue-shelf {
+    width: calc(100% - 8px);
+  }
+  .queue-row-main {
+    gap: 0;
+  }
+  .queue-row-actions {
+    gap: 0;
+  }
+}
+
+/* Reuse the reference outbox's visible, right-aligned message bubbles while
+   keeping the shared Queue shelf, theme tokens and 44px control targets. */
+.steer-shelf .queue-shelf-toggle {
+  min-width: 0;
+  min-height: 44px;
+  white-space: normal;
+}
+.steer-shelf .mini-spinner {
+  flex: 0 0 13px;
+}
+.steer-shelf .queue-shelf-header {
+  flex-wrap: wrap;
+}
+.steer-shelf {
+  width: 100%;
+  max-width: var(--conversation-width);
+  border-inline: 0;
+}
+.steer-shelf-details {
+  --steer-column-left: 0px;
+  --steer-column-width: 100%;
+  position: relative;
+  left: var(--steer-column-left);
+  width: var(--steer-column-width);
+  scrollbar-gutter: auto;
+  scrollbar-width: thin;
+  max-height: min(196px, 32dvh);
+}
+.steer-shelf-details[hidden] {
+  display: none;
+}
+.steer-shelf-details > ol {
+  display: grid;
+  gap: 6px;
+  justify-items: end;
+  padding: 0 0 10px;
+}
+.steer-shelf-row {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  overflow-wrap: anywhere;
+}
+.steer-shelf-row + .steer-shelf-row {
+  border: 0;
+}
+.steer-shelf-notice,
+.steer-shelf > p,
+.steer-shelf > [role="status"] {
+  margin: 0;
+  padding: 0 14px 9px;
+}
+.steer-shelf > .steer-recovery {
+  padding: 8px 14px;
+}
+.pending-steer-panel summary {
+  cursor: pointer;
+}
+.queue-shelf + .steer-shelf {
+  border-radius: 0;
+  margin-top: 0;
+}
+.steer-recovery > div {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.steer-recovery > div > p {
+  flex-basis: 100%;
+}
+
+.pending-steer-panel button:disabled {
+  cursor: default;
+  color: var(--color-text-disabled);
+}
+.pending-steer-panel button:focus-visible,
+.pending-steer-panel summary:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.pending-steer-text {
+  overflow-wrap: anywhere;
+}
+.pending-steer-message > .pending-steer-text {
+  display: block;
+  margin-top: 4px;
+}
+
+.pending-steer-images {
+  align-items: flex-start;
+}
+
+/* Unknown-outcome and recovery actions remain distinct, keyboard-visible controls. */
+.steer-shelf > button,
+.steer-recovery button {
+  min-height: 44px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-control);
+}
+.steer-shelf > button {
+  align-self: flex-start;
+  margin: 0 14px 8px;
+}
+
+/* One bounded pending area. The groups below never create their own scrollbars. */
+.pending-tray {
+  position: relative;
+  left: var(--pending-tray-left, 0px);
+  width: var(--pending-tray-width, 100%);
+  flex: 0 0 auto;
+  min-width: 0;
+  min-height: 0;
+  max-height: min(240px, 30dvh);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 12px;
+  background: var(--color-surface-inset);
+  /* The outer gutter uses the existing conversation padding, rather than
+     enlarging the bottom-zone's scrollable margin box. */
+  margin: 6px calc(0px - var(--pending-tray-gutter, 0px)) 6px 0;
+}
+.pending-tray:empty {
+  display: none;
+}
+/* A bounded pending list must advertise its hidden rows before interaction.
+   Native auto overflow supplies the thumb only when content actually overflows;
+   keep the shared thin, trackless geometry and the global auto-hide elsewhere. */
+.pending-tray,
+:root[data-scrollbar-autohide] .pending-tray {
+  scrollbar-color: var(--color-text-muted) transparent;
+}
+@media (forced-colors: active) {
+  .pending-tray,
+  :root[data-scrollbar-autohide] .pending-tray {
+    scrollbar-color: auto;
+  }
+}
+.pending-tray > .queue-shelf {
+  width: 100%;
+  max-width: none;
+  flex: none;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.pending-tray > .queue-shelf ~ .queue-shelf {
+  border-top: 1px solid var(--color-border-subtle);
+}
+.pending-tray .queue-shelf-details {
+  min-height: 0;
+  max-height: none;
+  overflow: visible;
+  scrollbar-gutter: auto;
+}
+.pending-tray .steer-shelf-details {
+  left: 0;
+  width: 100%;
+}
+.pending-tray .queue-shelf-list {
+  padding: 0 0 6px;
+}
+.pending-tray .queue-shelf-header {
+  /* Keep delivery timing attached to the group while keyboard focus scrolls. */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--color-surface-inset);
+  min-height: 32px;
+  flex-wrap: wrap;
+}
+.pending-tray .queue-shelf-toggle,
+.pending-tray .queue-header-action {
+  min-height: 32px;
+}
+.pending-tray .pending-send-row {
+  margin: 0;
+  padding: 8px 12px;
+}
+.pending-tray .pending-send-status,
+.pending-tray .pending-send-recovery p {
+  margin: 4px 0;
+}
+.pending-tray .pending-send-check-feedback {
+  margin-top: var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-label);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.pending-tray .pending-send-check-feedback[data-check-state="failed"] {
+  color: var(--color-status-danger);
+}
+.pending-tray .pending-send-recovery,
+.pending-tray .pending-send-recovery pre,
+.pending-tray .queue-resume-error {
+  max-height: none;
+  overflow: visible;
+}
+@media (pointer: coarse) {
+  .pending-tray .queue-shelf-toggle,
+  .pending-tray .queue-header-action {
+    min-height: 44px;
+  }
+}
+.pending-tray .queue-row-main {
+  align-items: flex-start;
+}
+.pending-tray .queue-message-body {
+  margin: 0;
+  padding: 6px 0;
+  gap: 4px;
+}
+.pending-tray .user-bubble {
+  max-width: 100%;
+  font-size: var(--font-size-caption);
+  padding: 7px 10px;
+}
+.pending-tray .queue-image-strip {
+  padding: 0;
+}
+.pending-tray .queue-image-gallery {
+  justify-content: flex-end;
+}
+.pending-tray .queue-row-actions {
+  padding-top: 4px;
+  flex-wrap: wrap;
+  max-width: 152px;
+  justify-content: flex-end;
+}
+@media (max-width: 480px) {
+  .pending-tray .queue-row-main {
+    flex-direction: column;
+  }
+  .pending-tray .queue-row-content,
+  .pending-tray .queue-row-actions {
+    width: 100%;
+  }
+  .pending-tray .queue-row-actions {
+    max-width: none;
+    padding-top: 0;
+    gap: 4px;
+  }
+}
+/* Use available height in tall narrow windows, not when a keyboard or short
+   viewport needs that space for the Composer and approval decisions. */
+@media (max-width: 480px) and (min-height: 700px) {
+  .pending-tray {
+    max-height: min(360px, 40dvh);
+  }
+}
+.queue-move-up {
+  transform: rotate(180deg);
+}
+.pending-tray .queue-mutation-status {
+  padding: 6px 12px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+  overflow-wrap: anywhere;
+}
+.pending-tray .queue-mutation-status p {
+  margin: 0 0 4px;
+}
+.pending-tray .queue-mutation-status pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (pointer: fine) {
+  .pending-tray .queue-row-actions button {
+    min-width: 28px;
+    min-height: 28px;
+    padding: 4px;
+  }
+}
+
+/* Focus scrolling must leave room for the sticky group heading. */
+.pending-tray {
+  scroll-padding-block-start: 64px;
+}
+
+/* A visible Send now label must not strand Cancel on a second desktop row.
+   Keep wrapping available for long localized pending-status labels. */
+@media (pointer: fine) and (min-width: 481px) {
+  .pending-tray .queue-row-actions {
+    max-width: 192px;
+  }
+}
+
+/* Desktop-only, explicit reading space; never resize the Composer or split the
+   existing pending groups into independent scrolling regions. */
+.queue-shelf .queue-reading-toggle {
+  display: none;
+}
+@media (min-width: 961px) {
+  .queue-shelf .queue-reading-toggle {
+    display: inline-flex;
+  }
+  .pending-tray:has(> .queue-shelf[data-reading-expanded="true"]) {
+    max-height: min(480px, 55dvh);
+    /* The bottom zone reserves a conversation lane. Its Composer and return
+       are fixed-size siblings; only the message viewport yields when their
+       combined height reaches that existing cap. */
+    flex-shrink: 1;
+  }
+}
+
+/* End-of-reading return lives outside the tray scroller, without overlay.
+   Empty hosts have no box, so the collapsed layout is unchanged.
+   End-of-reading return: ordinary reverse Tab from the Composer reaches this
+   before individual message actions. No actions are removed from tab order. */
+.queue-reading-return {
+  display: none;
+}
+@media (min-width: 961px) {
+  .queue-reading-return {
+    display: flex;
+    justify-content: flex-end;
+    padding: 0 10px;
+    min-height: 32px;
+  }
+}
+
+.queue-reading-return-host:empty {
+  display: none;
+}
+
+.queue-reading-return-host {
+  display: none;
+  flex: 0 0 auto;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+  line-height: 1.5;
+}
+@media (min-width: 961px) {
+  .queue-reading-return-host:not(:empty) {
+    display: block;
+  }
+}
+@media (min-width: 961px) and (pointer: fine) {
+  .queue-reading-return .queue-header-action {
+    min-height: 32px;
+  }
+}

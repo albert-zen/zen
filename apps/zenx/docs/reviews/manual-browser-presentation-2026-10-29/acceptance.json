@@ -1,0 +1,69 @@
+{
+  "accepted_source_commit": "734137ff36e60cc4fee7b5587f7295ec35efd617",
+  "public_source_commit": "066b1752749d294ebaa7bb42e3f2966c14c22c34",
+  "source_tree": "12c832321f1983834ae9441e0821802659f9ff7d",
+  "capture_window_utc": "2026-10-29, approximately 10:37\u201310:39 UTC (operator-reported window, not per-image timestamps)",
+  "capture_method": "Cloud-browser CUA screenshots following visible fixture-control interactions; original JPEG bytes copied without modification.",
+  "operator": "root acceptance reviewer",
+  "secondary_review": "Integration reviewer inspected all five supplied images before archiving.",
+  "scope": "Actual production renderer components; all catalogs, target frames, activity, owners and native mount counters are synthetic. No user machine, real browser/account/profile, native provider/input or model API.",
+  "observed_interactions": [
+    "Initial Browser and Computer catalogs remain unselected; Browser no-selection sentence appears once.",
+    "Explicit page A/window A choices persist across B activity and selected-frame updates.",
+    "Retiring selected A identities shows unavailable without selecting B or displaying contradictory no-selection text.",
+    "Two Reference actions and one Draft inspection mark only exact built-in tab glyphs while Notes remains selected.",
+    "Settling one of two Reference actions keeps its glyph marked; human takeover safety text remains in the existing permission tooltip and accessible description, without an extra status row.",
+    "Final settlement clears activity glyphs while actual human control and settled unknown-outcome warning remain.",
+    "Closing workspace then emitting new Draft activity and late other-owner activity leaves workspace closed.",
+    "In the real browser fixture, the interactive viewport element stayed at x=18, y=310, width=357, height=430 across Agent-allowed two actions, human-controlled one action, and settled unknown outcome."
+  ],
+  "image_limit": "Screenshots capture selected end states; intermediate click results above are operator observations, not additional captured images.",
+  "screenshots": [
+    {
+      "file": "builtin-background-icons-light.jpg",
+      "width": 1180,
+      "height": 757,
+      "sha256": "f4e0dfe0b68dd40d5c45c1ffa4a2ccd7345c75f55c7a82349d3702044281a4a7"
+    },
+    {
+      "file": "builtin-settled-human-control-dark.jpg",
+      "width": 1180,
+      "height": 757,
+      "sha256": "51978a6fa69f3e908f9d71d7799813968cbe45260088e312a02cdca8450a4557"
+    },
+    {
+      "file": "manual-targets-retained-light.jpg",
+      "width": 1180,
+      "height": 757,
+      "sha256": "efaa331414caceaa1215a264e497ba3026bbc177f13b20d90976d345b33fbed7"
+    },
+    {
+      "file": "manual-targets-unavailable-light.jpg",
+      "width": 1180,
+      "height": 757,
+      "sha256": "239117ffe47ea500a0fbdbf6caa238e9dd764d5db47a3d14553eea606b608a12"
+    },
+    {
+      "file": "manual-targets-unselected-light.jpg",
+      "width": 1180,
+      "height": 757,
+      "sha256": "2fb578ad2d981a6fd0b0cc12e47733bea2e8cc0b7a089010733052e5777f50c6"
+    }
+  ],
+  "native_validation": "No local native Electron run was performed. These browser screenshots do not establish native WebContents/CDP/OS-input or real-account behavior. Separate hosted native-step evidence is recorded in validation.json.",
+  "geometry": {
+    "scope": "production viewport DOM element in synthetic cloud-browser fixture, not a mounted native WebContentsView",
+    "rectangle_css_px": {
+      "x": 18,
+      "y": 310,
+      "width": 357,
+      "height": 430
+    },
+    "states": [
+      "agent-allowed, two actions",
+      "human-controlled, one action",
+      "settled, unknown outcome"
+    ],
+    "unchanged": true
+  }
+}

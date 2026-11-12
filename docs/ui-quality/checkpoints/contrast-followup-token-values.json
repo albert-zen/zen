@@ -1,0 +1,326 @@
+[
+  {
+    "appearance": "light",
+    "theme-preset": "graphite",
+    "accent": "azure",
+    "contrast": "standard",
+    "selected_description_ratio": 6.381905878944642,
+    "error_on_surface_ratio": 5.152753991806194,
+    "error_on_surface-main_ratio": 4.9077299339007885
+  },
+  {
+    "appearance": "light",
+    "theme-preset": "graphite",
+    "accent": "azure",
+    "contrast": "high",
+    "selected_description_ratio": 6.381905878944642,
+    "error_on_surface_ratio": 5.152753991806194,
+    "error_on_surface-main_ratio": 4.9077299339007885
+  },
+  {
+    "appearance": "light",
+    "theme-preset": "graphite",
+    "accent": "iris",
+    "contrast": "standard",
+    "selected_description_ratio": 6.293176597618239,
+    "error_on_surface_ratio": 5.152753991806194,
+    "error_on_surface-main_ratio": 4.9077299339007885
+  },
+  {
+    "appearance": "light",
+    "theme-preset": "graphite",
+    "accent": "iris",
+    "contrast": "high",
+    "selected_description_ratio": 6.293176597618239,
+    "error_on_surface_ratio": 5.152753991806194,
+    "error_on_surface-main_ratio": 4.9077299339007885
+  },
+  {
+    "appearance": "light",
+    "theme-preset": "graphite",
+    "accent": "jade",
+    "contrast": "standard",
+    "selected_description_ratio": 6.302299998967248,
+    "error_on_surface_ratio": 5.152753991806194,
+    "error_on_surface-main_ratio": 4.9077299339007885
+  },
+  {
+    "appearance": "light",
+    "theme-preset": "graphite",
+    "accent": "jade",
+    "contrast": "high",
+    "selected_description_ratio": 6.302299998967248,
+    "error_on_surface_ratio": 5.152753991806194,
+    "error_on_surface-main_ratio": 4.9077299339007885
+  },
+  {
+    "appearance": "light",
+    "theme-preset": "cobalt",
+    "accent": "azure",
+    "contrast": "standard",
+    "selected_description_ratio": 6.271191462928777,
+    "error_on_surface_ratio": 5.1824430559216115,
+    "error_on_surface-main_ratio": 4.962364901458525
+  },
+  {
+    "appearance": "light",
+    "theme-preset": "cobalt",
+    "accent": "azure",
+    "contrast": "high",
+    "selected_description_ratio": 6.271191462928777,
+    "error_on_surface_ratio": 5.1824430559216115,
+    "error_on_surface-main_ratio": 4.962364901458525
+  },
+  {
+    "appearance": "light",
+    "theme-preset": "cobalt",
+    "accent": "iris",
+    "contrast": "standard",
+    "selected_description_ratio": 6.183767830654309,
+    "error_on_surface_ratio": 5.1824430559216115,
+    "error_on_surface-main_ratio": 4.962364901458525
+  },
+  {
+    "appearance": "light",
+    "theme-preset": "cobalt",
+    "accent": "iris",
+    "contrast": "high",
+    "selected_description_ratio": 6.183767830654309,
+    "error_on_surface_ratio": 5.1824430559216115,
+    "error_on_surface-main_ratio": 4.962364901458525
+  },
+  {
+    "appearance": "light",
+    "theme-preset": "cobalt",
+    "accent": "jade",
+    "contrast": "standard",
+    "selected_description_ratio": 6.1936186473228885,
+    "error_on_surface_ratio": 5.1824430559216115,
+    "error_on_surface-main_ratio": 4.962364901458525
+  },
+  {
+    "appearance": "light",
+    "theme-preset": "cobalt",
+    "accent": "jade",
+    "contrast": "high",
+    "selected_description_ratio": 6.1936186473228885,
+    "error_on_surface_ratio": 5.1824430559216115,
+    "error_on_surface-main_ratio": 4.962364901458525
+  },
+  {
+    "appearance": "light",
+    "theme-preset": "ember",
+    "accent": "azure",
+    "contrast": "standard",
+    "selected_description_ratio": 7.125954895251712,
+    "error_on_surface_ratio": 5.1019597040038,
+    "error_on_surface-main_ratio": 5.009613083357467
+  },
+  {
+    "appearance": "light",
+    "theme-preset": "ember",
+    "accent": "azure",
+    "contrast": "high",
+    "selected_description_ratio": 7.125954895251712,
+    "error_on_surface_ratio": 5.1019597040038,
+    "error_on_surface-main_ratio": 5.009613083357467
+  },
+  {
+    "appearance": "light",
+    "theme-preset": "ember",
+    "accent": "iris",
+    "contrast": "standard",
+    "selected_description_ratio": 7.028916163150271,
+    "error_on_surface_ratio": 5.1019597040038,
+    "error_on_surface-main_ratio": 5.009613083357467
+  },
+  {
+    "appearance": "light",
+    "theme-preset": "ember",
+    "accent": "iris",
+    "contrast": "high",
+    "selected_description_ratio": 7.028916163150271,
+    "error_on_surface_ratio": 5.1019597040038,
+    "error_on_surface-main_ratio": 5.009613083357467
+  },
+  {
+    "appearance": "light",
+    "theme-preset": "ember",
+    "accent": "jade",
+    "contrast": "standard",
+    "selected_description_ratio": 7.036801893748754,
+    "error_on_surface_ratio": 5.1019597040038,
+    "error_on_surface-main_ratio": 5.009613083357467
+  },
+  {
+    "appearance": "light",
+    "theme-preset": "ember",
+    "accent": "jade",
+    "contrast": "high",
+    "selected_description_ratio": 7.036801893748754,
+    "error_on_surface_ratio": 5.1019597040038,
+    "error_on_surface-main_ratio": 5.009613083357467
+  },
+  {
+    "appearance": "dark",
+    "theme-preset": "graphite",
+    "accent": "azure",
+    "contrast": "standard",
+    "selected_description_ratio": 7.05851658767595,
+    "error_on_surface_ratio": 6.203757925023527,
+    "error_on_surface-main_ratio": 6.813741277257653
+  },
+  {
+    "appearance": "dark",
+    "theme-preset": "graphite",
+    "accent": "azure",
+    "contrast": "high",
+    "selected_description_ratio": 7.05851658767595,
+    "error_on_surface_ratio": 6.203757925023527,
+    "error_on_surface-main_ratio": 6.813741277257653
+  },
+  {
+    "appearance": "dark",
+    "theme-preset": "graphite",
+    "accent": "iris",
+    "contrast": "standard",
+    "selected_description_ratio": 6.899400656845957,
+    "error_on_surface_ratio": 6.203757925023527,
+    "error_on_surface-main_ratio": 6.813741277257653
+  },
+  {
+    "appearance": "dark",
+    "theme-preset": "graphite",
+    "accent": "iris",
+    "contrast": "high",
+    "selected_description_ratio": 6.899400656845957,
+    "error_on_surface_ratio": 6.203757925023527,
+    "error_on_surface-main_ratio": 6.813741277257653
+  },
+  {
+    "appearance": "dark",
+    "theme-preset": "graphite",
+    "accent": "jade",
+    "contrast": "standard",
+    "selected_description_ratio": 6.791555222126782,
+    "error_on_surface_ratio": 6.203757925023527,
+    "error_on_surface-main_ratio": 6.813741277257653
+  },
+  {
+    "appearance": "dark",
+    "theme-preset": "graphite",
+    "accent": "jade",
+    "contrast": "high",
+    "selected_description_ratio": 6.791555222126782,
+    "error_on_surface_ratio": 6.203757925023527,
+    "error_on_surface-main_ratio": 6.813741277257653
+  },
+  {
+    "appearance": "dark",
+    "theme-preset": "cobalt",
+    "accent": "azure",
+    "contrast": "standard",
+    "selected_description_ratio": 8.528947639188651,
+    "error_on_surface_ratio": 5.902715016906296,
+    "error_on_surface-main_ratio": 6.571232371390849
+  },
+  {
+    "appearance": "dark",
+    "theme-preset": "cobalt",
+    "accent": "azure",
+    "contrast": "high",
+    "selected_description_ratio": 8.528947639188651,
+    "error_on_surface_ratio": 5.902715016906296,
+    "error_on_surface-main_ratio": 6.571232371390849
+  },
+  {
+    "appearance": "dark",
+    "theme-preset": "cobalt",
+    "accent": "iris",
+    "contrast": "standard",
+    "selected_description_ratio": 8.370740425105486,
+    "error_on_surface_ratio": 5.902715016906296,
+    "error_on_surface-main_ratio": 6.571232371390849
+  },
+  {
+    "appearance": "dark",
+    "theme-preset": "cobalt",
+    "accent": "iris",
+    "contrast": "high",
+    "selected_description_ratio": 8.370740425105486,
+    "error_on_surface_ratio": 5.902715016906296,
+    "error_on_surface-main_ratio": 6.571232371390849
+  },
+  {
+    "appearance": "dark",
+    "theme-preset": "cobalt",
+    "accent": "jade",
+    "contrast": "standard",
+    "selected_description_ratio": 8.187299386398815,
+    "error_on_surface_ratio": 5.902715016906296,
+    "error_on_surface-main_ratio": 6.571232371390849
+  },
+  {
+    "appearance": "dark",
+    "theme-preset": "cobalt",
+    "accent": "jade",
+    "contrast": "high",
+    "selected_description_ratio": 8.187299386398815,
+    "error_on_surface_ratio": 5.902715016906296,
+    "error_on_surface-main_ratio": 6.571232371390849
+  },
+  {
+    "appearance": "dark",
+    "theme-preset": "ember",
+    "accent": "azure",
+    "contrast": "standard",
+    "selected_description_ratio": 8.078256788422035,
+    "error_on_surface_ratio": 6.1229737504818775,
+    "error_on_surface-main_ratio": 6.660102810844582
+  },
+  {
+    "appearance": "dark",
+    "theme-preset": "ember",
+    "accent": "azure",
+    "contrast": "high",
+    "selected_description_ratio": 8.078256788422035,
+    "error_on_surface_ratio": 6.1229737504818775,
+    "error_on_surface-main_ratio": 6.660102810844582
+  },
+  {
+    "appearance": "dark",
+    "theme-preset": "ember",
+    "accent": "iris",
+    "contrast": "standard",
+    "selected_description_ratio": 7.8642348214504265,
+    "error_on_surface_ratio": 6.1229737504818775,
+    "error_on_surface-main_ratio": 6.660102810844582
+  },
+  {
+    "appearance": "dark",
+    "theme-preset": "ember",
+    "accent": "iris",
+    "contrast": "high",
+    "selected_description_ratio": 7.8642348214504265,
+    "error_on_surface_ratio": 6.1229737504818775,
+    "error_on_surface-main_ratio": 6.660102810844582
+  },
+  {
+    "appearance": "dark",
+    "theme-preset": "ember",
+    "accent": "jade",
+    "contrast": "standard",
+    "selected_description_ratio": 7.780776546068317,
+    "error_on_surface_ratio": 6.1229737504818775,
+    "error_on_surface-main_ratio": 6.660102810844582
+  },
+  {
+    "appearance": "dark",
+    "theme-preset": "ember",
+    "accent": "jade",
+    "contrast": "high",
+    "selected_description_ratio": 7.780776546068317,
+    "error_on_surface_ratio": 6.1229737504818775,
+    "error_on_surface-main_ratio": 6.660102810844582
+  }
+]

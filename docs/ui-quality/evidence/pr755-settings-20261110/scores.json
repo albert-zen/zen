@@ -1,0 +1,2456 @@
+{
+  "notice": "Exact original scores. Null means unobserved, not zero. Sol/Terra are requested assignment labels; backend identity not independently attested. Static historical reviews, not current PR end-to-end validation.",
+  "rounds": [
+    {
+      "sourceRecord": "ui-information-neutral-pair-review-20261110/independent-score-records.json",
+      "sourceSha256": "6e2b5591cf8c6e61c37eb3ff1866141a8878af884e0d44adadbaac38f4c2a988",
+      "dimensions": [
+        "hierarchy",
+        "readability_density",
+        "purposeful_color",
+        "material_consistency",
+        "attention",
+        "layout",
+        "visible_navigation",
+        "visible_focus_accessibility_cues"
+      ],
+      "scope": "Independent static matched-light supplement, not whole-product review or causal A/B",
+      "models": [
+        {
+          "assignment": "Sol",
+          "sourceReport": "ui-information-neutral-pair-sol-review-20261110.md",
+          "rows": [
+            {
+              "subject": "Codex project-thread",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ],
+              "kind": "reference"
+            },
+            {
+              "subject": "T3 details dark",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ],
+              "kind": "reference"
+            },
+            {
+              "subject": "T3 model picker",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ],
+              "kind": "reference"
+            },
+            {
+              "subject": "Linear preferences",
+              "scores": [
+                4,
+                4,
+                3,
+                4,
+                3,
+                4,
+                null,
+                3
+              ],
+              "kind": "reference"
+            },
+            {
+              "subject": "Vercel email",
+              "scores": [
+                4,
+                4,
+                4,
+                3,
+                3,
+                3,
+                null,
+                3
+              ],
+              "kind": "reference"
+            },
+            {
+              "subject": "K parent light",
+              "scores": [
+                2,
+                2,
+                3,
+                3,
+                2,
+                3,
+                3,
+                2
+              ],
+              "kind": "candidate"
+            },
+            {
+              "subject": "L parent light",
+              "scores": [
+                2,
+                2,
+                3,
+                3,
+                2,
+                3,
+                3,
+                2
+              ],
+              "kind": "candidate"
+            }
+          ]
+        },
+        {
+          "assignment": "Terra",
+          "sourceReport": "ui-information-neutral-pair-terra-review-20261110.md",
+          "rows": [
+            {
+              "subject": "Codex project-thread",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ],
+              "kind": "reference"
+            },
+            {
+              "subject": "T3 details dark",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2,
+                2
+              ],
+              "kind": "reference"
+            },
+            {
+              "subject": "T3 model picker",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ],
+              "kind": "reference"
+            },
+            {
+              "subject": "Linear preferences",
+              "scores": [
+                4,
+                4,
+                3,
+                4,
+                4,
+                4,
+                null,
+                3
+              ],
+              "kind": "reference"
+            },
+            {
+              "subject": "Vercel email",
+              "scores": [
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                null,
+                3
+              ],
+              "kind": "reference"
+            },
+            {
+              "subject": "K parent light",
+              "scores": [
+                3,
+                2,
+                2,
+                3,
+                2,
+                3,
+                3,
+                2
+              ],
+              "kind": "candidate"
+            },
+            {
+              "subject": "L parent light",
+              "scores": [
+                3,
+                2,
+                2,
+                3,
+                2,
+                3,
+                3,
+                2
+              ],
+              "kind": "candidate"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sourceRecord": "ui-models-neutral-pair-review-20261110/independent-score-records.json",
+      "sourceSha256": "7eb9fd0eb04bcaefa21fff3120abe3eecc45d59623c40676cb609c89144585f3",
+      "dimensions": [
+        "hierarchy",
+        "readability_density",
+        "purposeful_color",
+        "materials",
+        "attention",
+        "layout",
+        "visible_navigation",
+        "visible_focus_accessibility_cues"
+      ],
+      "scope": "Static per-image comparison, not causal A/B or whole product",
+      "models": [
+        {
+          "assignment": "Sol",
+          "sourceReport": "models-sol-review-20261110.md",
+          "rows": [
+            {
+              "image": "1. linear-preferences.png",
+              "scores": [
+                4,
+                4,
+                3,
+                4,
+                3,
+                4,
+                null,
+                3
+              ]
+            },
+            {
+              "image": "2. vercel-emails-primary-light.png",
+              "scores": [
+                4,
+                4,
+                4,
+                3,
+                3,
+                3,
+                null,
+                3
+              ]
+            },
+            {
+              "image": "3. t3-pr25251-model-picker.png",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                2,
+                2
+              ]
+            },
+            {
+              "image": "4. R-light-models.jpg",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "image": "5. S-light-models.jpg",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "image": "6. R-dark-models.jpg",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "image": "7. S-dark-models.jpg",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "image": "8. R-dark-default-menu.jpg",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3
+              ]
+            },
+            {
+              "image": "9. S-dark-default-menu.jpg",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3
+              ]
+            }
+          ]
+        },
+        {
+          "assignment": "Terra",
+          "sourceReport": "models-terra-review-20261110.md",
+          "rows": [
+            {
+              "image": "Linear preferences (reference)",
+              "scores": [
+                4,
+                4,
+                3,
+                4,
+                3,
+                4,
+                null,
+                2
+              ]
+            },
+            {
+              "image": "Vercel email (reference)",
+              "scores": [
+                4,
+                4,
+                4,
+                3,
+                3,
+                3,
+                null,
+                2
+              ]
+            },
+            {
+              "image": "T3 model picker (reference)",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "image": "R light Models overview",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "image": "S light Models overview",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "image": "R dark Models overview",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "image": "S dark Models overview",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "image": "R dark Default menu",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3
+              ]
+            },
+            {
+              "image": "S dark Default menu",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sourceRecord": "ui-models-neutral-pair-review-20261110/independent-score-records-v2.json",
+      "sourceSha256": "aa3bc0f08a0d3817ec972a7e555180228ccdf81f68eec3363bc3733765e46b7c",
+      "dimensions": [
+        "hierarchy",
+        "readability_density",
+        "purposeful_color",
+        "materials",
+        "attention",
+        "layout",
+        "visible_navigation",
+        "visible_focus_accessibility_cues"
+      ],
+      "scope": "Same-reviewer matched-disclosure supplement, NOT a new blind sample; no goal or implementation supplied",
+      "models": [
+        {
+          "assignment": "Sol",
+          "sourceReport": "models-sol-review-v2-20261110.md",
+          "rows": [
+            {
+              "image": "linear-preferences.png",
+              "scores": [
+                4,
+                4,
+                3,
+                4,
+                3,
+                4,
+                null,
+                3
+              ]
+            },
+            {
+              "image": "vercel-emails-primary-light.png",
+              "scores": [
+                4,
+                4,
+                4,
+                3,
+                3,
+                3,
+                null,
+                3
+              ]
+            },
+            {
+              "image": "t3-pr25251-model-picker.png",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                2,
+                2
+              ]
+            },
+            {
+              "image": "R-light-models.jpg",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "image": "S-light-models.jpg",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "image": "R-dark-models.jpg",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "image": "S-dark-models.jpg",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "image": "R-dark-default-menu.jpg",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3
+              ]
+            },
+            {
+              "image": "S-dark-default-menu.jpg",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3
+              ]
+            }
+          ]
+        },
+        {
+          "assignment": "Terra",
+          "sourceReport": "models-terra-v2-review-20261110.md",
+          "rows": [
+            {
+              "image": "Linear preferences reference",
+              "scores": [
+                4,
+                4,
+                3,
+                4,
+                3,
+                4,
+                null,
+                2
+              ]
+            },
+            {
+              "image": "Vercel email reference",
+              "scores": [
+                4,
+                4,
+                4,
+                3,
+                3,
+                3,
+                null,
+                2
+              ]
+            },
+            {
+              "image": "T3 model picker reference",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "image": "R light overview",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "image": "S light overview",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "image": "R dark overview",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "image": "S dark overview",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "image": "R dark Default menu",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3
+              ]
+            },
+            {
+              "image": "S dark Default menu",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sourceRecord": "ui-settings-native-baseline-review-20261110/independent-score-records.json",
+      "sourceSha256": "16185a83015a08d2de593e4ce5473a30ba3dba44e0b8640d6dfe9e3267e54a45",
+      "dimensions": [
+        "hierarchy",
+        "readability_density",
+        "purposeful_color",
+        "materials",
+        "attention",
+        "layout",
+        "visible_navigation",
+        "visible_focus_accessibility_cues"
+      ],
+      "scope": "historical baseline",
+      "models": [
+        {
+          "assignment": "Sol",
+          "sourceReport": "ui-settings-baseline-sol-review-20261110.md",
+          "rows": [
+            {
+              "subject": "09 light models/providers",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "subject": "11 light fake provider editor",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                2,
+                2,
+                3,
+                3
+              ]
+            },
+            {
+              "subject": "13 light capabilities expanded",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "subject": "14 light plugin inventory",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                2,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "subject": "17 light plugin no results",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3
+              ]
+            },
+            {
+              "subject": "18 dark models/providers",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "subject": "19 dark default model options",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3
+              ]
+            },
+            {
+              "subject": "20 dark plugin installed filter",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "subject": "21 dark plugin inventory scrolled",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                2,
+                3,
+                2,
+                2
+              ]
+            },
+            {
+              "subject": "参考 Linear preferences",
+              "scores": [
+                4,
+                4,
+                3,
+                4,
+                3,
+                4,
+                null,
+                3
+              ]
+            },
+            {
+              "subject": "参考 Vercel email",
+              "scores": [
+                4,
+                4,
+                4,
+                3,
+                3,
+                3,
+                null,
+                3
+              ]
+            },
+            {
+              "subject": "参考 T3 model picker",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            }
+          ]
+        },
+        {
+          "assignment": "Terra",
+          "sourceReport": "ui-information-baseline-terra-review-20261110.md",
+          "rows": [
+            {
+              "subject": "09 light models/providers",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "subject": "11 light provider editor",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3
+              ]
+            },
+            {
+              "subject": "13 light capabilities expanded",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "subject": "14 light plugin inventory",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "subject": "17 light plugin no results",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3
+              ]
+            },
+            {
+              "subject": "18 dark models/providers",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "subject": "19 dark default model options",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3
+              ]
+            },
+            {
+              "subject": "20 dark plugin installed filter",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "subject": "21 dark plugin inventory scrolled",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "subject": "Linear preferences",
+              "scores": [
+                4,
+                4,
+                3,
+                4,
+                4,
+                4,
+                null,
+                3
+              ]
+            },
+            {
+              "subject": "Vercel emails",
+              "scores": [
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                null,
+                3
+              ]
+            },
+            {
+              "subject": "T3 model picker",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sourceRecord": "ui-context-native-baseline-review-20261110/independent-score-records.json",
+      "sourceSha256": "c0fbb0ac1f7356ae2f350ef8f097487bad46c438e58f7e8dc241bf2a7d1afa63",
+      "dimensions": [
+        "hierarchy",
+        "readability_density",
+        "purposeful_color",
+        "materials",
+        "attention",
+        "layout",
+        "visible_navigation",
+        "visible_focus_accessibility_cues"
+      ],
+      "scope": "Fresh independent static baseline for three dark Context scenes plus two public references; not change validation",
+      "models": [
+        {
+          "assignment": "Sol",
+          "sourceReport": "context-sol-review-20261110.md",
+          "rows": [
+            {
+              "image": "linear-preferences.png",
+              "scores": [
+                4,
+                3,
+                3,
+                4,
+                3,
+                4,
+                null,
+                3
+              ]
+            },
+            {
+              "image": "vercel-emails-primary-light.png",
+              "scores": [
+                4,
+                4,
+                4,
+                3,
+                3,
+                3,
+                null,
+                3
+              ]
+            },
+            {
+              "image": "context-upper.jpg",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                2,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "image": "context-lower.jpg",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "image": "context-explanation.jpg",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                2,
+                3,
+                3,
+                2
+              ]
+            }
+          ]
+        },
+        {
+          "assignment": "Terra",
+          "sourceReport": "context-terra-review-20261110.md",
+          "rows": [
+            {
+              "image": "Linear preferences",
+              "scores": [
+                4,
+                3,
+                3,
+                4,
+                3,
+                4,
+                null,
+                2
+              ]
+            },
+            {
+              "image": "Vercel email",
+              "scores": [
+                4,
+                4,
+                4,
+                3,
+                3,
+                3,
+                null,
+                2
+              ]
+            },
+            {
+              "image": "context-upper.jpg",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                2,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "image": "context-lower.jpg",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "image": "context-explanation.jpg",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                2,
+                3,
+                3,
+                2
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sourceRecord": "ui-native-settings-preview-review-20261110/independent-score-records.json",
+      "sourceSha256": "b2c5abb763fb214b82ae2c09d15339afd9f481bda4afbb7f84b144d02a96195d",
+      "dimensions": [
+        "hierarchy",
+        "readability/density",
+        "color purpose",
+        "material consistency",
+        "attention",
+        "layout",
+        "visible navigation",
+        "visible keyboard/accessibility cues"
+      ],
+      "scope": "qa10 native fixed-build settings/preview/focus",
+      "models": [
+        {
+          "assignment": "gpt-6.1-sol",
+          "sourceReport": "ui-native-settings-preview-sol-review-20261110.md",
+          "rows": [
+            {
+              "originalLabel": "linear-preferences.png",
+              "scores": [
+                4,
+                3,
+                3,
+                4,
+                3,
+                4,
+                null,
+                null
+              ],
+              "confidenceAndReason": "High: clear title/group/row/help hierarchy, aligned right controls and quiet dividers; generous spacing and gray help text. Gradient is publisher surround, not app chrome. Navigation/focus absent.",
+              "image": "linear-preferences.png",
+              "scope": "reference",
+              "imageSha256": "252b8dbbc654c6f865df9c64e794ee1c0e61bb766b049518cdb58d0054318172"
+            },
+            {
+              "originalLabel": "linear-team-settings-20241218.png",
+              "scores": [
+                3,
+                3,
+                3,
+                4,
+                3,
+                3,
+                3,
+                null
+              ],
+              "confidenceAndReason": "High: grouped sidebar, consistent icon tiles and summary counts; broad empty gutter separates navigation/content, long sidebar and cropped lower workflow constrain scanning. No visible focus.",
+              "image": "linear-team-settings-20241218.png",
+              "scope": "reference",
+              "imageSha256": "9d149ba9de4a1e0ba285cf4b5564e3a98f1f2e1a5663618fd2a48483dca9bf4e"
+            },
+            {
+              "originalLabel": "linear-members-settings-20241218.png",
+              "scores": [
+                4,
+                3,
+                4,
+                4,
+                4,
+                4,
+                3,
+                3
+              ],
+              "confidenceAndReason": "High: coherent columns and row rhythm, differentiated invite action, active navigation and search outline/caret. Secondary metadata subdued. Only search focus is visible.",
+              "image": "linear-members-settings-20241218.png",
+              "scope": "reference",
+              "imageSha256": "9097884232355fea76e0ea798b7e5b05fe3f205a0b10a815e4428618fe93ce13"
+            },
+            {
+              "originalLabel": "vercel-authentication-light.png",
+              "scores": [
+                3,
+                4,
+                3,
+                3,
+                3,
+                3,
+                null,
+                null
+              ],
+              "confidenceAndReason": "High within crop: strong heading, concise explanation and spacious action group. Provider colors compete equally for attention; right/left button groups leave a broad gap. No navigation/focus evidence.",
+              "image": "vercel-authentication-light.png",
+              "scope": "reference",
+              "imageSha256": "89fbfd7b22686f3b8baab88088c83eed739a2372a3f829c0bf62999c85ce4a67"
+            },
+            {
+              "originalLabel": "vercel-emails-primary-light.png",
+              "scores": [
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                null,
+                null
+              ],
+              "confidenceAndReason": "High within crop: address/status/action hierarchy, text-labeled status chips and red destructive menu item. Menu anchored near overflow; footer distinct. Open menu does not establish keyboard focus.",
+              "image": "vercel-emails-primary-light.png",
+              "scope": "reference",
+              "imageSha256": "d0677d1d090689225a15e46f52274106629427c8d4ef314a1d86c31c085aca4e"
+            },
+            {
+              "originalLabel": "13-light-account-unconfigured.jpg",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                null
+              ],
+              "confidenceAndReason": "High: title and two cards scan easily; explicit Not configured and next-step button. Subscription usage occupies a large mostly empty card; pale Refresh is visibly subordinate. Two navigation rails consume substantial width. No focused control shown.",
+              "image": "13-light-account-unconfigured.jpg",
+              "scope": "candidate",
+              "imageSha256": "3c043374efc03dd1ff944d28c40181f66a099d10c4e4e1a4c2af12b03c116d23"
+            },
+            {
+              "originalLabel": "14-light-general.jpg",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                2,
+                2,
+                3,
+                null
+              ],
+              "confidenceAndReason": "High: card headings and full-width selects are consistent. Interaction explanation is dense; lower security explanation is cut by fixed footer, making continuation less clear. Apply is subdued with up-to-date text. No focus evidence.",
+              "image": "14-light-general.jpg",
+              "scope": "candidate",
+              "imageSha256": "04b6170b2d0feb3c53d392f1abfe13519e546d2f7642e33e2e08bbb455b9be82"
+            },
+            {
+              "originalLabel": "22-light-explicit-appearance.jpg",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                null
+              ],
+              "confidenceAndReason": "High: mode, preview, presets, accent and contrast form a readable sequence. Checks supplement selection outlines; many similarly outlined options and dual selected presets add visual work. Reset is separated from choices. No observed focus state.",
+              "image": "22-light-explicit-appearance.jpg",
+              "scope": "candidate",
+              "imageSha256": "f4dcac8b2b7230c2d1667bcc31611fdf77e0933eee7db3523282d0b07e74fa61"
+            },
+            {
+              "originalLabel": "17-dark-account-unconfigured.jpg",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                null
+              ],
+              "confidenceAndReason": "High: cards and current nav remain distinct; secondary account/help text and disabled Refresh recede strongly. Clear next action but usage card remains mostly blank. No focused control shown.",
+              "image": "17-dark-account-unconfigured.jpg",
+              "scope": "candidate",
+              "imageSha256": "86ec12618156896f96c883095da9bb58462264c4b025d6b94e987c44df8ffdb6"
+            },
+            {
+              "originalLabel": "18-dark-general.jpg",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                2,
+                2,
+                3,
+                null
+              ],
+              "confidenceAndReason": "High: labels/selects have predictable alignment, while several subdued explanatory lines and clipped lower card demand effort. Footer overlays the reading continuation. Active General remains recognizable.",
+              "image": "18-dark-general.jpg",
+              "scope": "candidate",
+              "imageSha256": "7a64b7147e70ed5a3ace7300eff3111fcae5b049ba7f6ce49149bce834b777ba"
+            },
+            {
+              "originalLabel": "16-dark-appearance.jpg",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                null
+              ],
+              "confidenceAndReason": "High: preview and checked choices are legible; inactive preset labels and footer explanation are subdued. Accent samples carry meaning and checks prevent color-only selection. Numerous boxed options crowd the card moderately.",
+              "image": "16-dark-appearance.jpg",
+              "scope": "candidate",
+              "imageSha256": "8368b7c97de088c3c2510958bd44f0ac1ef35512796f6147aac37aa996319f58"
+            },
+            {
+              "originalLabel": "21-dark-preview-readonly-no-menu.jpg",
+              "scores": [
+                2,
+                2,
+                3,
+                3,
+                2,
+                2,
+                3,
+                null
+              ],
+              "confidenceAndReason": "High: tabs and split boundary distinguish panes; long wrapped raw outputs dominate both columns. Parent/preview drafts are present but provenance is below dense content. Read only beside bright send arrows is semantically ambiguous without interaction evidence. No focus observed.",
+              "image": "21-dark-preview-readonly-no-menu.jpg",
+              "scope": "candidate",
+              "imageSha256": "52e93d6a4a935c28b090d773631f12bd1d9761d140d4e72519cba8a6cfa159aa"
+            },
+            {
+              "originalLabel": "23-light-preview-draft-restored.jpg",
+              "scores": [
+                2,
+                2,
+                3,
+                3,
+                2,
+                2,
+                3,
+                null
+              ],
+              "confidenceAndReason": "High: light surfaces and tab selection are consistent, two drafts visually distinct. Wrapped paths/JSON overwhelm content hierarchy; parent bottom message is partly hidden by composer and Back to live. Screenshot does not prove restoration.",
+              "image": "23-light-preview-draft-restored.jpg",
+              "scope": "candidate",
+              "imageSha256": "7cb30ccb073fa2b7294ef1640cc600e14d330648e9868fbce14fbcb0b1ac2319"
+            },
+            {
+              "originalLabel": "08-light-B-forward-keyboard-focus.jpg",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                2,
+                3,
+                3,
+                3
+              ],
+              "confidenceAndReason": "High: visible dark focus outline surrounds View sent message, with readable action label. Tool panel grouping helps, but input/output duplication and long paths create dense clutter; composer occludes bottom output. Focus score covers this control only.",
+              "image": "08-light-B-forward-keyboard-focus.jpg",
+              "scope": "candidate",
+              "imageSha256": "cfd3c8856d0cfc39dda4b556165e177859474c12e387e77eb06e3f488f0d483c"
+            },
+            {
+              "originalLabel": "11-light-A-source-focus-visible.jpg",
+              "scores": [
+                2,
+                2,
+                3,
+                3,
+                2,
+                2,
+                3,
+                3
+              ],
+              "confidenceAndReason": "High: visible source-chip focus outline is distinct, sender label readable; selected tab and split boundary orient. Dense wrapped paths in parent, clipped top child text and overlapping bottom affordances weaken hierarchy. Keyboard judgment covers source chip only.",
+              "image": "11-light-A-source-focus-visible.jpg",
+              "scope": "candidate",
+              "imageSha256": "a2fd2dc180b98d5ce96864b220268eda6c26fda1652ca4572e188eb7a6079808"
+            }
+          ]
+        },
+        {
+          "assignment": "gpt-6.1-terra",
+          "sourceReport": "ui-native-settings-preview-terra-review-20261110.md",
+          "rows": [
+            {
+              "originalLabel": "Linear Preferences",
+              "scores": [
+                4,
+                3,
+                3,
+                4,
+                3,
+                4,
+                null,
+                null
+              ],
+              "confidenceAndReason": "High for shown panel. Clear headings, descriptions and aligned controls; muted help text recedes. Navigation and focus are outside evidence.",
+              "image": "linear-preferences.png",
+              "scope": "reference",
+              "imageSha256": "252b8dbbc654c6f865df9c64e794ee1c0e61bb766b049518cdb58d0054318172"
+            },
+            {
+              "originalLabel": "Linear team settings",
+              "scores": [
+                3,
+                3,
+                3,
+                4,
+                3,
+                3,
+                3,
+                null
+              ],
+              "confidenceAndReason": "Medium. Grouped sidebar and consistent summary rows are clear; long sidebar and cropped lower workflow limit assessment.",
+              "image": "linear-team-settings-20241218.png",
+              "scope": "reference",
+              "imageSha256": "9d149ba9de4a1e0ba285cf4b5564e3a98f1f2e1a5663618fd2a48483dca9bf4e"
+            },
+            {
+              "originalLabel": "Linear members",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                4,
+                3
+              ],
+              "confidenceAndReason": "Medium. Active Members item and column structure are identifiable; purple search outline and caret are visible, but do not establish keyboard behavior.",
+              "image": "linear-members-settings-20241218.png",
+              "scope": "reference",
+              "imageSha256": "9097884232355fea76e0ea798b7e5b05fe3f205a0b10a815e4428618fe93ce13"
+            },
+            {
+              "originalLabel": "Vercel Authentication",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                null,
+                null
+              ],
+              "confidenceAndReason": "Medium for crop. Heading, explanation and grouped provider actions read clearly; branded buttons compete somewhat for attention.",
+              "image": "vercel-authentication-light.png",
+              "scope": "reference",
+              "imageSha256": "89fbfd7b22686f3b8baab88088c83eed739a2372a3f829c0bf62999c85ce4a67"
+            },
+            {
+              "originalLabel": "Vercel Email",
+              "scores": [
+                3,
+                3,
+                4,
+                3,
+                3,
+                3,
+                null,
+                null
+              ],
+              "confidenceAndReason": "Medium for crop. Labels accompany colored status pills; red Delete distinguishes a destructive action. Open menu is visible but focus is not.",
+              "image": "vercel-emails-primary-light.png",
+              "scope": "reference",
+              "imageSha256": "d0677d1d090689225a15e46f52274106629427c8d4ef314a1d86c31c085aca4e"
+            },
+            {
+              "originalLabel": "13 light account",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                null
+              ],
+              "confidenceAndReason": "High for shown state. Account heading, unconfigured status, next action and usage area are distinct; muted secondary text is less prominent.",
+              "image": "13-light-account-unconfigured.jpg",
+              "scope": "candidate",
+              "imageSha256": "3c043374efc03dd1ff944d28c40181f66a099d10c4e4e1a4c2af12b03c116d23"
+            },
+            {
+              "originalLabel": "14 light general",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                2,
+                2,
+                3,
+                null
+              ],
+              "confidenceAndReason": "High for visible upper page. Controls align, but long interaction guidance and the foreground-control section crowd the lower viewport; sticky footer obscures lower content.",
+              "image": "14-light-general.jpg",
+              "scope": "candidate",
+              "imageSha256": "04b6170b2d0feb3c53d392f1abfe13519e546d2f7642e33e2e08bbb455b9be82"
+            },
+            {
+              "originalLabel": "22 light appearance",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                null
+              ],
+              "confidenceAndReason": "High. Theme, presets, accents and contrast are grouped; selection has both checkmarks and outlines. Dense preset grid requires careful scanning.",
+              "image": "22-light-explicit-appearance.jpg",
+              "scope": "candidate",
+              "imageSha256": "f4dcac8b2b7230c2d1667bcc31611fdf77e0933eee7db3523282d0b07e74fa61"
+            },
+            {
+              "originalLabel": "17 dark account",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                null
+              ],
+              "confidenceAndReason": "High. Structure and action are clear, but subdued descriptions and disabled Refresh have weak visual separation from dark surfaces.",
+              "image": "17-dark-account-unconfigured.jpg",
+              "scope": "candidate",
+              "imageSha256": "86ec12618156896f96c883095da9bb58462264c4b025d6b94e987c44df8ffdb6"
+            },
+            {
+              "originalLabel": "18 dark general",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                2,
+                2,
+                3,
+                null
+              ],
+              "confidenceAndReason": "High for shown upper page. Same compact grouping and footer overlap as light; muted explanatory copy is harder to distinguish. Lower page not captured.",
+              "image": "18-dark-general.jpg",
+              "scope": "candidate",
+              "imageSha256": "7a64b7147e70ed5a3ace7300eff3111fcae5b049ba7f6ce49149bce834b777ba"
+            },
+            {
+              "originalLabel": "16 dark appearance",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                null
+              ],
+              "confidenceAndReason": "High. Checkmarks and selected backgrounds distinguish choices; unselected preset cards and muted captions have subtle boundaries.",
+              "image": "16-dark-appearance.jpg",
+              "scope": "candidate",
+              "imageSha256": "8368b7c97de088c3c2510958bd44f0ac1ef35512796f6147aac37aa996319f58"
+            },
+            {
+              "originalLabel": "21 dark preview",
+              "scores": [
+                2,
+                2,
+                3,
+                3,
+                2,
+                2,
+                3,
+                null
+              ],
+              "confidenceAndReason": "Medium. Two composers and side-chat context are visible, but raw wrapped result text dominates; bottom composer overlays conversation content. Static image does not prove draft or read-only behavior.",
+              "image": "21-dark-preview-readonly-no-menu.jpg",
+              "scope": "candidate",
+              "imageSha256": "52e93d6a4a935c28b090d773631f12bd1d9761d140d4e72519cba8a6cfa159aa"
+            },
+            {
+              "originalLabel": "23 light preview",
+              "scores": [
+                2,
+                2,
+                3,
+                3,
+                2,
+                2,
+                3,
+                null
+              ],
+              "confidenceAndReason": "Medium. Two local draft texts and snapshot explanation are visible; long wrapped result and overlapping composer reduce scanability. Restoration is not proven by the screenshot.",
+              "image": "23-light-preview-draft-restored.jpg",
+              "scope": "candidate",
+              "imageSha256": "7cb30ccb073fa2b7294ef1640cc600e14d330648e9868fbce14fbcb0b1ac2319"
+            },
+            {
+              "originalLabel": "08 light forward focus",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                2,
+                2,
+                3,
+                3
+              ],
+              "confidenceAndReason": "Medium. Focus outline around “View sent message” is distinct; result blocks and sticky composer compete for vertical space. Only this visible focus cue is assessed.",
+              "image": "08-light-B-forward-keyboard-focus.jpg",
+              "scope": "candidate",
+              "imageSha256": "cfd3c8856d0cfc39dda4b556165e177859474c12e387e77eb06e3f488f0d483c"
+            },
+            {
+              "originalLabel": "11 light source focus",
+              "scores": [
+                2,
+                2,
+                3,
+                3,
+                2,
+                2,
+                3,
+                2
+              ],
+              "confidenceAndReason": "Medium. A dark outline identifies the source label, but its boundary is visually tight and intersects nearby content. Two narrow panes amplify wrapping and bottom overlays. Only the shown cue is assessed.",
+              "image": "11-light-A-source-focus-visible.jpg",
+              "scope": "candidate",
+              "imageSha256": "a2fd2dc180b98d5ce96864b220268eda6c26fda1652ca4572e188eb7a6079808"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sourceRecord": "ui-information-native-review-20261110/independent-score-records.json",
+      "sourceSha256": "a2a5a1bf269edb18e6c82248f56d89472578f636af068996ee99e0b04122860c",
+      "dimensions": [
+        "hierarchy",
+        "readability",
+        "color",
+        "material/style",
+        "attention",
+        "layout/density",
+        "navigation/context",
+        "visible keyboard focus"
+      ],
+      "scope": "qa11 Information received messages",
+      "models": [
+        {
+          "assignment": "gpt-6.1-sol",
+          "sourceReport": "ui-information-native-sol-review-20261110.md",
+          "rows": [
+            {
+              "kind": "reference",
+              "originalLabel": "codex-official-project-thread-2026-02-23.jpeg",
+              "file": "codex-official-project-thread-2026-02-23.jpeg",
+              "sha256": "03925cce4fc6a9f9d63f0c7fff13e60671b5e895f544296d0564617e70b76e60",
+              "scores": [
+                3,
+                2,
+                3,
+                4,
+                3,
+                3,
+                3,
+                null
+              ]
+            },
+            {
+              "kind": "reference",
+              "originalLabel": "t3-pr25251-details-dark.png",
+              "file": "t3-pr25251-details-dark.png",
+              "sha256": "1b25fd041a14286917440743c48d6606aa89a2f8765d6f650f030d333db9a900",
+              "scores": [
+                3,
+                3,
+                3,
+                4,
+                3,
+                3,
+                3,
+                null
+              ]
+            },
+            {
+              "kind": "reference",
+              "originalLabel": "t3-pr25251-model-picker.png",
+              "file": "t3-pr25251-model-picker.png",
+              "sha256": "15797d462049b9e99fec0cf534a4e6f81b7ef783ef775aab7e6dd14e8edda1a5",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                null
+              ]
+            },
+            {
+              "kind": "reference",
+              "originalLabel": "linear-preferences.png",
+              "file": "linear-preferences.png",
+              "sha256": "252b8dbbc654c6f865df9c64e794ee1c0e61bb766b049518cdb58d0054318172",
+              "scores": [
+                4,
+                4,
+                4,
+                4,
+                4,
+                3,
+                3,
+                null
+              ]
+            },
+            {
+              "kind": "reference",
+              "originalLabel": "vercel-emails-primary-light.png",
+              "file": "vercel-emails-primary-light.png",
+              "sha256": "d0677d1d090689225a15e46f52274106629427c8d4ef314a1d86c31c085aca4e",
+              "scores": [
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                3,
+                null
+              ]
+            },
+            {
+              "kind": "candidate",
+              "originalLabel": "02-light-parent-information.jpg",
+              "file": "02-light-parent-information.jpg",
+              "sha256": "27077d223f55ed52744759e546f970e91fca400575ce9d7f1531661435f14231",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                2,
+                2,
+                3,
+                null
+              ]
+            },
+            {
+              "kind": "candidate",
+              "originalLabel": "04-light-child-information-no-inbound.jpg",
+              "file": "04-light-child-information-no-inbound.jpg",
+              "sha256": "bf76487bc7b26e5a3a7ce050a818425e7b851e5637f8c1999ba6c157442ae557",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                2,
+                2,
+                3,
+                null
+              ]
+            },
+            {
+              "kind": "candidate",
+              "originalLabel": "07-light-information-source-A-focus.jpg",
+              "file": "07-light-information-source-A-focus.jpg",
+              "sha256": "c4bd30dc726761473801b234823faec57fe492f6deb2895e27ab469abd2924e5",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                2,
+                2,
+                3,
+                3
+              ]
+            },
+            {
+              "kind": "candidate",
+              "originalLabel": "08-light-information-source-A-keyboard-result.jpg",
+              "file": "08-light-information-source-A-keyboard-result.jpg",
+              "sha256": "2c147b2e30b8f47428d1e7695f1f8676a65a13aee9394d204dfdcde311e14a31",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                2,
+                2,
+                3,
+                3
+              ]
+            },
+            {
+              "kind": "candidate",
+              "originalLabel": "10-light-general-initial.jpg",
+              "file": "10-light-general-initial.jpg",
+              "sha256": "04b6170b2d0feb3c53d392f1abfe13519e546d2f7642e33e2e08bbb455b9be82",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                null
+              ]
+            },
+            {
+              "kind": "candidate",
+              "originalLabel": "11-light-general-scrolled-end.jpg",
+              "file": "11-light-general-scrolled-end.jpg",
+              "sha256": "c4b5391bd5e46804de0b87af9aec39b22320c6f6693fa4dffd161c328f397367",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                null
+              ]
+            },
+            {
+              "kind": "candidate",
+              "originalLabel": "12-dark-parent-information.jpg",
+              "file": "12-dark-parent-information.jpg",
+              "sha256": "83ecc8479f151e9ffd1f082997f978a4933feea3443ce539c19292b79cff235b",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                2,
+                2,
+                3,
+                null
+              ]
+            },
+            {
+              "kind": "candidate",
+              "originalLabel": "14-dark-information-with-companion.jpg",
+              "file": "14-dark-information-with-companion.jpg",
+              "sha256": "f410e748d0580e2fb2f0e9d9251c3a53dc78de822f534acd0cf46d28f430b4db",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                2,
+                2,
+                3,
+                null
+              ]
+            },
+            {
+              "kind": "candidate",
+              "originalLabel": "15-dark-after-timeout.jpg",
+              "file": "15-dark-after-timeout.jpg",
+              "sha256": "ab4215da6da40fd1d36f2658d02096b5754055b951402987983bd4a2287796f5",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                2,
+                2,
+                3,
+                3
+              ]
+            }
+          ]
+        },
+        {
+          "assignment": "gpt-6.1-terra",
+          "sourceReport": "ui-information-native-terra-review-20261110.md",
+          "rows": [
+            {
+              "kind": "reference",
+              "originalLabel": "Codex project thread",
+              "file": "codex-official-project-thread-2026-02-23.jpeg",
+              "sha256": "03925cce4fc6a9f9d63f0c7fff13e60671b5e895f544296d0564617e70b76e60",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                null
+              ]
+            },
+            {
+              "kind": "reference",
+              "originalLabel": "T3 details, before/after",
+              "file": "t3-pr25251-details-dark.png",
+              "sha256": "1b25fd041a14286917440743c48d6606aa89a2f8765d6f650f030d333db9a900",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                null
+              ]
+            },
+            {
+              "kind": "reference",
+              "originalLabel": "T3 model picker, before/after",
+              "file": "t3-pr25251-model-picker.png",
+              "sha256": "15797d462049b9e99fec0cf534a4e6f81b7ef783ef775aab7e6dd14e8edda1a5",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                null
+              ]
+            },
+            {
+              "kind": "reference",
+              "originalLabel": "Linear preferences",
+              "file": "linear-preferences.png",
+              "sha256": "252b8dbbc654c6f865df9c64e794ee1c0e61bb766b049518cdb58d0054318172",
+              "scores": [
+                4,
+                4,
+                3,
+                4,
+                4,
+                4,
+                2,
+                null
+              ]
+            },
+            {
+              "kind": "reference",
+              "originalLabel": "Vercel emails",
+              "file": "vercel-emails-primary-light.png",
+              "sha256": "d0677d1d090689225a15e46f52274106629427c8d4ef314a1d86c31c085aca4e",
+              "scores": [
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                2,
+                null
+              ]
+            },
+            {
+              "kind": "candidate",
+              "originalLabel": "02",
+              "file": "02-light-parent-information.jpg",
+              "sha256": "27077d223f55ed52744759e546f970e91fca400575ce9d7f1531661435f14231",
+              "scores": [
+                2,
+                2,
+                3,
+                3,
+                2,
+                2,
+                3,
+                null
+              ]
+            },
+            {
+              "kind": "candidate",
+              "originalLabel": "04",
+              "file": "04-light-child-information-no-inbound.jpg",
+              "sha256": "bf76487bc7b26e5a3a7ce050a818425e7b851e5637f8c1999ba6c157442ae557",
+              "scores": [
+                2,
+                2,
+                3,
+                3,
+                2,
+                2,
+                3,
+                null
+              ]
+            },
+            {
+              "kind": "candidate",
+              "originalLabel": "07",
+              "file": "07-light-information-source-A-focus.jpg",
+              "sha256": "c4bd30dc726761473801b234823faec57fe492f6deb2895e27ab469abd2924e5",
+              "scores": [
+                2,
+                2,
+                3,
+                3,
+                2,
+                2,
+                3,
+                3
+              ]
+            },
+            {
+              "kind": "candidate",
+              "originalLabel": "08",
+              "file": "08-light-information-source-A-keyboard-result.jpg",
+              "sha256": "2c147b2e30b8f47428d1e7695f1f8676a65a13aee9394d204dfdcde311e14a31",
+              "scores": [
+                2,
+                2,
+                3,
+                3,
+                2,
+                2,
+                3,
+                3
+              ]
+            },
+            {
+              "kind": "candidate",
+              "originalLabel": "10",
+              "file": "10-light-general-initial.jpg",
+              "sha256": "04b6170b2d0feb3c53d392f1abfe13519e546d2f7642e33e2e08bbb455b9be82",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                null
+              ]
+            },
+            {
+              "kind": "candidate",
+              "originalLabel": "11",
+              "file": "11-light-general-scrolled-end.jpg",
+              "sha256": "c4b5391bd5e46804de0b87af9aec39b22320c6f6693fa4dffd161c328f397367",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                null
+              ]
+            },
+            {
+              "kind": "candidate",
+              "originalLabel": "12",
+              "file": "12-dark-parent-information.jpg",
+              "sha256": "83ecc8479f151e9ffd1f082997f978a4933feea3443ce539c19292b79cff235b",
+              "scores": [
+                2,
+                2,
+                2,
+                3,
+                2,
+                2,
+                3,
+                null
+              ]
+            },
+            {
+              "kind": "candidate",
+              "originalLabel": "14",
+              "file": "14-dark-information-with-companion.jpg",
+              "sha256": "f410e748d0580e2fb2f0e9d9251c3a53dc78de822f534acd0cf46d28f430b4db",
+              "scores": [
+                2,
+                2,
+                2,
+                3,
+                1,
+                1,
+                2,
+                null
+              ]
+            },
+            {
+              "kind": "candidate",
+              "originalLabel": "15",
+              "file": "15-dark-after-timeout.jpg",
+              "sha256": "ab4215da6da40fd1d36f2658d02096b5754055b951402987983bd4a2287796f5",
+              "scores": [
+                2,
+                2,
+                2,
+                3,
+                1,
+                1,
+                2,
+                3
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sourceRecord": "plugins-sol-review-20261110.md + plugins-terra-review-20261110.md",
+      "dimensions": [
+        "hierarchy",
+        "readability_density",
+        "purposeful_color",
+        "material_consistency",
+        "attention",
+        "layout",
+        "visible_navigation",
+        "visible_focus_accessibility_cues"
+      ],
+      "scope": "U earlier, V later; bottom anchored lower-All captures differ in visible top row",
+      "models": [
+        {
+          "assignment": "Sol",
+          "sourceReport": "plugins-sol-review-20261110.md",
+          "rows": [
+            {
+              "image": "U-light-all",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                2,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "image": "V-light-all",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3
+              ]
+            },
+            {
+              "image": "U-dark-installed",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                3,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "image": "V-dark-installed",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3
+              ]
+            },
+            {
+              "image": "U-dark-lower-all",
+              "scores": [
+                3,
+                2,
+                3,
+                3,
+                2,
+                3,
+                3,
+                2
+              ]
+            },
+            {
+              "image": "V-dark-lower-all",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3
+              ]
+            }
+          ]
+        },
+        {
+          "assignment": "Terra",
+          "sourceReport": "plugins-terra-review-20261110.md",
+          "rows": [
+            {
+              "image": "U-light-all",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3
+              ]
+            },
+            {
+              "image": "V-light-all",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3
+              ]
+            },
+            {
+              "image": "U-dark-installed",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3
+              ]
+            },
+            {
+              "image": "V-dark-installed",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3
+              ]
+            },
+            {
+              "image": "U-dark-lower-all",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                2,
+                3,
+                3,
+                3
+              ]
+            },
+            {
+              "image": "V-dark-lower-all",
+              "scores": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

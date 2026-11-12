@@ -1,0 +1,1533 @@
+{
+  "schemaVersion": 2,
+  "id": "browser",
+  "name": "Browser",
+  "version": "1.2.0",
+  "description": "The shared ZenX browser and an explicitly connected external browser, available together with independent targets and tool approvals.",
+  "compatibility": {
+    "zenx": ">=0.1.0 <0.2.0"
+  },
+  "runtime": {
+    "type": "bundled",
+    "entry": "./dist/runtime.js"
+  },
+  "mainDocument": "For a new browsing task, prefer open to create a background task page; use an existing tab when the user's task calls for that page. New connected pages are grouped by task session automatically. New pages are temporary and close at turn/session end unless open uses keep:true for a deliverable; existing user pages are released. The Host displays the exact operated page automatically, without model UI commands. Browser actions observe by default with a small backend-captured subset and use exact backend-scoped refs. Use full:true for a broader self-contained capture. Inspect returns a bounded capture; query searches captured targets only, and cursor reads its immutable continuation. Pass since with a retained observation ref for a diff, or full:true after context loss. Every new observation has new action refs; diff targetChanges.replacements maps old refs to fresh refs. Discard prior continuation pages on every new observation or first-page diff and follow its new nextCursor for tails. Human takeover blocks Workspace mutations until the user returns control and a fresh inspection is made. If actionCompleted has observationError, inspect again without repeating the action. Unknown effects must not be replayed. Connected browsers require explicit connection discovery and approval; they never fall back to Workspace. Browser backends coexist: browser_workspace_* uses the shared Workspace browser; browser_connected_* uses only the explicitly enabled external connection. For existing pages use list_tabs; for a new task prefer open with a semantic session name. Results identify backendId. Pass returned tabId, observationId, targetId and cursor unchanged to tools in the same namespace; cross-backend references reject. An unavailable external connection never redirects to the Workspace browser. Closing a connected tab releases it; closing its session also retires unkept pages created by the Agent. Existing user pages remain open. Approvals for one tool namespace do not approve the other. Only one external browser connection is supported at a time; disconnect it explicitly before connecting another.",
+  "provider": {
+    "id": "concurrent-browser",
+    "platforms": ["darwin", "win32", "linux"],
+    "interactionModes": ["background_safe"],
+    "capabilities": [
+      "dedicated_profile",
+      "cdp",
+      "dom.inspect",
+      "dom.navigate",
+      "dom.interact",
+      "user_session",
+      "backend_isolation"
+    ]
+  },
+  "permissions": [
+    {
+      "id": "browser.tabs.read",
+      "title": "Inspect browser tabs",
+      "description": "List tabs, inspect visible text and targets, and explicitly read full page content, screenshots, network events/responses and console diagnostics.",
+      "scope": "browser-session"
+    },
+    {
+      "id": "browser.navigate",
+      "title": "Open and navigate pages",
+      "description": "Open URLs or navigate an explicitly targeted ZenX browser tab.",
+      "scope": "browser-session"
+    },
+    {
+      "id": "browser.interact",
+      "title": "Interact with pages",
+      "description": "Interact with the exact observed tab through element, coordinate/key input or programmable JavaScript; JavaScript may mutate the page, submit forms or send requests.",
+      "scope": "browser-session"
+    },
+    {
+      "id": "browser.connected.tabs.read",
+      "title": "Connected browser: Inspect browser tabs",
+      "description": "List tabs, inspect visible text and targets, and explicitly read full page content, screenshots, network events/responses and console diagnostics.",
+      "scope": "browser-session"
+    },
+    {
+      "id": "browser.connected.navigate",
+      "title": "Connected browser: Open and navigate pages",
+      "description": "Open URLs or navigate an explicitly targeted ZenX browser tab.",
+      "scope": "browser-session"
+    },
+    {
+      "id": "browser.connected.interact",
+      "title": "Connected browser: Interact with pages",
+      "description": "Interact with the exact observed tab through element, coordinate/key input or programmable JavaScript; JavaScript may mutate the page, submit forms or send requests.",
+      "scope": "browser-session"
+    }
+  ],
+  "ui": {
+    "bundles": [
+      {
+        "id": "main",
+        "apiVersion": 1,
+        "kind": "trusted",
+        "entry": "zenx/bundled/browser-ui"
+      }
+    ],
+    "surfaces": [
+      {
+        "id": "browser-page",
+        "bundleId": "main",
+        "exportName": "browser-page"
+      }
+    ]
+  },
+  "contributions": {
+    "pages": [
+      {
+        "id": "browser",
+        "title": "Browser",
+        "route": "/plugins/browser/browser",
+        "surfaceId": "browser-page"
+      }
+    ],
+    "sidebar": []
+  },
+  "tools": [
+    {
+      "name": "browser_workspace_list_tabs",
+      "description": "[Workspace browser] List bounded metadata for tabs in one explicit ZenX browser session. Cookies, storage, headers, and history are never returned.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp", "tab_metadata.read"],
+      "maxOutputBytes": 8192
+    },
+    {
+      "name": "browser_workspace_open",
+      "description": "[Workspace browser] Open an HTTP(S) URL in a shared Thread-owned Workspace tab visible to the user; this does not connect an external browser.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "keep": {
+            "type": "boolean",
+            "description": "Keep this new page as a deliverable after the turn; defaults to false."
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          }
+        },
+        "required": ["sessionId", "url"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.navigate", "browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp", "dom.navigate"],
+      "maxOutputBytes": 131072
+    },
+    {
+      "name": "browser_workspace_navigate",
+      "description": "[Workspace browser] Navigate one explicit ZenX browser session/tab target to an http(s) URL.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string",
+            "description": "Required for a shared Workspace tab after human takeover: pass its latest browser_workspace_inspect observationId. Missing, stale, or pre-takeover references reject. Other backends do not require this field."
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          }
+        },
+        "required": ["sessionId", "tabId", "url"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.navigate", "browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp", "dom.navigate"],
+      "maxOutputBytes": 131072
+    },
+    {
+      "name": "browser_workspace_inspect",
+      "description": "[Workspace browser] Inspect one tab, or use nextCursor to read more of its exact captured snapshot. Coverage distinguishes unread captured data from native omissions. Omit baseObservationId or set full:true for a self-contained first page; a retained matching base allows a smaller diff. Target IDs are stable only for surviving observed DOM nodes; actions require the fresh observationId.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Continue the exact immutable captured observation using its returned nextCursor. Does not recapture or renew action references. Omit to inspect afresh."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "description": "Search role, name, and value within this backend's captured targets. Coverage names the capture scope; a miss is not a whole-page claim. Follow nextCursor for more matches from the same capture."
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp", "dom.inspect"],
+      "maxOutputBytes": 131072
+    },
+    {
+      "name": "browser_workspace_click",
+      "description": "[Workspace browser] Click one visible, clickable opaque target from the latest browser_workspace_inspect observation. Stale, forged, hidden, or changed targets fail closed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string"
+          },
+          "targetId": {
+            "type": "string"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          }
+        },
+        "required": ["sessionId", "tabId", "observationId", "targetId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.interact", "browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp", "dom.click"],
+      "maxOutputBytes": 131072
+    },
+    {
+      "name": "browser_workspace_pointer_click",
+      "description": "[Workspace browser] Click CSS viewport coordinates in the exact observed browser tab without requesting window activation. Requires a real screenshot and inputViewport from the latest inspection. Convert screenshot pixels with x * inputViewport.width / screenshot.width and likewise y. No dragging, OS input or automatic foreground fallback. Detected page, frame lifecycle, viewport, focus, or user input changes reject. Observed HTML iframe chains, including cross-origin/out-of-process frames when exact child routing is available, and bounded author shadow roots are supported after trusted observation. Frame mapping requires verified static invertible 2D geometry and complete owner/context evidence; unresolved ancestry or geometry rejects locally. Newly discovered geometry or closed roots require re-inspection. Extension child sessions require Chrome 125+ and the current root lease; unavailable routing never falls back. Ordinary div/span containers remain supported after exact-node metadata checks. Ordinary tab input stays targeted without selecting an active tab. Trusted input can trigger site dialogs or popups; HTML select and file/date/color controls are supported; an OS dialog needs an appropriate provider capability, never implicit global input or forced activation. Unknown input is never replayed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          },
+          "x": {
+            "type": "number",
+            "minimum": 0
+          },
+          "y": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "required": ["sessionId", "tabId", "observationId", "x", "y"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.interact", "browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp", "input.pointer"],
+      "maxOutputBytes": 131072
+    },
+    {
+      "name": "browser_workspace_key_press",
+      "description": "[Workspace browser] Press one named unmodified key in the exact browser tab's already-focused observed element, without requesting window activation. Requires focusedInputAvailable and a fresh inspection; never selects a current tab or focuses an element implicitly. Focus resolves through complete observed HTML iframe owner/context chains, including cross-origin/out-of-process frames when exact child routing is available, and bounded author shadow roots. Verified static invertible 2D geometry is required; unresolved ancestry, geometry or focus is unavailable. Newly discovered geometry or closed roots require re-inspection. Extension child sessions require Chrome 125+ and the current root lease; unavailable routing never falls back. Detected frame lifecycle changes reject. Ordinary focused contenteditable containers remain supported after exact-node metadata checks. Ordinary tab input stays targeted without selecting an active tab. Trusted input can trigger site dialogs or popups; HTML select and file/date/color controls are supported; an OS dialog needs an appropriate provider capability, never implicit global input or forced activation. Unknown input is never replayed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          },
+          "key": {
+            "type": "string",
+            "enum": [
+              "Enter",
+              "Tab",
+              "Escape",
+              "ArrowUp",
+              "ArrowDown",
+              "ArrowLeft",
+              "ArrowRight",
+              "Backspace",
+              "Delete",
+              "Home",
+              "End",
+              "PageUp",
+              "PageDown",
+              "Space"
+            ]
+          }
+        },
+        "required": ["sessionId", "tabId", "observationId", "key"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.interact", "browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp", "input.keyboard"],
+      "maxOutputBytes": 131072
+    },
+    {
+      "name": "browser_workspace_type",
+      "description": "[Workspace browser] Replace the value in one visible, typeable opaque target from the latest browser_workspace_inspect observation, optionally submitting its form. Text is dispatched as an ordinary tool argument regardless of field metadata.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          },
+          "observationId": {
+            "type": "string"
+          },
+          "targetId": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "submit": {
+            "type": "boolean"
+          }
+        },
+        "required": ["sessionId", "tabId", "observationId", "targetId", "text"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.interact", "browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp", "dom.set_value"],
+      "maxOutputBytes": 131072
+    },
+    {
+      "name": "browser_workspace_select",
+      "description": "[Workspace browser] Select one native option by exact value or unique exact visible label in a visible select target from the latest browser_workspace_inspect observation. Consumes the observation and fails closed if the target or option changed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          },
+          "observationId": {
+            "type": "string"
+          },
+          "targetId": {
+            "type": "string"
+          },
+          "option": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "tabId",
+          "observationId",
+          "targetId",
+          "option"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.interact", "browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp", "dom.select_option"],
+      "maxOutputBytes": 131072
+    },
+    {
+      "name": "browser_workspace_scroll",
+      "description": "[Workspace browser] Scroll the page viewport in one explicit tab using the latest browser_workspace_inspect observation. Direction is up/down/left/right and pixels is an integer from 1 to 2000. Consumes the observation; inspect again before interacting. Nested scrolling containers are not supported.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          },
+          "observationId": {
+            "type": "string"
+          },
+          "direction": {
+            "type": "string",
+            "enum": ["up", "down", "left", "right"]
+          },
+          "pixels": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000
+          }
+        },
+        "required": [
+          "sessionId",
+          "tabId",
+          "observationId",
+          "direction",
+          "pixels"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.interact", "browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp", "dom.scroll"],
+      "maxOutputBytes": 131072
+    },
+    {
+      "name": "browser_workspace_close",
+      "description": "[Workspace browser] Close one explicit ZenX browser tab and invalidate its latest observation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string",
+            "description": "Required for a shared Workspace tab after human takeover: pass its latest browser_workspace_inspect observationId. Missing, stale, or pre-takeover references reject. Other backends do not require this field."
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.navigate"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "tab.close"]
+    },
+    {
+      "name": "browser_workspace_close_session",
+      "description": "[Workspace browser] Detach this Agent session without closing the user's shared Workspace pages or clearing their storage.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.navigate"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "session.close"]
+    },
+    {
+      "name": "browser_workspace_evaluate",
+      "description": "[Workspace browser] Evaluate a JavaScript expression in a separate page DOM isolated world. May mutate pages, submit forms or send requests; requires a fresh observation and interaction permission. Defaults to a separate isolated world; world:main selects the pinned page context to access application globals.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string"
+          },
+          "expression": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100000
+          },
+          "world": {
+            "type": "string",
+            "enum": ["isolated", "main"]
+          }
+        },
+        "required": ["sessionId", "tabId", "observationId", "expression"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.interact"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_workspace_network_start",
+      "description": "[Workspace browser] Start opt-in network event collection on the exact tab attachment; survives fresh code calls, no past traffic recovery.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_workspace_network_read",
+      "description": "[Workspace browser] Read bounded captured network events using eventCursor and limit (1–100). Full retained capture is in shared rawPath; evicted cursors fail.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "eventCursor": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_workspace_network_response",
+      "description": "[Workspace browser] Read body and base64Encoded for an observed requestId in this exact attachment. Native response eviction is an error.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId", "requestId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_workspace_console_start",
+      "description": "[Workspace browser] Start opt-in console/error collection on the exact tab attachment; survives fresh code calls.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_workspace_console_read",
+      "description": "[Workspace browser] Read bounded console events with eventCursor and limit (1–100), plus shared full rawPath.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "eventCursor": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_workspace_content",
+      "description": "[Workspace browser] Read full current top-document HTML from the exact owned tab.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_workspace_extensions",
+      "description": "[Workspace browser] List extensions actually implemented by this tab's provider; unsupported backends never fall back.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_workspace_screenshot",
+      "description": "[Workspace browser] Capture the exact tab with existing fenced inspect and return PNG artifact plus fresh observation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_connected_list_tabs",
+      "description": "[Connected external browser] List bounded metadata for tabs in one explicit ZenX browser session. Cookies, storage, headers, and history are never returned.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.connected.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "user_session",
+        "authenticated_state_in_place",
+        "cdp",
+        "tab_metadata.read"
+      ],
+      "maxOutputBytes": 8192
+    },
+    {
+      "name": "browser_connected_open",
+      "description": "[Connected external browser] Open an http(s) URL in a user browser tab in an explicit attached user browser session. Returns the new tabId without activating an app window.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "keep": {
+            "type": "boolean",
+            "description": "Keep this new page as a deliverable after the turn; defaults to false."
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          }
+        },
+        "required": ["sessionId", "url"],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "browser.connected.navigate",
+        "browser.connected.tabs.read"
+      ],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "user_session",
+        "authenticated_state_in_place",
+        "cdp",
+        "dom.navigate"
+      ],
+      "maxOutputBytes": 131072
+    },
+    {
+      "name": "browser_connected_navigate",
+      "description": "[Connected external browser] Navigate one explicit ZenX browser session/tab target to an http(s) URL.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string",
+            "description": "Required for a shared Workspace tab after human takeover: pass its latest browser_connected_inspect observationId. Missing, stale, or pre-takeover references reject. Other backends do not require this field."
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          }
+        },
+        "required": ["sessionId", "tabId", "url"],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "browser.connected.navigate",
+        "browser.connected.tabs.read"
+      ],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "user_session",
+        "authenticated_state_in_place",
+        "cdp",
+        "dom.navigate"
+      ],
+      "maxOutputBytes": 131072
+    },
+    {
+      "name": "browser_connected_inspect",
+      "description": "[Connected external browser] Inspect one tab, or use nextCursor to read more of its exact captured snapshot. Coverage distinguishes unread captured data from native omissions. Omit baseObservationId or set full:true for a self-contained first page; a retained matching base allows a smaller diff. Target IDs are stable only for surviving observed DOM nodes; actions require the fresh observationId.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Continue the exact immutable captured observation using its returned nextCursor. Does not recapture or renew action references. Omit to inspect afresh."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "description": "Search role, name, and value within this backend's captured targets. Coverage names the capture scope; a miss is not a whole-page claim. Follow nextCursor for more matches from the same capture."
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.connected.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "user_session",
+        "authenticated_state_in_place",
+        "cdp",
+        "dom.inspect"
+      ],
+      "maxOutputBytes": 131072
+    },
+    {
+      "name": "browser_connected_click",
+      "description": "[Connected external browser] Click one visible, clickable opaque target from the latest browser_connected_inspect observation. Stale, forged, hidden, or changed targets fail closed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string"
+          },
+          "targetId": {
+            "type": "string"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          }
+        },
+        "required": ["sessionId", "tabId", "observationId", "targetId"],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "browser.connected.interact",
+        "browser.connected.tabs.read"
+      ],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "user_session",
+        "authenticated_state_in_place",
+        "cdp",
+        "dom.click"
+      ],
+      "maxOutputBytes": 131072
+    },
+    {
+      "name": "browser_connected_pointer_click",
+      "description": "[Connected external browser] Click CSS viewport coordinates in the exact observed browser tab without requesting window activation. Requires a real screenshot and inputViewport from the latest inspection. Convert screenshot pixels with x * inputViewport.width / screenshot.width and likewise y. No dragging, OS input or automatic foreground fallback. Detected page, frame lifecycle, viewport, focus, or user input changes reject. Observed HTML iframe chains, including cross-origin/out-of-process frames when exact child routing is available, and bounded author shadow roots are supported after trusted observation. Frame mapping requires verified static invertible 2D geometry and complete owner/context evidence; unresolved ancestry or geometry rejects locally. Newly discovered geometry or closed roots require re-inspection. Extension child sessions require Chrome 125+ and the current root lease; unavailable routing never falls back. Ordinary div/span containers remain supported after exact-node metadata checks. Ordinary tab input stays targeted without selecting an active tab. Trusted input can trigger site dialogs or popups; HTML select and file/date/color controls are supported; an OS dialog needs an appropriate provider capability, never implicit global input or forced activation. Unknown input is never replayed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          },
+          "x": {
+            "type": "number",
+            "minimum": 0
+          },
+          "y": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "required": ["sessionId", "tabId", "observationId", "x", "y"],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "browser.connected.interact",
+        "browser.connected.tabs.read"
+      ],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "user_session",
+        "authenticated_state_in_place",
+        "cdp",
+        "input.pointer"
+      ],
+      "maxOutputBytes": 131072
+    },
+    {
+      "name": "browser_connected_key_press",
+      "description": "[Connected external browser] Press one named unmodified key in the exact browser tab's already-focused observed element, without requesting window activation. Requires focusedInputAvailable and a fresh inspection; never selects a current tab or focuses an element implicitly. Focus resolves through complete observed HTML iframe owner/context chains, including cross-origin/out-of-process frames when exact child routing is available, and bounded author shadow roots. Verified static invertible 2D geometry is required; unresolved ancestry, geometry or focus is unavailable. Newly discovered geometry or closed roots require re-inspection. Extension child sessions require Chrome 125+ and the current root lease; unavailable routing never falls back. Detected frame lifecycle changes reject. Ordinary focused contenteditable containers remain supported after exact-node metadata checks. Ordinary tab input stays targeted without selecting an active tab. Trusted input can trigger site dialogs or popups; HTML select and file/date/color controls are supported; an OS dialog needs an appropriate provider capability, never implicit global input or forced activation. Unknown input is never replayed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          },
+          "key": {
+            "type": "string",
+            "enum": [
+              "Enter",
+              "Tab",
+              "Escape",
+              "ArrowUp",
+              "ArrowDown",
+              "ArrowLeft",
+              "ArrowRight",
+              "Backspace",
+              "Delete",
+              "Home",
+              "End",
+              "PageUp",
+              "PageDown",
+              "Space"
+            ]
+          }
+        },
+        "required": ["sessionId", "tabId", "observationId", "key"],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "browser.connected.interact",
+        "browser.connected.tabs.read"
+      ],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "user_session",
+        "authenticated_state_in_place",
+        "cdp",
+        "input.keyboard"
+      ],
+      "maxOutputBytes": 131072
+    },
+    {
+      "name": "browser_connected_type",
+      "description": "[Connected external browser] Replace the value in one visible, typeable opaque target from the latest browser_connected_inspect observation, optionally submitting its form. Text is dispatched as an ordinary tool argument regardless of field metadata.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          },
+          "observationId": {
+            "type": "string"
+          },
+          "targetId": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "submit": {
+            "type": "boolean"
+          }
+        },
+        "required": ["sessionId", "tabId", "observationId", "targetId", "text"],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "browser.connected.interact",
+        "browser.connected.tabs.read"
+      ],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "user_session",
+        "authenticated_state_in_place",
+        "cdp",
+        "dom.set_value"
+      ],
+      "maxOutputBytes": 131072
+    },
+    {
+      "name": "browser_connected_select",
+      "description": "[Connected external browser] Select one native option by exact value or unique exact visible label in a visible select target from the latest browser_connected_inspect observation. Consumes the observation and fails closed if the target or option changed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          },
+          "observationId": {
+            "type": "string"
+          },
+          "targetId": {
+            "type": "string"
+          },
+          "option": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "tabId",
+          "observationId",
+          "targetId",
+          "option"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "browser.connected.interact",
+        "browser.connected.tabs.read"
+      ],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "user_session",
+        "authenticated_state_in_place",
+        "cdp",
+        "dom.select_option"
+      ],
+      "maxOutputBytes": 131072
+    },
+    {
+      "name": "browser_connected_scroll",
+      "description": "[Connected external browser] Scroll the page viewport in one explicit tab using the latest browser_connected_inspect observation. Direction is up/down/left/right and pixels is an integer from 1 to 2000. Consumes the observation; inspect again before interacting. Nested scrolling containers are not supported.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          },
+          "observationId": {
+            "type": "string"
+          },
+          "direction": {
+            "type": "string",
+            "enum": ["up", "down", "left", "right"]
+          },
+          "pixels": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000
+          }
+        },
+        "required": [
+          "sessionId",
+          "tabId",
+          "observationId",
+          "direction",
+          "pixels"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "browser.connected.interact",
+        "browser.connected.tabs.read"
+      ],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "user_session",
+        "authenticated_state_in_place",
+        "cdp",
+        "dom.scroll"
+      ],
+      "maxOutputBytes": 131072
+    },
+    {
+      "name": "browser_connected_close",
+      "description": "[Connected external browser] Detach one explicit user-browser tab from this ZenX session without closing the user's tab.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string",
+            "description": "Required for a shared Workspace tab after human takeover: pass its latest browser_connected_inspect observationId. Missing, stale, or pre-takeover references reject. Other backends do not require this field."
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.connected.navigate"],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "user_session",
+        "authenticated_state_in_place",
+        "tab.close"
+      ]
+    },
+    {
+      "name": "browser_connected_close_session",
+      "description": "[Connected external browser] End this user-browser session: retire unkept Agent-created pages and release existing user pages without clearing storage or changing the user profile.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.connected.navigate"],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "user_session",
+        "authenticated_state_in_place",
+        "session.close"
+      ]
+    },
+    {
+      "name": "browser_connected_evaluate",
+      "description": "[Connected external browser] Evaluate a JavaScript expression in a separate page DOM isolated world. May mutate pages, submit forms or send requests; requires a fresh observation and interaction permission. Defaults to a separate isolated world; world:main selects the pinned page context to access application globals.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string"
+          },
+          "expression": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100000
+          },
+          "world": {
+            "type": "string",
+            "enum": ["isolated", "main"]
+          }
+        },
+        "required": ["sessionId", "tabId", "observationId", "expression"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.connected.interact"],
+      "interactionMode": "background_safe",
+      "capabilities": ["user_session", "authenticated_state_in_place", "cdp"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_connected_network_start",
+      "description": "[Connected external browser] Start opt-in network event collection on the exact tab attachment; survives fresh code calls, no past traffic recovery.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.connected.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["user_session", "authenticated_state_in_place", "cdp"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_connected_network_read",
+      "description": "[Connected external browser] Read bounded captured network events using eventCursor and limit (1–100). Full retained capture is in ephemeral rawPath; evicted cursors fail.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "eventCursor": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.connected.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["user_session", "authenticated_state_in_place", "cdp"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_connected_network_response",
+      "description": "[Connected external browser] Read body and base64Encoded for an observed requestId in this exact attachment. Native response eviction is an error.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId", "requestId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.connected.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["user_session", "authenticated_state_in_place", "cdp"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_connected_console_start",
+      "description": "[Connected external browser] Start opt-in console/error collection on the exact tab attachment; survives fresh code calls.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.connected.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["user_session", "authenticated_state_in_place", "cdp"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_connected_console_read",
+      "description": "[Connected external browser] Read bounded console events with eventCursor and limit (1–100), plus ephemeral full rawPath.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "eventCursor": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.connected.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["user_session", "authenticated_state_in_place", "cdp"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_connected_content",
+      "description": "[Connected external browser] Read full current top-document HTML from the exact owned tab.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.connected.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["user_session", "authenticated_state_in_place", "cdp"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_connected_extensions",
+      "description": "[Connected external browser] List extensions actually implemented by this tab's provider; unsupported backends never fall back.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.connected.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["user_session", "authenticated_state_in_place", "cdp"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_connected_screenshot",
+      "description": "[Connected external browser] Capture the exact tab with existing fenced inspect and return PNG artifact plus fresh observation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.connected.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["user_session", "authenticated_state_in_place", "cdp"],
+      "maxOutputBytes": 16384
+    }
+  ]
+}

@@ -1,0 +1,1019 @@
+{
+  "schemaVersion": 2,
+  "id": "computer",
+  "name": "Computer",
+  "version": "1.5.0",
+  "description": "Negotiated macOS desktop operations: targeted accessibility actions where supported and explicitly labeled, cancellable foreground takeover as the reliable baseline.",
+  "compatibility": {
+    "zenx": ">=0.1.0 <0.2.0"
+  },
+  "runtime": {
+    "type": "bundled",
+    "entry": "./dist/runtime.js"
+  },
+  "mainDocument": "If available, start with computer_list_windows; its query filters windows only. Otherwise use the supplied exact window target. Prefer a returned exact window ref with computer_inspect; providers without discovery accept an explicit native window target. Inspect coverage and follow nextCursor alone to read the immutable captured controls beyond the first page; native traversal omissions remain explicit and are not recoverable by paging. References express exact-fingerprint presentation continuity, not proven native object identity. Actions use exact control refs and native revalidation. Pass since with a retained observation ref for a diff; omit since or set full:true after context compaction/lost context. For retained controls, pass the control ref with an explicit latest observation ref; native action checks still decide freshness. Cursor pages do not replace the first-page diff baseline or renew action authority. Discard prior continuation pages on every new observation or first-page diff and follow its new nextCursor for tails. Prefer background-safe semantic controls. Native macOS global input requires this thread's selected target. computer_select_target or computer_screenshot selects one exact window; it does not activate it. Input activates and checks that same window after approval. Click x/y are screenshot image pixels and require its captureId, not desktop coordinates. Key/scroll/type/shortcut require the bindingId returned by select/screenshot; reuse it without a screenshot per key, so pending approval cannot silently follow a later selection. After stale geometry, closed target, cancelled or uncertain input, reselect/reobserve; never replay an uncertain action automatically. A full desktop image never selects a target. Other providers do not inherit this binding guarantee. When AX is empty or partial, explicitly capture the same window then call computer_ocr with that captureId for local visual text. OCR boxes are not accessibility controls and do not authorize semantic press. OCR never activates, wakes or unlocks the desktop. Screenshot captureSource/backgroundInputEligible distinguish verified native window input proof from legacy read-only images. Older macOS and known oversized SCK images retain active-only legacy screenshots/OCR, which never authorize background click. Native background_type/background_key_press/background_shortcut derive only the selected application identity from binding and target its current focus; no original-window guarantee. Separate app keyboard permission is required; internal focus and this app’s windows behind the foreground app may reorder, while foreign windows, desktop foreground and pointer must remain stable. Unknown input is never replayed.",
+  "provider": {
+    "id": "macos-desktop",
+    "platforms": ["darwin"],
+    "interactionModes": ["background_safe", "foreground_required"],
+    "capabilities": [
+      "window.list",
+      "desktop.environment.read",
+      "accessibility.inspect",
+      "semantic.press",
+      "semantic.set_value",
+      "window.capture",
+      "foreground.pointer",
+      "foreground.keyboard",
+      "foreground.scroll",
+      "window.ocr",
+      "window.background_click",
+      "app.background_keyboard",
+      "foreground.drag"
+    ]
+  },
+  "permissions": [
+    {
+      "id": "computer.accessibility.inspect",
+      "title": "Inspect a targeted app",
+      "description": "Read a bounded accessibility tree for an explicitly targeted app or window.",
+      "scope": "local-device"
+    },
+    {
+      "id": "computer.accessibility.act",
+      "title": "Act on a targeted control",
+      "description": "Perform a semantic press or set a semantic value on an explicitly selected accessibility control without global input.",
+      "scope": "local-device"
+    },
+    {
+      "id": "computer.window.capture",
+      "title": "Capture a targeted window",
+      "description": "Capture one explicitly targeted app window to a private short-lived artifact.",
+      "scope": "local-device"
+    },
+    {
+      "id": "computer.foreground.control",
+      "title": "Control the foreground desktop",
+      "description": "Use global pointer, keyboard, focus, or scrolling. ZenX exposes these as explicitly labeled, cancellable foreground takeover.",
+      "scope": "local-device"
+    },
+    {
+      "id": "computer.app.background_keyboard",
+      "title": "Send keyboard input to a background app",
+      "description": "Send bounded text, a basic key or a shortcut to the selected application current focus. Its windows may reorder behind the foreground app; foreign windows, desktop foreground and pointer stay stable. No exact-window guarantee or global takeover.",
+      "scope": "local-device"
+    },
+    {
+      "id": "computer.window.background_click",
+      "title": "Click inside a background window",
+      "description": "Send one left click to an exact captured window without desktop foreground or pointer takeover; application-internal focus may change.",
+      "scope": "local-device"
+    }
+  ],
+  "tools": [
+    {
+      "name": "computer_background_type",
+      "description": "Type 1–1024 Unicode scalars into this binding's selected application CURRENT FOCUS using target-PID Unicode events. Application-internal focus may change; no exact-window/control guarantee, desktop activation, pointer movement or clipboard. Only this app’s windows may reorder behind the current foreground app; foreign windows, desktop focus and pointer must stay stable. Separate app keyboard permission; native console session including locked. Partial or unknown input must not be replayed. Receipt does not prove application effect.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "bindingId": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        },
+        "required": ["bindingId", "text"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.app.background_keyboard"],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "app.background_keyboard",
+        "app_current_focus",
+        "no_global_input",
+        "cancellable"
+      ]
+    },
+    {
+      "name": "computer_background_key_press",
+      "description": "Send one basic key to this binding's selected application CURRENT FOCUS. Application-internal focus may change; not an exact-window/control operation. No modifiers, shortcuts, desktop activation, pointer movement or clipboard. Only this app’s windows may reorder behind the current foreground app; foreign windows, desktop focus and pointer must stay stable. Separate app keyboard permission; native console session including locked. Never replay unknown input; posting does not prove effect.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "bindingId": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string",
+            "enum": [
+              "enter",
+              "escape",
+              "tab",
+              "backspace",
+              "space",
+              "arrowUp",
+              "arrowDown",
+              "arrowLeft",
+              "arrowRight",
+              "delete",
+              "home",
+              "end",
+              "pageUp",
+              "pageDown",
+              "f1",
+              "f2",
+              "f3",
+              "f4",
+              "f5",
+              "f6",
+              "f7",
+              "f8",
+              "f9",
+              "f10",
+              "f11",
+              "f12",
+              "f13",
+              "f14",
+              "f15",
+              "f16",
+              "f17",
+              "f18",
+              "f19",
+              "f20"
+            ]
+          }
+        },
+        "required": ["bindingId", "key"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.app.background_keyboard"],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "app.background_keyboard",
+        "app_current_focus",
+        "no_global_input",
+        "cancellable"
+      ]
+    },
+    {
+      "name": "computer_background_shortcut",
+      "description": "Send one layout-aware shortcut to this binding's selected application CURRENT FOCUS, not the original window/control. Logical unshifted key mapping uses the current Command layout when command is present; modifiers apply separately. No global activation, pointer movement, direct clipboard API access or fallback. Shortcut effects are application-defined. Foreign windows and desktop state must remain stable. Application effect is unverified; never replay unknown input.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "bindingId": {
+            "type": "string"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "a",
+                  "b",
+                  "c",
+                  "d",
+                  "e",
+                  "f",
+                  "g",
+                  "h",
+                  "i",
+                  "j",
+                  "k",
+                  "l",
+                  "m",
+                  "n",
+                  "o",
+                  "p",
+                  "q",
+                  "r",
+                  "s",
+                  "t",
+                  "u",
+                  "v",
+                  "w",
+                  "x",
+                  "y",
+                  "z",
+                  "0",
+                  "1",
+                  "2",
+                  "3",
+                  "4",
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  "enter",
+                  "escape",
+                  "tab",
+                  "backspace",
+                  "space",
+                  "arrowUp",
+                  "arrowDown",
+                  "arrowLeft",
+                  "arrowRight",
+                  "delete",
+                  "home",
+                  "end",
+                  "pageUp",
+                  "pageDown",
+                  "f1",
+                  "f2",
+                  "f3",
+                  "f4",
+                  "f5",
+                  "f6",
+                  "f7",
+                  "f8",
+                  "f9",
+                  "f10",
+                  "f11",
+                  "f12",
+                  "f13",
+                  "f14",
+                  "f15",
+                  "f16",
+                  "f17",
+                  "f18",
+                  "f19",
+                  "f20"
+                ]
+              },
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1
+              }
+            ]
+          },
+          "modifiers": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": ["command", "control", "option", "shift"]
+            }
+          }
+        },
+        "required": ["bindingId", "key", "modifiers"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.app.background_keyboard"],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "app.background_keyboard",
+        "app_current_focus",
+        "no_global_input",
+        "cancellable"
+      ]
+    },
+    {
+      "name": "computer_background_click",
+      "description": "Click x/y image pixels of this thread's current exact-window screenshot with button left (default), right or middle, without desktop activation, raising or pointer movement. Native macOS 14+ console session, including locked; requires a fresh verified native full-window screenshot (SCK when bright, WindowServer when asleep) and uses a runtime-checked window-local primitive and separate permission. Consumes the capture. Application-internal focus may change. Posted/release receipts do not verify application effect; never retry unknown input automatically.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "applicationId": {
+                "type": "string"
+              },
+              "bundleId": {
+                "type": "string"
+              },
+              "windowTitle": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "anyOf": [
+              {
+                "required": ["pid"]
+              },
+              {
+                "required": ["applicationId"]
+              },
+              {
+                "required": ["bundleId"]
+              }
+            ]
+          },
+          "bindingId": {
+            "type": "string"
+          },
+          "captureId": {
+            "type": "string"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          },
+          "button": {
+            "type": "string",
+            "enum": ["left", "right", "middle"],
+            "default": "left"
+          }
+        },
+        "required": ["target", "bindingId", "captureId", "x", "y"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.window.background_click"],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "window.background_click",
+        "app_targeted",
+        "no_global_input",
+        "capture_bound",
+        "cancellable"
+      ]
+    },
+    {
+      "name": "computer_environment",
+      "description": "Read the current desktop session and power availability. lockedTools names this provider’s scoped capabilities while locked; re-inspect for fresh controls and treat native failures as failures. Only explicitly listed native scoped tools may work while locked; foreground input requires an active session. This read does not wake, unlock, or operate another app.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.accessibility.inspect"],
+      "interactionMode": "background_safe",
+      "capabilities": ["desktop.environment.read", "no_global_input"],
+      "maxOutputBytes": 4096
+    },
+    {
+      "name": "computer_list_windows",
+      "description": "List open desktop windows and their running applications without activating them. Pass a case-insensitive query matching application name, PID, or title to narrow results. Use its returned window ref with computer_inspect; this is not a catalog of installed apps.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.accessibility.inspect"],
+      "interactionMode": "background_safe",
+      "capabilities": ["window.list", "no_global_input"],
+      "maxOutputBytes": 1048576
+    },
+    {
+      "name": "computer_inspect",
+      "description": "Inspect a bounded first page of at most 32 controls in one exact app window, or follow nextCursor without recapture. Coverage separately reports available pages and native omissions; this is not a complete accessibility tree. Model callers use since with an exact observation ref to request a diff; omit it or set full:true to resync. target.windowTitle is required.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "applicationId": {
+                "type": "string"
+              },
+              "bundleId": {
+                "type": "string"
+              },
+              "windowTitle": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "anyOf": [
+              {
+                "required": ["pid"]
+              },
+              {
+                "required": ["applicationId"]
+              },
+              {
+                "required": ["bundleId"]
+              }
+            ]
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Continue the exact immutable captured observation using its returned nextCursor. Does not recapture or renew action references. Omit to inspect afresh."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 32
+          }
+        },
+        "required": ["target"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.accessibility.inspect"],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "accessibility.inspect",
+        "app_targeted",
+        "no_global_input"
+      ],
+      "maxOutputBytes": 131072
+    },
+    {
+      "name": "computer_press",
+      "description": "Perform a native semantic press on one control returned by computer_inspect. Does not move the pointer, type keys, or activate the target app.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "applicationId": {
+                "type": "string"
+              },
+              "bundleId": {
+                "type": "string"
+              },
+              "windowTitle": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "anyOf": [
+              {
+                "required": ["pid"]
+              },
+              {
+                "required": ["applicationId"]
+              },
+              {
+                "required": ["bundleId"]
+              }
+            ]
+          },
+          "control": {
+            "type": "object",
+            "properties": {
+              "observationId": {
+                "type": "string"
+              },
+              "targetId": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "required": ["observationId", "targetId"]
+          },
+          "observe": {
+            "type": "boolean"
+          },
+          "baseObservationId": {
+            "type": "string"
+          },
+          "full": {
+            "type": "boolean"
+          }
+        },
+        "required": ["target", "control"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.accessibility.act"],
+      "interactionMode": "background_safe",
+      "capabilities": ["semantic.press", "app_targeted", "no_global_input"]
+    },
+    {
+      "name": "computer_set_value",
+      "description": "Set the supplied text on one editable opaque target from the latest computer_inspect observation. The value follows the ordinary tool path and host/model policy decides how it is handled.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "applicationId": {
+                "type": "string"
+              },
+              "bundleId": {
+                "type": "string"
+              },
+              "windowTitle": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "anyOf": [
+              {
+                "required": ["pid"]
+              },
+              {
+                "required": ["applicationId"]
+              },
+              {
+                "required": ["bundleId"]
+              }
+            ]
+          },
+          "control": {
+            "type": "object",
+            "properties": {
+              "observationId": {
+                "type": "string"
+              },
+              "targetId": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "required": ["observationId", "targetId"]
+          },
+          "value": {
+            "type": "string"
+          },
+          "observe": {
+            "type": "boolean"
+          },
+          "baseObservationId": {
+            "type": "string"
+          },
+          "full": {
+            "type": "boolean"
+          }
+        },
+        "required": ["target", "control", "value"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.accessibility.act"],
+      "interactionMode": "background_safe",
+      "capabilities": ["semantic.set_value", "app_targeted", "no_global_input"]
+    },
+    {
+      "name": "computer_screenshot",
+      "description": "Capture one explicit app/window target to a private five-minute PNG artifact. Returns metadata/path, never pixels in the Thread journal.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "applicationId": {
+                "type": "string"
+              },
+              "bundleId": {
+                "type": "string"
+              },
+              "windowTitle": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "anyOf": [
+              {
+                "required": ["pid"]
+              },
+              {
+                "required": ["applicationId"]
+              },
+              {
+                "required": ["bundleId"]
+              }
+            ]
+          }
+        },
+        "required": ["target"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.window.capture"],
+      "interactionMode": "background_safe",
+      "capabilities": ["window.capture", "app_targeted", "no_global_input"],
+      "maxOutputBytes": 4096
+    },
+    {
+      "permissions": ["computer.foreground.control"],
+      "interactionMode": "foreground_required",
+      "capabilities": ["global_input", "may_change_focus", "cancellable"],
+      "name": "computer_foreground_click",
+      "description": "FOREGROUND TAKEOVER: click image-pixel x/y in this thread's selected exact window. Requires current window screenshot captureId; validates window/focus immediately before native posting.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          },
+          "button": {
+            "type": "string",
+            "enum": ["left", "right"]
+          },
+          "captureId": {
+            "type": "string"
+          }
+        },
+        "required": ["x", "y", "captureId"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "permissions": ["computer.foreground.control"],
+      "interactionMode": "foreground_required",
+      "capabilities": ["global_input", "may_change_focus", "cancellable"],
+      "name": "computer_foreground_key_press",
+      "description": "FOREGROUND TAKEOVER: press one allowlisted key in the focused control. Stop cancels the running operation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": [
+              "enter",
+              "escape",
+              "tab",
+              "backspace",
+              "space",
+              "arrowUp",
+              "arrowDown",
+              "arrowLeft",
+              "arrowRight",
+              "delete",
+              "home",
+              "end",
+              "pageUp",
+              "pageDown",
+              "f1",
+              "f2",
+              "f3",
+              "f4",
+              "f5",
+              "f6",
+              "f7",
+              "f8",
+              "f9",
+              "f10",
+              "f11",
+              "f12",
+              "f13",
+              "f14",
+              "f15",
+              "f16",
+              "f17",
+              "f18",
+              "f19",
+              "f20"
+            ]
+          },
+          "bindingId": {
+            "type": "string"
+          }
+        },
+        "required": ["key", "bindingId"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "permissions": ["computer.foreground.control"],
+      "interactionMode": "foreground_required",
+      "capabilities": ["global_input", "may_change_focus", "cancellable"],
+      "name": "computer_foreground_scroll",
+      "description": "FOREGROUND TAKEOVER: scroll the current foreground target. Stop cancels the running operation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deltaY": {
+            "type": "number"
+          },
+          "bindingId": {
+            "type": "string"
+          }
+        },
+        "required": ["deltaY", "bindingId"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "computer_foreground_drag",
+      "description": "FOREGROUND TAKEOVER: left-button drag from x/y to toX/toY image pixels in one fresh exact-window capture. A bounded path checks the same window/focus before each event. Cancellation or focus loss stops movement and attempts mouse-up cleanup at the current pointer; cleanup can reach changed focus. Posted/release receipts do not prove application effect. Never replay uncertain input.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "bindingId": {
+            "type": "string"
+          },
+          "captureId": {
+            "type": "string"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          },
+          "toX": {
+            "type": "number"
+          },
+          "toY": {
+            "type": "number"
+          }
+        },
+        "required": ["bindingId", "captureId", "x", "y", "toX", "toY"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.foreground.control"],
+      "interactionMode": "foreground_required",
+      "capabilities": [
+        "foreground.drag",
+        "global_input",
+        "may_change_focus",
+        "cancellable",
+        "capture_bound",
+        "target_bound"
+      ]
+    },
+    {
+      "name": "computer_foreground_type",
+      "description": "FOREGROUND TAKEOVER: type up to 1024 Unicode scalars into this thread's selected exact window using Unicode keyboard events, without clipboard access. Does not guarantee application acceptance. Partial/cancelled input must not be replayed automatically; no text is echoed in the receipt.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "bindingId": {
+            "type": "string"
+          }
+        },
+        "required": ["text", "bindingId"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.foreground.control"],
+      "interactionMode": "foreground_required",
+      "capabilities": [
+        "global_input",
+        "may_change_focus",
+        "cancellable",
+        "target_bound"
+      ]
+    },
+    {
+      "name": "computer_foreground_shortcut",
+      "description": "FOREGROUND TAKEOVER: send one shortcut to this thread's selected exact window. key is a logical unshifted printable character in the current Command layout when command is present, otherwise the current base layout; modifiers apply separately. Navigation keys are layout-independent. Missing or ambiguous character mappings/input-source changes fail closed; no ANSI fallback.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "bindingId": {
+            "type": "string"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "a",
+                  "b",
+                  "c",
+                  "d",
+                  "e",
+                  "f",
+                  "g",
+                  "h",
+                  "i",
+                  "j",
+                  "k",
+                  "l",
+                  "m",
+                  "n",
+                  "o",
+                  "p",
+                  "q",
+                  "r",
+                  "s",
+                  "t",
+                  "u",
+                  "v",
+                  "w",
+                  "x",
+                  "y",
+                  "z",
+                  "0",
+                  "1",
+                  "2",
+                  "3",
+                  "4",
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  "enter",
+                  "escape",
+                  "tab",
+                  "backspace",
+                  "space",
+                  "arrowUp",
+                  "arrowDown",
+                  "arrowLeft",
+                  "arrowRight",
+                  "delete",
+                  "home",
+                  "end",
+                  "pageUp",
+                  "pageDown",
+                  "f1",
+                  "f2",
+                  "f3",
+                  "f4",
+                  "f5",
+                  "f6",
+                  "f7",
+                  "f8",
+                  "f9",
+                  "f10",
+                  "f11",
+                  "f12",
+                  "f13",
+                  "f14",
+                  "f15",
+                  "f16",
+                  "f17",
+                  "f18",
+                  "f19",
+                  "f20"
+                ]
+              },
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1
+              }
+            ],
+            "description": "A named native key or one printable logical unshifted Unicode scalar. The current keyboard layout must map it uniquely."
+          },
+          "modifiers": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": ["command", "control", "option", "shift"]
+            }
+          }
+        },
+        "required": ["key", "modifiers", "bindingId"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.foreground.control"],
+      "interactionMode": "foreground_required",
+      "capabilities": [
+        "global_input",
+        "may_change_focus",
+        "cancellable",
+        "target_bound"
+      ]
+    },
+    {
+      "name": "computer_ocr",
+      "description": "Read local visual text from this thread's current exact-window screenshot, with original capture time and top-left image-pixel boxes. Explicit ten-second read, not an automatic AX fallback. Up to 96 text boxes/16 KiB text; accepts an original image at most 16 MP and locally bounds recognition to 4 MP. Default languages zh-Hans then en-US; Chinese/English requests are normalized Chinese-first; returned languages report the effective order. Unsupported languages/combinations fail explicitly. Observations only, never AX controls or proof a click works. No recapture, foreground activation, wake, unlock or cloud OCR.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "applicationId": {
+                "type": "string"
+              },
+              "bundleId": {
+                "type": "string"
+              },
+              "windowTitle": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "anyOf": [
+              {
+                "required": ["pid"]
+              },
+              {
+                "required": ["applicationId"]
+              },
+              {
+                "required": ["bundleId"]
+              }
+            ]
+          },
+          "captureId": {
+            "type": "string"
+          },
+          "languages": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "maxLength": 32
+            }
+          }
+        },
+        "required": ["target", "captureId"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.window.capture"],
+      "interactionMode": "background_safe",
+      "capabilities": ["window.ocr", "app_targeted", "no_global_input"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "computer_select_target",
+      "description": "Select this thread's exact application/window for subsequent foreground input without activating it. Supply an exact listed window target; application-only targets must resolve to exactly one window.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "applicationId": {
+                "type": "string"
+              },
+              "bundleId": {
+                "type": "string"
+              },
+              "windowTitle": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "anyOf": [
+              {
+                "required": ["pid"]
+              },
+              {
+                "required": ["applicationId"]
+              },
+              {
+                "required": ["bundleId"]
+              }
+            ]
+          }
+        },
+        "required": ["target"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.accessibility.inspect"],
+      "interactionMode": "background_safe",
+      "capabilities": ["app_targeted", "no_global_input"]
+    }
+  ]
+}

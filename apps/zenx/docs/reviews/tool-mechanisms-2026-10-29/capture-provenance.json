@@ -1,0 +1,24 @@
+{
+  "method": "Unmodified JPEG bytes returned by cloud CUA native Chromium screenshot API; detected file format preserved with .jpg extension",
+  "environment": "Cloud native Chromium; no user-machine activity",
+  "url": "http://127.0.0.1:8475/",
+  "previewSourceCommit": "902286ccf56f0ba9dc1d604e2b8e10ea6f4011d0",
+  "htmlSha256": "950e86ed0a69875f7c29696bd025f2b29ead52b918513ef023aa667b9d02b6e7",
+  "transferVerification": "Native terminal sha256sum matched HTML source hash after Mousepad base64 transfer and gzip decode",
+  "boundary": "Synthetic fixture using production ContextCompactionEvent; no real user data or provider request",
+  "interaction": "Opened Context compacted disclosure, selected third Diagnostics tab, scrolled page, captured call, scrolled raw JSON panel, captured output",
+  "screenshots": [
+    {
+      "file": "hosted-discovery-call.jpg",
+      "sha256": "5b1eba3f2160d4b87f711ce448ee4a155868192342d40f1500ec26daf7d6750e",
+      "bytes": 83047
+    },
+    {
+      "file": "hosted-discovery-output.jpg",
+      "sha256": "64d6db8cf2c2587986d6812ff558dbeacc588d81ade4b55067d7f3eba0eaddfd",
+      "bytes": 79086
+    }
+  ],
+  "acceptedSourceCommit": "6a72b7e096d6d465c1454744fd6a19408eb58fcb",
+  "sourceEquivalence": "All 49 repository inputs from the preview esbuild metafile match the integrated source byte for byte."
+}

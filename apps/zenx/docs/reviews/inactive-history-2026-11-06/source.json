@@ -1,0 +1,16 @@
+{
+  "commit": "66c6b6c3f6bf8ff789bae27fa000bc88d68a49ac",
+  "scope": "Production App with synthetic protocol and deterministic generated text. V8 retained used heap after explicit GC is not RSS, Electron WebContents, decoded image/GPU memory, macOS footprint, or original-machine acceptance.",
+  "baselineAppBlob": "97bbf176c50becc43da1a55670abd33fa130ebad",
+  "candidateAppBlob": "c590ac63c886b43799d80f76d0e03aec7c350a4b",
+  "sources": {
+    "src/renderer/src/App.tsx": "69b3b05a09ea4ccfb8c92d14a6da520fa65f4c5d5657ab35e28f1389991812d2",
+    "src/renderer/src/ThreadView.tsx": "b3907f648d99563307d4fb8566631d6e65486d28c7ade30ca37cb72b504f0703",
+    "src/renderer/src/ExperimentalTranscriptViewport.tsx": "ca8bf8779f7b2e8cb8e670c6f3b9b6a771a1499bf0485a149dc19fa60ad5a365",
+    "test/fixtures/inactive-history-visual.tsx": "d68080407703cb6e76ab6c9c5f2bf88c64d69013c7a95217475b66e10e893501",
+    "test/native-recovery-fixture.ts": "dfa3310eec0ad06590e2161fe17f38ac6ea36e21dd83bd72efa192df6e939c0f",
+    "scripts/build-inactive-history-preview.mjs": "93d4cf0d09e05bbe6ca119b6e6699bb44865406a382af8d517626206a366bcb7",
+    "scripts/capture-inactive-history-preview.mjs": "d513a7d772fe4a1c660249960f89dfe3bfa57e7879b43c2b28bd2ce2215467f6",
+    "scripts/preview-browser-lifecycle.mjs": "71ee505a535bbd4701e48668a66e26821f335a4dc0dc44bbf7af80274dde84fa"
+  }
+}

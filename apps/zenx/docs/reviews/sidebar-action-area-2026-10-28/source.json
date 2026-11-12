@@ -1,0 +1,16 @@
+{
+  "base": "f10ef8371029bf27e0b70cb61231c682fb9ce3f2",
+  "commit": "3cbb20e102cafa5edbe3d04d7dc9c5dbdfd0c09a",
+  "scope": "Actual Sidebar, Room/PAW navigation, shared production styles and existing sidebar-information fixture. Synthetic in-memory threads/projects/plugins only; no Host, credentials, local user computer or model API. New-thread, plugin navigation and persistence callbacks are fixture stubs; screenshots do not establish native Electron or full App acceptance. Before overrides only Sidebar.tsx and styles.css with exact main source; after uses committed source.",
+  "sources": {
+    "apps/zenx/src/renderer/src/Sidebar.tsx": "bdcd93ff8345aa07c2ab0d7a64fa20d16317b0da104b05bd4b3fb5b2ba235342",
+    "apps/zenx/src/renderer/src/styles.css": "d4506ae7544c528c229e7e47a55cb8a54066dee19ce4b333d8d579317351dd57",
+    "apps/zenx/test/fixtures/sidebar-information-preview.tsx": "87aefad9fb96b8428248b2649bf9f161576c49287a4fad2ca6d42cacfbc8286a"
+  },
+  "urls": [
+    "before.html?navigation=sections&theme=dark",
+    "after.html?navigation=sections&theme=dark",
+    "after.html?navigation=sections&theme=light",
+    "after.html?navigation=sections&theme=light&lang=en"
+  ]
+}

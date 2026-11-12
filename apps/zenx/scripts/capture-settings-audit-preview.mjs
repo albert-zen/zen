@@ -1,0 +1,952 @@
+/** Uses the existing Ubuntu CI Chrome, never a user profile or downloaded browser. */
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { constants } from "node:fs";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import { execFileSync, spawn } from "node:child_process";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { once } from "node:events";
+import { observePreviewChrome } from "./preview-browser-lifecycle.mjs";
+
+assert.equal(
+  process.env.GITHUB_ACTIONS,
+  "true",
+  "This capture runs only in GitHub Actions; open the HTML manually elsewhere.",
+);
+assert.equal(process.platform, "linux", "This fixture targets Ubuntu CI.");
+const directory = path.resolve(process.argv[2] ?? ".settings-audit-preview");
+const densityLongPath = `/synthetic/${"long-project-name-".repeat(20)}`;
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const evidence = {
+  scope:
+    "Actual production SettingsView and separately launched production DirectoryPicker; synthetic providers/catalog/directory responses only. No Host, credentials, private settings, live provider, Host mutations or persistence. Deferred Save uses a synthetic Promise only. Settings and QA-only directory launcher scaffolds, not full App navigation/onboarding/native Electron or filesystem integration. Observations are not desired-UX assertions.",
+  browserSandboxDisabled: false,
+  cases: [],
+  screenshots: {},
+  rendererErrors: [],
+  externalRequests: [],
+};
+
+const measure = `(() => {
+  const rect = e => { if (!e) return null; const r=e.getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom}; };
+  const editor=document.querySelector('.provider-editor');
+  const scroll=document.querySelector('#root[hidden] ~ div .page-scroll') ?? document.querySelector('.page-scroll');
+  const active=document.activeElement;
+  const list=document.querySelector('.directory-picker-list');
+  const selection=document.querySelector('#directory-picker-selection');
+  const listRect=rect(list);
+  const rows=[...document.querySelectorAll('.directory-picker-list [data-index]')];
+  const visibleIn=(outer, inner) => !!outer && !!inner && inner.width > 0 && inner.height > 0 && inner.x >= outer.x - 1 && inner.right <= outer.right + 1 && inner.y >= outer.y - 1 && inner.bottom <= outer.bottom + 1;
+  const viewportRect={x:0,y:0,width:innerWidth,height:innerHeight,right:innerWidth,bottom:innerHeight};
+
+  return {viewport:{width:innerWidth,height:innerHeight}, editor:rect(editor), editorRole:editor?.getAttribute('role'), focusInEditor:!!editor?.contains(active), focus:{tag:active?.tagName,text:active?.textContent?.slice(0,120),label:active?.getAttribute('aria-label'),id:active?.id},
+    scroll:{top:scroll?.scrollTop,height:scroll?.clientHeight,total:scroll?.scrollHeight},
+    providerCards:document.querySelectorAll('.provider-profile-card').length, modelRows:document.querySelectorAll('.provider-model-row').length,
+    save:rect(document.querySelector('.provider-editor-actions [type="submit"]')),
+    discovery:rect(document.querySelector('.available-model-picker')),
+    errorSummary:document.querySelector('.provider-editor-error-summary')?.textContent,
+    capabilitySummaries:[...document.querySelectorAll('.provider-model-capabilities summary')].map(e=>e.textContent),
+    dialogs:document.querySelectorAll('[role="dialog"]').length,
+    overflow:document.documentElement.scrollWidth>innerWidth,
+    calls:window.__settingsAudit.calls,
+    responsive: Object.fromEntries(Object.entries({
+      foregroundCard: '.settings-foreground-control', foregroundLabel: '.settings-foreground-control-body strong',
+      foregroundSwitch: '.settings-foreground-control [role=switch]', risk: '#foreground-control-risk', help: '#foreground-control-help',
+      directoryBody: '.directory-picker-body', browser: '.directory-picker-browser', locations: '.directory-picker-body nav',
+      current: '.directory-picker-breadcrumbs [aria-current=location]', selection: '#directory-picker-selection'
+    }).map(([key, selector]) => [key, rect(document.querySelector(selector))])),
+    breadcrumbsOverflow: (() => { const e = document.querySelector(".directory-picker-breadcrumbs"); return !!e && e.scrollWidth > e.clientWidth; })(),
+    directoryGeometry: {
+      platform:document.documentElement.dataset.platform,
+      path:{scrollTop:selection?.scrollTop,clientHeight:selection?.clientHeight,scrollHeight:selection?.scrollHeight,focused:active===selection,text:selection?.textContent,title:selection?.title},
+      viewport: viewportRect, list: listRect, clientHeight:list?.clientHeight, scrollHeight:list?.scrollHeight, scrollTop:list?.scrollTop,
+      fullyVisibleRows:rows.filter(row => visibleIn(listRect,rect(row)) && visibleIn(viewportRect,rect(row))).map(row => Number(row.dataset.index)),
+      rowRects:rows.map(rect), focusedIndex:active?.getAttribute('data-index'),
+      focusRect:rect(active), focusVisible:!!active?.matches(':focus-visible'),
+      focusInsideList:!!list?.contains(active), focusFullyVisible:visibleIn(listRect,rect(active)) && visibleIn(viewportRect,rect(active)),
+      focusOutline:active ? getComputedStyle(active).outline : null, focusBoxShadow:active ? getComputedStyle(active).boxShadow : null,
+      footer:rect(document.querySelector('.directory-picker-dialog footer')),
+      cancel:rect(document.querySelector('.directory-picker-dialog footer .secondary-button')),
+      add:rect(document.querySelector('.directory-picker-dialog footer .primary-button')),
+      addDisabled:document.querySelector('.directory-picker-dialog footer .primary-button')?.disabled,
+      addDescription:document.querySelector('.directory-picker-dialog footer .primary-button')?.getAttribute('aria-describedby'),
+      pageScrollTop:document.scrollingElement?.scrollTop,
+    },
+    directory:{dialog:rect(document.querySelector(".directory-picker-shell")),path:document.querySelector(".directory-picker-dialog footer strong")?.textContent,rows:document.querySelectorAll(".directory-picker-list [data-index]").length,error:document.querySelector(".directory-picker-error")?.textContent,focusInside:!!document.querySelector(".directory-picker-shell")?.contains(active),calls:window.__directoryAudit?.calls},
+  };
+})()`;
+
+let server;
+let child;
+let socket;
+let profile;
+let lifecycle;
+const pending = new Map();
+let evaluate;
+let screenshot;
+try {
+  let chrome;
+  for (const candidate of [
+    process.env.CHROME_PATH,
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+  ].filter(Boolean)) {
+    try {
+      await access(candidate, constants.X_OK);
+      chrome = candidate;
+      break;
+    } catch {}
+  }
+  assert.ok(chrome, "Existing Chrome unavailable; no browser is downloaded.");
+  evidence.chrome = chrome;
+  evidence.chromeVersion = execFileSync(chrome, ["--version"], {
+    encoding: "utf8",
+    timeout: 10_000,
+  }).trim();
+  // Inspect CI's fonts; this process never installs packages or changes security.
+  evidence.cjkFonts = execFileSync("fc-list", [":lang=zh", "family"], {
+    encoding: "utf8",
+    timeout: 10_000,
+  })
+    .trim()
+    .split("\n")
+    .filter(Boolean);
+
+  const html = await readFile(path.join(directory, "settings-audit.html"));
+  evidence.source = JSON.parse(
+    await readFile(path.join(directory, "source.json"), "utf8"),
+  );
+  assert.equal(
+    createHash("sha256").update(html).digest("hex"),
+    evidence.source.bundleSha256,
+    "Capture matches built bundle",
+  );
+  server = createServer((req, res) => {
+    if (
+      new URL(req.url, "http://localhost").pathname !== "/settings-audit.html"
+    ) {
+      res.writeHead(404).end();
+      return;
+    }
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.end(html);
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const url = `http://127.0.0.1:${server.address().port}`;
+  profile = await mkdtemp(path.join(tmpdir(), "zenx-settings-audit-chrome-"));
+  child = spawn(
+    chrome,
+    [
+      "--headless=new",
+      "--disable-dev-shm-usage",
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--remote-debugging-port=0",
+      `--user-data-dir=${profile}`,
+      "about:blank",
+    ],
+    { stdio: ["ignore", "ignore", "pipe"] },
+  );
+  lifecycle = observePreviewChrome(child, profile);
+  socket = await lifecycle.connect();
+  let id = 0;
+  socket.on("message", (data) => {
+    const message = JSON.parse(String(data));
+    if (message.method === "Runtime.exceptionThrown")
+      evidence.rendererErrors.push(message.params.exceptionDetails);
+    if (message.method === "Network.requestWillBeSent") {
+      const requested = message.params.request.url;
+      if (/^https?:/u.test(requested) && !requested.startsWith(`${url}/`))
+        evidence.externalRequests.push(requested);
+    }
+    const request = pending.get(message.id);
+    if (!request) return;
+    pending.delete(message.id);
+    clearTimeout(request.timeout);
+    if (message.error) request.reject(new Error(JSON.stringify(message.error)));
+    else request.resolve(message.result);
+  });
+  const send = (method, params = {}) =>
+    new Promise((resolve, reject) => {
+      lifecycle.commandStarted(method);
+      const requestId = ++id;
+      const timeout = setTimeout(() => {
+        pending.delete(requestId);
+        reject(new Error(`CDP timeout: ${method}`));
+      }, 15_000);
+      pending.set(requestId, { resolve, reject, timeout });
+      socket.send(JSON.stringify({ id: requestId, method, params }));
+    });
+  evaluate = async (expression) => {
+    const result = await send("Runtime.evaluate", {
+      expression,
+      awaitPromise: true,
+      returnByValue: true,
+    });
+    if (result.exceptionDetails)
+      throw new Error(JSON.stringify(result.exceptionDetails));
+    return result.result.value;
+  };
+  screenshot = async (name) => {
+    const result = await send("Page.captureScreenshot", {
+      format: "png",
+      captureBeyondViewport: false,
+    });
+    const bytes = Buffer.from(result.data, "base64");
+    await writeFile(path.join(directory, name), bytes);
+    evidence.screenshots[name] = createHash("sha256")
+      .update(bytes)
+      .digest("hex");
+  };
+  const waitFor = async (expression) => {
+    for (let attempt = 0; attempt < 200; attempt++) {
+      if (await evaluate(expression)) return;
+      await delay(50);
+    }
+    throw new Error(`Fixture condition timed out: ${expression}`);
+  };
+  const key = async (key, code, windowsVirtualKeyCode, modifiers = 0) => {
+    const parameters = { key, code, windowsVirtualKeyCode, modifiers };
+    // Match the established production browser-targeted-input.ts semantics.
+    // Chromium needs Enter's character payload for native button activation;
+    // a keyDown lacking text can report the key without generating the click.
+    await send("Input.dispatchKeyEvent", {
+      ...parameters,
+      type: key === "Enter" ? "keyDown" : "rawKeyDown",
+      ...(key === "Enter" ? { text: "\r", unmodifiedText: "\r" } : {}),
+    });
+    await send("Input.dispatchKeyEvent", {
+      ...parameters,
+      type: "keyUp",
+    });
+  };
+  const click = async (x, y) => {
+    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+    for (const type of ["mousePressed", "mouseReleased"])
+      await send("Input.dispatchMouseEvent", {
+        type,
+        x,
+        y,
+        button: "left",
+        clickCount: 1,
+      });
+  };
+  await send("Page.enable");
+  await send("Runtime.enable");
+  lifecycle.captureStarted();
+  await send("Network.enable");
+
+  // DOM is inspected immediately before each real CDP click. scrollIntoView
+  // only exposes the requested target; it does not replace activation/focus.
+  const clickSelector = async (selector, index = 0) => {
+    const target = await evaluate(
+      `(() => { const e=document.querySelectorAll(${JSON.stringify(selector)})[${index}]; if(!e) return null; e.scrollIntoView({block:'center'}); const r=e.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2,disabled:e.disabled}; })()`,
+    );
+    assert.ok(target && !target.disabled, `Available target: ${selector}`);
+    await click(target.x, target.y);
+    await delay(120);
+  };
+  for (const options of [
+    { name: "desktop-en", lang: "en", theme: "dark", width: 1100, height: 760 },
+    {
+      name: "narrow-zh",
+      lang: "zh-CN",
+      theme: "light",
+      width: 390,
+      height: 640,
+    },
+  ]) {
+    const receipt = { ...options, states: [] };
+    evidence.cases.push(receipt);
+    const capture = async (name) => {
+      await delay(150);
+      const filename = `${options.name}-${name}.png`;
+      const observation = await evaluate(measure);
+      const r = observation.responsive;
+      const contains = (outer, inner) =>
+        outer &&
+        inner &&
+        inner.width > 0 &&
+        inner.x >= outer.x - 1 &&
+        inner.right <= outer.right + 1 &&
+        inner.y >= outer.y - 1 &&
+        inner.bottom <= outer.bottom + 1;
+      if (name === "16-general-foreground-description") {
+        assert.ok(r.foregroundLabel && r.foregroundSwitch);
+        assert.ok(
+          Math.min(r.foregroundLabel.bottom, r.foregroundSwitch.bottom) >
+            Math.max(r.foregroundLabel.y, r.foregroundSwitch.y),
+          "Label and switch share a row",
+        );
+        assert.ok(
+          contains(r.foregroundCard, r.risk),
+          "Risk stays inside permission card",
+        );
+        assert.ok(
+          contains(r.foregroundCard, r.help),
+          "Help stays inside permission card",
+        );
+      }
+      if (/^1[789]-directory/u.test(name)) {
+        assert.ok(
+          contains(r.directoryBody, r.browser),
+          "Directory browser stays in body",
+        );
+        if (options.width <= 640) {
+          assert.ok(
+            r.browser.width >= r.directoryBody.width - 2,
+            "Narrow directory browser uses body width",
+          );
+        }
+        if (name === "17-directory-initial-failure") {
+          assert.equal(
+            r.locations,
+            null,
+            "Failed initial snapshot has no empty location rail",
+          );
+          assert.equal(
+            r.current,
+            null,
+            "Failed initial snapshot claims no current directory",
+          );
+        } else {
+          assert.ok(r.current, "Current directory is identified");
+          if (!observation.breadcrumbsOverflow) {
+            assert.ok(
+              contains(r.browser, r.current),
+              "Current directory cue remains visible in browser",
+            );
+          }
+          assert.equal(
+            observation.directory.path,
+            name === "19-directory-empty" ? "/synthetic/empty" : "/synthetic",
+            "Footer identifies the actual folder to add",
+          );
+          assert.ok(
+            r.selection && r.selection.bottom <= options.height,
+            "Folder to add remains within viewport",
+          );
+        }
+      }
+      if (/^2[4-9]-directory-density/u.test(name)) {
+        const geometry = observation.directoryGeometry;
+        const viewport = geometry.viewport;
+        assert.ok(
+          contains(viewport, observation.directory.dialog),
+          "Dialog stays in viewport",
+        );
+        assert.ok(
+          contains(viewport, geometry.footer),
+          "Footer stays in viewport",
+        );
+        assert.ok(
+          contains(viewport, geometry.cancel),
+          "Cancel remains visible",
+        );
+        assert.ok(contains(viewport, geometry.add), "Add remains visible");
+        assert.ok(
+          contains(viewport, r.selection),
+          "Current add path remains visible",
+        );
+        assert.ok(
+          contains(r.browser, geometry.list),
+          "Directory list stays inside browser",
+        );
+        assert.equal(
+          observation.overflow,
+          false,
+          "No horizontal page overflow",
+        );
+        assert.equal(geometry.addDisabled, false);
+        assert.equal(geometry.addDescription, "directory-picker-selection");
+        if (viewport.width <= 640) {
+          for (const target of [
+            geometry.cancel,
+            geometry.add,
+            ...geometry.rowRects,
+          ]) {
+            assert.ok(
+              target.width >= 44 && target.height >= 44,
+              "Narrow directory action is at least 44px",
+            );
+          }
+        }
+        if (["linux", "win32"].includes(geometry.platform)) {
+          assert.ok(
+            observation.directory.dialog.y >= 44,
+            "Native-platform dialog avoids the 44px titlebar",
+          );
+        }
+        if (name.includes("long-path")) {
+          assert.equal(
+            geometry.path.focused,
+            true,
+            "Tab reaches the full path",
+          );
+          assert.ok(
+            geometry.path.scrollHeight > geometry.path.clientHeight,
+            "Long path has internal overflow",
+          );
+          assert.ok(
+            geometry.path.scrollTop > 0,
+            "End actually scrolls the full path",
+          );
+          assert.ok(
+            geometry.path.scrollTop + geometry.path.clientHeight >=
+              geometry.path.scrollHeight - 1,
+            "End reveals the tail of the full path",
+          );
+          assert.equal(
+            geometry.path.text,
+            densityLongPath,
+            "Path text is complete",
+          );
+          assert.equal(geometry.path.title, densityLongPath);
+          assert.ok(
+            contains(viewport, geometry.list),
+            "Empty list stays visible",
+          );
+        } else {
+          assert.ok(
+            geometry.focusInsideList && geometry.focusFullyVisible,
+            "Keyboard focus stays visible inside list",
+          );
+        }
+        assert.equal(
+          geometry.focusVisible,
+          true,
+          "Keyboard navigation retains focus-visible",
+        );
+        assert.equal(
+          observation.directory.path,
+          name.includes("child") || name.includes("long-path")
+            ? densityLongPath
+            : "/synthetic",
+        );
+        if (!name.includes("child") && !name.includes("long-path")) {
+          assert.equal(observation.directory.rows, 10);
+          assert.ok(
+            geometry.fullyVisibleRows.length > 0,
+            "List exposes complete rows",
+          );
+          assert.equal(
+            geometry.focusedIndex,
+            name.includes("-end") ? "9" : "0",
+          );
+          if (viewport.bottom === 480) {
+            assert.ok(
+              geometry.scrollHeight > geometry.clientHeight,
+              "Short viewport uses internal list overflow",
+            );
+          }
+          if (
+            name.includes("-end") &&
+            geometry.scrollHeight > geometry.clientHeight
+          ) {
+            assert.ok(
+              geometry.scrollTop > 0,
+              "End actually scrolls the overflowing list",
+            );
+          }
+          if (name.includes("-home") || name.includes("-back")) {
+            // Minimum browsing area for this fixed ordinary-path sample only,
+            // not a score or a constraint on separate long-path fixtures.
+            const minimumRows =
+              viewport.width === 390 && viewport.height === 640
+                ? 5
+                : viewport.width === 390 && viewport.height === 480
+                  ? 2
+                  : 1;
+            assert.ok(
+              geometry.fullyVisibleRows.length >= minimumRows,
+              `Ordinary-path density fixture exposes at least ${minimumRows} complete rows at the top`,
+            );
+            assert.ok(
+              geometry.scrollTop <= 1,
+              "Home/return restores top of list",
+            );
+          }
+        }
+      }
+      receipt.states.push({ name, filename, observation });
+      await screenshot(filename);
+    };
+    await send("Emulation.setDeviceMetricsOverride", {
+      width: options.width,
+      height: options.height,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    const navigate = async (
+      initialFailure = false,
+      metadata = false,
+      deferredSave = false,
+    ) => {
+      const destination = `${url}/settings-audit.html?${new URLSearchParams({ lang: options.lang, theme: options.theme, initialFailure: initialFailure ? "1" : "0", metadata: metadata ? "1" : "0", deferredSave: deferredSave ? "1" : "0" })}`;
+      await send("Page.navigate", { url: destination });
+      await waitFor(
+        `location.href===${JSON.stringify(destination)} && ${initialFailure ? "!!document.querySelector('.page-loading [role=alert]')" : "document.querySelectorAll('.provider-profile-card').length===4"}`,
+      );
+      await evaluate("document.fonts.ready");
+    };
+    await navigate(true);
+    assert.equal(
+      await evaluate("!!document.querySelector('.loading-ring')"),
+      false,
+      "Settled failure stops loading",
+    );
+    await capture("00-initial-load-failure");
+    await clickSelector(".page-loading button");
+    await waitFor(
+      "document.querySelectorAll('.provider-profile-card').length===4",
+    );
+    assert.equal(
+      await evaluate(
+        "window.__settingsAudit.calls.filter(x=>x==='settings-get').length",
+      ),
+      2,
+      "One explicit retry, no loop",
+    );
+    await waitFor(
+      `document.querySelector('.settings-view')?.textContent.includes(${JSON.stringify(options.lang === "zh-CN" ? "模型与服务商" : "Models & providers")})`,
+    );
+    await capture("00b-explicit-retry-success");
+    await capture("01-models-overview");
+    await clickSelector(".provider-profile-actions button:first-child", 3);
+    await waitFor(
+      "document.querySelectorAll('.provider-model-row').length===12",
+    );
+    await capture("02-edit-from-last-provider");
+    await evaluate(
+      `(() => { const name = document.querySelector('.provider-editor input[id$="-displayName"]'); name.focus(); name.select(); })()`,
+    );
+    await send("Input.insertText", { text: "Synthetic unsaved provider" });
+    await waitFor(
+      `document.querySelector('.provider-editor input[id$="-displayName"]').value === "Synthetic unsaved provider"`,
+    );
+    receipt.editorIsolation = await evaluate(`(() => {
+      const editor = document.querySelector('.provider-editor');
+      const name = editor.querySelector('input[id$="-displayName"]');
+      const before = name.value;
+      const actions = [...document.querySelectorAll('.provider-profile-actions button')];
+      actions.forEach(button => button.click());
+      return {allDisabled: actions.every(button => button.disabled), allExplained: actions.every(button => !!document.getElementById(button.getAttribute('aria-describedby'))?.textContent), sameEditor: document.querySelector('.provider-editor') === editor, namePreserved: name.value === before};
+    })()`);
+    assert.deepEqual(receipt.editorIsolation, {
+      allDisabled: true,
+      allExplained: true,
+      sameEditor: true,
+      namePreserved: true,
+    });
+    await capture("02c-preserved-provider-draft");
+    await key("Tab", "Tab", 9);
+    receipt.keyboardForward = await evaluate(measure);
+    await key("Tab", "Tab", 9, 8);
+    receipt.keyboardBackward = await evaluate(measure);
+    await key("Escape", "Escape", 27);
+    await capture("02b-keyboard-escape-observation");
+    await evaluate(
+      "document.querySelector('.provider-editor').scrollIntoView({block:'start'})",
+    );
+    await capture("03-editor-top");
+    await clickSelector(".provider-model-capabilities summary", 0);
+    await capture("04-model-capabilities");
+    await clickSelector(".model-catalog-head button");
+    await waitFor(
+      "document.querySelectorAll('.available-model-option').length===2",
+    );
+    await capture("05-discovery");
+    await clickSelector(".available-model-option input", 1);
+    await clickSelector(".available-model-actions .primary-button");
+    await waitFor(
+      "document.querySelectorAll('.provider-model-row').length===13",
+    );
+    await clickSelector('.provider-editor-actions [type="submit"]');
+    await waitFor("!!document.querySelector('.provider-editor-error-summary')");
+    await capture("06-unknown-context-validation");
+    await clickSelector(".provider-editor-error-summary a");
+    await capture("07-validation-field");
+    await clickSelector(".provider-editor-head button");
+    await waitFor("!document.querySelector('.provider-editor')");
+    await capture("08-cancel-focus");
+    assert.equal(
+      await evaluate(
+        "document.activeElement === document.querySelectorAll('.provider-profile-actions button:first-child')[3]",
+      ),
+      true,
+      "Cancel returns focus to originating provider Edit",
+    );
+    // Real Chromium disables focused native controls unlike DOM-only harnesses.
+    for (const newerNavigation of [false, true]) {
+      await navigate(false, false, true);
+      await clickSelector(".provider-profile-actions button:first-child", 3);
+      await waitFor("!!document.querySelector('.provider-editor')");
+      await clickSelector('.provider-editor-actions [type="submit"]');
+      await waitFor(
+        "document.querySelector('.provider-editor form')?.getAttribute('aria-busy') === 'true'",
+      );
+      const pendingFocus = await evaluate(measure);
+      (receipt.pendingSaveFocus ??= []).push({ newerNavigation, pendingFocus });
+      if (newerNavigation) await clickSelector("#settings-tab-general");
+      await evaluate("window.__settingsAudit.settleProviderEdit()");
+      await waitFor("!document.querySelector('.provider-editor')");
+      const settledFocus = await evaluate(measure);
+      const restored = await evaluate(
+        "document.activeElement === document.querySelectorAll('.provider-profile-actions button:first-child')[3]",
+      );
+      const preservedNavigation = await evaluate(
+        "document.activeElement === document.querySelector('#settings-tab-general')",
+      );
+      (receipt.deferredSaves ??= []).push({
+        newerNavigation,
+        pendingFocus,
+        settledFocus,
+        restored,
+        preservedNavigation,
+      });
+      await capture(newerNavigation ? "12-save-navigation" : "11-save-focus");
+      // Record both cases before asserting so a failed restoration has navigation evidence too.
+    }
+    assert.equal(
+      receipt.deferredSaves[0].restored,
+      true,
+      "Save success returns focus after native pending disable",
+    );
+    assert.equal(
+      receipt.deferredSaves[1].preservedNavigation,
+      true,
+      "Late Save does not steal General tab focus",
+    );
+    await navigate(false, false, true);
+    await clickSelector(".provider-profile-actions button:first-child", 3);
+    await evaluate(
+      `(() => { const name = document.querySelector('.provider-editor input[id$="-displayName"]'); name.focus(); name.select(); })()`,
+    );
+    await send("Input.insertText", { text: "Synthetic failed-save draft" });
+    await clickSelector('.provider-editor-actions [type="submit"]');
+    await waitFor(
+      "document.querySelector('.provider-editor form')?.getAttribute('aria-busy') === 'true'",
+    );
+    await evaluate("window.__settingsAudit.settleProviderEdit('failure')");
+    await waitFor(
+      "document.querySelector('.provider-editor form')?.getAttribute('aria-busy') === 'false'",
+    );
+    receipt.failedSave = await evaluate(`(() => ({
+      draft: document.querySelector('.provider-editor input[id$="-displayName"]').value,
+      enabled: !document.querySelector('.provider-editor fieldset').disabled,
+      attempts: window.__settingsAudit.calls.filter(x => x === "synthetic-deferred-edit").length
+    }))()`);
+    assert.deepEqual(receipt.failedSave, {
+      draft: "Synthetic failed-save draft",
+      enabled: true,
+      attempts: 1,
+    });
+    await capture("13-failed-save-draft");
+    await clickSelector(".provider-editor-head button");
+    assert.equal(
+      await evaluate(
+        "document.activeElement === document.querySelectorAll('.provider-profile-actions button:first-child')[3]",
+      ),
+      true,
+      "Cancel works after failed Save cleanup",
+    );
+    // Fresh page avoids attributing prior synthetic edits to the add flow.
+    await navigate();
+    await clickSelector(".provider-section-actions .primary-button");
+    await waitFor("!!document.querySelector('.provider-editor')");
+    await capture("09-new-provider");
+    await clickSelector('.provider-editor-actions [type="submit"]');
+    await waitFor("!!document.querySelector('.provider-editor-error-summary')");
+    await capture("10-new-provider-validation");
+    await navigate(false, true);
+    await clickSelector(".provider-profile-actions button:first-child", 0);
+    await clickSelector(".model-catalog-head button");
+    await waitFor("!!document.querySelector('.model-catalog-status button')");
+    await capture("11-declared-input-available");
+    await clickSelector(".model-catalog-status button");
+    await waitFor("!document.querySelector('.model-catalog-status button')");
+    assert.equal(
+      await evaluate(
+        "window.__settingsAudit.calls.some(x=>x.includes('save'))",
+      ),
+      false,
+    );
+    await capture("12-declared-input-draft");
+    const firstRow = await evaluate(
+      "document.querySelector('.provider-model-row').textContent",
+    );
+    assert.match(
+      firstRow,
+      /text \+ image/u,
+      "Existing row actually receives declared inputs",
+    );
+    assert.match(
+      firstRow,
+      options.lang === "zh-CN" ? /推理未知/u : /reasoning unknown/u,
+      "Reasoning remains Unknown",
+    );
+    assert.match(
+      firstRow,
+      options.lang === "zh-CN" ? /需要上下文/u : /context required/u,
+      "Context remains Unknown",
+    );
+    const manualRow = await evaluate(
+      "document.querySelectorAll('.provider-model-row')[1].textContent",
+    );
+    assert.match(
+      manualRow,
+      /32,?768|32k/u,
+      "Existing manual context remains unchanged",
+    );
+    await clickSelector(".provider-model-capabilities summary", 0);
+    await evaluate(
+      "document.querySelector('.provider-model-row').scrollIntoView({block:'start'})",
+    );
+    await capture("13-existing-row-input-filled");
+    // General uses the actual Settings route; DirectoryPicker has a labeled
+    // test-only launcher because SettingsView does not own that navigation.
+    await navigate();
+    await clickSelector("#settings-tab-general");
+    await waitFor(
+      "!!document.querySelector('details.settings-send-shortcuts')",
+    );
+    assert.equal(
+      await evaluate(
+        "document.querySelector('details.settings-send-shortcuts').open",
+      ),
+      false,
+    );
+    await evaluate(
+      "document.querySelector('details.settings-send-shortcuts').scrollIntoView({block:'center'})",
+    );
+    await capture("14-general-shortcuts-collapsed");
+    await clickSelector("details.settings-send-shortcuts summary");
+    assert.equal(
+      await evaluate(
+        "document.querySelector('details.settings-send-shortcuts').open",
+      ),
+      true,
+    );
+    await key("Enter", "Enter", 13);
+    await waitFor(
+      "!document.querySelector('details.settings-send-shortcuts').open",
+    );
+    await key("Enter", "Enter", 13);
+    await waitFor(
+      "document.querySelector('details.settings-send-shortcuts').open",
+    );
+    await capture("15-general-shortcuts-expanded");
+    await evaluate(
+      "document.querySelector('#foreground-control-risk').scrollIntoView({block:'center'})",
+    );
+    assert.ok(
+      await evaluate(
+        "!!document.querySelector('#foreground-control-help')?.textContent.trim()",
+      ),
+    );
+    await capture("16-general-foreground-description");
+    const directoryUrl = `${url}/settings-audit.html?${new URLSearchParams({ lang: options.lang, theme: options.theme, scene: "directory", directoryFailure: "1" })}`;
+    await send("Page.navigate", { url: directoryUrl });
+    await waitFor("!!document.querySelector('#directory-audit-open')");
+    await evaluate("document.fonts.ready");
+    await clickSelector("#directory-audit-open");
+    await waitFor("!!document.querySelector('.directory-picker-error button')");
+    assert.ok(
+      await evaluate(
+        "!!document.querySelector('[role=dialog].directory-picker-shell') && !document.querySelector('#root').contains(document.querySelector('.directory-picker-shell'))",
+      ),
+    );
+    assert.equal(
+      await evaluate(
+        "document.querySelector('.directory-picker-dialog footer .primary-button').disabled",
+      ),
+      true,
+    );
+    await key("Tab", "Tab", 9);
+    assert.ok(
+      await evaluate(
+        "document.querySelector('.directory-picker-shell').contains(document.activeElement)",
+      ),
+      "Tab remains inside actual modal",
+    );
+    await capture("17-directory-initial-failure");
+    await clickSelector(".directory-picker-error button");
+    await waitFor(
+      "!!document.querySelector('.directory-picker-list [data-index=\"0\"]')",
+    );
+    await capture("18-directory-retry-success");
+    await clickSelector('.directory-picker-list [data-index="0"]');
+    await waitFor(
+      "document.querySelector('.directory-picker-dialog footer strong')?.textContent === '/synthetic/empty'",
+    );
+    assert.equal(
+      await evaluate(
+        "document.querySelectorAll('.directory-picker-list [data-index]').length",
+      ),
+      0,
+    );
+    await capture("19-directory-empty");
+    await clickSelector(".directory-picker-breadcrumbs button");
+    await waitFor(
+      "document.querySelector('.directory-picker-dialog footer strong')?.textContent === '/synthetic'",
+    );
+    await capture("20-directory-parent");
+    await key("Escape", "Escape", 27);
+    await waitFor("!document.querySelector('.directory-picker-shell')");
+    await waitFor("document.activeElement?.id === 'directory-audit-open'");
+    await capture("21-directory-escape-focus");
+    await key("Enter", "Enter", 13);
+    await waitFor(
+      "!!document.querySelector('.directory-picker-list [data-index=\"0\"]')",
+    );
+    await capture("22-directory-keyboard-reopen");
+    await clickSelector(".directory-picker-dialog footer .secondary-button");
+    await waitFor("!document.querySelector('.directory-picker-shell')");
+    await waitFor("document.activeElement?.id === 'directory-audit-open'");
+    assert.deepEqual(await evaluate("window.__directoryAudit.calls"), [
+      "snapshot",
+      "snapshot",
+      "list:/synthetic",
+      "list:/synthetic/empty",
+      "list:/synthetic",
+      "snapshot",
+      "list:/synthetic",
+    ]);
+    await capture("23-directory-cancel");
+    // Reuse only the production directory journey at short height, not Settings.
+    for (const short of [false, true]) {
+      await send("Emulation.setDeviceMetricsOverride", {
+        width: short ? 390 : options.width,
+        height: short ? 480 : options.height,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+      const densityUrl = `${url}/settings-audit.html?${new URLSearchParams({ lang: options.lang, theme: options.theme, scene: "directory", directoryDensity: "1" })}`;
+      await send("Page.navigate", { url: densityUrl });
+      await waitFor("!!document.querySelector('#directory-audit-open')");
+      await evaluate("document.fonts.ready");
+      await clickSelector("#directory-audit-open");
+      await waitFor(
+        "document.querySelectorAll('.directory-picker-list [data-index]').length === 10",
+      );
+      const suffix = short ? "-short-390x480" : "";
+      // Genuine keyboard events switch modality; no focus()/scrollTop injection.
+      await key("End", "End", 35);
+      await waitFor(
+        "document.activeElement?.getAttribute('data-index') === '9'",
+      );
+      await capture("24-directory-density-end" + suffix);
+      await key("Home", "Home", 36);
+      await waitFor(
+        "document.activeElement?.getAttribute('data-index') === '0'",
+      );
+      await capture("25-directory-density-home" + suffix);
+      await key("Enter", "Enter", 13);
+      await waitFor(
+        `document.querySelector('#directory-picker-selection')?.textContent === ${JSON.stringify(densityLongPath)}`,
+      );
+      await capture("26-directory-density-child" + suffix);
+      await key("Tab", "Tab", 9);
+      await waitFor(
+        "document.activeElement?.id === 'directory-picker-selection'",
+      );
+      await key("End", "End", 35);
+      await waitFor(
+        "(() => { const path = document.querySelector('#directory-picker-selection'); return path.scrollTop > 0 && path.scrollTop + path.clientHeight >= path.scrollHeight - 1; })()",
+      );
+      await capture("28-directory-density-long-path-end" + suffix);
+      await key("Home", "Home", 36);
+      await waitFor(
+        "document.querySelector('#directory-picker-selection').scrollTop <= 1",
+      );
+      (receipt.longPathHome ??= []).push({
+        short,
+        observation: await evaluate(measure),
+      });
+      await key("Tab", "Tab", 9, 8);
+      await waitFor(
+        "document.activeElement === document.querySelector('.directory-picker-list')",
+      );
+      await key("Backspace", "Backspace", 8);
+      await waitFor(
+        "document.querySelectorAll('.directory-picker-list [data-index]').length === 10 && document.activeElement?.getAttribute('data-index') === '0'",
+      );
+      await capture("27-directory-density-back" + suffix);
+      // Backspace at the synthetic root is safe and must not issue another read.
+      await key("Backspace", "Backspace", 8);
+      assert.deepEqual(await evaluate("window.__directoryAudit.calls"), [
+        "snapshot",
+        "list:/synthetic",
+        `list:${densityLongPath}`,
+        "list:/synthetic",
+      ]);
+      await key("Escape", "Escape", 27);
+      await waitFor("!document.querySelector('.directory-picker-shell')");
+      await waitFor("document.activeElement?.id === 'directory-audit-open'");
+    }
+    receipt.status = "captured";
+  }
+  assert.equal(evidence.rendererErrors.length, 0, "No renderer exceptions.");
+  assert.equal(evidence.externalRequests.length, 0, "No external requests.");
+  assert.ok(
+    evidence.cjkFonts.length > 0,
+    "CI has no CJK-capable font. Chinese screenshots are not visual acceptance; no font installation was attempted.",
+  );
+  lifecycle.captureFinished("passed");
+  evidence.status = "passed";
+  console.log("Captured actual Settings EN/ZH desktop/narrow observations.");
+} catch (error) {
+  lifecycle?.captureFinished(
+    lifecycle.receipt.captureStatus === "not-started"
+      ? "not-started"
+      : "failed",
+    error,
+  );
+  evidence.status = "failed";
+  evidence.failure = error instanceof Error ? error.message : String(error);
+  if (evaluate && screenshot) {
+    try {
+      evidence.failureState = await evaluate(measure);
+      await screenshot("failure.png");
+    } catch {}
+  }
+  throw error;
+} finally {
+  for (const request of pending.values()) {
+    clearTimeout(request.timeout);
+    request.reject(new Error("Preview capture closed."));
+  }
+  socket?.terminate();
+  let stopped = false;
+  try {
+    stopped = await lifecycle?.close(directory);
+  } finally {
+    server?.closeAllConnections();
+    if (server?.listening)
+      await new Promise((resolve) => server.close(resolve));
+    if (profile && lifecycle?.receipt.cleanupComplete)
+      await rm(profile, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
+  }
+  await writeFile(
+    path.join(directory, "measurements.json"),
+    JSON.stringify(evidence, null, 2) + "\n",
+  );
+  if (
+    lifecycle &&
+    (!stopped || lifecycle.receipt.artifactErrors.length) &&
+    evidence.status === "passed"
+  )
+    throw new Error(
+      "Preview Chrome cleanup or artifact persistence incomplete; see lifecycle receipt and stderr.",
+    );
+}

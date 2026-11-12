@@ -1,0 +1,38 @@
+{
+  "reviewDate": "2026-10-29",
+  "documentationBaseCommit": "5d4a11ef9d79da4cca6f50d656682460f77135d9",
+  "captureSourceCommit": "6b657ece281538efc00b03182d85c51afddff92a",
+  "captureEnvironment": "Root-operated cloud CUA browser; offline production-component fixture with synthetic events and records.",
+  "sourceManifestSha256": "67065fb23fa14af0b0429d786b68199d180e9265189558f2cde707ef5b368904",
+  "sourceHashesMatchDocumentationBase": true,
+  "screenshots": {
+    "automatic-pending.jpg": {
+      "originalCaptureFilename": "automatic-pending.png",
+      "format": "JPEG",
+      "sha256": "1b036936a922bd9e47c0786ed19599a53addaf8d34df70048308cb43639eed28",
+      "width": 1180,
+      "height": 757
+    },
+    "committed-details.jpg": {
+      "originalCaptureFilename": "committed-details.png",
+      "format": "JPEG",
+      "sha256": "fb9072638467ae6521d0611e81e66ee7b9b4b8d9197f8ed931c82e47f76e6a22",
+      "width": 1180,
+      "height": 757
+    },
+    "committed-single-row.jpg": {
+      "originalCaptureFilename": "committed-single-row.png",
+      "format": "JPEG",
+      "sha256": "326a530cc167e711bfa6324f5e999d048929e2cb529cbda59884e39c869080be",
+      "width": 1180,
+      "height": 757
+    },
+    "failed-details.jpg": {
+      "originalCaptureFilename": "failed-details.png",
+      "format": "JPEG",
+      "sha256": "a10c9c5c0a9b8c63296bbad59bfa9fb76d3b607b9b509d24ead4fb7311244960",
+      "width": 1180,
+      "height": 757
+    }
+  }
+}

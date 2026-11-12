@@ -1,0 +1,112 @@
+{
+  "synthetic": true,
+  "scenes": [
+    {
+      "name": "user",
+      "excerpt": "合成用户问题：这段话可以引用吗？",
+      "reference": {
+        "kind": "message",
+        "name": "",
+        "cwd": "/synthetic/zenx",
+        "threadId": "quote-thread",
+        "id": "synthetic-user",
+        "excerpt": "合成用户问题：这段话可以引用吗？",
+        "position": 0
+      }
+    },
+    {
+      "name": "reasoning",
+      "excerpt": "合成推理：先核对引用来源，再检查工具输出。",
+      "reference": {
+        "kind": "message",
+        "name": "",
+        "cwd": "/synthetic/zenx",
+        "threadId": "quote-thread",
+        "id": "synthetic-reasoning",
+        "excerpt": "合成推理：先核对引用来源，再检查工具输出。",
+        "position": 0
+      }
+    },
+    {
+      "name": "tool-output",
+      "excerpt": "合成工具输出：保留原始换行。\n第二行完整内容。\n退出码 0",
+      "reference": {
+        "kind": "text",
+        "name": "",
+        "cwd": "/synthetic/zenx",
+        "sources": [
+          {
+            "threadId": "quote-thread",
+            "id": "synthetic-call"
+          },
+          {
+            "threadId": "quote-thread",
+            "id": "synthetic-result"
+          }
+        ],
+        "excerpt": "合成工具输出：保留原始换行。\n第二行完整内容。\n退出码 0",
+        "position": 1
+      }
+    },
+    {
+      "name": "interface",
+      "excerpt": "ZenX",
+      "reference": {
+        "kind": "text",
+        "name": "",
+        "cwd": "/synthetic/zenx",
+        "sources": [],
+        "excerpt": "ZenX",
+        "position": 0
+      }
+    },
+    {
+      "name": "form-field",
+      "reference": {
+        "kind": "text",
+        "name": "",
+        "cwd": "/synthetic/zenx",
+        "sources": [],
+        "excerpt": "页面字段中的可选原文",
+        "position": 0
+      }
+    },
+    {
+      "name": "cross-message",
+      "reference": {
+        "kind": "text",
+        "name": "",
+        "cwd": "/synthetic/zenx",
+        "sources": [
+          {
+            "threadId": "quote-thread",
+            "id": "synthetic-user"
+          },
+          {
+            "threadId": "quote-thread",
+            "id": "synthetic-answer"
+          }
+        ],
+        "excerpt": "合成用户问题：这段话可以引用吗？\n\n12:12\n\n\n已工作 3 秒\n建议把执行细节留在对话里，但不要让日志成为页面的主角。\n\n",
+        "position": 0
+      }
+    },
+    {
+      "name": "explicit-send",
+      "sent": "[zenx-reference-message:v3;clientId=\"synthetic-send-1\"]\n[ZenX reference: {\"kind\":\"text\",\"name\":\"\",\"cwd\":\"/synthetic/zenx\",\"excerpt\":\"合成用户问题：这段话可以引用吗？\\n\\n12:12\\n\\n\\n已工作 3 秒\\n建议把执行细节留在对话里，但不要让日志成为页面的主角。\\n\\n\",\"sources\":[{\"threadId\":\"quote-thread\",\"id\":\"synthetic-user\"},{\"threadId\":\"quote-thread\",\"id\":\"synthetic-answer\"}],\"contentMode\":\"excerpt\"}]"
+    },
+    {
+      "name": "narrow-user",
+      "excerpt": "合成用户问题：这段话可以引用吗？",
+      "reference": {
+        "kind": "message",
+        "name": "",
+        "cwd": "/synthetic/zenx",
+        "threadId": "quote-thread",
+        "id": "synthetic-user",
+        "excerpt": "合成用户问题：这段话可以引用吗？",
+        "position": 0
+      }
+    }
+  ]
+}

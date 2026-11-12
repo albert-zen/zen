@@ -1,0 +1,309 @@
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import path from "node:path";
+
+import type { ApprovalPolicy, SandboxMode } from "./item.js";
+import type { UserQuestionSummary } from "./user-question-state.js";
+
+export interface CurrentMetadata {
+  providerProfileId?: string;
+  modelId?: string;
+  reasoningEffort?: string | null;
+  /** Compatibility projections for existing product callers. */
+  model: string;
+  provider: string;
+  cwd: string;
+  sandbox: SandboxMode;
+  approvalPolicy: ApprovalPolicy;
+}
+
+export interface ThreadMessageSummary {
+  id: string;
+  createdAt: string;
+  kind: "user" | "agent";
+}
+
+export interface ThreadSummary {
+  /** Canonical messages only; omitted on empty/legacy projections. */
+  lastMessage?: ThreadMessageSummary;
+  lastAgentMessage?: Omit<ThreadMessageSummary, "kind">;
+  /** Canonical end of the latest local Turn; position is its zero-based canonical end ordinal. */
+  lastTurnEnd?: {
+    id: string;
+    turnId: string;
+    createdAt: string;
+    position: number;
+    /** Absent only on older projections; never infer failure from message text. */
+    status?: "completed" | "failed" | "aborted";
+  };
+  threadId: string;
+  /** Canonical delete fence; absent only on legacy or unavailable projections. */
+  lastItemId?: string;
+  parentThreadId?: string;
+  currentMetadata: CurrentMetadata;
+  name?: string;
+  archived: boolean;
+  createdAt: string;
+  updatedAt: string;
+  /** Latest locally started Turn, or this Thread's creation (including forks). */
+  turnSortAt?: string;
+  /** Latest human receipt, accepted final answer, or local question publication. */
+  recentActivityAt?: string;
+  /** Bounded source-derived attention; omitted by older Hosts or unavailable Threads. */
+  userQuestionSummary?: UserQuestionSummary;
+  preview: string;
+  status: "idle" | "active";
+  forkedFromThreadId?: string;
+  forkedFromTurnId?: string;
+}
+
+export interface UnavailableThreadSummary {
+  threadId: string;
+  lastItemId?: string;
+  parentThreadId?: string;
+  name?: string;
+  archived: boolean;
+  createdAt: null;
+  updatedAt: null;
+  preview: string;
+  status: "systemError";
+  error: string;
+}
+
+export type NativeThreadSummary = ThreadSummary | UnavailableThreadSummary;
+
+export interface ThreadSummaryListOptions {
+  archived?: boolean;
+}
+
+export interface ThreadSummaryCheckpoint {
+  summaries: NativeThreadSummary[];
+  /** Includes deleted Threads, whose valid summary is intentionally absent. */
+  sourceRevisions: Record<string, string>;
+}
+
+export interface ThreadSummaryProjection {
+  loadCheckpoint?(): Promise<ThreadSummaryCheckpoint | undefined>;
+  load(): Promise<NativeThreadSummary[] | undefined>;
+  replace(
+    summaries: readonly NativeThreadSummary[],
+    sourceRevisions?: Readonly<Record<string, string>>,
+  ): Promise<void>;
+}
+
+export class InMemoryThreadSummaryProjection implements ThreadSummaryProjection {
+  #summaries: NativeThreadSummary[] | undefined;
+
+  async load(): Promise<NativeThreadSummary[] | undefined> {
+    return this.#summaries === undefined
+      ? undefined
+      : structuredClone(this.#summaries);
+  }
+
+  async replace(summaries: readonly NativeThreadSummary[]): Promise<void> {
+    this.#summaries = structuredClone([...summaries]);
+  }
+}
+
+export class JsonThreadSummaryProjection implements ThreadSummaryProjection {
+  readonly #filename: string;
+  #writeChain: Promise<void> = Promise.resolve();
+
+  constructor(filename: string) {
+    this.#filename = path.resolve(filename);
+  }
+
+  async load(): Promise<NativeThreadSummary[] | undefined> {
+    return (await this.#read())?.summaries;
+  }
+
+  async loadCheckpoint(): Promise<ThreadSummaryCheckpoint | undefined> {
+    const value = await this.#read();
+    return value?.version === 2 ? value : undefined;
+  }
+
+  async #read(): Promise<ProjectionFile | undefined> {
+    let contents: string;
+    try {
+      contents = await readFile(this.#filename, "utf8");
+    } catch (error) {
+      if (isNodeError(error) && error.code === "ENOENT") return undefined;
+      throw error;
+    }
+    try {
+      const value: unknown = JSON.parse(contents);
+      if (!isProjectionFile(value)) throw new Error("invalid shape");
+      return structuredClone(value);
+    } catch (error) {
+      console.warn(
+        `Ignoring invalid native Thread summary projection ${this.#filename}`,
+        error,
+      );
+      return undefined;
+    }
+  }
+
+  async replace(
+    summaries: readonly NativeThreadSummary[],
+    sourceRevisions: Readonly<Record<string, string>> = {},
+  ): Promise<void> {
+    // Detach before queueing so the checksum and payload describe the same observation.
+    const payload = structuredClone({
+      summaries: [...summaries],
+      sourceRevisions: { ...sourceRevisions },
+    });
+    const checksum = checkpointChecksum(payload);
+    const write = this.#writeChain.then(async () => {
+      await mkdir(path.dirname(this.#filename), { recursive: true });
+      const temporary = `${this.#filename}.${randomUUID()}.tmp`;
+      await writeFile(
+        temporary,
+        `${JSON.stringify({ version: 2, ...payload, checksum })}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      );
+      await rename(temporary, this.#filename);
+    });
+    this.#writeChain = write.catch(() => undefined);
+    await write;
+  }
+}
+
+type ProjectionFile =
+  | { version: 1; summaries: NativeThreadSummary[] }
+  | (ThreadSummaryCheckpoint & { version: 2; checksum: string });
+
+function checkpointChecksum(value: ThreadSummaryCheckpoint): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        summaries: value.summaries,
+        sourceRevisions: value.sourceRevisions,
+      }),
+    )
+    .digest("hex");
+}
+
+function isProjectionFile(value: unknown): value is ProjectionFile {
+  return (
+    isRecord(value) &&
+    (value.version === 1 || value.version === 2) &&
+    Array.isArray(value.summaries) &&
+    value.summaries.every(isNativeThreadSummary) &&
+    (value.version === 1 ||
+      (isRecord(value.sourceRevisions) &&
+        Object.values(value.sourceRevisions).every(
+          (revision) => typeof revision === "string",
+        ) &&
+        typeof value.checksum === "string" &&
+        checkpointChecksum(value as unknown as ThreadSummaryCheckpoint) ===
+          value.checksum))
+  );
+}
+
+export function isNativeThreadSummary(
+  value: unknown,
+): value is NativeThreadSummary {
+  if (
+    !isRecord(value) ||
+    typeof value.threadId !== "string" ||
+    value.threadId.length === 0 ||
+    (value.parentThreadId !== undefined &&
+      (typeof value.parentThreadId !== "string" ||
+        value.parentThreadId.length === 0 ||
+        value.parentThreadId === value.threadId)) ||
+    (value.lastItemId !== undefined &&
+      (typeof value.lastItemId !== "string" ||
+        value.lastItemId.length === 0)) ||
+    typeof value.archived !== "boolean" ||
+    (value.name !== undefined && typeof value.name !== "string") ||
+    typeof value.preview !== "string"
+  ) {
+    return false;
+  }
+  if (value.status === "systemError") {
+    return (
+      value.createdAt === null &&
+      value.updatedAt === null &&
+      typeof value.error === "string" &&
+      value.userQuestionSummary === undefined &&
+      value.currentMetadata === undefined
+    );
+  }
+  return (
+    (value.status === "idle" || value.status === "active") &&
+    typeof value.createdAt === "string" &&
+    typeof value.updatedAt === "string" &&
+    (value.turnSortAt === undefined || typeof value.turnSortAt === "string") &&
+    (value.recentActivityAt === undefined ||
+      (typeof value.recentActivityAt === "string" &&
+        Number.isFinite(Date.parse(value.recentActivityAt)))) &&
+    (value.userQuestionSummary === undefined ||
+      (isRecord(value.userQuestionSummary) &&
+        Number.isSafeInteger(value.userQuestionSummary.openCount) &&
+        (value.userQuestionSummary.openCount as number) >= 0 &&
+        (value.userQuestionSummary.latestPublishedAt === undefined ||
+          (typeof value.userQuestionSummary.latestPublishedAt === "string" &&
+            Number.isFinite(
+              Date.parse(value.userQuestionSummary.latestPublishedAt),
+            ))))) &&
+    (value.lastMessage === undefined ||
+      (isMessageSummary(value.lastMessage) &&
+        (value.lastMessage.kind === "user" ||
+          value.lastMessage.kind === "agent"))) &&
+    (value.lastAgentMessage === undefined ||
+      isMessageSummary(value.lastAgentMessage)) &&
+    (value.lastTurnEnd === undefined ||
+      (isMessageSummary(value.lastTurnEnd) &&
+        typeof value.lastTurnEnd.turnId === "string" &&
+        value.lastTurnEnd.turnId.length > 0 &&
+        Number.isSafeInteger(value.lastTurnEnd.position) &&
+        (value.lastTurnEnd.position as number) >= 0 &&
+        (value.lastTurnEnd.status === undefined ||
+          value.lastTurnEnd.status === "completed" ||
+          value.lastTurnEnd.status === "failed" ||
+          value.lastTurnEnd.status === "aborted"))) &&
+    (value.forkedFromThreadId === undefined ||
+      typeof value.forkedFromThreadId === "string") &&
+    (value.forkedFromTurnId === undefined ||
+      typeof value.forkedFromTurnId === "string") &&
+    value.error === undefined &&
+    isCurrentMetadata(value.currentMetadata)
+  );
+}
+
+function isMessageSummary(value: unknown): value is Record<string, unknown> {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    value.id.length > 0 &&
+    typeof value.createdAt === "string" &&
+    Number.isFinite(Date.parse(value.createdAt))
+  );
+}
+
+function isCurrentMetadata(value: unknown): value is CurrentMetadata {
+  return (
+    isRecord(value) &&
+    (value.providerProfileId === undefined ||
+      typeof value.providerProfileId === "string") &&
+    (value.modelId === undefined || typeof value.modelId === "string") &&
+    (value.reasoningEffort === undefined ||
+      value.reasoningEffort === null ||
+      typeof value.reasoningEffort === "string") &&
+    typeof value.model === "string" &&
+    typeof value.provider === "string" &&
+    typeof value.cwd === "string" &&
+    (value.sandbox === "danger-full-access" ||
+      value.sandbox === "read-only" ||
+      value.sandbox === "workspace-write") &&
+    (value.approvalPolicy === "always" || value.approvalPolicy === "never")
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
+}

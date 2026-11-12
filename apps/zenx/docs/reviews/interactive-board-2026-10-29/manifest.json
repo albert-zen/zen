@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 1,
+  "captureDate": "2026-10-29",
+  "captureMethod": "Manual cloud-browser computer-use interactions against the synthetic component preview; not native Electron and not the automated capture helper.",
+  "previewSourceCommit": "76f8dcf51ee8af0d437cadf58d3d114d97d6e2ad",
+  "sourceMetadata": {
+    "file": "source.json",
+    "sha256": "f2d2de0164c42d3d2e4c3a8f6f504a795eb856ceed03fcebc09f30d8cb48ddb1"
+  },
+  "sourceVerification": {
+    "comparedAgainstCommit": "0f2c54718ebe124c0b4ed50dd10c8cbde06df3da",
+    "allRecordedSourcesMatch": true,
+    "sourceCount": 14,
+    "results": {
+      "src/renderer/src/board-ui.tsx": true,
+      "src/renderer/src/board-ui-state.ts": true,
+      "src/renderer/src/plugin-information-host.tsx": true,
+      "src/renderer/src/plugin-ui-host.tsx": true,
+      "src/renderer/src/styles.css": true,
+      "src/renderer/src/theme.css": true,
+      "src/renderer/src/ui/plugin-theme.ts": true,
+      "src/renderer/src/auxiliary-panel.tsx": true,
+      "src/renderer/src/workspace-browser-panel.tsx": true,
+      "src/renderer/src/PluginProductPage.tsx": true,
+      "src/renderer/public/plugin-frame.html": true,
+      "scripts/board-preview.tsx": true,
+      "scripts/build-board-preview.mjs": true,
+      "scripts/capture-board-preview.mjs": true
+    },
+    "note": "Final integration must recheck these hashes; Host-only changes are not native/Host acceptance evidence."
+  },
+  "generatedPreviewArtifactsNotIncluded": [
+    {
+      "file": "board.html",
+      "sha256": "0a6df13ffb3b6e91a186e2e65aea3724b7eba5783b88e698bb3070020f8603da",
+      "bytes": 2347416
+    },
+    {
+      "file": "plugin-frame.html",
+      "sha256": "384d294a16fcfb191b7c972e5e2393407214364da8f3f3acf8bf7a87739e319a",
+      "bytes": 894
+    }
+  ],
+  "artifacts": [
+    {
+      "file": "board-custom-url.jpg",
+      "sha256": "f92eb751446d4f94ec5b102c235edac9aa71c88c33936446740dfae2c83fac35",
+      "bytes": 76782,
+      "width": 1180,
+      "height": 757,
+      "mediaType": "image/jpeg"
+    },
+    {
+      "file": "board-dark-async-draft.jpg",
+      "sha256": "f43fa1e48c49e27cc97f2d45e8b0e4c994a7f3876bd1b6d45819fa5c696be719",
+      "bytes": 72936,
+      "width": 1180,
+      "height": 757,
+      "mediaType": "image/jpeg"
+    },
+    {
+      "file": "board-error-details.jpg",
+      "sha256": "634e94b64fd7781a82b957e5d3dc80ff34f5412b520a20432a9bf9af86b57d63",
+      "bytes": 75698,
+      "width": 1180,
+      "height": 757,
+      "mediaType": "image/jpeg"
+    },
+    {
+      "file": "board-fullscreen.jpg",
+      "sha256": "81ca8fb8878655f9b0075f6a41acbb4a17f92db4593fe31250356c9bdc9b91ae",
+      "bytes": 64718,
+      "width": 1180,
+      "height": 757,
+      "mediaType": "image/jpeg"
+    },
+    {
+      "file": "board-late-contribution.jpg",
+      "sha256": "60dd02b0a65ced3a7611927a6031cdf2e94b898ea71153aaa4f4815dd0a2d24c",
+      "bytes": 47850,
+      "width": 756,
+      "height": 757,
+      "mediaType": "image/jpeg"
+    },
+    {
+      "file": "board-light-popup.jpg",
+      "sha256": "7700ca5740f9559866bb3c6e654e964790708a33c6898ad8f73e698d8268cc4b",
+      "bytes": 68505,
+      "width": 1180,
+      "height": 757,
+      "mediaType": "image/jpeg"
+    },
+    {
+      "file": "board-narrow.jpg",
+      "sha256": "b3114df4364dfc25977f9b4c0e123b635e1509bd9e0eb48bcbc7094e8f181018",
+      "bytes": 52675,
+      "width": 756,
+      "height": 757,
+      "mediaType": "image/jpeg"
+    },
+    {
+      "file": "board-onload-blocked.jpg",
+      "sha256": "cde10d30eef046a441f4513323ded43f826681c96550f51fe2c922728a7fd1d4",
+      "bytes": 67414,
+      "width": 1180,
+      "height": 757,
+      "mediaType": "image/jpeg"
+    }
+  ],
+  "limitations": [
+    "Synthetic current state, execution, message admission and native Browser viewport.",
+    "No actual Provider/model calls, external API, native script execution or real user data.",
+    "No subprocess lifecycle receipt exists for this manual cloud-browser capture.",
+    "No full CI, packaged Electron, physical touch or complete Host/schema acceptance claimed."
+  ]
+}

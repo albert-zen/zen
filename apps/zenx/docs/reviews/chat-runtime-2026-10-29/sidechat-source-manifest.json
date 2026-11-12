@@ -1,0 +1,35 @@
+{
+  "commit": "cb3bd13c17e4029587faa4d5a861126215ed1418",
+  "dirtyFiles": [],
+  "scope": "Production App welcome/Project selector/Fleet machine selector and AuxiliaryPanel. All app bridge facts and tab contents are synthetic. CSP blocks all network connections. No user profile, real Host, filesystem, model or native desktop action.",
+  "artifact": {
+    "html": "ui-polish-visual.html",
+    "htmlSha256": "bb1fca0f0d48a549b2689c15c53aaba474cf5b5de448b62b86b3c919da5655b2"
+  },
+  "sources": {
+    "scripts/build-ui-polish-visual.mjs": "d861528bd00f231b5121b3c8ba34581d05d162da5ceecb52a595372d0c71c30a",
+    "scripts/capture-ui-polish-visual.mjs": "29aeaa03975c0b400ef2872b2bb4ee7dd79c36bff55dcadf60739a01153234b5",
+    "scripts/capture-sidechat-visual.mjs": "1ee4716cef8e6b62629968922d6ee42466f7ffd84b4e4ff74306323d117dcaac",
+    "scripts/preview-browser.mjs": "fa825e48b1196dff7da7617004452e3a9bab46b8492614e4d17bed84d54f24be",
+    "scripts/preview-browser-lifecycle.mjs": "71ee505a535bbd4701e48668a66e26821f335a4dc0dc44bbf7af80274dde84fa",
+    "src/renderer/src/App.tsx": "41aacd5f39456380347528bd6ed0cfc309bbe338b69d6c02669f693a1a333e13",
+    "src/renderer/src/thread-list.ts": "aeaa4546ffdaee4a831fbf66f26f11fd878af7c789840a625e9d9aabd3b54c60",
+    "src/renderer/src/i18n/shell.ts": "e8207c7531897a9fbe8d27fbb178fe810f4926529435af12a3dad7e7b07488b4",
+    "src/renderer/src/auxiliary-panel.tsx": "0de76695a46e924491d365217bcfbd528f1ff2af792e1e1765d6410f359b52e9",
+    "src/renderer/src/FleetComposerSurface.tsx": "1275b254d2eecd96237b8782d47cf85ba98f73b899f8f87057c1fb156e032c9c",
+    "src/renderer/src/ThreadView.tsx": "0de23fa666f459588bb1236f5be6996b0ad01849aa137d70fee59912de30e12e",
+    "src/renderer/src/side-chat-drafts.ts": "94eb579b92d2c438747e06cad596e32e356728a1de10ce392e4b49de464f781b",
+    "src/renderer/src/subagents-ui.tsx": "59f335fead8dd993a60c7146394e5a033dd5832a045900945d85fa7e16a20f2d",
+    "src/renderer/src/thread-view-state.ts": "562cef226903da931910853b4a33c925a415f9ac71e45834f33373b87181e1ce",
+    "src/renderer/src/i18n/panels.ts": "1a6875f0a90fe0862247fbf064f83517342b6aee19f4d99e39a8c5a97848406b",
+    "src/renderer/src/Sidebar.tsx": "bdcd93ff8345aa07c2ab0d7a64fa20d16317b0da104b05bd4b3fb5b2ba235342",
+    "src/renderer/src/auxiliary-tab-reorder.css": "18bd26e9fc029ccb8e6a974c065b2fd7f42caefe7dcfd8848a6d55659bcdd548",
+    "src/renderer/src/fleet-ui.css": "f32e632da1d303aac1ada916a90e27704646c0db73ad6820ee37e7abf453601d",
+    "src/renderer/src/icons.tsx": "493d7458c4514b1793c832d6b4e8322ebbf55caafc7229cd91a330b1572a6cc4",
+    "src/renderer/src/styles.css": "bde972bbfeda9b40a8469c765d53f5f8932144a60a4b44545e103bf4219563b6",
+    "src/renderer/src/theme.css": "6fe99f043bb28cc00757e6450e92241222a6714a83ff6737d3dd34a105ce8271",
+    "test/fixtures/ui-polish-visual.tsx": "c0450cab18311375d873c24b2047fdac2696836abca27ff5db04daf153f8e025",
+    "test/fixtures/ui-polish-title-bridge.ts": "65d6e647cef5014b7a28d4428387fb485f6675eea219a174a8565300543634c1",
+    "test/fixtures/ui-polish-visual.html": "7a7c4c2f5b20fa8164ac4eb1196d5aa4e513b1735750ea04ff56b124d8a6f882"
+  }
+}

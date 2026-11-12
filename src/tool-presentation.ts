@@ -1,0 +1,376 @@
+import type { CapabilityObjectBinding, ModelTool } from "./model.js";
+import { ASK_USER_QUESTION_NAME } from "./user-question.js";
+
+export type ToolPresentation = "direct" | "code" | "both";
+
+export interface ToolCatalogEntry {
+  readonly objectBinding?: CapabilityObjectBinding;
+  readonly name: string;
+  readonly description: string;
+  readonly pluginId?: string;
+  readonly fullDescription: string;
+  readonly inputSchema: Record<string, unknown>;
+}
+
+export interface ToolPresentationSnapshot {
+  readonly modelTools: readonly ModelTool[];
+  /** Complete eligible catalog, frozen for this sample; select details programmatically. */
+  readonly codeTools: readonly ToolCatalogEntry[];
+  /** Names a model response may submit directly for this sample. */
+  readonly modelToolNames: ReadonlySet<string>;
+  /** Names the run_code Worker may invoke for this sample. */
+  readonly nestedToolNames: ReadonlySet<string>;
+}
+
+const RUN_CODE_NAME = "run_code";
+export const COMPACT_CONTEXT_NAME = "compact_context";
+
+/** Build both model entry points from one immutable definition snapshot. */
+export function buildToolPresentation(
+  definitions: readonly ModelTool[],
+  mode: ToolPresentation,
+): ToolPresentationSnapshot {
+  const snapshot = definitions.map((definition) => structuredClone(definition));
+  const runCodeCount = snapshot.filter(
+    (definition) => definition.name === RUN_CODE_NAME,
+  ).length;
+  const compactContextTools = snapshot.filter(
+    (definition) => definition.name === COMPACT_CONTEXT_NAME,
+  );
+  const questionTools = snapshot.filter(
+    (definition) => definition.name === ASK_USER_QUESTION_NAME,
+  );
+  if (questionTools.length > 1)
+    throw new Error(
+      "Tool presentation accepts at most one ask_user_question definition",
+    );
+  const directOnlyTools = [...compactContextTools, ...questionTools];
+  if (
+    compactContextTools.length > 1 ||
+    compactContextTools.some(
+      (definition) =>
+        typeof definition.description !== "string" ||
+        definition.description.trim().length === 0 ||
+        !isRecord(definition.inputSchema),
+    )
+  ) {
+    throw new Error(
+      "Tool presentation accepts at most one valid compact_context definition",
+    );
+  }
+  const ordinaryTools = snapshot.filter(
+    (definition) =>
+      definition.name !== RUN_CODE_NAME &&
+      definition.name !== ASK_USER_QUESTION_NAME &&
+      definition.name !== COMPACT_CONTEXT_NAME,
+  );
+  if (mode !== "direct" && runCodeCount !== 1) {
+    throw new Error(
+      "Tool presentation code requires a registered run_code runtime",
+    );
+  }
+
+  const modelTools =
+    mode === "direct"
+      ? [...ordinaryTools, ...directOnlyTools]
+      : mode === "code"
+        ? [createRunCodeModelTool(ordinaryTools), ...directOnlyTools]
+        : [
+            ...ordinaryTools,
+            ...directOnlyTools,
+            createRunCodeModelTool(ordinaryTools),
+          ];
+  return Object.freeze({
+    codeTools: Object.freeze(
+      generateToolCatalog(ordinaryTools).map((tool) => deepFreeze(tool)),
+    ),
+    modelTools: Object.freeze(
+      modelTools.map((definition) => deepFreeze(definition)),
+    ),
+    modelToolNames: new Set(modelTools.map((definition) => definition.name)),
+    nestedToolNames: new Set(
+      ordinaryTools.map((definition) => definition.name),
+    ),
+  });
+}
+
+export function createRunCodeModelTool(
+  _ordinaryTools: readonly ModelTool[] = [],
+): ModelTool {
+  return {
+    name: RUN_CODE_NAME,
+    rawSource: { language: "javascript", argument: "code" },
+    description: [
+      "Run a fresh JavaScript async module with top-level await.",
+      "Use pure JavaScript, not TypeScript syntax. No Node.js, filesystem, network, process, require, or package imports; use tools.* for external actions.",
+      "In-memory helpers: atob/btoa, TextEncoder/TextDecoder, URL/URLSearchParams, crypto.randomUUID(). import.meta is unavailable.",
+      'Browser and Computer primary interface: capabilities.browser(provider) / capabilities.computer(provider). Discover providers with capabilities.list(); select ALL_TOOLS objectBinding entries for exact available methods and schemas. Re-acquire short references each fresh program, e.g. capabilities.browser("workspace").tab("r1").inspect({}). Facades return unchanged ToolResult; check exitCode. Provider/session owns state; no persistent JS objects. Only declared methods exist; provider extensions remain explicit. Standalone tools.* are compatible entry points to the same operations.',
+      "Use ALL_TOOLS to find eligible tools available through tools.*. Select output with text/image/audio; the last expression is not returned automatically.",
+      'Optional first line: // @exec: {"yield_time_ms": 10000, "max_output_tokens": 1000, "timeout_ms": 600000}. Controls observation wait, preview budget, and execution deadline respectively.',
+      "Awaited tools return their final result. A running outer program returns a task_id; use tools.wait with that task_id to observe new output or completion.",
+      "Tools marked [parallel_safe] can overlap in Promise.all within the host limit; unmarked tools serialize. Await dependent operations sequentially.",
+      "output is complete raw text (up to 1 MiB), otherwise null. outputInfo provides status/file reference; diagnostic carries control messages. Model previews have an independent budget.",
+      "Check exitCode before using tool output: tool failures, invalid parameters and unknown names return nonzero codes. Serialization and bridge errors can throw.",
+      "Await every tool call; unfinished or unobserved calls fail the program. await yield_control() yields output while execution continues. Timers alone do not keep a finished program alive.",
+      'image/audio accept base64 data URIs, MCP blocks (e.g. image({type:"image", mimeType:"image/png", data:"<base64>"})), or current-thread attachment refs. Local paths use tools.view_image; its images return automatically. Unsupported modalities become text references.',
+      "store/load retain bounded JSON values within this thread: keys 1–160 characters, 256 KiB per value, 128 keys/2 MiB total. Ordinary variables are fresh each run; missing keys return undefined. Writes already committed survive later program failure.",
+      "ALL_TOOLS is the complete eligible tool catalog for this program: name, short description, optional pluginId/objectBinding, fullDescription and exact inputSchema. Filter/map it in JavaScript; print only selected entries with text() to retrieve detailed documentation at the conversation tail. The tools Proxy also returns functions for unknown names, so it is not an availability check.",
+      "Stable helper declarations (TypeScript reference notation only; submitted code must be JavaScript):",
+      "```ts",
+      generateToolSdk([]),
+      "```",
+    ].join("\n"),
+    inputSchema: {
+      type: "object",
+      properties: {
+        code: {
+          type: "string",
+          description:
+            "The JavaScript async module source, optionally beginning with // @exec: JSON.",
+        },
+      },
+      required: ["code"],
+      additionalProperties: false,
+    },
+  };
+}
+
+/** Selectable details from the same eligible definitions used for invocation. */
+export function generateToolCatalog(
+  tools: readonly ModelTool[],
+): ToolCatalogEntry[] {
+  return tools
+    .filter(
+      (tool) =>
+        tool.name !== RUN_CODE_NAME && tool.name !== COMPACT_CONTEXT_NAME,
+    )
+    .map(
+      ({
+        name,
+        description,
+        pluginId,
+        fullDescription,
+        inputSchema,
+        objectBinding,
+      }) => ({
+        ...(objectBinding === undefined
+          ? {}
+          : { objectBinding: structuredClone(objectBinding) }),
+        name,
+        description: compactToolDescription(description),
+        ...(pluginId === undefined ? {} : { pluginId }),
+        fullDescription: fullDescription ?? description,
+        inputSchema: structuredClone(inputSchema),
+      }),
+    );
+}
+
+export function generateToolSdk(tools: readonly ModelTool[]): string {
+  const declarations = tools
+    .filter(
+      (tool) =>
+        tool.name !== RUN_CODE_NAME && tool.name !== COMPACT_CONTEXT_NAME,
+    )
+    .flatMap((tool) => {
+      const declaration = `  ${typescriptProperty(tool.name)}(args: ${schemaType(tool.inputSchema)}): Promise<ToolResult>;`;
+      return [
+        ...docComment(tool.description, "  "),
+        ...(isIdentifierName(tool.name)
+          ? []
+          : [`  // Invoke as tools[${JSON.stringify(tool.name)}](...).`]),
+        declaration,
+      ];
+    });
+  return [
+    "type ToolResult = {",
+    "  output: string | null;",
+    '  outputInfo: { complete: boolean; capturedBytes: number; sourceTruncated: boolean; reason?: "program_limit" | "source_truncated" | "unavailable"; fullOutput?: { path: string; sha256: string; lifetime: "host_instance" } };',
+    "  diagnostic?: string;",
+    "  exitCode: number;",
+    "  contentType?: string;",
+    "  structuredContent?: unknown;",
+    "};",
+    "",
+    'declare const capabilities: { list(): {kind: "browser" | "computer"; provider: string}[]; browser(provider: string): any; computer(provider: string): any };',
+    "declare const tools: {",
+    ...declarations,
+    "};",
+    "",
+    "/** Append one intentionally selected value to the outer model-visible result. */",
+    "declare function text(value: unknown): void;",
+    "declare function image(value: unknown): void;",
+    "declare function audio(value: unknown): void;",
+    "declare function exit(): never;",
+    "declare function store(key: string, value: unknown): void;",
+    "declare function load(key: string): unknown;",
+    "declare function yield_control(): Promise<void>;",
+    "declare function setTimeout(callback: (...args: unknown[]) => unknown, delayMs?: number, ...args: unknown[]): number;",
+    "declare function clearTimeout(id: number): void;",
+    'declare const ALL_TOOLS: ReadonlyArray<{ name: string; description: string; pluginId?: string; objectBinding?: {kind: "browser" | "computer"; provider: string; path: readonly string[]; reference?: {kind: string; argument: string}}; fullDescription: string; inputSchema: Record<string, unknown> }>;',
+  ].join("\n");
+}
+
+function schemaType(schema: unknown, depth = 0): string {
+  if (depth > 12 || !isRecord(schema)) return "unknown";
+  if ("const" in schema) return literalType(schema.const);
+  if (Array.isArray(schema.enum) && schema.enum.length > 0) {
+    const variants = schema.enum.map(literalType);
+    return variants.includes("unknown") ? "unknown" : variants.join(" | ");
+  }
+  const variants = Array.isArray(schema.oneOf)
+    ? schema.oneOf
+    : Array.isArray(schema.anyOf)
+      ? schema.anyOf
+      : undefined;
+  if (variants !== undefined && variants.length > 0) {
+    // JSON Schema alternatives also constrain their sibling object properties.
+    // Required-only branches do not redefine those properties or their docs.
+    const properties = schema.properties;
+    if (
+      schema.type === "object" &&
+      isRecord(properties) &&
+      variants.every(
+        (entry) =>
+          isRecord(entry) &&
+          Object.keys(entry).length === 1 &&
+          Array.isArray(entry.required) &&
+          entry.required.length > 0 &&
+          entry.required.every(
+            (name) =>
+              typeof name === "string" && Object.hasOwn(properties, name),
+          ),
+      )
+    ) {
+      const baseRequired = Array.isArray(schema.required)
+        ? schema.required
+        : [];
+      const exclusiveKeys =
+        Array.isArray(schema.oneOf) &&
+        variants.every((entry) => entry.required.length === 1)
+          ? variants.map((entry) => entry.required[0] as string)
+          : [];
+      return variants
+        .map((entry) =>
+          objectSchemaType(
+            { ...schema, required: [...baseRequired, ...entry.required] },
+            depth + 1,
+            new Set(
+              exclusiveKeys.filter((key) => !entry.required.includes(key)),
+            ),
+          ),
+        )
+        .join(" | ");
+    }
+    const rendered = variants.map((entry) => schemaType(entry, depth + 1));
+    return rendered.every((entry) => entry !== "unknown")
+      ? rendered.join(" | ")
+      : "unknown";
+  }
+  if (Array.isArray(schema.type)) {
+    const rendered = schema.type.map((type) =>
+      schemaType({ ...schema, type }, depth + 1),
+    );
+    return rendered.every((entry) => entry !== "unknown")
+      ? rendered.join(" | ")
+      : "unknown";
+  }
+  switch (schema.type) {
+    case "string":
+      return "string";
+    case "number":
+    case "integer":
+      return "number";
+    case "boolean":
+      return "boolean";
+    case "null":
+      return "null";
+    case "array":
+      return `Array<${schemaType(schema.items, depth + 1)}>`;
+    case "object":
+      return objectSchemaType(schema, depth + 1);
+    default:
+      return "unknown";
+  }
+}
+
+function objectSchemaType(
+  schema: Record<string, unknown>,
+  depth: number,
+  forbidden: ReadonlySet<string> = new Set(),
+): string {
+  const properties = isRecord(schema.properties) ? schema.properties : {};
+  const required = new Set(
+    Array.isArray(schema.required)
+      ? schema.required.filter(
+          (name): name is string => typeof name === "string",
+        )
+      : [],
+  );
+  const entries = Object.entries(properties).map(([name, propertySchema]) => {
+    const description =
+      isRecord(propertySchema) && typeof propertySchema.description === "string"
+        ? `${inlineDocComment(propertySchema.description)} `
+        : "";
+    return `${description}${typescriptProperty(name)}${required.has(name) ? "" : "?"}: ${forbidden.has(name) ? "never" : schemaType(propertySchema, depth)};`;
+  });
+  if (schema.additionalProperties === true) {
+    entries.push("[key: string]: unknown;");
+  } else if (isRecord(schema.additionalProperties)) {
+    entries.push(
+      `[key: string]: ${schemaType(schema.additionalProperties, depth)};`,
+    );
+  }
+  return entries.length === 0 ? "{ }" : `{ ${entries.join(" ")} }`;
+}
+
+function docComment(description: string, indent: string): string[] {
+  const lines = description.replace(/\*\//gu, "*\\/").split(/\r?\n/u);
+  return [
+    `${indent}/**`,
+    ...lines.map((line) => `${indent} * ${line}`),
+    `${indent} */`,
+  ];
+}
+
+function inlineDocComment(description: string): string {
+  return `/** ${description.replace(/\*\//gu, "*\\/").replace(/\r?\n/gu, " ")} */`;
+}
+
+function literalType(value: unknown): string {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  ) {
+    return JSON.stringify(value);
+  }
+  return "unknown";
+}
+
+function typescriptProperty(name: string): string {
+  return isIdentifierName(name) ? name : JSON.stringify(name);
+}
+
+function isIdentifierName(name: string): boolean {
+  return /^[$_\p{ID_Start}][$\u200c\u200d\p{ID_Continue}]*$/u.test(name);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
+    return value;
+  }
+  for (const entry of Object.values(value)) deepFreeze(entry);
+  return Object.freeze(value);
+}
+
+/** Keep an authored purpose sentence; full usage instructions remain selectable. */
+export function compactToolDescription(description: string): string {
+  return (
+    description.split(/\n|(?<=[.!?])\s+(?=[A-Z])/u)[0]?.trim() || description
+  );
+}

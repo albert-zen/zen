@@ -1,0 +1,76 @@
+name: Fast feedback (not full acceptance)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fast-feedback-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: Early static feedback (risk checks separate)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Test the exact PR head; selected-risk/full CI still tests integration.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Report pinned impact candidates (shadow only)
+        env:
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node scripts/ci-impact-shadow.mjs "${{ runner.temp }}/impact-shadow.json"
+      - name: Select conservative documentation-only feedback
+        id: selection
+        env:
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          CI_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node scripts/ci-docs-selection.mjs "${{ runner.temp }}/docs-selection.json"
+      - name: Verify shadow planner contracts
+        run: node --test scripts/test/ci-impact-shadow.test.mjs scripts/test/ci-docs-selection.test.mjs
+      - name: Install static-check dependencies without native lifecycle work
+        id: dependencies
+        timeout-minutes: 4
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build SDK declarations for standalone typechecks
+        if: ${{ steps.selection.outputs.docs-only != 'true' }}
+        id: sdk
+        run: npm run build --workspace @zenx/plugin-sdk
+      - name: Core and CLI typecheck
+        if: ${{ !cancelled() && steps.selection.outputs.docs-only != 'true' && steps.sdk.outcome == 'success' }}
+        run: npm run typecheck
+      - name: ZenX main and renderer typecheck
+        if: ${{ !cancelled() && steps.selection.outputs.docs-only != 'true' && steps.sdk.outcome == 'success' }}
+        run: npm --workspace apps/zenx run typecheck:prepared
+      - name: Repository Prettier check (Python lint remains in full CI)
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        run: npx --no-install prettier --check .
+      - name: Retain shadow report even when static checks fail
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: impact-shadow-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/impact-shadow.json
+            ${{ runner.temp }}/docs-selection.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Clarify feedback boundary
+        if: ${{ always() }}
+        run: echo 'Early static feedback only. Shadow candidates remain advisory. All ordinary PRs, draft or ready, get static feedback plus selected-risk CI. Main pushes and manual dispatch run full acceptance; a PR green result does not claim the complete aggregate ran.' >> "$GITHUB_STEP_SUMMARY"

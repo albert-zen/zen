@@ -1,0 +1,1296 @@
+import type {
+  RoomQuestion,
+  RoomQuestionResponseInput,
+  RoomQuestionWorkspaceReadOptions,
+  RoomQuestionWriteInput,
+} from "../room-questions.js";
+import { readFile, realpath, stat } from "node:fs/promises";
+import path from "node:path";
+import {
+  listThreadCandidates,
+  resolveThreadTarget,
+  type ThreadTargetPort,
+} from "./thread-target.js";
+
+import {
+  ZENX_ROOMS_CAPABILITY_ID,
+  ZENX_TRIGGERS_CAPABILITY_ID,
+  type ZenXAutomationControlPort,
+} from "./capabilities/automation-control-package.js";
+import {
+  JsonPluginStorage,
+  PluginStorageReplacementPendingError,
+  type PluginStorageFileSystem,
+  type ZenXPluginHostSdkV1,
+} from "./plugin-host-sdk.js";
+import {
+  ZenXTriggerService,
+  projectCompletedTurn,
+  type ZenXTriggerAppServerPort,
+  type ZenXTriggerStorePort,
+  type ZenXTriggerTitlePort,
+} from "./trigger-service.js";
+import { ZenXTriggerStore } from "./trigger-store.js";
+import {
+  openAutomationTransactionStorage,
+  assertAutomationDataDeletable,
+  type MigratedAutomationStorage,
+} from "./automation-transaction-migration.js";
+import {
+  readAutomationProjection,
+  automationTransactionForSnapshot,
+} from "./automation-transaction-adapter.js";
+import type {
+  AutomationRoomEvent,
+  AutomationRoomSnapshot,
+} from "./automation-transaction-store.js";
+import type {
+  CreateRoomInput,
+  CreateTriggerInput,
+  RoomMember,
+  RoomSendOperation,
+  RoomDeliveryView,
+  TriggerSnapshot,
+  TriggerSidebarSnapshot,
+  UpdateTriggerInput,
+  AssistantWorkspace,
+  UpdateAssistantWorkspaceInput,
+  ZenXRoom,
+} from "./trigger-types.js";
+
+export interface AutomationTargetPreview {
+  workspace: string;
+  resolvedWorkspace: string;
+  model: string;
+  providerProfileId: string;
+  modelId: string;
+  reasoningEffort: string | null;
+  sandbox: "read-only" | "workspace-write" | "danger-full-access";
+  approvalPolicy: "on-request" | "never";
+  processEpoch: string;
+  revision: number;
+}
+
+/** Host setup intent; the Room service only receives a real Thread binding. */
+export interface CreateAssistantRoomInput {
+  name: string;
+  memberName: string;
+  operationId: string;
+  target:
+    | { kind: "new"; workspace: string; expected: AutomationTargetPreview }
+    | { kind: "existing"; threadId: string };
+}
+
+const MAX_ASSISTANT_CREATION_OPERATIONS = 256;
+
+/** Remove the Room portion of the shared container when plugin data is deleted. */
+export async function clearBundledAutomationRoomsData(
+  userDataDirectory: string,
+): Promise<void> {
+  const root = path.join(userDataDirectory, "plugin-data");
+  await assertAutomationDataDeletable(root);
+  const filename = path.join(root, ZENX_TRIGGERS_CAPABILITY_ID, "storage.json");
+  try {
+    await readFile(filename, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  const storage = await JsonPluginStorage.open({
+    pluginId: ZENX_TRIGGERS_CAPABILITY_ID,
+    root,
+    version: 1,
+    initialValue: { triggers: [], history: [], rooms: [] },
+  });
+  const value = await storage.get();
+  await storage.set({
+    triggers: value["triggers"] ?? [],
+    history: value["history"] ?? [],
+    rooms: [],
+  });
+}
+
+export async function createBundledAutomationPluginService(options: {
+  userDataDirectory: string;
+  /** Test seam for validating a failed container rename and restart. */
+  storageFileSystem?: PluginStorageFileSystem;
+  appServer: ZenXTriggerAppServerPort;
+  titles?: ZenXTriggerTitlePort;
+  threadTargets?: ThreadTargetPort;
+  targetDefaults?: () => Promise<
+    Omit<AutomationTargetPreview, "workspace" | "resolvedWorkspace">
+  >;
+  startThread?: (preview: AutomationTargetPreview) => Promise<{
+    thread: { id: string };
+    cwd: string;
+    model: string;
+    sandbox: { type: string };
+    approvalPolicy: string;
+    reasoningEffort: string | null;
+  }>;
+}): Promise<ZenXBundledAutomationPluginService> {
+  // The migration module inspects both marker namespaces and known artifacts
+  // before this lazy legacy read, and before any bootstrap write can occur.
+  const storage = await openAutomationTransactionStorage({
+    storageRoot: path.join(options.userDataDirectory, "plugin-data"),
+    fileSystem: options.storageFileSystem,
+    loadLegacy: async () => {
+      try {
+        return await new ZenXTriggerStore(
+          path.join(options.userDataDirectory, "trigger-registry.json"),
+        ).read();
+      } catch (error) {
+        console.error(
+          `ZenX legacy automation source is unavailable: ${describeError(error)}`,
+        );
+        return { triggers: [], history: [], rooms: [] };
+      }
+    },
+  });
+  const active = new Set<string>();
+  return new ZenXBundledAutomationPluginService(
+    options.appServer,
+    new PluginAutomationStore(storage, active),
+    active,
+    options.titles,
+    options.threadTargets,
+    options.targetDefaults,
+    options.startThread,
+  );
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Only this new automation admission needs an existing physical directory. */
+async function resolveAutomationDirectory(workspace: string): Promise<string> {
+  try {
+    const resolved = await realpath(workspace);
+    if ((await stat(resolved)).isDirectory()) return resolved;
+  } catch {
+    // Project's historical alias fallback is deliberately not admission here.
+  }
+  throw new Error(
+    "Workspace directory is missing or not a directory; review it again",
+  );
+}
+
+class PluginAutomationStore implements ZenXTriggerStorePort {
+  readonly roomHistory;
+  constructor(
+    readonly storage: MigratedAutomationStorage,
+    readonly active: ReadonlySet<string>,
+    readonly candidates: Parameters<
+      MigratedAutomationStorage["append"]
+    >[1] = {},
+  ) {
+    this.roomHistory = storage.journal;
+  }
+
+  forLifecycle(
+    pluginId: string,
+    sdk: ZenXPluginHostSdkV1,
+  ): PluginAutomationStore {
+    if (
+      pluginId !== ZENX_TRIGGERS_CAPABILITY_ID &&
+      pluginId !== ZENX_ROOMS_CAPABILITY_ID
+    )
+      throw Error("Unknown shared automation plugin");
+    return new PluginAutomationStore(this.storage, this.active, {
+      ...this.candidates,
+      ...(pluginId === ZENX_TRIGGERS_CAPABILITY_ID
+        ? { shared: sdk.storage }
+        : { rooms: sdk.storage }),
+    });
+  }
+  wakeupStorageAvailable(): boolean {
+    return (
+      !this.storage.shared.replacementPending &&
+      !this.storage.rooms.replacementPending
+    );
+  }
+  onStorageReplacementChange(listener: () => void): () => void {
+    const disposers = [this.storage.shared, this.storage.rooms].map((storage) =>
+      storage.onReplacementChange(listener),
+    );
+    return () => {
+      for (const dispose of disposers) dispose();
+    };
+  }
+  async #verifyMarkers(): Promise<void> {
+    for (const [storage, format] of [
+      [
+        this.candidates?.shared ?? this.storage.shared,
+        "zenx-automation-journal",
+      ],
+      [this.candidates?.rooms ?? this.storage.rooms, "zenx-automation-forward"],
+    ] as const) {
+      const value = await storage.get();
+      if (
+        storage.version !== 2 ||
+        value.format !== format ||
+        value.generation !== this.storage.journal.generation
+      )
+        throw Error(
+          "Automation lifecycle marker does not select this history generation",
+        );
+    }
+  }
+  async read(): Promise<TriggerSnapshot> {
+    await this.#verifyMarkers();
+    const snapshot = await readAutomationProjection(this.storage.journal);
+    await this.#verifyMarkers();
+    return snapshot;
+  }
+  async write(
+    snapshot: TriggerSnapshot,
+    roomEvents: readonly AutomationRoomEvent[] = [],
+  ): Promise<void> {
+    await this.storage.append(
+      automationTransactionForSnapshot(
+        this.storage.journal,
+        snapshot,
+        roomEvents,
+        {
+          triggers: this.active.has(ZENX_TRIGGERS_CAPABILITY_ID),
+          rooms: this.active.has(ZENX_ROOMS_CAPABILITY_ID),
+        },
+      ),
+      this.candidates,
+    );
+  }
+  async close(): Promise<void> {
+    await this.storage.close();
+  }
+}
+
+export class ZenXBundledAutomationPluginService implements ZenXAutomationControlPort {
+  readonly #service: ZenXTriggerService;
+  readonly #store: ZenXTriggerStorePort;
+  readonly #active: Set<string>;
+  // A bundled profile replacement may start its new runtime before the old
+  // generation closes. Catalog enablement is one logical capability, but
+  // both runtime instances must release their own transient lease.
+  #triggerRuntimeLeases = 0;
+  readonly #triggerRuntimeSdks: ZenXPluginHostSdkV1[] = [];
+  readonly #roomRuntimeLeases: ZenXPluginHostSdkV1[] = [];
+  // Admission to storage is not proof that the underlying generation survived
+  // a failed stop. Only an explicit start can re-read durable state.
+  #serviceRunning = false;
+  readonly #targets: ThreadTargetPort | undefined;
+  readonly #appServer: ZenXTriggerAppServerPort;
+  readonly #targetDefaults?: () => Promise<
+    Omit<AutomationTargetPreview, "workspace" | "resolvedWorkspace">
+  >;
+  readonly #startThread?: NonNullable<
+    Parameters<typeof createBundledAutomationPluginService>[0]["startThread"]
+  >;
+  #lifecycle: Promise<void> = Promise.resolve();
+  // Bounded Host-lifetime UI receipts. Never retry an attempted thread/start,
+  // including unknown transport outcomes; no durable recovery workflow.
+  readonly #assistantCreations = new Map<
+    string,
+    { signature: string; result: Promise<ZenXRoom> }
+  >();
+
+  constructor(
+    appServer: ZenXTriggerAppServerPort,
+    store: ZenXTriggerStorePort,
+    active: Set<string>,
+    titles?: ZenXTriggerTitlePort,
+    targets?: ThreadTargetPort,
+    targetDefaults?: () => Promise<
+      Omit<AutomationTargetPreview, "workspace" | "resolvedWorkspace">
+    >,
+    startThread?: NonNullable<
+      Parameters<typeof createBundledAutomationPluginService>[0]["startThread"]
+    >,
+  ) {
+    this.#active = active;
+    this.#store = store;
+    this.#appServer = appServer;
+    this.#targets = targets;
+    this.#targetDefaults = targetDefaults;
+    this.#startThread = startThread;
+    this.#service = new ZenXTriggerService(appServer, store, {
+      titles,
+      ...(store instanceof PluginAutomationStore
+        ? {
+            wakeupGate: {
+              isOpen: () => store.wakeupStorageAvailable(),
+              isBlockedError: (error: unknown) =>
+                error instanceof PluginStorageReplacementPendingError,
+              subscribe: (listener: () => void) =>
+                store.onStorageReplacementChange(listener),
+            },
+          }
+        : {}),
+    });
+  }
+
+  async startPlugin(pluginId: string, sdk: ZenXPluginHostSdkV1): Promise<void> {
+    await this.#serialize(async () => {
+      const lifecycleStore =
+        sdk.storage !== undefined &&
+        this.#store instanceof PluginAutomationStore
+          ? this.#store.forLifecycle(pluginId, sdk)
+          : this.#store;
+      if (!this.#serviceRunning && this.#active.size > 0) {
+        const admitted = this.#active.has(pluginId);
+        if (!admitted) {
+          this.#active.add(pluginId);
+          if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID) {
+            this.#triggerRuntimeLeases = 1;
+            this.#triggerRuntimeSdks.push(sdk);
+          } else if (pluginId === ZENX_ROOMS_CAPABILITY_ID) {
+            this.#roomRuntimeLeases.push(sdk);
+          }
+        }
+        try {
+          await this.#service.start(
+            this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID),
+            lifecycleStore,
+          );
+          this.#serviceRunning = true;
+        } catch (error) {
+          if (!admitted) {
+            this.#active.delete(pluginId);
+            if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID) {
+              this.#triggerRuntimeLeases = 0;
+              this.#triggerRuntimeSdks.pop();
+            } else if (pluginId === ZENX_ROOMS_CAPABILITY_ID) {
+              this.#roomRuntimeLeases.pop();
+            }
+          }
+          throw error;
+        }
+        if (admitted && pluginId === ZENX_TRIGGERS_CAPABILITY_ID) {
+          if (!this.#triggerRuntimeSdks.includes(sdk)) {
+            this.#triggerRuntimeLeases++;
+            this.#triggerRuntimeSdks.push(sdk);
+          }
+        } else if (
+          admitted &&
+          pluginId === ZENX_ROOMS_CAPABILITY_ID &&
+          !this.#roomRuntimeLeases.includes(sdk)
+        ) {
+          this.#roomRuntimeLeases.push(sdk);
+        }
+        return;
+      }
+      if (
+        pluginId === ZENX_TRIGGERS_CAPABILITY_ID &&
+        this.#active.has(pluginId)
+      ) {
+        this.#triggerRuntimeLeases++;
+        this.#triggerRuntimeSdks.push(sdk);
+        return;
+      }
+      if (
+        pluginId === ZENX_ROOMS_CAPABILITY_ID &&
+        this.#roomRuntimeLeases.includes(sdk)
+      )
+        return;
+      const roomLease = pluginId === ZENX_ROOMS_CAPABILITY_ID;
+      if (roomLease) this.#roomRuntimeLeases.push(sdk);
+      if (this.#active.has(pluginId)) return;
+      const first = this.#active.size === 0;
+      if (first) {
+        this.#active.add(pluginId);
+        if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID) {
+          this.#triggerRuntimeLeases = 1;
+          this.#triggerRuntimeSdks.push(sdk);
+        }
+        try {
+          await this.#service.start(
+            this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID),
+            lifecycleStore,
+          );
+          this.#serviceRunning = true;
+        } catch (error) {
+          this.#active.delete(pluginId);
+          if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID) {
+            this.#triggerRuntimeLeases = 0;
+            this.#triggerRuntimeSdks.pop();
+          }
+          if (roomLease) this.#roomRuntimeLeases.pop();
+          throw error;
+        }
+      } else {
+        try {
+          await this.#service.stop(lifecycleStore);
+          this.#serviceRunning = false;
+        } catch (error) {
+          this.#serviceRunning = false;
+          if (roomLease) this.#roomRuntimeLeases.pop();
+          throw error;
+        }
+        this.#active.add(pluginId);
+        if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID) {
+          this.#triggerRuntimeLeases = 1;
+          this.#triggerRuntimeSdks.push(sdk);
+        }
+        try {
+          await this.#service.start(
+            this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID),
+            lifecycleStore,
+          );
+          this.#serviceRunning = true;
+        } catch (error) {
+          this.#active.delete(pluginId);
+          if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID) {
+            this.#triggerRuntimeLeases = 0;
+            this.#triggerRuntimeSdks.pop();
+          }
+          if (roomLease) this.#roomRuntimeLeases.pop();
+          await this.#service.start(
+            this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID),
+            lifecycleStore,
+          );
+          this.#serviceRunning = true;
+          throw error;
+        }
+      }
+    });
+  }
+
+  async stopPlugin(
+    pluginId: string,
+    runtimeSdk?: ZenXPluginHostSdkV1,
+  ): Promise<void> {
+    await this.#serialize(async () => {
+      const sdk =
+        runtimeSdk ??
+        (pluginId === ZENX_TRIGGERS_CAPABILITY_ID
+          ? this.#triggerRuntimeSdks[0]
+          : this.#roomRuntimeLeases[0]);
+      const lifecycleStore =
+        sdk?.storage !== undefined &&
+        this.#store instanceof PluginAutomationStore
+          ? this.#store.forLifecycle(pluginId, sdk)
+          : this.#store;
+      if (pluginId === ZENX_ROOMS_CAPABILITY_ID) {
+        // Old 1.0.x runtimes close without a token. Their lease was admitted
+        // first; never let that close retire the already staged new runtime.
+        const index =
+          runtimeSdk === undefined
+            ? 0
+            : this.#roomRuntimeLeases.indexOf(runtimeSdk);
+        if (index < 0 || index >= this.#roomRuntimeLeases.length) return;
+        this.#roomRuntimeLeases.splice(index, 1);
+        if (this.#roomRuntimeLeases.length > 0) return;
+      }
+      if (!this.#active.has(pluginId)) return;
+      if (
+        pluginId === ZENX_TRIGGERS_CAPABILITY_ID &&
+        runtimeSdk !== undefined &&
+        !this.#triggerRuntimeSdks.includes(runtimeSdk)
+      )
+        return;
+      if (
+        pluginId === ZENX_TRIGGERS_CAPABILITY_ID &&
+        this.#triggerRuntimeLeases > 1
+      ) {
+        const index =
+          runtimeSdk === undefined
+            ? 0
+            : this.#triggerRuntimeSdks.indexOf(runtimeSdk);
+        if (index < 0) return;
+        this.#triggerRuntimeLeases--;
+        this.#triggerRuntimeSdks.splice(index, 1);
+        return;
+      }
+      const last = this.#active.size === 1;
+      try {
+        if (last && this.#serviceRunning)
+          await this.#service.stop(lifecycleStore);
+      } catch (error) {
+        // TriggerService.stop retires the generation even when its durable
+        // write fails. This invocation must not retain a ghost lease.
+        this.#serviceRunning = false;
+        this.#active.delete(pluginId);
+        if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID) {
+          this.#triggerRuntimeLeases = 0;
+          this.#triggerRuntimeSdks.length = 0;
+        }
+        throw error;
+      }
+      if (last) this.#serviceRunning = false;
+      this.#active.delete(pluginId);
+      if (pluginId === ZENX_TRIGGERS_CAPABILITY_ID) {
+        this.#triggerRuntimeLeases = 0;
+        this.#triggerRuntimeSdks.length = 0;
+      }
+      if (
+        this.#serviceRunning &&
+        this.#active.size > 0 &&
+        pluginId === ZENX_TRIGGERS_CAPABILITY_ID
+      )
+        this.#service.suspendWakeups();
+    });
+  }
+
+  onChange(
+    listener: (snapshot: TriggerSnapshot, revision: number) => void,
+  ): () => void {
+    return this.#service.onChange(listener);
+  }
+  triggersAvailable(): boolean {
+    return (
+      this.#serviceRunning && this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID)
+    );
+  }
+  roomsAvailable(): boolean {
+    return this.#serviceRunning && this.#active.has(ZENX_ROOMS_CAPABILITY_ID);
+  }
+  snapshot(): TriggerSnapshot {
+    this.#assertStorageReadable();
+    return this.#service.snapshot();
+  }
+
+  snapshotPreviews() {
+    this.#assertStorageReadable();
+    return this.#service.snapshotPreviews();
+  }
+  roomOperations(roomId: string) {
+    this.#assertStorageReadable();
+    return this.#service.roomOperations(roomId);
+  }
+  readRoomPage(
+    roomId: string,
+    cursor?: number,
+    snapshot?: AutomationRoomSnapshot,
+  ) {
+    this.#assertStorageReadable();
+    return this.#service.readRoomPage(roomId, cursor, snapshot);
+  }
+  readRoomMessage(
+    roomId: string,
+    messageId: string,
+    snapshot?: AutomationRoomSnapshot,
+  ) {
+    this.#assertStorageReadable();
+    return this.#service.readRoomMessage(roomId, messageId, snapshot);
+  }
+  roomMessageReadProjection(
+    roomId: string,
+    readCursor: unknown,
+    readSince: unknown,
+  ) {
+    this.#assertStorageReadable();
+    return this.#service.roomMessageReadProjection(
+      roomId,
+      readCursor,
+      readSince,
+    );
+  }
+  async close(): Promise<void> {
+    await this.#serialize(async () => {
+      try {
+        await this.#service.close();
+      } finally {
+        this.#serviceRunning = false;
+        this.#active.clear();
+        this.#triggerRuntimeLeases = 0;
+        this.#triggerRuntimeSdks.length = 0;
+        this.#roomRuntimeLeases.length = 0;
+        if (this.#store instanceof PluginAutomationStore)
+          await this.#store.close();
+      }
+    });
+  }
+
+  sidebarFacts(): TriggerSidebarSnapshot {
+    this.#assertStorageReadable();
+    return this.#service.sidebarFacts();
+  }
+
+  async create(input: CreateTriggerInput) {
+    this.#assertStorageReadable();
+    return await this.#service.create(await this.#resolveInput(input));
+  }
+  async update(input: UpdateTriggerInput) {
+    this.#assertStorageReadable();
+    return await this.#service.update({
+      ...(await this.#resolveInput(input)),
+      id: input.id,
+    });
+  }
+  async threads() {
+    if (this.#targets === undefined)
+      throw new Error("Thread discovery is unavailable");
+    return await listThreadCandidates(this.#targets);
+  }
+  async workspaces(): Promise<string[]> {
+    const projection = this.#targets?.projectProjection;
+    if (!projection?.configuredWorkspaces)
+      throw new Error("Configured workspace discovery is unavailable");
+    return await projection.configuredWorkspaces();
+  }
+  async previewTarget(workspace: string): Promise<AutomationTargetPreview> {
+    const projection = this.#targets?.projectProjection;
+    if (!projection?.configuredWorkspace || !this.#targetDefaults)
+      throw new Error("Target preview is unavailable");
+    const configured = await projection.configuredWorkspace(workspace);
+    if (configured === null)
+      throw new Error("Workspace is not configured; refresh projects");
+    const resolvedWorkspace = await resolveAutomationDirectory(configured);
+    const defaults = await this.#targetDefaults();
+    if ((await projection.configuredWorkspace(configured)) !== configured)
+      throw new Error(
+        "Workspace configuration changed; refresh and confirm again",
+      );
+    if ((await resolveAutomationDirectory(configured)) !== resolvedWorkspace)
+      throw new Error(
+        "Workspace directory changed; review its actual location again",
+      );
+    return { workspace: configured, resolvedWorkspace, ...defaults };
+  }
+  async createTarget(
+    workspace: string,
+    expected: AutomationTargetPreview,
+  ): Promise<{ threadId: string; effective: AutomationTargetPreview }> {
+    this.#assertStorageReadable();
+    return await this.#createTarget(workspace, expected);
+  }
+
+  async #createTarget(
+    workspace: string,
+    expected: AutomationTargetPreview,
+    onStart?: () => void,
+  ): Promise<{ threadId: string; effective: AutomationTargetPreview }> {
+    if (this.#targets === undefined || this.#startThread === undefined)
+      throw new Error("Creating a target Thread is unavailable");
+    const current = await this.previewTarget(workspace);
+    if (JSON.stringify(expected) !== JSON.stringify(current))
+      throw new Error(
+        "Workspace or Host defaults changed; refresh preview and confirm again",
+      );
+    // Last trusted workspace admission, independent of historical Thread cwd.
+    if (
+      (await this.#targets.projectProjection.configuredWorkspace?.(
+        current.workspace,
+      )) !== current.workspace
+    )
+      throw new Error(
+        "Workspace was unconfigured; refresh preview and confirm again",
+      );
+    if (
+      (await resolveAutomationDirectory(current.workspace)) !==
+      current.resolvedWorkspace
+    )
+      throw new Error(
+        "Workspace directory changed; review its actual location again",
+      );
+    this.#assertStorageReadable();
+    onStart?.();
+    const result = await this.#startThread(current);
+    const sandboxType =
+      current.sandbox === "danger-full-access"
+        ? "dangerFullAccess"
+        : current.sandbox === "read-only"
+          ? "readOnly"
+          : "workspaceWrite";
+    if (
+      result.cwd !== current.resolvedWorkspace ||
+      result.model !== current.model ||
+      result.sandbox.type !== sandboxType ||
+      result.approvalPolicy !== current.approvalPolicy ||
+      result.reasoningEffort !== current.reasoningEffort
+    )
+      throw new Error(
+        `Thread ${result.thread.id} was created with different settings; inspect it before retrying`,
+      );
+    return { threadId: result.thread.id, effective: current };
+  }
+
+  async result(
+    historyId: string,
+  ): ReturnType<NonNullable<ZenXAutomationControlPort["result"]>> {
+    const entry = this.#service
+      .snapshot()
+      .history.find((item) => item.id === historyId);
+    if (entry?.sourceThreadId == null || entry.sourceTurnId == null)
+      throw new Error(
+        "Source result was not found in retained notification history",
+      );
+    if (entry.sourceDevice !== undefined) {
+      if (!this.#appServer.readRemoteThread)
+        throw new Error("Reading remote Thread results is unavailable");
+      const read = await this.#appServer.readRemoteThread(
+        entry.sourceDevice,
+        entry.sourceWorkspace,
+        entry.sourceThreadId,
+        entry.sourceTurnId,
+      );
+      if (read.threadId !== entry.sourceThreadId)
+        throw new Error("Remote source Thread identity changed");
+      const turn = read.turns.find((item) => item.id === entry.sourceTurnId);
+      if (!turn) throw new Error("Remote source Turn is unavailable");
+      return {
+        sourceDevice: entry.sourceDevice,
+        ...(entry.sourceWorkspace === undefined
+          ? {}
+          : { sourceWorkspace: entry.sourceWorkspace }),
+        threadId: entry.sourceThreadId,
+        turnId: turn.id,
+        status: turn.status,
+        preview: turn.preview,
+      };
+    }
+    if (this.#appServer.readThread === undefined)
+      throw new Error("Reading Thread results is unavailable");
+    const read = await this.#appServer.readThread(entry.sourceThreadId);
+    const turn = read.thread.turns.find(
+      (item) => item.id === entry.sourceTurnId,
+    );
+    if (turn === undefined) throw new Error("Source Turn is unavailable");
+    return {
+      threadId: entry.sourceThreadId,
+      turnId: turn.id,
+      status: turn.status,
+      preview: projectCompletedTurn(entry.sourceThreadId, turn),
+    };
+  }
+  async #resolveInput(input: CreateTriggerInput): Promise<CreateTriggerInput> {
+    const resolve = async (target: string) => {
+      if (this.#targets === undefined) return target;
+      const result = await resolveThreadTarget(this.#targets!, { target });
+      if (result.status !== "resolved")
+        throw new Error(
+          `Thread target ${JSON.stringify(target)} is ${result.status}: ${JSON.stringify(result.candidates)}`,
+        );
+      if (result.candidate.archived)
+        throw new Error(
+          `Thread target ${JSON.stringify(target)} is archived; unarchive it first`,
+        );
+      return result.threadId;
+    };
+    const threadId = await resolve(input.threadId);
+    if (
+      input.kind === "thread" &&
+      input.sourceDevice !== undefined &&
+      input.sourceDevice.trim() !== "local"
+    ) {
+      if (
+        !this.#appServer.resolveRemoteThread ||
+        !this.#appServer.subscribeRemoteThread
+      )
+        throw new Error("Remote Thread observation is unavailable");
+      const sourceDevice = input.sourceDevice.trim();
+      const resolved = await this.#appServer.resolveRemoteThread(
+        sourceDevice,
+        input.sourceWorkspace,
+        input.watchedThreadId,
+      );
+      return {
+        ...input,
+        threadId,
+        sourceDevice,
+        watchedThreadId: resolved.threadId,
+        ...(resolved.workspace === undefined
+          ? {}
+          : { sourceWorkspace: resolved.workspace }),
+      };
+    }
+    return input.kind === "thread"
+      ? {
+          ...input,
+          threadId,
+          watchedThreadId: await resolve(input.watchedThreadId),
+        }
+      : { ...input, threadId };
+  }
+  async cancel(triggerId: string): Promise<void> {
+    this.#assertStorageReadable();
+    await this.#service.cancel(triggerId);
+  }
+  async resume(triggerId: string, expectedRevision?: number): Promise<void> {
+    const trigger = this.#service
+      .snapshot()
+      .triggers.find((item) => item.id === triggerId);
+    if (trigger === undefined) throw new Error("Trigger was not found");
+    if (
+      expectedRevision !== undefined &&
+      trigger.definitionRevision !== expectedRevision &&
+      (trigger.definitionRevision !== undefined || expectedRevision !== 0)
+    )
+      throw new Error("Trigger definition changed; refresh before enabling");
+    const resolved = await this.#resolveInput({
+      threadId: trigger.threadId,
+      kind: "thread",
+      label: trigger.label,
+      prompt: trigger.prompt,
+      watchedThreadId: trigger.watch?.threadId ?? trigger.threadId,
+      ...(trigger.watch?.sourceDevice === undefined
+        ? {}
+        : { sourceDevice: trigger.watch.sourceDevice }),
+      ...(trigger.watch?.sourceWorkspace === undefined
+        ? {}
+        : { sourceWorkspace: trigger.watch.sourceWorkspace }),
+    });
+    if (
+      trigger.watch?.sourceDevice !== undefined &&
+      (resolved.kind !== "thread" ||
+        resolved.watchedThreadId !== trigger.watch.threadId ||
+        resolved.sourceDevice !== trigger.watch.sourceDevice ||
+        resolved.sourceWorkspace !== trigger.watch.sourceWorkspace)
+    )
+      throw new Error(
+        "Remote Trigger source identity changed; edit its definition before enabling",
+      );
+    this.#assertStorageReadable();
+    await this.#service.resume(triggerId, trigger);
+  }
+  async delete(triggerId: string): Promise<void> {
+    this.#assertStorageReadable();
+    await this.#service.delete(triggerId);
+  }
+  async signal(name: string, detail: string): Promise<void> {
+    this.#assertStorageReadable();
+    await this.#service.signal(name, detail);
+  }
+  async prepareRoomMessage(
+    roomId: string,
+    operationId: string,
+    text: string,
+    replyToMessageId?: string,
+  ): Promise<RoomSendOperation> {
+    this.#assertStorageReadable();
+    return await this.#service.prepareRoomMessage(
+      roomId,
+      operationId,
+      text,
+      replyToMessageId,
+    );
+  }
+  async postAddressedRoomMessage(
+    roomId: string,
+    threadId: string,
+    operationId: string,
+    text: string,
+  ): Promise<RoomDeliveryView> {
+    if (!this.roomsAvailable())
+      throw new Error("Rooms are disabled or unavailable");
+    this.#assertStorageReadable();
+    return await this.#service.postAddressedRoomMessage(
+      roomId,
+      threadId,
+      operationId,
+      text,
+    );
+  }
+  async prepareAssistantIntroduction(
+    roomId: string,
+    operationId: string,
+    language: "en" | "zh",
+  ) {
+    this.#assertStorageReadable();
+    return this.#service.prepareAssistantIntroduction(
+      roomId,
+      operationId,
+      language,
+    );
+  }
+  async startAssistantIntroduction(roomId: string, operationId: string) {
+    this.#assertStorageReadable();
+    return this.#service.startAssistantIntroduction(roomId, operationId);
+  }
+  async postPreparedRoomMessage(
+    roomId: string,
+    operationId: string,
+    text: string,
+  ): Promise<RoomSendOperation> {
+    this.#assertStorageReadable();
+    return await this.#service.postPreparedRoomMessage(
+      roomId,
+      operationId,
+      text,
+    );
+  }
+  async cancelPreparedRoomOperation(roomId: string, operationId: string) {
+    this.#assertStorageReadable();
+    return await this.#service.cancelPreparedRoomOperation(roomId, operationId);
+  }
+  wakeupsEnabled(): boolean {
+    return (
+      this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID) &&
+      this.#service.wakeupsEnabled()
+    );
+  }
+  roomOperation(roomId: string, operationId: string): RoomDeliveryView {
+    this.#assertStorageReadable();
+    return this.#service.roomOperation(roomId, operationId);
+  }
+  roomDelivery(roomId: string, messageId: string) {
+    this.#assertStorageReadable();
+    return this.#service.roomMessageReceipt(roomId, messageId);
+  }
+  async setRoomReaction(
+    roomId: string,
+    messageId: string,
+    actorThreadId: string | null,
+    emoji: string | null,
+  ) {
+    this.#assertStorageReadable();
+    return await this.#service.setRoomReaction(
+      roomId,
+      messageId,
+      actorThreadId,
+      emoji,
+    );
+  }
+  async acknowledgeRoomOperation(
+    roomId: string,
+    operationId: string,
+  ): Promise<void> {
+    this.#assertStorageReadable();
+    await this.#service.acknowledgeRoomOperation(roomId, operationId);
+  }
+  async createAssistantRoom(
+    input: CreateAssistantRoomInput | CreateRoomInput,
+  ): Promise<ZenXRoom> {
+    this.#assertStorageReadable();
+    const captured = structuredClone(input);
+    // Cached 1.0.x Rooms runtimes explicitly supply their existing binding.
+    if ("members" in captured) {
+      if ("target" in captured)
+        throw new Error("Choose either a new or existing PAW Thread");
+      return await this.#serialize(async () => {
+        this.#requireAssistantSetup();
+        const validated = this.#service.validateAssistantRoom(captured);
+        return await this.#bindAssistantRoom(validated);
+      });
+    }
+    const operationId = captured.operationId;
+    if (
+      typeof operationId !== "string" ||
+      !operationId.trim() ||
+      Buffer.byteLength(operationId, "utf8") > 512
+    )
+      throw new Error("PAW creation operation ID is required and bounded");
+    const signature = JSON.stringify(captured);
+    const previous = this.#assistantCreations.get(operationId);
+    if (previous !== undefined) {
+      if (previous.signature !== signature)
+        throw new Error(
+          "PAW creation operation was already used with different input",
+        );
+      return structuredClone(await previous.result);
+    }
+    if (this.#assistantCreations.size >= MAX_ASSISTANT_CREATION_OPERATIONS)
+      throw new Error(
+        "PAW setup operation limit reached; restart Host before creating another",
+      );
+    let threadStartAttempted = false;
+    const result = this.#serialize(async () => {
+      this.#requireAssistantSetup();
+      if (
+        !captured.target ||
+        !["new", "existing"].includes(captured.target.kind)
+      )
+        throw new Error("Choose a new or existing PAW Thread");
+      const validated = this.#service.validateAssistantRoom({
+        name: captured.name,
+        members: [
+          {
+            name: captured.memberName,
+            threadId:
+              captured.target.kind === "existing"
+                ? captured.target.threadId
+                : "pending-new-thread",
+          },
+        ],
+      });
+      if (captured.target.kind === "existing")
+        return await this.#bindAssistantRoom(validated);
+      let threadId: string | undefined;
+      try {
+        const created = await this.#createTarget(
+          captured.target.workspace,
+          captured.target.expected,
+          () => {
+            threadStartAttempted = true;
+          },
+        );
+        threadId = created.threadId;
+        this.#requireAssistantSetup();
+        this.#assertStorageReadable();
+        return await this.#service.createAssistantRoom({
+          name: validated.name,
+          members: [{ name: validated.members[0]!.name, threadId }],
+        });
+      } catch (error) {
+        if (!threadStartAttempted) throw error;
+        if (threadId !== undefined)
+          throw new Error(
+            `Thread ${threadId} was created, but PAW setup failed: ${describeError(error)}. Inspect it and explicitly bind that existing Thread; this operation will not create another Thread`,
+          );
+        throw new Error(
+          `PAW Thread creation could not be confirmed: ${describeError(error)}. Inspect Threads before trying again; this operation will not retry Thread creation`,
+        );
+      }
+    });
+    const receipt = { signature, result };
+    this.#assistantCreations.set(operationId, receipt);
+    try {
+      return structuredClone(await result);
+    } catch (error) {
+      // Pure validation/binding failures can be corrected with the same draft.
+      // Once creation was attempted, retain failure to fence duplicate Threads.
+      if (
+        !threadStartAttempted &&
+        this.#assistantCreations.get(operationId) === receipt
+      )
+        this.#assistantCreations.delete(operationId);
+      throw error;
+    }
+  }
+
+  #requireAssistantSetup(): void {
+    this.#assertStorageReadable();
+    if (
+      !this.#serviceRunning ||
+      !this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID) ||
+      !this.#active.has(ZENX_ROOMS_CAPABILITY_ID)
+    )
+      throw new Error("Enable Rooms and Triggers before creating an assistant");
+  }
+
+  async #bindAssistantRoom(input: CreateRoomInput): Promise<ZenXRoom> {
+    if (input.members.length !== 1 || this.#targets === undefined)
+      throw new Error("Select one available existing Thread");
+    const member = input.members[0]!;
+    const target = await resolveThreadTarget(this.#targets, {
+      target: member.threadId,
+    });
+    if (target.status !== "resolved" || target.candidate.archived)
+      throw new Error("Assistant Thread is unavailable or archived");
+    this.#requireAssistantSetup();
+    this.#assertStorageReadable();
+    return await this.#service.createAssistantRoom({
+      name: input.name,
+      members: [{ name: member.name, threadId: target.threadId }],
+    });
+  }
+  async setAssistantDeliveryMode(roomId: string, mode: "steer" | "queue") {
+    if (!this.roomsAvailable())
+      throw new Error("Rooms are disabled or unavailable");
+    this.#assertStorageReadable();
+    return await this.#service.setAssistantDeliveryMode(roomId, mode);
+  }
+  async setAssistantReplies(roomId: string, enabled: boolean) {
+    if (!this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID))
+      throw new Error("Triggers are disabled");
+    const room = this.#service
+      .snapshot()
+      .rooms.find((entry) => entry.id === roomId);
+    if (!room?.assistant) throw new Error("Assistant Room was not found");
+    if (enabled) await this.resume(room.assistant.triggerId);
+    else await this.cancel(room.assistant.triggerId);
+  }
+  async addAssistantHeartbeat(roomId: string) {
+    return await this.#serialize(async () => {
+      this.#requireAssistantSetup();
+      const room = this.#service
+        .snapshot()
+        .rooms.find((entry) => entry.id === roomId);
+      if (!room?.assistant || !this.#targets)
+        throw new Error("Select an available PAW working Thread");
+      const target = await resolveThreadTarget(this.#targets, {
+        target: room.assistant.threadId,
+      });
+      if (target.status !== "resolved" || target.candidate.archived)
+        throw new Error("PAW working Thread is unavailable or archived");
+      this.#requireAssistantSetup();
+      this.#assertStorageReadable();
+      return await this.#service.addAssistantHeartbeat(roomId);
+    });
+  }
+  async createRoom(input: CreateRoomInput) {
+    this.#assertStorageReadable();
+    return await this.#service.createRoom(input);
+  }
+  #questionAdmission(admit: () => Promise<void>) {
+    return async () => {
+      if (!this.roomsAvailable())
+        throw Error("Rooms are disabled or unavailable");
+      this.#assertStorageReadable();
+      await admit();
+      if (!this.roomsAvailable())
+        throw Error("Rooms are disabled or unavailable");
+      this.#assertStorageReadable();
+    };
+  }
+  roomQuestionSummary(roomId: string) {
+    if (!this.roomsAvailable())
+      throw Error("Rooms are disabled or unavailable");
+    this.#assertStorageReadable();
+    return this.#service.roomQuestionSummary(roomId);
+  }
+  async roomQuestions(
+    roomId: string,
+    options: RoomQuestionWorkspaceReadOptions = {},
+  ) {
+    await this.#questionAdmission(async () => {})();
+    const value = await this.#service.roomQuestions(roomId, options);
+    await this.#questionAdmission(async () => {})();
+    return value;
+  }
+  async roomQuestionsAsMember(
+    roomId: string,
+    callerThreadId: string,
+    options: RoomQuestionWorkspaceReadOptions,
+    admit: () => Promise<void>,
+  ) {
+    await this.#questionAdmission(admit)();
+    return this.#service.roomQuestionsAsMember(
+      roomId,
+      callerThreadId,
+      options,
+      this.#questionAdmission(admit),
+    );
+  }
+  async readRoomQuestion(roomId: string, questionId: string) {
+    await this.#questionAdmission(async () => {})();
+    const value = await this.#service.readRoomQuestion(roomId, questionId);
+    await this.#questionAdmission(async () => {})();
+    return value;
+  }
+  async publishRoomQuestion(
+    roomId: string,
+    origin: RoomQuestion["origin"],
+    specification: unknown,
+    admit: () => Promise<void>,
+  ) {
+    await this.#questionAdmission(admit)();
+    return this.#service.publishRoomQuestion(
+      roomId,
+      origin,
+      specification,
+      this.#questionAdmission(admit),
+    );
+  }
+  async updateRoomQuestion(
+    input: RoomQuestionWriteInput,
+    callerThreadId: string,
+    admit: () => Promise<void>,
+  ) {
+    await this.#questionAdmission(admit)();
+    return this.#service.updateRoomQuestion(
+      input,
+      callerThreadId,
+      this.#questionAdmission(admit),
+    );
+  }
+  async withdrawRoomQuestion(
+    input: Pick<
+      RoomQuestionWriteInput,
+      "roomId" | "questionId" | "expectedRevision"
+    >,
+    callerThreadId: string,
+    admit: () => Promise<void>,
+  ) {
+    await this.#questionAdmission(admit)();
+    return this.#service.withdrawRoomQuestion(
+      input,
+      callerThreadId,
+      this.#questionAdmission(admit),
+    );
+  }
+  async respondRoomQuestion(
+    input: RoomQuestionResponseInput,
+    admit: () => Promise<void>,
+  ) {
+    await this.#questionAdmission(admit)();
+    return this.#service.respondRoomQuestion(
+      input,
+      this.#questionAdmission(admit),
+    );
+  }
+  async readRoomQuestionResponse(
+    roomId: string,
+    questionId: string,
+    clientId: string,
+  ) {
+    await this.#questionAdmission(async () => {})();
+    const value = await this.#service.readRoomQuestionResponse(
+      roomId,
+      questionId,
+      clientId,
+    );
+    await this.#questionAdmission(async () => {})();
+    return value;
+  }
+
+  assistantWorkspace(roomId: string): AssistantWorkspace {
+    if (!this.roomsAvailable())
+      throw Error("Rooms are disabled or unavailable");
+    this.#assertStorageReadable();
+    return this.#service.assistantWorkspace(roomId);
+  }
+  async updateAssistantWorkspace(
+    input: UpdateAssistantWorkspaceInput,
+  ): Promise<AssistantWorkspace> {
+    const captured = structuredClone(input);
+    return await this.#serialize(async () => {
+      if (!this.roomsAvailable())
+        throw Error("Rooms are disabled or unavailable");
+      this.#assertStorageReadable();
+      return await this.#service.updateAssistantWorkspace(captured);
+    });
+  }
+  async renameRoom(roomId: string, name: string): Promise<void> {
+    this.#assertStorageReadable();
+    await this.#service.renameRoom(roomId, name);
+  }
+  async deleteRoom(roomId: string): Promise<void> {
+    this.#assertStorageReadable();
+    await this.#service.deleteRoom(roomId);
+  }
+  async addRoomMember(roomId: string, member: RoomMember): Promise<void> {
+    this.#assertStorageReadable();
+    await this.#service.addRoomMember(roomId, member);
+  }
+  async removeRoomMember(roomId: string, threadId: string): Promise<void> {
+    this.#assertStorageReadable();
+    await this.#service.removeRoomMember(roomId, threadId);
+  }
+  async postAgentRoomMessage(
+    roomId: string,
+    text: string,
+    replyToMessageId?: string,
+    callingThreadId?: string,
+  ): Promise<void> {
+    this.#assertStorageReadable();
+    await this.#service.postAgentRoomMessage(
+      roomId,
+      text,
+      replyToMessageId,
+      callingThreadId,
+    );
+  }
+  async postRoomMessage(
+    roomId: string,
+    author: string,
+    text: string,
+  ): Promise<void> {
+    this.#assertStorageReadable();
+    await this.#service.postRoomMessage(roomId, author, text);
+  }
+
+  #assertStorageReadable(): void {
+    if (this.#store instanceof PluginAutomationStore)
+      void this.#store.storage.journal.position;
+  }
+
+  async #serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.#lifecycle.then(operation);
+    this.#lifecycle = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return await result;
+  }
+}

@@ -1,0 +1,217 @@
+name: App Shot synthetic UI and native bridge
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/app-shot.yml
+      - apps/zenx/src/**/app-shot*
+      - apps/zenx/src/renderer/src/AppShotButton.tsx
+      - apps/zenx/src/renderer/src/ImagePresentation.tsx
+      - apps/zenx/src/renderer/src/ThreadView.tsx
+      - apps/zenx/src/renderer/src/ui/controls.tsx
+      - apps/zenx/src/renderer/src/styles.css
+      - apps/zenx/src/renderer/src/theme.css
+      - apps/zenx/test/app-shot*.test.ts
+      - apps/zenx/test/image-composer-interaction.test.ts
+      - apps/zenx/test/theme-source-policy.test.ts
+      - apps/zenx/test/fixtures/app-shot-visual.tsx
+      - apps/zenx/scripts/*app-shot*.mjs
+      - apps/zenx/scripts/preview-browser*.mjs
+      - apps/zenx/scripts/prepare-cjk-fonts.mjs
+      - package-lock.json
+      - apps/zenx/package.json
+      - apps/zenx/electron.vite.config.ts
+      - apps/zenx/scripts/stage-app-shot-runtime.mjs
+      - apps/zenx/scripts/package-zenx-portable.mjs
+      - apps/zenx/test/app-shot*.test.mjs
+      - apps/zenx/test/stage-app-shot*.test.mjs
+      - apps/zenx/resources/app-shot-gnome/**
+  workflow_dispatch:
+    inputs:
+      macos_owned_acceptance:
+        description: Run owned synthetic macOS capture only with existing OS grants
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-shot-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  renderer:
+    name: App Shot actual-component synthetic screenshots
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Prepare workspace SDK for packaging tests
+        run: npm run prepare:plugin-sdk --workspace @zen/zenx
+      - name: Verify App Shot contracts
+        run: node --import tsx --test apps/zenx/test/app-shot*.test.ts apps/zenx/test/app-shot*.test.mjs apps/zenx/test/stage-app-shot*.test.mjs apps/zenx/test/package-zenx-portable.test.mjs apps/zenx/test/image-composer-interaction.test.ts apps/zenx/test/theme-source-policy.test.ts
+      - name: Typecheck integrated desktop contract
+        run: npm run typecheck --workspace @zen/zenx
+      - name: Resolve and install authenticated CJK font package
+        timeout-minutes: 5
+        run: |
+          node apps/zenx/scripts/prepare-cjk-fonts.mjs resolve "${{ runner.temp }}/zenx-app-shot-fonts"
+          node apps/zenx/scripts/prepare-cjk-fonts.mjs install "${{ runner.temp }}/zenx-app-shot-fonts"
+      - name: Capture production components with synthetic data
+        timeout-minutes: 3
+        run: |
+          node apps/zenx/scripts/build-app-shot-preview.mjs "${{ runner.temp }}/zenx-app-shot"
+          cp "${{ runner.temp }}/zenx-app-shot-fonts/package.json" "${{ runner.temp }}/zenx-app-shot/cjk-package.json"
+          node apps/zenx/scripts/capture-app-shot-preview.mjs "${{ runner.temp }}/zenx-app-shot"
+      - name: Retain screenshots and bounded browser evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-shot-renderer-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-app-shot
+          if-no-files-found: warn
+          retention-days: 14
+
+  macos-jxa:
+    name: App Shot real macOS JXA bridge, not native capture acceptance
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Exercise actual JXA without permission changes or screen capture
+        timeout-minutes: 1
+        env:
+          ZENX_APP_SHOT_JXA_SMOKE: "1"
+          ZENX_APP_SHOT_JXA_EVIDENCE: ${{ runner.temp }}/app-shot-jxa.json
+        run: node --import tsx --test apps/zenx/test/app-shot-native.test.ts apps/zenx/test/app-shot-native-smoke.test.ts
+      - name: Retain native bridge result and explicit blockers
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-shot-jxa-${{ github.sha }}
+          path: ${{ runner.temp }}/app-shot-jxa.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  native-modifiers:
+    name: Native modifier lifecycle (${{ matrix.os }}), not desktop acceptance
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build the actual worker entries
+        run: |
+          npm run prepare:plugin-sdk --workspace @zen/zenx
+          npm run build:prepared --workspace @zen/zenx
+      - name: Verify native package staging and focused contracts
+        run: node --import tsx --test apps/zenx/test/app-shot-native-capture.test.ts apps/zenx/test/app-shot-shortcut.test.ts apps/zenx/test/app-shot-runtime-package.test.mjs
+      - name: Read finite real modifier state and foreground metadata
+        timeout-minutes: 2
+        env:
+          ZENX_APP_SHOT_NATIVE_SMOKE: "1"
+          ZENX_APP_SHOT_WINDOWS_SMOKE: "1"
+          ZENX_APP_SHOT_WINDOWS_EVIDENCE: ${{ runner.temp }}/app-shot-windows.json
+        run: node --import tsx --test apps/zenx/test/app-shot-shortcut-native.test.ts apps/zenx/test/app-shot-windows-native-smoke.test.ts
+      - name: Retain bounded Windows native metadata receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-shot-native-${{ matrix.os }}-${{ github.sha }}
+          path: ${{ runner.temp }}/app-shot-windows.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  macos-owned-acceptance:
+    name: Owned synthetic macOS App Shot acceptance (permission-gated)
+    if: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'workflow_dispatch' && inputs.macos_owned_acceptance) }}
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build unmodified production worker and shared chunks
+        run: |
+          npm run prepare:plugin-sdk --workspace @zen/zenx
+          npm run build:prepared --workspace @zen/zenx
+      - name: Verify acceptance safety contracts without capture
+        run: node --test apps/zenx/test/app-shot-macos-acceptance.test.mjs
+      - name: Capture only the owned nonce window through the real Electron service
+        timeout-minutes: 5
+        env:
+          ZENX_APP_SHOT_MACOS_ACCEPTANCE: "1"
+        run: node apps/zenx/scripts/verify-app-shot-macos.mjs "${{ runner.temp }}/app-shot-owned-macos"
+      - name: Retain only allowlisted receipts and verified synthetic PNGs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-shot-owned-macos-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/app-shot-owned-macos/receipt.json
+            ${{ runner.temp }}/app-shot-owned-macos/selected.png
+            ${{ runner.temp }}/app-shot-owned-macos/accessibility.png
+            ${{ runner.temp }}/app-shot-owned-macos/foreground.png
+          if-no-files-found: warn
+          retention-days: 14
+
+  formatting:
+    name: Check changed-source formatting with read-only repair evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Check formatting without modifying the repository
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from "node:child_process";
+          import { readFile } from "node:fs/promises";
+          import { format, getFileInfo, resolveConfig } from "prettier";
+          const base = execFileSync("git", ["merge-base", "HEAD", "origin/main"], { encoding: "utf8" }).trim();
+          const files = execFileSync("git", ["diff", "--name-only", "--diff-filter=ACMR", base, "HEAD"], { encoding: "utf8" }).trim().split("\n").filter((file) => /\.(?:ts|tsx|js|mjs|json|md|yml|css)$/u.test(file));
+          const changed = {};
+          for (const file of files) {
+            if ((await getFileInfo(file, { ignorePath: ".prettierignore" })).ignored) continue;
+            const source = await readFile(file, "utf8");
+            const formatted = await format(source, { ...(await resolveConfig(file)), filepath: file });
+            if (formatted !== source) changed[file] = formatted;
+          }
+          const output = JSON.stringify(changed);
+          for (let offset = 0, index = 0; offset < output.length; offset += 12000, index++)
+            console.log("APP_SHOT_FORMAT_CHUNK:" + JSON.stringify({ index, data: output.slice(offset, offset + 12000) }));
+          console.log("APP_SHOT_FORMAT_END:" + Object.keys(changed).length);
+          if (Object.keys(changed).length) process.exitCode = 1;
+          NODE

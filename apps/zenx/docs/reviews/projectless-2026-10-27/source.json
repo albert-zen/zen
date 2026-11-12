@@ -1,0 +1,29 @@
+{
+  "commit": "cb26d875504e33682e93c6b489ae39eeb3468421",
+  "dirtyFiles": [],
+  "scope": "Production App welcome/Project selector/Fleet machine selector and AuxiliaryPanel. All app bridge facts and tab contents are synthetic. CSP blocks all network connections. No user profile, real Host, filesystem, model or native desktop action.",
+  "artifact": {
+    "html": "ui-polish-visual.html",
+    "htmlSha256": "31f7d63509a01139dd00e733d461716ef8a44baa0ce3e852239906b1c2c7f154"
+  },
+  "sources": {
+    "scripts/build-ui-polish-visual.mjs": "e9f3a70af1768d662a6a5baab8304cef617fa96e5f48f35847cb5126fed66c1c",
+    "scripts/capture-ui-polish-visual.mjs": "29aeaa03975c0b400ef2872b2bb4ee7dd79c36bff55dcadf60739a01153234b5",
+    "scripts/preview-browser.mjs": "fa825e48b1196dff7da7617004452e3a9bab46b8492614e4d17bed84d54f24be",
+    "scripts/preview-browser-lifecycle.mjs": "71ee505a535bbd4701e48668a66e26821f335a4dc0dc44bbf7af80274dde84fa",
+    "src/renderer/src/App.tsx": "6bf9338ad6cb185192e333b9e8f2ee87c1832d13bfa4b12a38a03606fabf59ff",
+    "src/renderer/src/thread-list.ts": "aeaa4546ffdaee4a831fbf66f26f11fd878af7c789840a625e9d9aabd3b54c60",
+    "src/renderer/src/i18n/shell.ts": "4966952f65f380f6cbed9911f583ecaed9341863a57e48779292d39bc353bc70",
+    "src/renderer/src/auxiliary-panel.tsx": "34339887a07e00e8858fd0bfe56d099616b81ad5be780fab150e5b1ef3f9272d",
+    "src/renderer/src/FleetComposerSurface.tsx": "1275b254d2eecd96237b8782d47cf85ba98f73b899f8f87057c1fb156e032c9c",
+    "src/renderer/src/ThreadView.tsx": "7cf0dc2747a5ead47ea5f51af376a820001a0dcde2ea85bbd668efb0d3f00aa7",
+    "src/renderer/src/Sidebar.tsx": "ab22ed5cba01e58fc5d7634d4982769c13e480eef12243d942292d75d5596c31",
+    "src/renderer/src/auxiliary-tab-reorder.css": "18bd26e9fc029ccb8e6a974c065b2fd7f42caefe7dcfd8848a6d55659bcdd548",
+    "src/renderer/src/fleet-ui.css": "f32e632da1d303aac1ada916a90e27704646c0db73ad6820ee37e7abf453601d",
+    "src/renderer/src/icons.tsx": "493d7458c4514b1793c832d6b4e8322ebbf55caafc7229cd91a330b1572a6cc4",
+    "src/renderer/src/styles.css": "92424f1e0cecebf44f13cca6a34d7ab2cdebeeac9d630346f3ca4a7936924ffa",
+    "src/renderer/src/theme.css": "6fe99f043bb28cc00757e6450e92241222a6714a83ff6737d3dd34a105ce8271",
+    "test/fixtures/ui-polish-visual.tsx": "d5da280cfbf28398a6f071a8ec05133de194035b37b1f23b947bbd98e4d4776c",
+    "test/fixtures/ui-polish-visual.html": "7a7c4c2f5b20fa8164ac4eb1196d5aa4e513b1735750ea04ff56b124d8a6f882"
+  }
+}

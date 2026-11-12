@@ -1,0 +1,53 @@
+.builtin-tab-activity-fixture {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  gap: 16px;
+  padding: 16px;
+  background: var(--color-surface-main);
+  color: var(--color-text-primary);
+}
+.builtin-tab-activity-fixture > aside {
+  display: grid;
+  gap: 8px;
+  flex: none;
+  font-size: 12px;
+}
+.builtin-tab-activity-fixture-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.builtin-tab-activity-fixture-controls button {
+  padding: 6px 10px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  background: var(--color-surface-control);
+}
+.builtin-tab-activity-fixture-composer {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+}
+.builtin-tab-activity-fixture-composer input {
+  max-width: 760px;
+}
+.builtin-tab-activity-fixture-panel {
+  position: relative;
+  flex: 1;
+  min-height: 240px;
+  width: min(760px, 100%);
+  border: 1px solid var(--color-border-subtle);
+}
+.builtin-tab-activity-fixture-panel[data-narrow="true"] {
+  width: min(360px, 100%);
+}
+.builtin-tab-activity-fixture-panel > .auxiliary-panel[data-open="true"] {
+  width: 100%;
+  min-width: 0;
+}
+.builtin-tab-activity-fixture-notes {
+  padding: 24px;
+  max-width: 640px;
+  line-height: 1.6;
+}

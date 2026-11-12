@@ -1,0 +1,53 @@
+import { questionIpcError } from "../preload/user-question-ipc.js";
+import { compactionIpcRejection } from "../preload/compaction-ipc.js";
+import { ipcMain } from "electron";
+import type { AppServerManager } from "./app-server-manager.js";
+import { ipcChannels } from "../preload/ipc.js";
+import { isClientRequestMethod } from "../protocol-client/index.js";
+import {
+  queueEditIpcRejection,
+  queueIpcUnknown,
+} from "../preload/queue-edit-ipc.js";
+import type { Thread } from "../protocol-client/index.js";
+
+/** One production main-process request boundary, also exercised in isolated Electron QA. */
+export function registerProtocolRequestIpc(
+  manager: Pick<AppServerManager, "request">,
+  observeThread: (thread: Thread) => void,
+  prepareRequest?: (method: string, params: unknown) => Promise<void>,
+): void {
+  ipcMain.handle(
+    ipcChannels.request,
+    async (_event, method: unknown, params: unknown) => {
+      if (!isClientRequestMethod(method)) {
+        throw new Error(`Unsupported ZenX protocol method: ${String(method)}`);
+      }
+      let result;
+      try {
+        await prepareRequest?.(method, params);
+        result = await manager.request(method, params as never);
+      } catch (error) {
+        if (method.startsWith("zen/thread/questions/"))
+          return questionIpcError(error);
+        if (method === "thread/compact") return compactionIpcRejection(error);
+        if (
+          method !== "zen/thread/queue/edit" &&
+          method !== "zen/thread/queue/steer" &&
+          method !== "zen/thread/queue/reorder" &&
+          method !== "zen/thread/steer/recall"
+        )
+          throw error;
+        const rejection = queueEditIpcRejection(error);
+        if (rejection !== undefined) return rejection;
+        // Unknown outcomes still need receipt recovery; retain the local cause.
+        return queueIpcUnknown(error);
+      }
+      if (method === "thread/resume" || method === "thread/read") {
+        const snapshot =
+          result as import("../protocol-client/index.js").ClientRequestResults["thread/read"];
+        observeThread(snapshot.thread);
+      }
+      return result;
+    },
+  );
+}

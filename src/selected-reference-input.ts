@@ -1,0 +1,159 @@
+import {
+  contentFromUserMessage,
+  type ContextCompactionItem,
+  type JsonValue,
+  type UserInput,
+  type UserInputPart,
+  type UserMessageItem,
+} from "./item.js";
+import type { ContextItem } from "./item-list.js";
+import {
+  validateModelReferenceBindings,
+  type ModelReferenceBinding,
+} from "./model-references.js";
+import {
+  parseSentReferenceContent,
+  type Reference,
+} from "./selected-reference-protocol.js";
+
+export interface SelectedReferenceInput {
+  parts: UserInput;
+  referenceBindings: ModelReferenceBinding[];
+}
+
+/** Allocate only from existing provenance; this disposable map is not another store. */
+function selectedSources(
+  ownerThreadId: string,
+  previous: readonly ContextItem[],
+) {
+  const history = previous.flatMap((item) =>
+    item.source.metadata?.referenceBindings === undefined
+      ? []
+      : validateModelReferenceBindings(item.source.metadata.referenceBindings),
+  );
+  let next = 1;
+  const owned = new Map<string, ModelReferenceBinding>();
+  const used = new Map<string, ModelReferenceBinding>();
+  for (const binding of history) {
+    if (binding.ref.startsWith("s"))
+      next = Math.max(next, Number(binding.ref.slice(1)) + 1);
+    if (binding.ownerThreadId !== ownerThreadId) continue;
+    const old = owned.get(binding.ref);
+    if (old && JSON.stringify(old) !== JSON.stringify(binding))
+      throw new Error("Conflicting selected source provenance");
+    owned.set(binding.ref, binding);
+  }
+  return {
+    bind(kind: string, value: JsonValue): string {
+      let binding = [...owned.values()].find(
+        (entry) =>
+          entry.ref.startsWith("s") &&
+          entry.namespace === "selected-reference" &&
+          entry.kind === kind &&
+          entry.epoch === undefined &&
+          JSON.stringify(entry.value) === JSON.stringify(value),
+      );
+      if (!binding) {
+        if (!Number.isSafeInteger(next))
+          throw new Error("Selected source reference scope exhausted");
+        binding = {
+          ref: `s${next++}`,
+          ownerThreadId,
+          namespace: "selected-reference",
+          kind,
+          value,
+        };
+        validateModelReferenceBindings([binding]);
+        owned.set(binding.ref, binding);
+      }
+      used.set(binding.ref, binding);
+      return binding.ref;
+    },
+    get bindings(): ModelReferenceBinding[] {
+      return structuredClone([...used.values()]);
+    },
+  };
+}
+
+/**
+ * Prepare semantic parts before persistence/dispatch. Recognition is not
+ * authentication: excerpts retain user role and refs never grant permission.
+ * The durable input fact must retain item unchanged; this is not its inverse.
+ */
+export function compileSelectedReferenceInput(
+  item: UserMessageItem,
+  previous: readonly ContextItem[],
+): SelectedReferenceInput | undefined {
+  if (item.type !== "user_message") return undefined;
+  const original = contentFromUserMessage(item);
+  const textParts = original.filter((part) => part.type === "text");
+  // The real Composer emits one text envelope, optionally alongside media.
+  // Never concatenate independent user parts to manufacture a recognized one.
+  if (textParts.length !== 1) return undefined;
+  const parsed = parseSentReferenceContent(textParts[0]!.text, item.clientId);
+  if (parsed.references.length === 0) return undefined;
+  const sources = selectedSources(item.threadId, previous);
+  let text = "";
+  let cursor = 0;
+  for (const reference of parsed.references) {
+    const position = reference.position ?? parsed.text.length;
+    text += parsed.text.slice(cursor, position);
+    if (reference.position === undefined && text) text += "\n\n";
+    const label = JSON.stringify(reference.name);
+    if (reference.kind === "file") {
+      // There is no native selected-file reader. Keep exact source coordinates
+      // rather than minting an unusable s ref or guessing the current workspace.
+      text += `[Selected file ${label}; workspace ${JSON.stringify(reference.cwd)}; relative path ${JSON.stringify(reference.path)}]`;
+    } else if (reference.kind === "text") {
+      const refs = [
+        ...new Set(
+          reference.sources.map((source) =>
+            sources.bind("message", { ...source, cwd: reference.cwd }),
+          ),
+        ),
+      ];
+      const readers = refs
+        .map((ref) => `zenx_threads_read ref=${ref}`)
+        .join("; ");
+      text += `[Selected text${readers ? `; ${readers}` : ""}]\n${reference.excerpt}\n[End selected excerpt]`;
+    } else {
+      const value: JsonValue =
+        reference.kind === "message"
+          ? {
+              threadId: reference.threadId,
+              id: reference.id,
+              cwd: reference.cwd,
+            }
+          : { id: reference.id, cwd: reference.cwd };
+      const ref = sources.bind(reference.kind, value);
+      if (reference.kind === "message") {
+        const messageLabel =
+          !reference.name || reference.name === "ZenX" ? "" : ` ${label}`;
+        text += `[Selected message${messageLabel}; zenx_threads_read ref=${ref}]\n${reference.excerpt}\n[End selected excerpt]`;
+      } else text += `[Selected thread ${label}; zenx_threads_read ref=${ref}]`;
+    }
+    cursor = reference.position === undefined ? position : position + 1;
+  }
+  text += parsed.text.slice(cursor);
+  const parts: UserInputPart[] = original.map((part) =>
+    part.type === "text" ? { type: "text", text } : structuredClone(part),
+  );
+  return { parts, referenceBindings: sources.bindings };
+}
+
+/** The encoder persists this footer with its summary, never the old UUID URI. */
+export function compileOriginalHistoryReference(
+  item: ContextCompactionItem,
+  previous: readonly ContextItem[],
+): { text: string; referenceBindings: ModelReferenceBinding[] } | undefined {
+  if (item.includeOriginalReference === false) return undefined;
+  const sources = selectedSources(item.threadId, previous);
+  const ref = sources.bind("history", {
+    threadId: item.threadId,
+    throughItemId: item.coveredThroughItemId,
+  });
+  return {
+    text: `[Original conversation history; zenx_threads_read ref=${ref}]`,
+    referenceBindings: sources.bindings,
+  };
+}

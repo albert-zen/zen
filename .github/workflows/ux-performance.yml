@@ -1,0 +1,60 @@
+name: Synthetic UX performance evidence
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/ux-performance.yml
+      - apps/zenx/evals/ux-performance/**
+      - apps/zenx/scripts/build-ux-performance.mjs
+      - apps/zenx/scripts/measure-ux-performance.mjs
+      - apps/zenx/test/ux-performance-contract.test.mjs
+  workflow_dispatch:
+    inputs:
+      include_5000:
+        description: Also run the bounded 5000-message case (3 deltas, one revisit)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ux-performance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  synthetic-components:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run prepare:plugin-sdk --workspace @zen/zenx
+      - name: Validate metric contracts and fixture types
+        run: |
+          node --test apps/zenx/test/ux-performance-contract.test.mjs
+          npx --no-install tsc -p apps/zenx/evals/ux-performance/tsconfig.json
+      - name: Build synthetic production components
+        run: node apps/zenx/scripts/build-ux-performance.mjs "${{ runner.temp }}/ux-performance"
+      - name: Record browser work and paint-opportunity timings
+        timeout-minutes: 4
+        env:
+          INCLUDE_5000: ${{ inputs.include_5000 }}
+        run: |
+          extra=()
+          if [ "$INCLUDE_5000" = "true" ]; then extra+=(--include-5000); fi
+          node apps/zenx/scripts/measure-ux-performance.mjs "${{ runner.temp }}/ux-performance" "${extra[@]}"
+      - name: Retain raw measurements and browser lifecycle receipt, including failures
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-ux-performance-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/ux-performance/*.json
+            ${{ runner.temp }}/ux-performance/*.log
+          if-no-files-found: warn
+          retention-days: 14

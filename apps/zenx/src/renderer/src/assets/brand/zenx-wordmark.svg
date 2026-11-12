@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 64" fill="currentColor" role="img" aria-labelledby="zenx-wordmark-title" data-geometry="zenx-board04-mechanical-v1">
+  <title id="zenx-wordmark-title">ZenX wordmark</title>
+  <path d="M4 14H54V18L13 46H54V50H4V46L45 18H4Z" />
+  <path d="M80 14H128V18H85V30H122V34H85V46H128V50H80Z" />
+  <path d="M154 50V14H158L198 44V14H202V50H198L158 20V50Z" />
+  <path d="M228 14H234L252 29L270 14H276L255 32L276 50H270L252 35L234 50H228L249 32Z" />
+</svg>

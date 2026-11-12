@@ -1,0 +1,201 @@
+{
+  "fixtureCommit": "902286ccf56f0ba9dc1d604e2b8e10ea6f4011d0",
+  "inputs": [
+    {
+      "path": "apps/zenx/src/external-link-policy.ts",
+      "sha256": "4c25348967364aaae14d3696798f5eb17e49b826471e95d430a3eea6283dafe0"
+    },
+    {
+      "path": "apps/zenx/src/image-source.ts",
+      "sha256": "089d01918a27fcc9aba3f386c8214d2cb412605a200db8f295ab8ca56a6e08c9"
+    },
+    {
+      "path": "apps/zenx/src/local-error-detail.ts",
+      "sha256": "ff676a793d4d4149281bbfeee93eb2e840b6a0081f35a9b33a63e3d24e67ed31"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/ComposerSendControl.css",
+      "sha256": "455a4490cca98810e725057dc268996b43b2395e5cf6950c790edeb92ea7a677"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/ContextCompactionEvent.tsx",
+      "sha256": "a8391f0ca4703cfa4d545362a0ed79cc8fcc3c2c48199e9013e357a5eec2b106"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/ContextUsageIndicator.css",
+      "sha256": "fe0845f5f040ee6868132b129693b688c8ad2bd3334f8ef151603e3f48af54a5"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/ImagePresentation.tsx",
+      "sha256": "584dbe11c632fd623f023630155fe5904887569192ca8b9cc40c0b2485b90112"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/Markdown.tsx",
+      "sha256": "e01d4963b0c50f2af86a79628a475ad67f868e7d774394247b5b4d12310a5537"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/MarkdownImage.tsx",
+      "sha256": "5ce52f2fbab925fc6c27b9f8f2f0a6f3cbb1caec2d53f57a350d4ca8748c7750"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/OriginalHistory.tsx",
+      "sha256": "9fc126b1fe15508992c1a594402427db2d13ab6244d92fb343aa3abf210327ec"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/PermissionSelect.tsx",
+      "sha256": "00a447ffa87327675cf8499f871cd115aecbd32c5d29a4ec4ea5d663378c3987"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/TraceInspector.css",
+      "sha256": "e9a7a38685eca833a46c643aab6937fdd46bf68093fea0454e86b45e29d69860"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/activity-text.css",
+      "sha256": "8f34f02d8b3489a2de323915d3a5a9d7158e00feec74726d7ff7b3ad286c4461"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/approval-request.css",
+      "sha256": "569756d57b1c7b0086ae0f8e62254aad402f7db914e40531421827c374289a4a"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/auxiliary-tab-reorder.css",
+      "sha256": "6bd98d37cbb74e5b6596e7da0a67e92d5428e0378316cf7aabb250e6d75221ad"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/context-compaction-projection.ts",
+      "sha256": "54ca060e208ed131c94064a566a16d0d6cd44f11e51b51e22b8530784cc52c38"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/fleet-ui.css",
+      "sha256": "f32e632da1d303aac1ada916a90e27704646c0db73ad6820ee37e7abf453601d"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/host-message.css",
+      "sha256": "edf85da732355fd994b4e455157811592f7a0700ee5ec21300e90c39ef65af16"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/i18n.ts",
+      "sha256": "96f9181b7318ff52a04b267849b32b8591a7ac621c19b015c4b5fa7804d6d350"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/i18n/common.ts",
+      "sha256": "c8cfa08c66058e2a2661d3233ba3ea777338a45066c784c0d4e5b58a7051559a"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/i18n/panels.ts",
+      "sha256": "03eac12de327995e562805fbb5fb4d53aedc654ffddc42295918472d2f0d5f19"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/i18n/selector.ts",
+      "sha256": "68431ca2011c334a923812fe094b65683cf6cbb99ea857c6f146ea4f25771fb8"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/i18n/settings.ts",
+      "sha256": "26df658daf14bbdc97ae29aeced713e0eb76153856c4d9071cad35b70e51275d"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/i18n/shell.ts",
+      "sha256": "d95df56db1970940b05d3b297c2aa42b200380048ac9cf2c5deec4e33b86dfaf"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/icons.tsx",
+      "sha256": "493d7458c4514b1793c832d6b4e8322ebbf55caafc7229cd91a330b1572a6cc4"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/inline-composer.css",
+      "sha256": "8d72cbc6e8dedd931d63ff674e1dd8d386950a5bdfa8159a9c6e9c14ab7ae9d8"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/local-path-links.ts",
+      "sha256": "ea64add5a70111ff2f95c6a887472f36873aae984328bd91e28df6eb0fe01d0f"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/message-quote.css",
+      "sha256": "3ccbc382587a4e54b902379a51ce3b1ced627a688b3702b6dd7ea6ef11b37ea7"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/queued-message-editor.css",
+      "sha256": "76e24710856f3949d1533398f992777fe63ca49dd794719798c5fb7bc4c3735b"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/queued-messages.css",
+      "sha256": "b69e6838ebf3f0e982d37e6451866b8550262422d8cff6d8d8921fca9b63e3a6"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/reference-token.css",
+      "sha256": "63d2cc7e179d9f09e69d4e311e74f7d05a64221bd2d6b8d2ce05efe8b3915565"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/scrollbar-visibility.ts",
+      "sha256": "d7971633e36533c1ad39df6da74ef7a1d154640f7f8cab7cba62c502d72b1f56"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/session-import.css",
+      "sha256": "db83f458e5f3635fa72a07304a02ef0d9be95a19c35297170b7aa94e17dcf082"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/styles.css",
+      "sha256": "9da315fe14f9109eadf43040188b8dec1fb7461b487d4f100dbd6281fe7488b2"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/subagents.css",
+      "sha256": "dc6603d37925f8d9661ff1cd56edd0b3a06d4e8864ff87710caa161a965c1561"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/theme.css",
+      "sha256": "6fe99f043bb28cc00757e6450e92241222a6714a83ff6737d3dd34a105ce8271"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/ui/controls.tsx",
+      "sha256": "9fe2235fa72c268a8fb6c306a3a836d700780006fb24e14954f9def683bc1629"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/workspace-files.css",
+      "sha256": "355ecec05ae6adc96c15d921f07a095c58c34e469f3638d973563aee079d7fb1"
+    },
+    {
+      "path": "apps/zenx/test/fixtures/controls-visual.tsx",
+      "sha256": "69ddc9100afaf3cd6d958c9a50d46ed7c584d0589e0bf36b7baedae7a92ef339"
+    },
+    {
+      "path": "src/attachment-ref.ts",
+      "sha256": "8985665b09151a72a4697a8c57f486604cbbbc6efa1f295e5721e1fb6959df40"
+    },
+    {
+      "path": "src/context-compaction.ts",
+      "sha256": "49bae82ec4b56d9925fb84430ae18115230a5142a8a3c6067a2e973e4199d7cb"
+    },
+    {
+      "path": "src/item.ts",
+      "sha256": "16b9467e5ee53c0c099531eeaea58f688029007a0552a85aa308ff45845071e8"
+    },
+    {
+      "path": "src/loop-recovery.ts",
+      "sha256": "e23f5b0e2b25a47da788b2a2b3f0c624f34637e5bcda0add1e9f83ff123d6e77"
+    },
+    {
+      "path": "src/media-content.ts",
+      "sha256": "8a8f46cdafa4cecc521737558dc813380ac6b3d2b5a4ec1210837f79ea84dadf"
+    },
+    {
+      "path": "src/model-media-origin.ts",
+      "sha256": "7b9b37d4dea5213b5de2f82eb448fcdf4c03b255ffae97d02b8ca7875117da0d"
+    },
+    {
+      "path": "src/model-references.ts",
+      "sha256": "657928cdbeae17b271d7cc7ac3b811564dcc3886ef08b34937cb2dfaa7f32cdc"
+    },
+    {
+      "path": "src/model.ts",
+      "sha256": "e7a8f0d31a220cde3853889edc39e525fb4769a40b58f9b49d47d71391f8c70b"
+    },
+    {
+      "path": "src/thread-import.ts",
+      "sha256": "55b46c3d4684f49656f76359a66d29b93b1bc53c350208bc62d677266b8226f8"
+    },
+    {
+      "path": "src/tool-task-content.ts",
+      "sha256": "f159a40f1d9c5996f88e19ac7ab869ce29ccd42e51d835cbf4bcf0ae0d8e3520"
+    }
+  ]
+}

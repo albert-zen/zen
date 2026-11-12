@@ -1,0 +1,85 @@
+.session-import-dialog {
+  width: min(42rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+  padding: 1.25rem;
+}
+.session-import-dialog header,
+.session-import-dialog footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.session-import-dialog label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-block: 0.8rem;
+}
+.session-import-dialog input,
+.session-import-dialog select {
+  width: 100%;
+  min-height: 44px;
+}
+.session-import-dialog button {
+  min-height: 44px;
+}
+.session-import-dialog fieldset {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+.session-import-dialog p,
+.session-import-dialog li {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.session-import-dialog details {
+  margin-block: 0.8rem;
+}
+.session-import-dialog summary {
+  cursor: pointer;
+  min-height: 32px;
+}
+.imported-thread-notice {
+  margin-block: 1rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border-control);
+  border-radius: 0.6rem;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+.imported-thread-notice p {
+  margin-block: 0.5rem;
+}
+.imported-thread-notice summary {
+  cursor: pointer;
+  padding-block: 0.5rem;
+}
+.session-import-dialog input,
+.session-import-dialog select {
+  border: 1px solid var(--border-control);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--surface-control);
+  color: var(--text);
+  font: inherit;
+}
+.session-import-dialog h2 {
+  font-size: 1.1rem;
+  margin: 0;
+}
+.session-import-dialog header {
+  margin-bottom: 1rem;
+}
+.session-import-dialog footer {
+  justify-content: flex-end;
+  padding-top: 0.75rem;
+}
+.session-import-dialog input:focus-visible,
+.session-import-dialog select:focus-visible,
+.session-import-dialog summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

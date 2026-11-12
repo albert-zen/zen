@@ -1,0 +1,205 @@
+{
+  "source": "d442cac0141ee01a756921712adf43fc33ad1f0a",
+  "tree": "c0867db91568756c3cd8470be39ddad9c30d9251",
+  "scope": "Actual production PluginAccessReview, styles and i18n; selected native manifest; synthetic locked Host readiness. Headless isolated Chrome. No native app, profile, permission, window capture or input connected.",
+  "sourceFiles": [
+    {
+      "path": "apps/zenx/src/external-link-policy.ts",
+      "sha256": "4c25348967364aaae14d3696798f5eb17e49b826471e95d430a3eea6283dafe0"
+    },
+    {
+      "path": "apps/zenx/src/foreground-activity-view.ts",
+      "sha256": "2b21f417cfa2abea7b3aa68e0c84867e8a5d8e8d925e15839976905d14be8de3"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/ComposerSendControl.css",
+      "sha256": "455a4490cca98810e725057dc268996b43b2395e5cf6950c790edeb92ea7a677"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/ContextUsageIndicator.css",
+      "sha256": "fe0845f5f040ee6868132b129693b688c8ad2bd3334f8ef151603e3f48af54a5"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/PluginAccessReview.tsx",
+      "sha256": "954e7d3c21e41d4027cd6dd6c1ae23744dc71a3e26c96391058aacd741ce52f8"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/TraceInspector.css",
+      "sha256": "e9a7a38685eca833a46c643aab6937fdd46bf68093fea0454e86b45e29d69860"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/activity-text.css",
+      "sha256": "8f34f02d8b3489a2de323915d3a5a9d7158e00feec74726d7ff7b3ad286c4461"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/agent-action-pointer.tsx",
+      "sha256": "8a8e43e20071435d59911cb5186d46ad42952ab109b917d424b72c60807b9086"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/approval-request.css",
+      "sha256": "569756d57b1c7b0086ae0f8e62254aad402f7db914e40531421827c374289a4a"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/auxiliary-tab-reorder.css",
+      "sha256": "18bd26e9fc029ccb8e6a974c065b2fd7f42caefe7dcfd8848a6d55659bcdd548"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/browser-external-open.tsx",
+      "sha256": "f4b9b2167580cb2e0c00b4b03871a08dea4a28c8c8eeb23624ef2a4b459b96f4"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/computer-thread-panel.tsx",
+      "sha256": "06fc566082a79ee15c5877994fc8b0d5757ca115d143ee7bffa9a12ffd26213d"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/fleet-ui.css",
+      "sha256": "f32e632da1d303aac1ada916a90e27704646c0db73ad6820ee37e7abf453601d"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/host-message.css",
+      "sha256": "edf85da732355fd994b4e455157811592f7a0700ee5ec21300e90c39ef65af16"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/i18n.ts",
+      "sha256": "96f9181b7318ff52a04b267849b32b8591a7ac621c19b015c4b5fa7804d6d350"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/i18n/common.ts",
+      "sha256": "c2fc159e36976ad672dc415706aa03ada0691f1f5ebe87690ce8baf82f36345c"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/i18n/panels.ts",
+      "sha256": "5ac998568fa2804049c7a8aef70ba97a9f22c451ffc7bf8631e21c0c5fc3e6db"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/i18n/selector.ts",
+      "sha256": "68431ca2011c334a923812fe094b65683cf6cbb99ea857c6f146ea4f25771fb8"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/i18n/settings.ts",
+      "sha256": "ed9822cabf0cb97181f3a09f88f0df0479bc9c556b6150dcfc34ab05e720692f"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/i18n/shell.ts",
+      "sha256": "4966952f65f380f6cbed9911f583ecaed9341863a57e48779292d39bc353bc70"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/icons.tsx",
+      "sha256": "493d7458c4514b1793c832d6b4e8322ebbf55caafc7229cd91a330b1572a6cc4"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/inline-composer.css",
+      "sha256": "8d72cbc6e8dedd931d63ff674e1dd8d386950a5bdfa8159a9c6e9c14ab7ae9d8"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/message-quote.css",
+      "sha256": "3ccbc382587a4e54b902379a51ce3b1ced627a688b3702b6dd7ea6ef11b37ea7"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/queued-message-editor.css",
+      "sha256": "76e24710856f3949d1533398f992777fe63ca49dd794719798c5fb7bc4c3735b"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/queued-messages.css",
+      "sha256": "b69e6838ebf3f0e982d37e6451866b8550262422d8cff6d8d8921fca9b63e3a6"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/reference-token.css",
+      "sha256": "63d2cc7e179d9f09e69d4e311e74f7d05a64221bd2d6b8d2ce05efe8b3915565"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/session-import.css",
+      "sha256": "db83f458e5f3635fa72a07304a02ef0d9be95a19c35297170b7aa94e17dcf082"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/styles.css",
+      "sha256": "92424f1e0cecebf44f13cca6a34d7ab2cdebeeac9d630346f3ca4a7936924ffa"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/subagents.css",
+      "sha256": "dc6603d37925f8d9661ff1cd56edd0b3a06d4e8864ff87710caa161a965c1561"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/theme.css",
+      "sha256": "6fe99f043bb28cc00757e6450e92241222a6714a83ff6737d3dd34a105ce8271"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/ui/controls.tsx",
+      "sha256": "9fe2235fa72c268a8fb6c306a3a836d700780006fb24e14954f9def683bc1629"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/workspace-browser-panel.tsx",
+      "sha256": "8bab1b184fe88fe2d9f83d0e449185608381f0141fc8652455c6b8c82368a101"
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/workspace-files.css",
+      "sha256": "03b163f8dc5df3c76990d517c25c82ffb22bf85d0a55a61279fb0ac54666ac5b"
+    },
+    {
+      "path": "apps/zenx/test/fixtures/browser-computer-experience-visual.css",
+      "sha256": "cd97d49924f5081a273c40ce313a532700b279ff164e0cc42c214e1eb660d837"
+    },
+    {
+      "path": "apps/zenx/test/fixtures/browser-computer-experience-visual.tsx",
+      "sha256": "a004e82f21d742c31f3055f8cded5115dc302f854f417ce9e0c7b5e4ad9d2503"
+    },
+    {
+      "path": "packages/zenx-computer-plugin/zenx.plugin.json",
+      "sha256": "210a28709c2a03c9973121e2e49e28b2df588297a3d81c7b8c75a26d2171756b"
+    }
+  ],
+  "evidence": [
+    {
+      "appearance": "light",
+      "width": 1280,
+      "height": 1053,
+      "language": "en",
+      "geometry": {
+        "width": 1280,
+        "scrollWidth": 1280,
+        "height": 1053,
+        "scrollHeight": 1053
+      },
+      "screenshot": "native-window-access-light-1280.png"
+    },
+    {
+      "appearance": "light",
+      "width": 390,
+      "height": 1473,
+      "language": "zh",
+      "geometry": {
+        "width": 390,
+        "scrollWidth": 390,
+        "height": 1473,
+        "scrollHeight": 1473
+      },
+      "screenshot": "native-window-access-light-390.png"
+    },
+    {
+      "appearance": "dark",
+      "width": 1280,
+      "height": 1053,
+      "language": "en",
+      "geometry": {
+        "width": 1280,
+        "scrollWidth": 1280,
+        "height": 1053,
+        "scrollHeight": 1053
+      },
+      "screenshot": "native-window-access-dark-1280.png"
+    },
+    {
+      "appearance": "dark",
+      "width": 390,
+      "height": 1473,
+      "language": "zh",
+      "geometry": {
+        "width": 390,
+        "scrollWidth": 390,
+        "height": 1473,
+        "scrollHeight": 1473
+      },
+      "screenshot": "native-window-access-dark-390.png"
+    }
+  ]
+}

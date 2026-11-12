@@ -1,0 +1,856 @@
+{
+  "source": "623d0dd9dc5f93cefe4dc323ee27d367359179c1",
+  "passed": true,
+  "cases": [
+    {
+      "name": "idle-empty",
+      "passed": true,
+      "label": "Send",
+      "stop": false,
+      "disabled": true,
+      "orb": {
+        "x": 957,
+        "y": 717,
+        "width": 44,
+        "height": 44
+      },
+      "form": {
+        "x": 170,
+        "y": 658,
+        "width": 840,
+        "height": 108
+      },
+      "rightInset": 9,
+      "bottomInset": 5,
+      "cornerRadius": "22px",
+      "circle": {
+        "inset": "4px",
+        "borderRadius": "50%",
+        "background": "rgb(228, 231, 240)",
+        "iconColor": "rgb(255, 255, 255)"
+      },
+      "permanentButtons": 1,
+      "disclosure": false,
+      "panel": false,
+      "focus": null,
+      "draft": "",
+      "action": "No action",
+      "count": 0
+    },
+    {
+      "name": "idle-empty-keyboard",
+      "passed": true,
+      "label": "Send",
+      "stop": false,
+      "disabled": true,
+      "orb": {
+        "x": 957,
+        "y": 717,
+        "width": 44,
+        "height": 44
+      },
+      "form": {
+        "x": 170,
+        "y": 658,
+        "width": 840,
+        "height": 108
+      },
+      "rightInset": 9,
+      "bottomInset": 5,
+      "cornerRadius": "22px",
+      "circle": {
+        "inset": "4px",
+        "borderRadius": "50%",
+        "background": "rgb(228, 231, 240)",
+        "iconColor": "rgb(255, 255, 255)"
+      },
+      "permanentButtons": 1,
+      "disclosure": false,
+      "panel": true,
+      "description": "Write a message to send",
+      "focus": "Default send mode",
+      "draft": "",
+      "action": "No action",
+      "count": 0
+    },
+    {
+      "name": "idle-empty-escape",
+      "passed": true,
+      "label": "Send",
+      "stop": false,
+      "disabled": true,
+      "orb": {
+        "x": 957,
+        "y": 717,
+        "width": 44,
+        "height": 44
+      },
+      "form": {
+        "x": 170,
+        "y": 658,
+        "width": 840,
+        "height": 108
+      },
+      "rightInset": 9,
+      "bottomInset": 5,
+      "cornerRadius": "22px",
+      "circle": {
+        "inset": "4px",
+        "borderRadius": "50%",
+        "background": "rgb(228, 231, 240)",
+        "iconColor": "rgb(255, 255, 255)"
+      },
+      "permanentButtons": 1,
+      "disclosure": false,
+      "panel": false,
+      "focus": "Send options",
+      "draft": "",
+      "action": "No action",
+      "count": 0
+    },
+    {
+      "name": "idle-draft",
+      "passed": true,
+      "label": "Send",
+      "stop": false,
+      "disabled": false,
+      "orb": {
+        "x": 927,
+        "y": 733,
+        "width": 44,
+        "height": 44
+      },
+      "form": {
+        "x": 140,
+        "y": 674,
+        "width": 840,
+        "height": 108
+      },
+      "rightInset": 9,
+      "bottomInset": 5,
+      "cornerRadius": "22px",
+      "circle": {
+        "inset": "4px",
+        "borderRadius": "50%",
+        "background": "rgb(82, 111, 185)",
+        "iconColor": "rgb(255, 255, 255)"
+      },
+      "permanentButtons": 1,
+      "disclosure": false,
+      "panel": false,
+      "focus": null,
+      "draft": "Draft stays here",
+      "action": "No action",
+      "count": 0
+    },
+    {
+      "name": "after-idle-hover",
+      "passed": true,
+      "label": "Send",
+      "stop": false,
+      "disabled": false,
+      "orb": {
+        "x": 927,
+        "y": 733,
+        "width": 44,
+        "height": 44
+      },
+      "form": {
+        "x": 140,
+        "y": 674,
+        "width": 840,
+        "height": 108
+      },
+      "rightInset": 9,
+      "bottomInset": 5,
+      "cornerRadius": "22px",
+      "circle": {
+        "inset": "4px",
+        "borderRadius": "50%",
+        "background": "rgb(82, 111, 185)",
+        "iconColor": "rgb(255, 255, 255)"
+      },
+      "permanentButtons": 1,
+      "disclosure": false,
+      "panel": true,
+      "description": "Start a new turn with this message",
+      "focus": null,
+      "draft": "Draft stays here",
+      "action": "No action",
+      "count": 0
+    },
+    {
+      "name": "idle-click-once",
+      "passed": true,
+      "label": "Send",
+      "stop": false,
+      "disabled": false,
+      "orb": {
+        "x": 927,
+        "y": 733,
+        "width": 44,
+        "height": 44
+      },
+      "form": {
+        "x": 140,
+        "y": 674,
+        "width": 840,
+        "height": 108
+      },
+      "rightInset": 9,
+      "bottomInset": 5,
+      "cornerRadius": "22px",
+      "circle": {
+        "inset": "4px",
+        "borderRadius": "50%",
+        "background": "rgb(82, 111, 185)",
+        "iconColor": "rgb(255, 255, 255)"
+      },
+      "permanentButtons": 1,
+      "disclosure": false,
+      "panel": false,
+      "focus": "Send",
+      "draft": "Draft stays here",
+      "action": "start:idle",
+      "count": 1
+    },
+    {
+      "name": "running-empty",
+      "passed": true,
+      "label": "Stop",
+      "stop": true,
+      "disabled": false,
+      "orb": {
+        "x": 927,
+        "y": 733,
+        "width": 44,
+        "height": 44
+      },
+      "form": {
+        "x": 140,
+        "y": 674,
+        "width": 840,
+        "height": 108
+      },
+      "rightInset": 9,
+      "bottomInset": 5,
+      "cornerRadius": "22px",
+      "circle": {
+        "inset": "4px",
+        "borderRadius": "50%",
+        "background": "rgb(255, 242, 241)",
+        "iconColor": "rgb(183, 71, 66)"
+      },
+      "permanentButtons": 1,
+      "disclosure": false,
+      "panel": false,
+      "focus": null,
+      "draft": "",
+      "action": "No action",
+      "count": 0
+    },
+    {
+      "name": "running-empty-hover",
+      "passed": true,
+      "label": "Stop",
+      "stop": true,
+      "disabled": false,
+      "orb": {
+        "x": 927,
+        "y": 733,
+        "width": 44,
+        "height": 44
+      },
+      "form": {
+        "x": 140,
+        "y": 674,
+        "width": 840,
+        "height": 108
+      },
+      "rightInset": 9,
+      "bottomInset": 5,
+      "cornerRadius": "22px",
+      "circle": {
+        "inset": "4px",
+        "borderRadius": "50%",
+        "background": "rgb(255, 242, 241)",
+        "iconColor": "rgb(183, 71, 66)"
+      },
+      "permanentButtons": 1,
+      "disclosure": false,
+      "panel": true,
+      "description": "Stop the current turn; keep your draft",
+      "focus": null,
+      "draft": "",
+      "action": "No action",
+      "count": 0
+    },
+    {
+      "name": "running-empty-click-once",
+      "passed": true,
+      "label": "Stop",
+      "stop": true,
+      "disabled": false,
+      "orb": {
+        "x": 927,
+        "y": 733,
+        "width": 44,
+        "height": 44
+      },
+      "form": {
+        "x": 140,
+        "y": 674,
+        "width": 840,
+        "height": 108
+      },
+      "rightInset": 9,
+      "bottomInset": 5,
+      "cornerRadius": "22px",
+      "circle": {
+        "inset": "4px",
+        "borderRadius": "50%",
+        "background": "rgb(255, 242, 241)",
+        "iconColor": "rgb(183, 71, 66)"
+      },
+      "permanentButtons": 1,
+      "disclosure": false,
+      "panel": false,
+      "focus": null,
+      "draft": "",
+      "action": "Stopped",
+      "count": 1
+    },
+    {
+      "name": "transition-empty-to-text",
+      "passed": true,
+      "label": "Steer now",
+      "stop": false,
+      "disabled": false,
+      "orb": {
+        "x": 927,
+        "y": 733,
+        "width": 44,
+        "height": 44
+      },
+      "form": {
+        "x": 140,
+        "y": 674,
+        "width": 840,
+        "height": 108
+      },
+      "rightInset": 9,
+      "bottomInset": 5,
+      "cornerRadius": "22px",
+      "circle": {
+        "inset": "4px",
+        "borderRadius": "50%",
+        "background": "rgb(82, 111, 185)",
+        "iconColor": "rgb(255, 255, 255)"
+      },
+      "permanentButtons": 1,
+      "disclosure": false,
+      "panel": false,
+      "focus": "Message",
+      "draft": "new direction",
+      "action": "Stopped",
+      "count": 1
+    },
+    {
+      "name": "running-text-click-once",
+      "passed": true,
+      "label": "Steer now",
+      "stop": false,
+      "disabled": false,
+      "orb": {
+        "x": 927,
+        "y": 733,
+        "width": 44,
+        "height": 44
+      },
+      "form": {
+        "x": 140,
+        "y": 674,
+        "width": 840,
+        "height": 108
+      },
+      "rightInset": 9,
+      "bottomInset": 5,
+      "cornerRadius": "22px",
+      "circle": {
+        "inset": "4px",
+        "borderRadius": "50%",
+        "background": "rgb(82, 111, 185)",
+        "iconColor": "rgb(255, 255, 255)"
+      },
+      "permanentButtons": 1,
+      "disclosure": false,
+      "panel": false,
+      "focus": "Steer now",
+      "draft": "new direction",
+      "action": "steer:running-turn",
+      "count": 2
+    },
+    {
+      "name": "transition-text-to-whitespace",
+      "passed": true,
+      "label": "Stop",
+      "stop": true,
+      "disabled": false,
+      "orb": {
+        "x": 927,
+        "y": 733,
+        "width": 44,
+        "height": 44
+      },
+      "form": {
+        "x": 140,
+        "y": 674,
+        "width": 840,
+        "height": 108
+      },
+      "rightInset": 9,
+      "bottomInset": 5,
+      "cornerRadius": "22px",
+      "circle": {
+        "inset": "4px",
+        "borderRadius": "50%",
+        "background": "rgb(255, 242, 241)",
+        "iconColor": "rgb(183, 71, 66)"
+      },
+      "permanentButtons": 1,
+      "disclosure": false,
+      "panel": false,
+      "focus": "Message",
+      "draft": "   ",
+      "action": "steer:running-turn",
+      "count": 2
+    },
+    {
+      "name": "after-running-hover",
+      "passed": true,
+      "label": "Steer now",
+      "stop": false,
+      "disabled": false,
+      "orb": {
+        "x": 927,
+        "y": 733,
+        "width": 44,
+        "height": 44
+      },
+      "form": {
+        "x": 140,
+        "y": 674,
+        "width": 840,
+        "height": 108
+      },
+      "rightInset": 9,
+      "bottomInset": 5,
+      "cornerRadius": "22px",
+      "circle": {
+        "inset": "4px",
+        "borderRadius": "50%",
+        "background": "rgb(82, 111, 185)",
+        "iconColor": "rgb(255, 255, 255)"
+      },
+      "permanentButtons": 1,
+      "disclosure": false,
+      "panel": true,
+      "description": "Add guidance to the current turn without stopping it",
+      "focus": null,
+      "draft": "Draft stays here",
+      "action": "No action",
+      "count": 0
+    },
+    {
+      "name": "hover-gap",
+      "passed": true,
+      "label": "Steer now",
+      "stop": false,
+      "disabled": false,
+      "orb": {
+        "x": 927,
+        "y": 733,
+        "width": 44,
+        "height": 44
+      },
+      "form": {
+        "x": 140,
+        "y": 674,
+        "width": 840,
+        "height": 108
+      },
+      "rightInset": 9,
+      "bottomInset": 5,
+      "cornerRadius": "22px",
+      "circle": {
+        "inset": "4px",
+        "borderRadius": "50%",
+        "background": "rgb(82, 111, 185)",
+        "iconColor": "rgb(255, 255, 255)"
+      },
+      "permanentButtons": 1,
+      "disclosure": false,
+      "panel": true,
+      "description": "Add guidance to the current turn without stopping it",
+      "focus": null,
+      "draft": "Draft stays here",
+      "action": "No action",
+      "count": 0
+    },
+    {
+      "name": "after-preference-menu",
+      "passed": true,
+      "label": "Steer now",
+      "stop": false,
+      "disabled": false,
+      "orb": {
+        "x": 927,
+        "y": 733,
+        "width": 44,
+        "height": 44
+      },
+      "form": {
+        "x": 140,
+        "y": 674,
+        "width": 840,
+        "height": 108
+      },
+      "rightInset": 9,
+      "bottomInset": 5,
+      "cornerRadius": "22px",
+      "circle": {
+        "inset": "4px",
+        "borderRadius": "50%",
+        "background": "rgb(82, 111, 185)",
+        "iconColor": "rgb(255, 255, 255)"
+      },
+      "permanentButtons": 1,
+      "disclosure": false,
+      "panel": true,
+      "description": "Add guidance to the current turn without stopping it",
+      "focus": null,
+      "draft": "Draft stays here",
+      "action": "No action",
+      "count": 0
+    },
+    {
+      "name": "running-keyboard-escape",
+      "passed": true,
+      "label": "Steer now",
+      "stop": false,
+      "disabled": false,
+      "orb": {
+        "x": 927,
+        "y": 733,
+        "width": 44,
+        "height": 44
+      },
+      "form": {
+        "x": 140,
+        "y": 674,
+        "width": 840,
+        "height": 108
+      },
+      "rightInset": 9,
+      "bottomInset": 5,
+      "cornerRadius": "22px",
+      "circle": {
+        "inset": "4px",
+        "borderRadius": "50%",
+        "background": "rgb(82, 111, 185)",
+        "iconColor": "rgb(255, 255, 255)"
+      },
+      "permanentButtons": 1,
+      "disclosure": false,
+      "panel": false,
+      "focus": "Steer now",
+      "draft": "Draft stays here",
+      "action": "No action",
+      "count": 0
+    },
+    {
+      "name": "running-keyboard-send-once",
+      "passed": true,
+      "label": "Steer now",
+      "stop": false,
+      "disabled": false,
+      "orb": {
+        "x": 927,
+        "y": 733,
+        "width": 44,
+        "height": 44
+      },
+      "form": {
+        "x": 140,
+        "y": 674,
+        "width": 840,
+        "height": 108
+      },
+      "rightInset": 9,
+      "bottomInset": 5,
+      "cornerRadius": "22px",
+      "circle": {
+        "inset": "4px",
+        "borderRadius": "50%",
+        "background": "rgb(82, 111, 185)",
+        "iconColor": "rgb(255, 255, 255)"
+      },
+      "permanentButtons": 1,
+      "disclosure": false,
+      "panel": false,
+      "focus": "Steer now",
+      "draft": "Draft stays here",
+      "action": "steer:running-turn",
+      "count": 1
+    },
+    {
+      "name": "transition-running-to-idle",
+      "passed": true,
+      "label": "Send",
+      "stop": false,
+      "disabled": false,
+      "orb": {
+        "x": 927,
+        "y": 733,
+        "width": 44,
+        "height": 44
+      },
+      "form": {
+        "x": 140,
+        "y": 674,
+        "width": 840,
+        "height": 108
+      },
+      "rightInset": 9,
+      "bottomInset": 5,
+      "cornerRadius": "22px",
+      "circle": {
+        "inset": "4px",
+        "borderRadius": "50%",
+        "background": "rgb(82, 111, 185)",
+        "iconColor": "rgb(255, 255, 255)"
+      },
+      "permanentButtons": 1,
+      "disclosure": false,
+      "panel": false,
+      "focus": "Send",
+      "draft": "Draft stays here",
+      "action": "steer:running-turn",
+      "count": 1
+    },
+    {
+      "name": "after-narrow-running",
+      "passed": true,
+      "label": "Steer now",
+      "stop": false,
+      "disabled": false,
+      "orb": {
+        "x": 293,
+        "y": 583,
+        "width": 44,
+        "height": 44
+      },
+      "form": {
+        "x": 16,
+        "y": 524,
+        "width": 328,
+        "height": 108
+      },
+      "rightInset": 7,
+      "bottomInset": 5,
+      "cornerRadius": "20px",
+      "circle": {
+        "inset": "4px",
+        "borderRadius": "50%",
+        "background": "rgb(82, 111, 185)",
+        "iconColor": "rgb(255, 255, 255)"
+      },
+      "permanentButtons": 1,
+      "disclosure": false,
+      "panel": true,
+      "description": "Add guidance to the current turn without stopping it",
+      "focus": null,
+      "draft": "Draft stays here",
+      "action": "No action",
+      "count": 0
+    },
+    {
+      "name": "after-short-running",
+      "passed": true,
+      "label": "Steer now",
+      "stop": false,
+      "disabled": false,
+      "orb": {
+        "x": 553,
+        "y": 363,
+        "width": 44,
+        "height": 44
+      },
+      "form": {
+        "x": 16,
+        "y": 304,
+        "width": 588,
+        "height": 108
+      },
+      "rightInset": 7,
+      "bottomInset": 5,
+      "cornerRadius": "20px",
+      "circle": {
+        "inset": "4px",
+        "borderRadius": "50%",
+        "background": "rgb(82, 111, 185)",
+        "iconColor": "rgb(255, 255, 255)"
+      },
+      "permanentButtons": 1,
+      "disclosure": false,
+      "panel": true,
+      "description": "Add guidance to the current turn without stopping it",
+      "focus": null,
+      "draft": "Draft stays here",
+      "action": "No action",
+      "count": 0
+    },
+    {
+      "name": "running-dark-hover",
+      "passed": true,
+      "label": "Steer now",
+      "stop": false,
+      "disabled": false,
+      "orb": {
+        "x": 927,
+        "y": 733,
+        "width": 44,
+        "height": 44
+      },
+      "form": {
+        "x": 140,
+        "y": 674,
+        "width": 840,
+        "height": 108
+      },
+      "rightInset": 9,
+      "bottomInset": 5,
+      "cornerRadius": "22px",
+      "circle": {
+        "inset": "4px",
+        "borderRadius": "50%",
+        "background": "rgb(142, 169, 255)",
+        "iconColor": "rgb(16, 19, 27)"
+      },
+      "permanentButtons": 1,
+      "disclosure": false,
+      "panel": true,
+      "description": "Add guidance to the current turn without stopping it",
+      "focus": null,
+      "draft": "Draft stays here",
+      "action": "No action",
+      "count": 0
+    },
+    {
+      "name": "mode-batch",
+      "passed": true,
+      "label": "Next turn",
+      "stop": false,
+      "disabled": false,
+      "orb": {
+        "x": 927,
+        "y": 733,
+        "width": 44,
+        "height": 44
+      },
+      "form": {
+        "x": 140,
+        "y": 674,
+        "width": 840,
+        "height": 108
+      },
+      "rightInset": 9,
+      "bottomInset": 5,
+      "cornerRadius": "22px",
+      "circle": {
+        "inset": "4px",
+        "borderRadius": "50%",
+        "background": "rgb(82, 111, 185)",
+        "iconColor": "rgb(255, 255, 255)"
+      },
+      "permanentButtons": 1,
+      "disclosure": false,
+      "panel": false,
+      "focus": "Next turn",
+      "draft": "Draft stays here",
+      "action": "batch-next:running-turn",
+      "count": 1
+    },
+    {
+      "name": "mode-queue",
+      "passed": true,
+      "label": "Each turn",
+      "stop": false,
+      "disabled": false,
+      "orb": {
+        "x": 927,
+        "y": 733,
+        "width": 44,
+        "height": 44
+      },
+      "form": {
+        "x": 140,
+        "y": 674,
+        "width": 840,
+        "height": 108
+      },
+      "rightInset": 9,
+      "bottomInset": 5,
+      "cornerRadius": "22px",
+      "circle": {
+        "inset": "4px",
+        "borderRadius": "50%",
+        "background": "rgb(82, 111, 185)",
+        "iconColor": "rgb(255, 255, 255)"
+      },
+      "permanentButtons": 1,
+      "disclosure": false,
+      "panel": false,
+      "focus": "Each turn",
+      "draft": "Draft stays here",
+      "action": "queue:running-turn",
+      "count": 1
+    },
+    {
+      "name": "mode-hard",
+      "passed": true,
+      "label": "Interrupt and send",
+      "stop": false,
+      "disabled": false,
+      "orb": {
+        "x": 927,
+        "y": 733,
+        "width": 44,
+        "height": 44
+      },
+      "form": {
+        "x": 140,
+        "y": 674,
+        "width": 840,
+        "height": 108
+      },
+      "rightInset": 9,
+      "bottomInset": 5,
+      "cornerRadius": "22px",
+      "circle": {
+        "inset": "4px",
+        "borderRadius": "50%",
+        "background": "rgb(82, 111, 185)",
+        "iconColor": "rgb(255, 255, 255)"
+      },
+      "permanentButtons": 1,
+      "disclosure": false,
+      "panel": false,
+      "focus": "Interrupt and send",
+      "draft": "Draft stays here",
+      "action": "replace:running-turn",
+      "count": 1
+    }
+  ],
+  "screenshots": "Captured after the ui-enter animation settled"
+}

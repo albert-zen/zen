@@ -1,0 +1,60 @@
+.wakeup-card.host-message-row {
+  padding: 10px 12px;
+}
+.host-message-content {
+  min-width: 0;
+  width: 100%;
+}
+.host-message-content header {
+  font-size: var(--font-size-caption);
+}
+.host-message-summary {
+  margin: 4px 0;
+  overflow-wrap: anywhere;
+}
+.host-message-toggle,
+.host-message-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+.host-message-toggle:focus-visible,
+.host-message-copy:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 2px;
+}
+.host-message-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+.host-message-details {
+  min-width: 0;
+  margin-top: 6px;
+}
+.host-message-original {
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--font-size-caption);
+}
+.host-message-source-id {
+  overflow-wrap: anywhere;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+}
+.host-message-row .message-actions {
+  opacity: 1;
+}
+@media (pointer: coarse) {
+  .host-message-toggle,
+  .host-message-copy {
+    min-height: 44px;
+  }
+}

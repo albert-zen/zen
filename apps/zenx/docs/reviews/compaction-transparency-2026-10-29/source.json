@@ -1,0 +1,19 @@
+{
+  "commit": "6b657ece281538efc00b03182d85c51afddff92a",
+  "artifactSha256": "1c18c2ecadb36eb186d0c1b27948671dd22bb7d8613f7867a634659544d3aecb",
+  "trackedDirty": "",
+  "scope": "Production ThreadView, ContextCompactionPanel and native feedback reducer; synthetic generated compaction events and committed record. No Host, user profile, network, paid model or native Electron acceptance.",
+  "sources": {
+    "src/renderer/src/ThreadView.tsx": "0de23fa666f459588bb1236f5be6996b0ad01849aa137d70fee59912de30e12e",
+    "src/renderer/src/ContextCompactionEvent.tsx": "2cad322c8588bf8ec7ca6d6cba24fc5170c4e31eba5bd43d7504ff9c144847e1",
+    "src/renderer/src/ContextCompactionPanel.tsx": "f6e8862e47a1a5b6feab7af7a144abd5140cf95b258ece64acbf53e34bee0ecf",
+    "src/renderer/src/compaction-feedback.ts": "fb280ab89493ba3292aad3a4bf8fecfda35bfdf4793728249d8a445d2dc30329",
+    "src/renderer/src/composer-state.ts": "7c852315dce77a17ace475457dcd89c7971c8cf85388e4b4c9a784904154cfbd",
+    "src/renderer/src/i18n/shell.ts": "d95df56db1970940b05d3b297c2aa42b200380048ac9cf2c5deec4e33b86dfaf",
+    "src/renderer/src/i18n/settings.ts": "26df658daf14bbdc97ae29aeced713e0eb76153856c4d9071cad35b70e51275d",
+    "src/renderer/src/styles.css": "bde972bbfeda9b40a8469c765d53f5f8932144a60a4b44545e103bf4219563b6",
+    "src/renderer/src/theme.css": "6fe99f043bb28cc00757e6450e92241222a6714a83ff6737d3dd34a105ce8271",
+    "test/fixtures/compaction-trigger-visual.tsx": "67511d6e13d773ad61851f67068c9f02652291c074b05b86e6ebaa53e9142073",
+    "scripts/build-compaction-trigger-preview.mjs": "d471b775ee677e7fb0f3683e9d6b24a3af74f728ebbfe23991016858746f20b6"
+  }
+}

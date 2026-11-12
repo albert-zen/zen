@@ -1,0 +1,1197 @@
+import { projectionFileRevision } from "./projection-source-revision.js";
+import type { TraceClock } from "./trace-clock.js";
+import { createHash, randomUUID } from "node:crypto";
+import { constants } from "node:fs";
+import {
+  chmod,
+  link,
+  lstat,
+  mkdir,
+  open,
+  readdir,
+  rm,
+  type FileHandle,
+} from "node:fs/promises";
+import path from "node:path";
+import { TraceRequestStore } from "./trace-request-store.js";
+import {
+  assertOwnedRegularFile,
+  assertRealDirectory,
+  assertSameFile,
+  isCode,
+  readOwnedFile,
+  syncDirectory,
+  writeAll,
+} from "./trace-storage-files.js";
+
+const clockDomain = randomUUID();
+const clockStart = process.hrtime.bigint();
+const identifier = /^[A-Za-z0-9_-]+$/u;
+const hashPattern = /^[a-f0-9]{64}$/u;
+const MAX_VERIFIED_PREFIX_BYTES = 32 * 1024 * 1024;
+const MAX_VERIFIED_SEGMENTS = 64;
+// Only freshly decoded JSON enters this graph; no caller-owned values are frozen.
+function freezeSnapshot<T>(value: T): T {
+  if (typeof value === "object" && value !== null && !Object.isFrozen(value)) {
+    for (const child of Object.values(value)) freezeSnapshot(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+export type { TraceClock } from "./trace-clock.js";
+export interface TraceArtifactRef {
+  sha256: string;
+  byteLength: number;
+  mediaType: string;
+}
+export interface TraceArtifactInput {
+  name: string;
+  bytes: Uint8Array | string;
+  mediaType?: string;
+  captureLayer?: string;
+}
+export interface TraceEvent {
+  threadId: string;
+  turnId?: string | null;
+  sampleId?: string;
+  type: string;
+  data?: unknown;
+  artifacts?: readonly TraceArtifactInput[];
+}
+export interface TraceRecord {
+  id: string;
+  threadId: string;
+  sequence: number;
+  turnId?: string | null;
+  sampleId?: string;
+  type: string;
+  clock: TraceClock;
+  data?: unknown;
+  artifacts: Array<{
+    name: string;
+    ref: TraceArtifactRef;
+    captureLayer?: string;
+  }>;
+  origin?: { threadId: string; recordId: string; sequence: number };
+}
+export type TraceReceipt =
+  | {
+      durability: "durable";
+      recordId: string;
+      sequence: number;
+      sync: "file-and-directory" | "file";
+      /** Existing artifacts readable on this execution Host, never remote spool paths. */
+      localArtifacts?: Array<{
+        name: string;
+        path: string;
+        ref: TraceArtifactRef;
+      }>;
+    }
+  | { durability: "degraded"; error: string; recordId?: string };
+export interface TraceIssue {
+  kind:
+    | "read_failure"
+    | "partial_frame"
+    | "invalid_frame"
+    | "artifact_unavailable"
+    | "write_failure"
+    | "capture_gap";
+  message: string;
+  segment?: string;
+  line?: number;
+  recordId?: string;
+}
+export interface TraceReadResult {
+  records: TraceRecord[];
+  /** Storage integrity, not proof that a model/tool reached EOF or completed. */
+  completeness: "complete" | "incomplete" | "unavailable";
+  issues: TraceIssue[];
+  artifactVerification?: "verified" | "not-checked";
+}
+/** Deeply frozen at runtime; callers may retain but never modify source facts. */
+export interface TraceReadSnapshot {
+  readonly records: readonly Readonly<TraceRecord>[];
+  readonly completeness: TraceReadResult["completeness"];
+  readonly issues: readonly Readonly<TraceIssue>[];
+  readonly artifactVerification?: TraceReadResult["artifactVerification"];
+}
+export interface RuntimeTrace {
+  record(event: TraceEvent): Promise<TraceReceipt>;
+  /** Same-Thread, artifact-free publication; a failed batch returns only degraded receipts. */
+  recordBatch?(events: readonly TraceEvent[]): Promise<TraceReceipt[]>;
+}
+export interface TraceReader {
+  /** Cheap display-cache invalidation only; never replaces fresh integrity checks before dispatch. */
+  summarySourceRevision?(threadId: string): Promise<string>;
+  /** Optional immutable view; must perform the same fresh source checks as read. */
+  readSnapshot?(
+    threadId: string,
+    options?: { verifyArtifacts?: boolean },
+  ): Promise<TraceReadSnapshot>;
+  read(
+    threadId: string,
+    options?: { verifyArtifacts?: boolean },
+  ): Promise<TraceReadResult>;
+  readArtifact(ref: TraceArtifactRef): Promise<Uint8Array>;
+  /** Validates the entire content hash but retains only the requested page in memory. */
+  readArtifactRange?(
+    ref: TraceArtifactRef,
+    offset: number,
+    limit: number,
+  ): Promise<Uint8Array>;
+}
+export interface TraceStatus {
+  durability: "healthy" | "degraded";
+  failedRecords: number;
+  lastError?: string;
+}
+
+/** Always-on append-only evidence; no side-effect authority, replay, eviction or hidden redaction. */
+export class FileTraceStore implements RuntimeTrace, TraceReader {
+  readonly directory: string;
+  readonly #queues = new Map<string, Promise<unknown>>();
+  readonly #next = new Map<string, number>();
+  readonly #requests: TraceRequestStore;
+  readonly #artifactQueues = new Map<string, Promise<unknown>>();
+  readonly #segments = new Map<string, string>();
+  // A single recently read Thread, not a read-authority or lifecycle cache.
+  // Reuse requires reading all current owned bytes and exact prefix equality.
+  #verifiedRead:
+    | {
+        threadId: string;
+        segments: Map<
+          string,
+          { bytes: Buffer; records: readonly TraceRecord[]; lines: number }
+        >;
+      }
+    | undefined;
+  readonly #initializedDirectories = new Map<
+    string,
+    readonly { dev: number; ino: number }[]
+  >();
+  #initialization: Promise<void> = Promise.resolve();
+  readonly #gaps = new Map<string, { count: number; error: string }>();
+  readonly #onFailure: ((issue: TraceIssue) => void) | undefined;
+  #failedRecords = 0;
+  #lastError: string | undefined;
+  constructor(
+    directory: string,
+    options: { onFailure?: (issue: TraceIssue) => void } = {},
+  ) {
+    this.directory = path.resolve(directory);
+    this.#requests = new TraceRequestStore(this.directory);
+    this.#onFailure = options.onFailure;
+  }
+  async summarySourceRevision(threadId: string): Promise<string> {
+    const directory = this.#threadPath(threadId);
+    try {
+      await this.#assertDirectories("threads", threadId);
+      const names = (await readdir(directory))
+        .filter((name) => name.endsWith(".jsonl"))
+        .sort();
+      const revisions = await Promise.all(
+        names.map(async (name) => [
+          name,
+          await projectionFileRevision(path.join(directory, name)),
+        ]),
+      );
+      await this.#assertDirectories("threads", threadId);
+      return JSON.stringify(revisions);
+    } catch (error) {
+      if (isCode(error, "ENOENT")) return "missing";
+      throw error;
+    }
+  }
+
+  status(): TraceStatus {
+    return {
+      durability: this.#lastError === undefined ? "healthy" : "degraded",
+      failedRecords: this.#failedRecords,
+      ...(this.#lastError === undefined ? {} : { lastError: this.#lastError }),
+    };
+  }
+  async record(event: TraceEvent): Promise<TraceReceipt> {
+    const id = randomUUID(),
+      clock = traceClock();
+    let snapshot: TraceEvent;
+    try {
+      assertIdentifier(event.threadId);
+      if (!event.type) throw new Error("Trace event type is required");
+      snapshot = {
+        ...event,
+        ...(event.data === undefined ? {} : { data: jsonSnapshot(event.data) }),
+        artifacts: (event.artifacts ?? []).map((artifact) => ({
+          ...artifact,
+          bytes:
+            typeof artifact.bytes === "string"
+              ? Buffer.from(artifact.bytes, "utf8")
+              : Uint8Array.from(artifact.bytes),
+        })),
+      };
+    } catch (error) {
+      return this.#failed(event.threadId, id, error);
+    }
+    return this.#serialize(snapshot.threadId, async () => {
+      try {
+        await this.#initialize(snapshot.threadId);
+        await this.#recordGap(snapshot.threadId);
+        const artifacts: TraceRecord["artifacts"] = [];
+        const localArtifacts = [];
+        for (const artifact of snapshot.artifacts ?? []) {
+          if (!artifact.name)
+            throw new Error("Trace artifact name is required");
+          const { ref, raw } = await this.#storeArtifact(
+            artifact.bytes,
+            artifact.mediaType,
+            isModelRequestBody(
+              snapshot.type,
+              artifact.name,
+              artifact.mediaType,
+            ),
+          );
+          const saved = {
+            name: artifact.name,
+            ref,
+            ...(artifact.captureLayer === undefined
+              ? {}
+              : { captureLayer: artifact.captureLayer }),
+          };
+          artifacts.push(saved);
+          if (raw)
+            localArtifacts.push({
+              ...saved,
+              path: this.#artifactPath(ref.sha256),
+            });
+        }
+        const record: TraceRecord = {
+          id,
+          threadId: snapshot.threadId,
+          sequence: this.#allocate(snapshot.threadId),
+          type: snapshot.type,
+          clock,
+          artifacts,
+          ...(snapshot.turnId === undefined ? {} : { turnId: snapshot.turnId }),
+          ...(snapshot.sampleId === undefined
+            ? {}
+            : { sampleId: snapshot.sampleId }),
+          ...(snapshot.data === undefined ? {} : { data: snapshot.data }),
+        };
+        const sync = await this.#append(record);
+        if (this.#gaps.size === 0) this.#lastError = undefined;
+        return {
+          durability: "durable",
+          recordId: id,
+          sequence: record.sequence,
+          sync,
+          localArtifacts,
+        };
+      } catch (error) {
+        this.#segments.delete(snapshot.threadId);
+        return this.#failed(snapshot.threadId, id, error);
+      }
+    });
+  }
+  /** Bounded fsync groups keep the existing independent, checksummed record format. */
+  async recordBatch(events: readonly TraceEvent[]): Promise<TraceReceipt[]> {
+    if (events.length === 0) return [];
+    const prepared = events.map((event) => ({
+      event,
+      // Failure evidence belongs to the enqueue-time identity too. The caller
+      // may mutate its original object while a later filesystem await fails.
+      failureThreadId:
+        typeof event?.threadId === "string" ? event.threadId : "invalid",
+      id: randomUUID(),
+      clock: traceClock(),
+    }));
+    const fail = (error: unknown) =>
+      prepared.map(({ failureThreadId, id }) =>
+        this.#failed(failureThreadId, id, error),
+      );
+    let snapshots: Array<{ event: TraceEvent; id: string; clock: TraceClock }>;
+    const threadId = events[0]?.threadId;
+    try {
+      if (typeof threadId !== "string")
+        throw new Error("Invalid Trace thread id");
+      assertIdentifier(threadId);
+      snapshots = prepared.map(({ event, id, clock }) => {
+        if (event.threadId !== threadId)
+          throw new Error("Trace batch requires one Thread");
+        if (typeof event.type !== "string" || !event.type)
+          throw new Error("Trace event type is required");
+        if (
+          event.artifacts !== undefined &&
+          (!Array.isArray(event.artifacts) || event.artifacts.length !== 0)
+        )
+          throw new Error("Trace batch does not accept artifacts; use record");
+        return {
+          id,
+          clock,
+          event: {
+            ...event,
+            ...(event.data === undefined
+              ? {}
+              : { data: jsonSnapshot(event.data) }),
+            artifacts: [],
+          },
+        };
+      });
+    } catch (error) {
+      return fail(error);
+    }
+    return this.#serialize(threadId, async () => {
+      try {
+        await this.#initialize(threadId);
+        await this.#recordGap(threadId);
+        const receipts: TraceReceipt[] = [];
+        let group: TraceRecord[] = [],
+          frames: Buffer[] = [],
+          bytes = 0;
+        const flush = async () => {
+          if (group.length === 0) return;
+          const sync = await this.#appendFrames(threadId, frames);
+          receipts.push(
+            ...group.map((record) => ({
+              durability: "durable" as const,
+              recordId: record.id,
+              sequence: record.sequence,
+              sync,
+            })),
+          );
+          group = [];
+          frames = [];
+          bytes = 0;
+        };
+        for (const { event, id, clock } of snapshots) {
+          const record: TraceRecord = {
+            id,
+            threadId,
+            sequence: this.#allocate(threadId),
+            type: event.type,
+            clock,
+            artifacts: [],
+            ...(event.turnId === undefined ? {} : { turnId: event.turnId }),
+            ...(event.sampleId === undefined
+              ? {}
+              : { sampleId: event.sampleId }),
+            ...(event.data === undefined ? {} : { data: event.data }),
+          };
+          const frame = encodeFrame(record);
+          if (
+            group.length >= 256 ||
+            (group.length > 0 && bytes + frame.byteLength > 1024 * 1024)
+          )
+            await flush();
+          group.push(record);
+          frames.push(frame);
+          bytes += frame.byteLength;
+        }
+        await flush();
+        if (this.#gaps.size === 0) this.#lastError = undefined;
+        return receipts;
+      } catch (error) {
+        // Even earlier flushed groups have no successful batch acknowledgement.
+        // Preserve all observed bytes; subsequent writes must use a fresh segment.
+        this.#segments.delete(threadId);
+        return fail(error);
+      }
+    });
+  }
+  async read(
+    threadId: string,
+    options: { verifyArtifacts?: boolean } = {},
+  ): Promise<TraceReadResult> {
+    return structuredClone(await this.#readCurrent(threadId, options));
+  }
+  async readSnapshot(
+    threadId: string,
+    options: { verifyArtifacts?: boolean } = {},
+  ): Promise<TraceReadSnapshot> {
+    return this.#readCurrent(threadId, options);
+  }
+  async #readCurrent(
+    threadId: string,
+    options: { verifyArtifacts?: boolean },
+  ): Promise<TraceReadResult> {
+    assertIdentifier(threadId);
+    await this.#queues.get(threadId)?.catch(() => undefined);
+    return freezeSnapshot({
+      ...(await this.#readStored(threadId, options.verifyArtifacts !== false)),
+      artifactVerification:
+        options.verifyArtifacts === false ? "not-checked" : "verified",
+    });
+  }
+  async listThreadIds(): Promise<string[]> {
+    try {
+      await this.#assertDirectories("threads");
+      return (
+        await readdir(path.join(this.directory, "threads"), {
+          withFileTypes: true,
+        })
+      )
+        .filter(
+          (entry) =>
+            entry.isDirectory() &&
+            !entry.isSymbolicLink() &&
+            identifier.test(entry.name),
+        )
+        .map((entry) => entry.name)
+        .sort();
+    } catch (error) {
+      if (isCode(error, "ENOENT")) return [];
+      throw error;
+    }
+  }
+  async readArtifact(ref: TraceArtifactRef): Promise<Uint8Array> {
+    assertArtifactRef(ref);
+    try {
+      return await this.#readRawArtifact(ref);
+    } catch (error) {
+      if (!isCode(error, "ENOENT")) throw error;
+      const bytes = await this.#requests.read(ref);
+      if (bytes === undefined) throw error;
+      return bytes;
+    }
+  }
+  async readArtifactRange(
+    ref: TraceArtifactRef,
+    offset: number,
+    limit: number,
+  ): Promise<Uint8Array> {
+    assertArtifactRef(ref);
+    if (
+      !Number.isSafeInteger(offset) ||
+      offset < 0 ||
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 1024 * 1024
+    )
+      throw new Error("Invalid Trace artifact range");
+    await this.#assertDirectories("artifacts");
+    try {
+      return await this.#readRawArtifactRange(ref, offset, limit);
+    } catch (error) {
+      if (!isCode(error, "ENOENT")) throw error;
+      const bytes = await this.#requests.read(ref, { offset, limit });
+      if (bytes === undefined) throw error;
+      return bytes;
+    }
+  }
+  async #readRawArtifact(ref: TraceArtifactRef): Promise<Buffer> {
+    await this.#assertDirectories("artifacts");
+    const bytes = await readOwnedFile(this.#artifactPath(ref.sha256));
+    await this.#assertDirectories("artifacts");
+    assertBytes(bytes, ref);
+    return bytes;
+  }
+  async #readRawArtifactRange(
+    ref: TraceArtifactRef,
+    offset: number,
+    limit: number,
+  ): Promise<Uint8Array> {
+    const filename = this.#artifactPath(ref.sha256),
+      before = await lstat(filename);
+    assertOwnedRegularFile(before);
+    const file = await open(
+      filename,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+    );
+    try {
+      const opened = await file.stat();
+      assertOwnedRegularFile(opened);
+      assertSameFile(before, opened);
+      const hash = createHash("sha256"),
+        buffer = Buffer.alloc(64 * 1024),
+        page = Buffer.alloc(
+          Math.min(limit, Math.max(0, ref.byteLength - offset)),
+        );
+      let position = 0;
+      for (;;) {
+        const { bytesRead } = await file.read(
+          buffer,
+          0,
+          buffer.length,
+          position,
+        );
+        if (!bytesRead) break;
+        const chunk = buffer.subarray(0, bytesRead);
+        hash.update(chunk);
+        const from = Math.max(offset, position),
+          to = Math.min(offset + page.length, position + bytesRead);
+        if (to > from)
+          chunk.copy(page, from - offset, from - position, to - position);
+        position += bytesRead;
+      }
+      const after = await lstat(filename);
+      assertOwnedRegularFile(after);
+      assertSameFile(opened, after);
+      await this.#assertDirectories("artifacts");
+      if (position !== ref.byteLength || hash.digest("hex") !== ref.sha256)
+        throw new Error("Trace artifact integrity mismatch");
+      return page;
+    } finally {
+      await file.close();
+    }
+  }
+  /** Copies independent bytes; imported evidence never authorizes local execution. */
+  async importRecords(
+    threadId: string,
+    records: readonly TraceRecord[],
+    source: TraceReader,
+  ): Promise<TraceReceipt[]> {
+    assertIdentifier(threadId);
+    const receipts: TraceReceipt[] = [];
+    for (const input of records) {
+      const id = randomUUID();
+      let snapshot: TraceRecord;
+      try {
+        snapshot = jsonSnapshot(input) as TraceRecord;
+        validateRecord(snapshot);
+      } catch (error) {
+        receipts.push(this.#failed(threadId, id, error));
+        break;
+      }
+      const receipt = await this.#serialize(
+        threadId,
+        async (): Promise<TraceReceipt> => {
+          try {
+            await this.#initialize(threadId);
+            await this.#recordGap(threadId);
+            for (const artifact of snapshot.artifacts) {
+              const bytes = await source.readArtifact(artifact.ref);
+              assertBytes(bytes, artifact.ref);
+              await this.#storeArtifact(
+                bytes,
+                artifact.ref.mediaType,
+                isModelRequestBody(
+                  snapshot.type,
+                  artifact.name,
+                  artifact.ref.mediaType,
+                ),
+              );
+            }
+            const record: TraceRecord = {
+              ...snapshot,
+              id,
+              threadId,
+              sequence: this.#allocate(threadId),
+              origin: snapshot.origin ?? {
+                threadId: snapshot.threadId,
+                recordId: snapshot.id,
+                sequence: snapshot.sequence,
+              },
+            };
+            const sync = await this.#append(record);
+            if (this.#gaps.size === 0) this.#lastError = undefined;
+            return {
+              durability: "durable",
+              recordId: id,
+              sequence: record.sequence,
+              sync,
+            };
+          } catch (error) {
+            this.#segments.delete(threadId);
+            return this.#failed(threadId, id, error);
+          }
+        },
+      );
+      receipts.push(receipt);
+      if (receipt.durability === "degraded") break;
+    }
+    return receipts;
+  }
+  async flush(): Promise<void> {
+    await Promise.allSettled([...this.#queues.values()]);
+  }
+  #serialize<T>(threadId: string, operation: () => Promise<T>): Promise<T> {
+    const pending = (this.#queues.get(threadId) ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(operation);
+    this.#queues.set(threadId, pending);
+    void pending
+      .finally(() => {
+        if (this.#queues.get(threadId) === pending)
+          this.#queues.delete(threadId);
+      })
+      .catch(() => undefined);
+    return pending;
+  }
+  async #assertDirectories(...parts: string[]): Promise<void> {
+    let current = this.directory;
+    await assertRealDirectory(current);
+    for (const part of parts) {
+      current = path.join(current, part);
+      await assertRealDirectory(current);
+    }
+  }
+  async #initialize(threadId: string): Promise<void> {
+    // Only shared directory setup is serialized; records and cold reads stay outside.
+    const initialized = this.#initialization
+      .catch(() => undefined)
+      .then(() => this.#initializeDirectories(threadId));
+    this.#initialization = initialized;
+    await initialized;
+    if (!this.#next.has(threadId)) {
+      const prior = await this.#readStored(threadId, false);
+      this.#next.set(
+        threadId,
+        prior.records.reduce(
+          (max, record) => Math.max(max, record.sequence),
+          0,
+        ) + 1,
+      );
+    }
+  }
+  async #initializeDirectories(threadId: string): Promise<void> {
+    try {
+      const initialized = this.#initializedDirectories.get(threadId);
+      this.#initializedDirectories.delete(threadId);
+      // Recheck every append; remembered durability never legitimizes aliases.
+      const directories = [
+        await privateDirectory(this.directory),
+        await privateDirectory(path.join(this.directory, "artifacts")),
+        await privateDirectory(path.join(this.directory, "threads")),
+        await privateDirectory(this.#threadPath(threadId)),
+      ];
+      const changed = directories.some(
+        (directory, index) =>
+          directory.created ||
+          directory.permissionsChanged ||
+          (initialized !== undefined &&
+            (directory.dev !== initialized[index]?.dev ||
+              directory.ino !== initialized[index]?.ino)),
+      );
+      if (initialized === undefined || changed) {
+        // Ancestors are shared: a repair can invalidate every Thread's proof.
+        if (changed) this.#initializedDirectories.clear();
+        await syncDirectory(this.directory);
+        await syncDirectory(path.dirname(this.directory));
+        await syncDirectory(path.join(this.directory, "threads"));
+      }
+      this.#initializedDirectories.set(threadId, directories);
+    } catch (error) {
+      this.#initializedDirectories.clear();
+      throw error;
+    }
+  }
+  #allocate(threadId: string): number {
+    const value = this.#next.get(threadId)!;
+    this.#next.set(threadId, value + 1);
+    return value;
+  }
+  async #recordGap(threadId: string): Promise<void> {
+    const gap = this.#gaps.get(threadId);
+    if (gap === undefined) return;
+    await this.#append({
+      id: randomUUID(),
+      threadId,
+      sequence: this.#allocate(threadId),
+      type: "trace_capture_gap",
+      clock: traceClock(),
+      data: { failedRecords: gap.count, error: gap.error },
+      artifacts: [],
+    });
+    this.#gaps.delete(threadId);
+  }
+  async #append(record: TraceRecord): Promise<"file-and-directory" | "file"> {
+    return this.#appendFrames(record.threadId, [encodeFrame(record)]);
+  }
+  async #appendFrames(
+    threadId: string,
+    frames: readonly Uint8Array[],
+  ): Promise<"file-and-directory" | "file"> {
+    let segment = this.#segments.get(threadId);
+    if (segment === undefined) {
+      segment = `${clockDomain}-${randomUUID()}.jsonl`;
+      this.#segments.set(threadId, segment);
+    }
+    const frame = frames.length === 1 ? frames[0]! : Buffer.concat(frames);
+    await this.#assertDirectories("threads", threadId);
+    const target = path.join(this.#threadPath(threadId), segment);
+    const file = await open(
+      target,
+      constants.O_WRONLY |
+        constants.O_APPEND |
+        constants.O_CREAT |
+        (constants.O_NOFOLLOW ?? 0),
+      0o600,
+    );
+    try {
+      const opened = await file.stat();
+      assertOwnedRegularFile(opened);
+      await writeAll(file, frame);
+      await file.sync();
+      const current = await lstat(target);
+      assertOwnedRegularFile(current);
+      assertSameFile(opened, current);
+      await this.#assertDirectories("threads", threadId);
+    } finally {
+      await file.close();
+    }
+    return (await syncDirectory(this.#threadPath(threadId)))
+      ? "file-and-directory"
+      : "file";
+  }
+  async #storeArtifact(
+    bytes: Uint8Array | string,
+    mediaType = "application/octet-stream",
+    compactRequest = false,
+  ): Promise<{ ref: TraceArtifactRef; raw: boolean }> {
+    const payload =
+      typeof bytes === "string" ? Buffer.from(bytes, "utf8") : bytes;
+    const ref = {
+      sha256: digest(payload),
+      byteLength: payload.byteLength,
+      mediaType,
+    };
+    const prior = this.#artifactQueues.get(ref.sha256) ?? Promise.resolve();
+    const pending = prior
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          await this.#readRawArtifact(ref);
+          return { ref, raw: true };
+        } catch (error) {
+          if (!isCode(error, "ENOENT")) throw error;
+        }
+        await this.#assertDirectories("artifacts");
+        if (compactRequest && (await this.#requests.store(ref, payload)))
+          return { ref, raw: false };
+        const target = this.#artifactPath(ref.sha256),
+          temporary = `${target}.${randomUUID()}.tmp`;
+        const file = await open(temporary, "wx", 0o600);
+        try {
+          await writeAll(file, payload);
+          await file.sync();
+        } finally {
+          await file.close();
+        }
+        try {
+          try {
+            await link(temporary, target);
+          } catch (error) {
+            if (!isCode(error, "EEXIST")) throw error;
+          }
+        } finally {
+          await rm(temporary, { force: true });
+        }
+        await syncDirectory(path.dirname(target));
+        await this.#readRawArtifact(ref);
+        return { ref, raw: true };
+      });
+    this.#artifactQueues.set(ref.sha256, pending);
+    void pending
+      .finally(() => {
+        if (this.#artifactQueues.get(ref.sha256) === pending)
+          this.#artifactQueues.delete(ref.sha256);
+      })
+      .catch(() => undefined);
+    return pending;
+  }
+
+  async #readStored(
+    threadId: string,
+    verifyArtifacts: boolean,
+  ): Promise<TraceReadResult> {
+    const records: TraceRecord[] = [],
+      issues: TraceIssue[] = [];
+    let segments: string[];
+    try {
+      await this.#assertDirectories("threads", threadId);
+      segments = (await readdir(this.#threadPath(threadId)))
+        .filter((name) => name.endsWith(".jsonl"))
+        .sort();
+    } catch (error) {
+      if (this.#verifiedRead?.threadId === threadId)
+        this.#verifiedRead = undefined;
+      if (isCode(error, "ENOENT"))
+        return { records, issues, completeness: "complete" };
+      return {
+        records,
+        issues: [{ kind: "read_failure", message: describe(error) }],
+        completeness: "unavailable",
+      };
+    }
+    const verified =
+      this.#verifiedRead?.threadId === threadId
+        ? this.#verifiedRead
+        : {
+            threadId,
+            segments: new Map<
+              string,
+              { bytes: Buffer; records: readonly TraceRecord[]; lines: number }
+            >(),
+          };
+    this.#verifiedRead = verified;
+    for (const name of verified.segments.keys())
+      if (!segments.includes(name)) verified.segments.delete(name);
+    for (const segment of segments) {
+      let bytes: Buffer;
+      try {
+        await this.#assertDirectories("threads", threadId);
+        bytes = await readOwnedFile(
+          path.join(this.#threadPath(threadId), segment),
+        );
+        await this.#assertDirectories("threads", threadId);
+      } catch (error) {
+        verified.segments.delete(segment);
+        issues.push({
+          kind: "read_failure",
+          message: describe(error),
+          segment,
+        });
+        continue;
+      }
+      const prior = verified.segments.get(segment);
+      const samePrefix =
+        prior !== undefined &&
+        prior.bytes.length <= bytes.length &&
+        bytes.subarray(0, prior.bytes.length).equals(prior.bytes);
+      // Private frames are deeply immutable. Public read clones the final result;
+      // an internal snapshot shares frames only after fresh exact byte checks.
+      const segmentRecords: TraceRecord[] = samePrefix
+        ? [...prior.records]
+        : [];
+      let offset = samePrefix ? prior.bytes.length : 0,
+        line = samePrefix ? prior.lines : 0;
+      let invalid = false;
+      while (offset < bytes.length) {
+        line++;
+        const end = bytes.indexOf(10, offset);
+        if (end < 0) {
+          invalid = true;
+          issues.push({
+            kind: "partial_frame",
+            message: `Uncommitted trailing bytes (${bytes.length - offset}) preserved`,
+            segment,
+            line,
+          });
+          break;
+        }
+        try {
+          const frame = JSON.parse(
+            new TextDecoder("utf-8", { fatal: true }).decode(
+              bytes.subarray(offset, end),
+            ),
+          ) as { record: TraceRecord; sha256: string };
+          validateRecord(frame.record);
+          if (
+            frame.record.threadId !== threadId ||
+            frame.sha256 !== digest(JSON.stringify(frame.record))
+          )
+            throw new Error("Trace frame identity or checksum mismatch");
+          segmentRecords.push(freezeSnapshot(frame.record));
+        } catch (error) {
+          invalid = true;
+          issues.push({
+            kind: "invalid_frame",
+            message: describe(error),
+            segment,
+            line,
+          });
+        }
+        offset = end + 1;
+      }
+      for (const record of segmentRecords) records.push(record);
+      if (invalid) verified.segments.delete(segment);
+      else if (!samePrefix || prior.bytes.length !== bytes.length) {
+        const retainedBytes = [...verified.segments.entries()].reduce(
+          (total, [name, retained]) =>
+            total + (name === segment ? 0 : retained.bytes.length),
+          0,
+        );
+        if (
+          retainedBytes + bytes.length > MAX_VERIFIED_PREFIX_BYTES ||
+          (!verified.segments.has(segment) &&
+            verified.segments.size >= MAX_VERIFIED_SEGMENTS)
+        ) {
+          verified.segments.delete(segment);
+        } else {
+          verified.segments.set(segment, {
+            bytes,
+            records: Object.freeze([...segmentRecords]),
+            lines: line,
+          });
+        }
+      }
+    }
+    records.sort((a, b) => a.sequence - b.sequence || a.id.localeCompare(b.id));
+    const seen = new Set<string>();
+    for (const record of records) {
+      if (seen.has(record.id))
+        issues.push({
+          kind: "invalid_frame",
+          message: "Duplicate occurrence id",
+          recordId: record.id,
+        });
+      seen.add(record.id);
+      if (
+        [
+          "trace_capture_gap",
+          "model_capture_gap",
+          "tool_output_gap",
+          "tool_media_gap",
+        ].includes(record.type)
+      )
+        issues.push({
+          kind: "capture_gap",
+          message:
+            "Capture failed for one or more observations; this Trace is not complete",
+          recordId: record.id,
+        });
+      if (verifyArtifacts)
+        for (const artifact of record.artifacts)
+          try {
+            await this.readArtifactRange(
+              artifact.ref,
+              artifact.ref.byteLength,
+              1,
+            );
+          } catch (error) {
+            issues.push({
+              kind: "artifact_unavailable",
+              message: describe(error),
+              recordId: record.id,
+            });
+          }
+    }
+    return {
+      records,
+      issues,
+      completeness: issues.length ? "incomplete" : "complete",
+    };
+  }
+  #failed(threadId: string, id: string, error: unknown): TraceReceipt {
+    const message = describe(error);
+    this.#failedRecords++;
+    this.#lastError = message;
+    if (identifier.test(threadId)) {
+      const old = this.#gaps.get(threadId);
+      this.#gaps.set(threadId, {
+        count: (old?.count ?? 0) + 1,
+        error: message,
+      });
+    }
+    try {
+      this.#onFailure?.({ kind: "write_failure", message, recordId: id });
+    } catch {
+      /* observation failure cannot grant execution authority */
+    }
+    return { durability: "degraded", error: message, recordId: id };
+  }
+  #threadPath(threadId: string): string {
+    return path.join(this.directory, "threads", threadId);
+  }
+  #artifactPath(hash: string): string {
+    return path.join(this.directory, "artifacts", hash);
+  }
+}
+
+export function traceClock(): TraceClock {
+  return {
+    domain: clockDomain,
+    monotonicNs: (process.hrtime.bigint() - clockStart).toString(),
+    wallTime: new Date().toISOString(),
+  };
+}
+export async function recordTraceJson(
+  trace: RuntimeTrace,
+  event: Omit<TraceEvent, "artifacts">,
+  name: string,
+  value: unknown,
+  captureLayer = "runtime-json-value",
+): Promise<TraceReceipt> {
+  try {
+    const bytes = JSON.stringify(value);
+    if (bytes === undefined)
+      throw new Error("Trace JSON value is not serializable");
+    return await trace.record({
+      ...event,
+      artifacts: [{ name, bytes, mediaType: "application/json", captureLayer }],
+    });
+  } catch (error) {
+    const message = describe(error);
+    try {
+      await trace.record({
+        ...event,
+        type: "trace_capture_gap",
+        data: { eventType: event.type, artifactName: name, reason: message },
+      });
+    } catch {
+      /* failing foreign writer */
+    }
+    return { durability: "degraded", error: message };
+  }
+}
+/** Explicitly non-durable test fixture, never the production default. */
+export class InMemoryTraceStore implements RuntimeTrace, TraceReader {
+  readonly #records = new Map<string, TraceRecord[]>();
+  readonly #artifacts = new Map<string, Uint8Array>();
+  async record(event: TraceEvent): Promise<TraceReceipt> {
+    const id = randomUUID();
+    try {
+      assertIdentifier(event.threadId);
+      const records = this.#records.get(event.threadId) ?? [];
+      const artifacts: TraceRecord["artifacts"] = (event.artifacts ?? []).map(
+        (artifact) => {
+          const bytes =
+            typeof artifact.bytes === "string"
+              ? Buffer.from(artifact.bytes)
+              : Uint8Array.from(artifact.bytes);
+          const ref = {
+            sha256: digest(bytes),
+            byteLength: bytes.length,
+            mediaType: artifact.mediaType ?? "application/octet-stream",
+          };
+          this.#artifacts.set(ref.sha256, bytes);
+          return {
+            name: artifact.name,
+            ref,
+            ...(artifact.captureLayer === undefined
+              ? {}
+              : { captureLayer: artifact.captureLayer }),
+          };
+        },
+      );
+      records.push({
+        id,
+        threadId: event.threadId,
+        sequence: records.length + 1,
+        type: event.type,
+        clock: traceClock(),
+        artifacts,
+        ...(event.turnId === undefined ? {} : { turnId: event.turnId }),
+        ...(event.sampleId === undefined ? {} : { sampleId: event.sampleId }),
+        ...(event.data === undefined ? {} : { data: jsonSnapshot(event.data) }),
+      });
+      this.#records.set(event.threadId, records);
+      return {
+        durability: "degraded",
+        recordId: id,
+        error: "Trace is memory-only (test fixture)",
+      };
+    } catch (error) {
+      return { durability: "degraded", recordId: id, error: describe(error) };
+    }
+  }
+  async read(
+    threadId: string,
+    options: { verifyArtifacts?: boolean } = {},
+  ): Promise<TraceReadResult> {
+    return {
+      records: jsonSnapshot(this.#records.get(threadId) ?? []) as TraceRecord[],
+      completeness: "incomplete",
+      issues: [
+        {
+          kind: "write_failure",
+          message: "Trace is memory-only (test fixture)",
+        },
+      ],
+      artifactVerification:
+        options.verifyArtifacts === false ? "not-checked" : "verified",
+    };
+  }
+  async readArtifact(ref: TraceArtifactRef): Promise<Uint8Array> {
+    assertArtifactRef(ref);
+    const bytes = this.#artifacts.get(ref.sha256);
+    if (bytes === undefined) throw new Error("Trace artifact unavailable");
+    assertBytes(bytes, ref);
+    return Uint8Array.from(bytes);
+  }
+  async listThreadIds(): Promise<string[]> {
+    return [...this.#records.keys()].sort();
+  }
+  status(): TraceStatus {
+    return {
+      durability: "degraded",
+      failedRecords: 0,
+      lastError: "Trace is memory-only (test fixture)",
+    };
+  }
+  async flush(): Promise<void> {}
+}
+function encodeFrame(record: TraceRecord): Buffer {
+  return Buffer.from(
+    JSON.stringify({ record, sha256: digest(JSON.stringify(record)) }) + "\n",
+  );
+}
+function digest(value: Uint8Array | string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+function jsonSnapshot(value: unknown): unknown {
+  return JSON.parse(JSON.stringify(value));
+}
+function describe(error: unknown): string {
+  return error instanceof Error
+    ? `${error.name}: ${error.message}`
+    : String(error);
+}
+function assertIdentifier(value: string): void {
+  if (!identifier.test(value)) throw new Error("Invalid Trace thread id");
+}
+function isModelRequestBody(
+  type: string,
+  name: string,
+  mediaType?: string,
+): boolean {
+  return (
+    type === "model_request" &&
+    name === "request_body" &&
+    mediaType === "application/json"
+  );
+}
+function assertArtifactRef(value: TraceArtifactRef): void {
+  if (
+    !value ||
+    !hashPattern.test(value.sha256) ||
+    !Number.isSafeInteger(value.byteLength) ||
+    value.byteLength < 0 ||
+    typeof value.mediaType !== "string"
+  )
+    throw new Error("Invalid Trace artifact reference");
+}
+function assertBytes(bytes: Uint8Array, ref: TraceArtifactRef): void {
+  if (bytes.byteLength !== ref.byteLength || digest(bytes) !== ref.sha256)
+    throw new Error("Trace artifact hash or byte length mismatch");
+}
+function validateRecord(value: TraceRecord): void {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    typeof value.id !== "string" ||
+    !value.id ||
+    typeof value.threadId !== "string" ||
+    !identifier.test(value.threadId) ||
+    !Number.isSafeInteger(value.sequence) ||
+    value.sequence < 1 ||
+    typeof value.type !== "string" ||
+    !value.type ||
+    !value.clock ||
+    typeof value.clock.domain !== "string" ||
+    !/^[0-9]+$/u.test(value.clock.monotonicNs) ||
+    typeof value.clock.wallTime !== "string" ||
+    !Array.isArray(value.artifacts)
+  )
+    throw new Error("Invalid Trace record");
+  for (const artifact of value.artifacts) {
+    if (!artifact || typeof artifact.name !== "string")
+      throw new Error("Invalid Trace artifact");
+    assertArtifactRef(artifact.ref);
+  }
+}
+async function privateDirectory(directory: string): Promise<{
+  dev: number;
+  ino: number;
+  created: boolean;
+  permissionsChanged: boolean;
+}> {
+  const created = await mkdir(directory, { recursive: true, mode: 0o700 });
+  const metadata = await assertRealDirectory(directory);
+  if (process.platform !== "win32") await chmod(directory, 0o700);
+  return {
+    dev: metadata.dev,
+    ino: metadata.ino,
+    created: created !== undefined,
+    permissionsChanged:
+      process.platform !== "win32" && (metadata.mode & 0o7777) !== 0o700,
+  };
+}
