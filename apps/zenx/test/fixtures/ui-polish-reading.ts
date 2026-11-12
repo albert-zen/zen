@@ -1,3 +1,7 @@
+import {
+  resultReadingPrompts,
+  resultReadingAnswers,
+} from "./result-reading-content.js";
 import type { Thread } from "../../src/protocol-client/index.js";
 import type {
   ApprovalRequestEvent,
@@ -70,6 +74,7 @@ export function readingRecovery(
   base: Thread,
   pending: boolean,
   markdown = readingMarkdown,
+  resultScene = false,
 ) {
   if (base.id !== "thread-1") throw new Error("Unexpected reading owner");
   const recovery = nativeRecoveryForThread(
@@ -79,26 +84,57 @@ export function readingRecovery(
         base.name && base.name !== "Thread one"
           ? base.name
           : "A quieter workspace for careful reading",
-      turns: [
-        {
-          id: "reading-turn",
-          itemsView: "full",
-          status: "completed",
-          error: null,
-          startedAt: 1792033200,
-          completedAt: 1792033210,
-          durationMs: 10000,
-          items: [
+      turns: resultScene
+        ? resultReadingAnswers.map((text, index) => ({
+            id: `result-turn-${index}`,
+            itemsView: "full",
+            status: "completed",
+            error: null,
+            startedAt: 1792033200 + index * 20,
+            completedAt: 1792033210 + index * 20,
+            durationMs: 10000,
+            items: [
+              {
+                id: `result-user-${index}`,
+                type: "userMessage",
+                clientId: null,
+                content: [
+                  {
+                    type: "text",
+                    text: resultReadingPrompts[index]!,
+                    text_elements: [],
+                  },
+                ],
+              },
+              {
+                id: `result-answer-${index}`,
+                type: "agentMessage",
+                text,
+                phase: "final_answer",
+                memoryCitation: null,
+              },
+            ],
+          }))
+        : [
             {
-              id: "reading-answer",
-              type: "agentMessage",
-              text: markdown,
-              phase: "final_answer",
-              memoryCitation: null,
+              id: "reading-turn",
+              itemsView: "full",
+              status: "completed",
+              error: null,
+              startedAt: 1792033200,
+              completedAt: 1792033210,
+              durationMs: 10000,
+              items: [
+                {
+                  id: "reading-answer",
+                  type: "agentMessage",
+                  text: markdown,
+                  phase: "final_answer",
+                  memoryCitation: null,
+                },
+              ],
             },
           ],
-        },
-      ],
     },
     { sandbox: "read-only", approvalPolicy: "on-request" },
   );
@@ -159,6 +195,7 @@ export function readReadingRequest(
   base: Thread,
   pending: boolean,
   markdown = readingMarkdown,
+  resultScene = false,
 ) {
   if (method === "zen/initialize") {
     if (
@@ -175,9 +212,11 @@ export function readReadingRequest(
   if (method === "zen/thread/questions/list")
     return readNavigationQuestions(request);
   if (method === "zen/thread/resume" || method === "zen/thread/resume-window")
-    return readingRecovery(base, pending, markdown);
+    return readingRecovery(base, pending, markdown, resultScene);
   if (method === "zen/thread/read")
-    return { thread: readingRecovery(base, pending, markdown).thread };
+    return {
+      thread: readingRecovery(base, pending, markdown, resultScene).thread,
+    };
   throw new Error(`Unsupported read-only reading protocol: ${method}`);
 }
 

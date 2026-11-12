@@ -36,6 +36,7 @@ Object.assign(globalThis, { React });
 const params = new URLSearchParams(location.search);
 const rails = supportingRailsData(params.get("rails"));
 const readingScene = params.get("scene") === "reading";
+const resultScene = readingScene && params.get("results") === "1";
 const codeWrapScene = readingScene && params.get("codeWrap") === "1";
 // This opt-in synthetic probe records writes only; it never reads or writes the OS clipboard.
 if (codeWrapScene) {
@@ -113,6 +114,7 @@ const options = {
         thread(),
         readingPending,
         codeWrapScene ? codeWrapMarkdown : undefined,
+        resultScene,
       );
     if (
       params.get("scene") === "navigation" &&

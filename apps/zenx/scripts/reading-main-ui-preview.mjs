@@ -1,3 +1,4 @@
+import { captureResultReading } from "./result-reading-main-ui-preview.mjs";
 import { captureCodeWrap } from "./code-wrap-main-ui-preview.mjs";
 import { captureScrollbarStates } from "./scrollbar-main-ui-preview.mjs";
 import assert from "node:assert/strict";
@@ -659,6 +660,17 @@ export async function captureDesktopReading({
       "New request does not take focus from Composer",
     );
     assert.match(newer.approvalScopeText, /once|one.time|this call/i);
+    await captureResultReading({
+      send,
+      evaluate,
+      wait,
+      click,
+      capture,
+      evidence,
+      options,
+      url,
+      scroll,
+    });
     await captureCodeWrap({
       send,
       evaluate,
@@ -693,6 +705,9 @@ export async function captureDesktopReading({
 }
 
 export const readingPaths = [
+  "apps/zenx/scripts/result-reading-main-ui-preview.mjs",
+  "apps/zenx/test/result-reading-main-ui-preview.test.mjs",
+  "apps/zenx/test/fixtures/result-reading-content.ts",
   "apps/zenx/scripts/code-wrap-main-ui-preview.mjs",
   "apps/zenx/test/code-wrap-main-ui-preview.test.mjs",
   "apps/zenx/test/fixtures/code-wrap-content.ts",
