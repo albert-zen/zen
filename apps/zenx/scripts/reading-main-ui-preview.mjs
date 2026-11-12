@@ -389,7 +389,8 @@ export async function captureSidebarNames({
 }) {
   const row = '.project-group [data-thread-id="thread-1"] .thread-row';
   const title = ".thread-information-title > span";
-  const project = ".project-group .project-more-trigger";
+  const project =
+    '.project-group:has([data-thread-id="thread-1"]) .project-more-trigger';
   const full = await evaluate(
     `({thread:document.querySelector(${JSON.stringify(row)} + ' .thread-title > span:first-child').textContent.trim(),project:document.querySelector('.project-group .project-toggle > span').textContent.trim()})`,
   );
