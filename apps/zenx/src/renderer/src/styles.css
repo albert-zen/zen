@@ -13497,6 +13497,17 @@ button:disabled {
   display: contents;
 }
 @media (min-width: 961px) {
+  /* Name the row switches' destination, distinct from the card's Hide action. */
+  .information-dock .subagent-sidebar-heading.sr-only {
+    position: static;
+    width: auto;
+    height: auto;
+    padding: 0 6px 4px;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+  }
   .information-dock .subagent-tree-row {
     display: grid;
     grid-template-columns: 16px minmax(0, 1fr);
