@@ -84,6 +84,9 @@ jobs:
           trap 'cp "${{ runner.temp }}/preview-fonts/fonts.json" "${{ runner.temp }}/desktop-reading/font-environment.json"' EXIT
           node apps/zenx/scripts/prepare-preview-fonts.mjs "${{ runner.temp }}/preview-fonts" --allow-download
         timeout-minutes: 2
+      - name: Build existing SDK dependency for component tests
+        if: steps.selection.outputs.needsCapture == 'true'
+        run: npm run build --workspace @zenx/plugin-sdk
       - if: steps.selection.outputs.needsCapture == 'true'
         run: node --import tsx --test apps/zenx/test/preview-fonts.test.mjs apps/zenx/test/reading-main-ui-preview.test.mjs apps/zenx/test/reading-fixture.test.ts apps/zenx/test/scrollbar-main-ui-preview.test.mjs apps/zenx/test/subagents-ui.test.ts apps/zenx/test/child-question-main-ui-preview.test.ts
       - if: steps.selection.outputs.needsCapture == 'true'
