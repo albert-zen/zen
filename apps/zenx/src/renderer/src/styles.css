@@ -13290,7 +13290,7 @@ button:disabled {
   }
   .thread-view .agent-copy {
     font-size: 15px;
-    line-height: 1.8;
+    line-height: 1.65;
   }
   .thread-view .agent-copy .markdown-body p {
     margin-bottom: 16px;
