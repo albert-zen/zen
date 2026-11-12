@@ -22,6 +22,8 @@ on:
       - apps/zenx/scripts/preview-font-probe.mjs
       - apps/zenx/scripts/preview-fonts-OFL.txt
       - apps/zenx/test/preview-fonts.test.mjs
+      - apps/zenx/scripts/scrollbar-main-ui-preview.mjs
+      - apps/zenx/test/scrollbar-main-ui-preview.test.mjs
       - apps/zenx/scripts/reading-main-ui-preview.mjs
       - apps/zenx/test/reading-main-ui-preview.test.mjs
   workflow_dispatch:
@@ -77,7 +79,7 @@ jobs:
           node apps/zenx/scripts/prepare-preview-fonts.mjs "${{ runner.temp }}/preview-fonts" --allow-download
         timeout-minutes: 2
       - if: steps.selection.outputs.needsCapture == 'true'
-        run: node --import tsx --test apps/zenx/test/preview-fonts.test.mjs apps/zenx/test/reading-main-ui-preview.test.mjs apps/zenx/test/reading-fixture.test.ts
+        run: node --import tsx --test apps/zenx/test/preview-fonts.test.mjs apps/zenx/test/reading-main-ui-preview.test.mjs apps/zenx/test/reading-fixture.test.ts apps/zenx/test/scrollbar-main-ui-preview.test.mjs
       - if: steps.selection.outputs.needsCapture == 'true'
         run: node apps/zenx/scripts/build-main-ui-preview.mjs "${{ runner.temp }}/desktop-reading" reading
         timeout-minutes: 2

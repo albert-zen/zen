@@ -1,3 +1,4 @@
+import { captureScrollbarStates } from "./scrollbar-main-ui-preview.mjs";
 import assert from "node:assert/strict";
 import { dispatchNavigationKey } from "./navigation-main-ui-preview.mjs";
 
@@ -414,6 +415,8 @@ export async function captureDesktopReading({
     await openThread();
     await scroll();
     await save("prose-top", {});
+    await captureScrollbarStates({ send, evaluate, capture, evidence, options });
+    await scroll();
     await scroll(".agent-copy h3");
     const list = await save("heading-list", {});
     assert(
@@ -548,6 +551,8 @@ export async function captureDesktopReading({
 }
 
 export const readingPaths = [
+  "apps/zenx/scripts/scrollbar-main-ui-preview.mjs",
+  "apps/zenx/test/scrollbar-main-ui-preview.test.mjs",
   "apps/zenx/scripts/prepare-preview-fonts.mjs",
   "apps/zenx/scripts/preview-font-probe.mjs",
   "apps/zenx/scripts/preview-fonts-OFL.txt",
