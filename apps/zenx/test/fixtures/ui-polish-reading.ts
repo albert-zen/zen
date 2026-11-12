@@ -71,7 +71,10 @@ export function readingRecovery(base: Thread, pending: boolean) {
   const recovery = nativeRecoveryForThread(
     {
       ...base,
-      name: "A quieter workspace for careful reading",
+      name:
+        base.name && base.name !== "Thread one"
+          ? base.name
+          : "A quieter workspace for careful reading",
       turns: [
         {
           id: "reading-turn",

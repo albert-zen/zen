@@ -24,6 +24,7 @@ import {
   createReadingApprovalFixture,
   readingBrowserCommand,
 } from "./ui-polish-reading.js";
+import { supportingRailsData } from "./supporting-rails-data.js";
 import type { NativeInformationApi } from "../../src/native-information.js";
 import { installScrollbarVisibility } from "../../src/renderer/src/scrollbar-visibility.js";
 import "../../src/renderer/src/theme.css";
@@ -32,6 +33,7 @@ import "../../src/renderer/src/styles.css";
 installScrollbarVisibility(document);
 Object.assign(globalThis, { React });
 const params = new URLSearchParams(location.search);
+const rails = supportingRailsData(params.get("rails"));
 const readingScene = params.get("scene") === "reading";
 const readingPending = readingScene && params.get("pending") === "1";
 const readingApprovalFixture = readingScene
@@ -49,8 +51,14 @@ let previewTabs: import("../../src/main/workspace-browser.js").WorkspaceBrowserT
   [];
 
 const sideConversations = [
-  { ...summary("design-child", "Design review"), parentThreadId: "thread-1" },
-  { ...summary("test-child", "Test coverage"), parentThreadId: "thread-1" },
+  {
+    ...summary("design-child", rails?.children[0] ?? "Design review"),
+    parentThreadId: "thread-1",
+  },
+  {
+    ...summary("test-child", rails?.children[1] ?? "Test coverage"),
+    parentThreadId: "thread-1",
+  },
 ];
 const uiPolishTelemetry = {
   protocolCalls: [] as string[],
@@ -286,7 +294,7 @@ const zenx = {
             {
               key: "/work/zen",
               workspace: "/work/zen",
-              name: "Zen",
+              name: rails?.project ?? "Zen",
               configured: true,
               isDefault: true,
               threadIds: [
@@ -538,11 +546,32 @@ Object.assign(zenx, {
 // Launcher mode mounts the real admitted Subagents/Triggers UI on a synthetic bridge.
 if (readingScene || params.has("launchers") || params.has("conversationTabs")) {
   Object.assign(zenx.plugins, {
-    get: async () => workspaceLauncherSnapshot,
+    get: async () =>
+      rails
+        ? {
+            ...workspaceLauncherSnapshot,
+            plugins: workspaceLauncherSnapshot.plugins.map((plugin) =>
+              plugin.id === "zenx-triggers"
+                ? { ...plugin, admissionId: "synthetic-rails-triggers" }
+                : plugin,
+            ),
+            commands: [
+              ...workspaceLauncherSnapshot.commands,
+              {
+                key: "zenx-triggers:sidebar-facts",
+                pluginId: "zenx-triggers",
+                id: "sidebar-facts",
+                title: "Synthetic trigger facts",
+                tool: "zenx_triggers_sidebar_facts",
+              },
+            ],
+          }
+        : workspaceLauncherSnapshot,
     executeCommand: async (pluginId: string, command: string) => {
       if (
         readingScene &&
-        !(pluginId === "zenx-subagents" && command === "list")
+        !(pluginId === "zenx-subagents" && command === "list") &&
+        !(rails && pluginId === "zenx-triggers" && command === "sidebar-facts")
       )
         throw new Error("Reading preview only admits subagent list");
       if (pluginId === "zenx-subagents") {
@@ -558,6 +587,8 @@ if (readingScene || params.has("launchers") || params.has("conversationTabs")) {
           return { threadId: "synthetic-side-chat" };
         }
       }
+      if (rails && pluginId === "zenx-triggers" && command === "sidebar-facts")
+        return { triggers: structuredClone(rails.triggers) };
       if (pluginId === "zenx-triggers") {
         if (command === "threads")
           return {
@@ -622,7 +653,7 @@ if (params.get("scene") === "navigation" || readingScene) {
         basis: "synthetic-navigation",
         members: [],
         resourceThreadId: owner.id,
-        layout: {
+        layout: rails?.layout ?? {
           version: 1,
           widgets: [
             {
@@ -825,7 +856,7 @@ function AuxiliaryFixture() {
 
 function summary(
   threadId = "thread-1",
-  name = "Thread one",
+  name = rails?.thread ?? "Thread one",
 ): NativeThreadSummary {
   return {
     threadId,
@@ -870,7 +901,8 @@ function thread(threadId = "thread-1"): Thread {
     agentNickname: null,
     agentRole: null,
     gitInfo: null,
-    name: threadId === "thread-1" ? "Thread one" : "Thread two",
+    name:
+      threadId === "thread-1" ? (rails?.thread ?? "Thread one") : "Thread two",
     turns: [],
   };
 }

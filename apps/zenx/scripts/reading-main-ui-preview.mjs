@@ -442,6 +442,23 @@ export async function captureDesktopReading({
     await openInformation();
     await scroll();
     await save("information-reading", { information: true });
+    // Opt-in synthetic stress cases use the same production desktop components.
+    // Collapsed is a saved initial layout, not a claim of click acceptance.
+    for (const rails of ["long", "collapsed"]) {
+      const stressUrl = new URL(url);
+      stressUrl.searchParams.set("rails", rails);
+      await send("Page.navigate", { url: stressUrl.href });
+      await wait(
+        `location.href===${JSON.stringify(stressUrl.href)} && !!document.querySelector('.thread-row')`,
+      );
+      await openThread();
+      await openInformation();
+      await scroll();
+      await wait(
+        "document.querySelectorAll('.information-widget').length >= 2",
+      );
+      await save(`supporting-rails-${rails}`, { information: true });
+    }
     const pendingUrl = new URL(url);
     pendingUrl.searchParams.set("pending", "1");
     await send("Page.navigate", { url: pendingUrl.href });
