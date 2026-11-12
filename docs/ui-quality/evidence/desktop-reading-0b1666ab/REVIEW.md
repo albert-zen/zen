@@ -4,13 +4,13 @@ Source: 0b1666ab55afede8f6df049a3329dbb08a50cebb. Baseline: 2a4d938f81711fe644df
 
 Independent visual reviewer examined information-reading and pending-information in both light and dark. No target score supplied. Scores are this paired Info-region review, not replacements for historical whole-scene integer scores.
 
-| Dimension (/10) | Before | After |
-|---|---:|---:|
-| Hierarchy | 6.5 | 8 |
-| Readability | 7 | 7.5 |
-| Attention balance | 8 | 7.5 |
-| Consistency | 7.5 | 8 |
-| Interaction discoverability | 7 | 7.5 |
+| Dimension (/10)             | Before | After |
+| --------------------------- | -----: | ----: |
+| Hierarchy                   |    6.5 |     8 |
+| Readability                 |      7 |   7.5 |
+| Attention balance           |      8 |   7.5 |
+| Consistency                 |    7.5 |     8 |
+| Interaction discoverability |      7 |   7.5 |
 
 Titles and grouping improved; attention balance worsened because the right rail double borders and background are more prominent. Long names, multiple cards, collapsed states and keyboard behavior were not validated. No overall completion or universal score improvement claimed. Existing Codex/Claude Code/Linear/T3 Code/DeepSeek Harness references retain their original evidence/version; they were not re-reviewed this round.
 

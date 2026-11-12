@@ -1347,7 +1347,6 @@ When a request competes with the transcript, queue and Information panel, let th
 
 Sidebar and docked Information are supporting rails around the primary conversation canvas. Sidebar section labels, project labels, selected conversation identities and secondary model/status text retain distinct roles without removing aliases or changing navigation. Empty-project spacing is quieter, not hidden. Docked Information uses the sidebar-tone host with clearly titled, lightly bounded content widgets, distinguishing the panel identity, widget identity and secondary customization controls. Preserve theme tokens, widget order, customization/disclosure behavior, focus rings and all statuses; this is not an opportunity to erase archived or inactive data. Compare whole light/dark screenshots with long identities, expanded/collapsed navigation and the real Information dock. Reference direction comes from the observed Codex/Claude/Linear navigation hierarchy and T3/DSH content-led workspace, not an assertion that unlike screenshots are equivalent.
 
-
 ### Desktop conversation canvas and information (2026-11-11 correction)
 
 The desktop Information region belongs to the conversation, not the sidebar. Both use the same `--color-surface-main` canvas; do not wrap Information in a sidebar-colored shell with nested white cards. The neutral default light/dark surfaces follow the inspected T3 Code proposal `6f13f36f` canvas (#f5f5f5/#151515); optional user color themes and status/accent meaning remain intact. T3 is a visual reference, not copied runtime authority.

@@ -18,13 +18,13 @@ Computed thumbColor is not a reliable substitute for final native pixels: dark d
 
 ## Representative original screenshots
 
-| State | Light | Dark |
-| --- | --- | --- |
-| Idle | ![Light idle](scrollbar-desktop-light-idle.png) | ![Dark idle](scrollbar-desktop-dark-idle.png) |
-| Edge hover held | ![Light hover](scrollbar-desktop-light-edge-hover-held.png) | ![Dark hover](scrollbar-desktop-dark-edge-hover-held.png) |
-| Wheel | ![Light wheel](scrollbar-desktop-light-wheel.png) | ![Dark wheel](scrollbar-desktop-dark-wheel.png) |
+| State               | Light                                                           | Dark                                                          |
+| ------------------- | --------------------------------------------------------------- | ------------------------------------------------------------- |
+| Idle                | ![Light idle](scrollbar-desktop-light-idle.png)                 | ![Dark idle](scrollbar-desktop-dark-idle.png)                 |
+| Edge hover held     | ![Light hover](scrollbar-desktop-light-edge-hover-held.png)     | ![Dark hover](scrollbar-desktop-dark-edge-hover-held.png)     |
+| Wheel               | ![Light wheel](scrollbar-desktop-light-wheel.png)               | ![Dark wheel](scrollbar-desktop-dark-wheel.png)               |
 | Keyboard focus held | ![Light focus](scrollbar-desktop-light-keyboard-focus-held.png) | ![Dark focus](scrollbar-desktop-dark-keyboard-focus-held.png) |
-| Native thumb drag | ![Light drag](scrollbar-desktop-light-native-thumb-drag.png) | ![Dark drag](scrollbar-desktop-dark-native-thumb-drag.png) |
+| Native thumb drag   | ![Light drag](scrollbar-desktop-light-native-thumb-drag.png)    | ![Dark drag](scrollbar-desktop-dark-native-thumb-drag.png)    |
 
 ## Unverified boundaries
 

@@ -25,26 +25,26 @@
 
 [2a18张实际原图与记录](https://github.com/albert-zen/zen/actions/runs/43039529428/artifacts/13863918651) · [acf匹配基线](https://github.com/albert-zen/zen/actions/runs/43037594276/artifacts/13862779659)。当前评分源码 `2a4d938f81711fe644df9cdbc8645c6207462237`，1280×900、en、生产组件＋只读合成数据，非真实Host／权限授予。以下18状态五维与acf各自同名图一致，无整数跨档；字体探针不计产品状态。
 
-| 实际场景 | 层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
-|---|---:|---:|---:|---:|---:|
-| 浅色长文顶部 | 8 | 8 | 8 | 8 | 8 |
-| 浅色标题／列表 | 8 | 8 | 8 | 8 | 8 |
-| 浅色表格／代码 | 8 | 8 | 8 | 8 | 8 |
-| 浅色资料打开 | 7 | 8 | 8 | 8 | 8 |
-| 浅色默认审批＋队列 | 7 | 7 | 7 | 8 | 8 |
-| 浅色默认审批＋队列＋资料 | 7 | 7 | 7 | 8 | 8 |
-| 浅色主动摘要＋队列＋资料 | 8 | 8 | 8 | 8 | 8 |
-| 浅色恢复完整审批 | 7 | 7 | 7 | 8 | 8 |
-| 浅色新请求完整审批 | 7 | 7 | 7 | 8 | 8 |
-| 深色长文顶部 | 8 | 7 | 8 | 8 | 8 |
-| 深色标题／列表 | 8 | 7 | 8 | 8 | 8 |
-| 深色表格／代码 | 8 | 7 | 8 | 8 | 8 |
-| 深色资料打开 | 7 | 7 | 8 | 8 | 8 |
-| 深色默认审批＋队列 | 7 | 7 | 7 | 8 | 8 |
-| 深色默认审批＋队列＋资料 | 7 | 7 | 7 | 8 | 8 |
-| 深色主动摘要＋队列＋资料 | 8 | 7 | 8 | 8 | 8 |
-| 深色恢复完整审批 | 7 | 7 | 7 | 8 | 8 |
-| 深色新请求完整审批 | 7 | 7 | 7 | 8 | 8 |
+| 实际场景                 | 层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
+| ------------------------ | ---: | -----: | -----: | -----: | -------: |
+| 浅色长文顶部             |    8 |      8 |      8 |      8 |        8 |
+| 浅色标题／列表           |    8 |      8 |      8 |      8 |        8 |
+| 浅色表格／代码           |    8 |      8 |      8 |      8 |        8 |
+| 浅色资料打开             |    7 |      8 |      8 |      8 |        8 |
+| 浅色默认审批＋队列       |    7 |      7 |      7 |      8 |        8 |
+| 浅色默认审批＋队列＋资料 |    7 |      7 |      7 |      8 |        8 |
+| 浅色主动摘要＋队列＋资料 |    8 |      8 |      8 |      8 |        8 |
+| 浅色恢复完整审批         |    7 |      7 |      7 |      8 |        8 |
+| 浅色新请求完整审批       |    7 |      7 |      7 |      8 |        8 |
+| 深色长文顶部             |    8 |      7 |      8 |      8 |        8 |
+| 深色标题／列表           |    8 |      7 |      8 |      8 |        8 |
+| 深色表格／代码           |    8 |      7 |      8 |      8 |        8 |
+| 深色资料打开             |    7 |      7 |      8 |      8 |        8 |
+| 深色默认审批＋队列       |    7 |      7 |      7 |      8 |        8 |
+| 深色默认审批＋队列＋资料 |    7 |      7 |      7 |      8 |        8 |
+| 深色主动摘要＋队列＋资料 |    8 |      7 |      8 |      8 |        8 |
+| 深色恢复完整审批         |    7 |      7 |      7 |      8 |        8 |
+| 深色新请求完整审批       |    7 |      7 |      7 |      8 |        8 |
 
 **实际收益只在主动模式：**审批卡266.17→112px，阅读净区257.64→411.81px，两条队列、108px Composer及草稿保留。默认代码／路径／权限范围／Allow-Deny完整；用户进入摘要后不再有Allow/Deny，只有Review request、Full request与“No decision has been made”。Enter进入／恢复、新合成请求回到完整卡有记录，没有作允许或拒绝决定。
 
@@ -56,20 +56,20 @@
 
 **主动摘要，浅／深。**
 
-| 浅色 | 深色 |
-|---|---|
+| 浅色                                                                                                                                                                                                             | 深色                                                                                                                                                                                                            |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | ![2a 主动摘要浅](https://github.com/albert-zen/zen/blob/042c623927f1ebca3069ce9e8ec6748f239e7a9b/docs/ui-quality/evidence/desktop-reading-2a4d938f/reading-desktop-light-approval-explicit-reading.png?raw=true) | ![2a 主动摘要深](https://github.com/albert-zen/zen/blob/042c623927f1ebca3069ce9e8ec6748f239e7a9b/docs/ui-quality/evidence/desktop-reading-2a4d938f/reading-desktop-dark-approval-explicit-reading.png?raw=true) |
 
 **恢复完整，浅／深。**
 
-| 浅色 | 深色 |
-|---|---|
+| 浅色                                                                                                                                                                                                     | 深色                                                                                                                                                                                                    |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | ![2a 恢复完整浅](https://github.com/albert-zen/zen/blob/042c623927f1ebca3069ce9e8ec6748f239e7a9b/docs/ui-quality/evidence/desktop-reading-2a4d938f/reading-desktop-light-approval-restored.png?raw=true) | ![2a 恢复完整深](https://github.com/albert-zen/zen/blob/042c623927f1ebca3069ce9e8ec6748f239e7a9b/docs/ui-quality/evidence/desktop-reading-2a4d938f/reading-desktop-dark-approval-restored.png?raw=true) |
 
 **新请求完整，浅／深。**
 
-| 浅色 | 深色 |
-|---|---|
+| 浅色                                                                                                                                                                                                          | 深色                                                                                                                                                                                                         |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | ![2a 新请求完整浅](https://github.com/albert-zen/zen/blob/042c623927f1ebca3069ce9e8ec6748f239e7a9b/docs/ui-quality/evidence/desktop-reading-2a4d938f/reading-desktop-light-approval-new-request.png?raw=true) | ![2a 新请求完整深](https://github.com/albert-zen/zen/blob/042c623927f1ebca3069ce9e8ec6748f239e7a9b/docs/ui-quality/evidence/desktop-reading-2a4d938f/reading-desktop-dark-approval-new-request.png?raw=true) |
 
 [2a源码、run与六图SHA清单](https://github.com/albert-zen/zen/blob/042c623927f1ebca3069ce9e8ec6748f239e7a9b/docs/ui-quality/evidence/desktop-reading-2a4d938f/manifest.json)。图仅合成生产组件；主动摘要无Allow/Deny，返回完整卡才有决策入口，未执行真实授权。中文和一次性权限摘要仍N/O。
@@ -82,20 +82,20 @@
 
 **相对750的实际变化：**返回控件移入原有元信息／工具栏，Composer回收47px；750表代码帧被切的解释末行、资料打开场景第三段、全组合第一段恢复完整。全组合阅读净区 **210.64→257.64px**，仍然有限，长文依然有正常底部边界，不能说所有内容同屏无遮挡。
 
-| 实际场景 | 层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 浅色长文顶部 | 8 | 8 | 8 | 8 | 8 |
-| 浅色标题／列表 | 8 | 8 | 8 | 8 | 8 |
-| 浅色表格／代码 | 8 | 8 | 8 | 8 | 8 |
-| 浅色资料打开整屏 | 7 | 8 | 8 | 8 | 8 |
-| 浅色审批＋队列 | 7 | 7 | 7 | 8 | 8 |
-| 浅色审批＋队列＋资料 | 7 | 7 | 7 | 8 | 8 |
-| 深色长文顶部 | 8 | 7 | 8 | 8 | 8 |
-| 深色标题／列表 | 8 | 7 | 8 | 8 | 8 |
-| 深色表格／代码 | 8 | 7 | 8 | 8 | 8 |
-| 深色资料打开整屏 | 7 | 7 | 8 | 8 | 8 |
-| 深色审批＋队列 | 7 | 7 | 7 | 8 | 8 |
-| 深色审批＋队列＋资料 | 7 | 7 | 7 | 8 | 8 |
+| 实际场景             | 层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
+| -------------------- | ---: | -----: | -----: | -----: | -------: |
+| 浅色长文顶部         |    8 |      8 |      8 |      8 |        8 |
+| 浅色标题／列表       |    8 |      8 |      8 |      8 |        8 |
+| 浅色表格／代码       |    8 |      8 |      8 |      8 |        8 |
+| 浅色资料打开整屏     |    7 |      8 |      8 |      8 |        8 |
+| 浅色审批＋队列       |    7 |      7 |      7 |      8 |        8 |
+| 浅色审批＋队列＋资料 |    7 |      7 |      7 |      8 |        8 |
+| 深色长文顶部         |    8 |      7 |      8 |      8 |        8 |
+| 深色标题／列表       |    8 |      7 |      8 |      8 |        8 |
+| 深色表格／代码       |    8 |      7 |      8 |      8 |        8 |
+| 深色资料打开整屏     |    7 |      7 |      8 |      8 |        8 |
+| 深色审批＋队列       |    7 |      7 |      7 |      8 |        8 |
+| 深色审批＋队列＋资料 |    7 |      7 |      7 |      8 |        8 |
 
 对照750：浅色表代码可读性7→8、浅色资料整屏可读性7→8；浅深全组合可读性／注意力6→7。其余分项持平，不将新增空间机械换成各项涨分。五家参考对象的逐项分数与实际原图保留于下方，各自场景不同，不拼总排名。
 
@@ -103,20 +103,20 @@
 
 **长文顶部：浅色／深色。**
 
-| 浅色 | 深色 |
-| --- | --- |
+| 浅色                                                                                                                                                                                                        | 深色                                                                                                                                                                                                       |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | ![b4 长文顶部 浅色真实截图](https://github.com/albert-zen/zen/blob/ddac6e2b00012681128f7572638513c3eb327112/docs/ui-quality/evidence/desktop-reading-b4c769df/reading-desktop-light-prose-top.png?raw=true) | ![b4 长文顶部 深色真实截图](https://github.com/albert-zen/zen/blob/ddac6e2b00012681128f7572638513c3eb327112/docs/ui-quality/evidence/desktop-reading-b4c769df/reading-desktop-dark-prose-top.png?raw=true) |
 
 **表格／代码：浅色／深色。**
 
-| 浅色 | 深色 |
-| --- | --- |
+| 浅色                                                                                                                                                                                                           | 深色                                                                                                                                                                                                          |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | ![b4 表格／代码 浅色真实截图](https://github.com/albert-zen/zen/blob/ddac6e2b00012681128f7572638513c3eb327112/docs/ui-quality/evidence/desktop-reading-b4c769df/reading-desktop-light-table-code.png?raw=true) | ![b4 表格／代码 深色真实截图](https://github.com/albert-zen/zen/blob/ddac6e2b00012681128f7572638513c3eb327112/docs/ui-quality/evidence/desktop-reading-b4c769df/reading-desktop-dark-table-code.png?raw=true) |
 
 **审批＋队列＋资料全组合：浅色／深色。**
 
-| 浅色 | 深色 |
-| --- | --- |
+| 浅色                                                                                                                                                                                                                                | 深色                                                                                                                                                                                                                               |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | ![b4 审批＋队列＋资料全组合 浅色真实截图](https://github.com/albert-zen/zen/blob/ddac6e2b00012681128f7572638513c3eb327112/docs/ui-quality/evidence/desktop-reading-b4c769df/reading-desktop-light-pending-information.png?raw=true) | ![b4 审批＋队列＋资料全组合 深色真实截图](https://github.com/albert-zen/zen/blob/ddac6e2b00012681128f7572638513c3eb327112/docs/ui-quality/evidence/desktop-reading-b4c769df/reading-desktop-dark-pending-information.png?raw=true) |
 
 [准确源码、run、逐图SHA与范围清单](https://github.com/albert-zen/zen/blob/ddac6e2b00012681128f7572638513c3eb327112/docs/ui-quality/evidence/desktop-reading-b4c769df/manifest.json)。12状态与750的fixture、捕获脚本、视口、输入模式、主题和滚动位置匹配；六张公开图均为已独立评阅的生产组件＋合成内容原图。全组合只余257.64px阅读净区，返回实际激活／Tab仍未测，不能把直显截图当全交互验收。
@@ -127,25 +127,24 @@
 
 **真实修复：**Back to live 已从正文浮钮移到 Composer 内，原句中压字消除；approval 与正文／输入同列，5px 偏轴修复。**真实代价：**返回区使 Composer 高108→155，增加47px；普通阅读净区686→639、审批共存275→228px。表代码帧解释末行新被 Composer 上缘切到；审批＋队列＋资料全开只余210.64px阅读净区。不能写“所有文字无遮挡”。
 
-| 实际场景 | 层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 浅色长文顶部 | 8 | 8 | 8 | 8 | 8 |
-| 浅色标题／列表 | 8 | 8 | 8 | 8 | 8 |
-| 浅色表格／代码 | 8 | 7 | 8 | 8 | 8 |
-| 浅色资料打开整屏 | 7 | 7 | 8 | 8 | 8 |
-| 浅色审批＋队列 | 7 | 7 | 7 | 8 | 8 |
-| 浅色审批＋队列＋资料 | 7 | 6 | 6 | 8 | 8 |
-| 深色长文顶部 | 8 | 7 | 8 | 8 | 8 |
-| 深色标题／列表 | 8 | 7 | 8 | 8 | 8 |
-| 深色表格／代码 | 8 | 7 | 8 | 8 | 8 |
-| 深色资料打开整屏 | 7 | 7 | 8 | 8 | 8 |
-| 深色审批＋队列 | 7 | 7 | 7 | 8 | 8 |
-| 深色审批＋队列＋资料 | 7 | 6 | 6 | 8 | 8 |
+| 实际场景             | 层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
+| -------------------- | ---: | -----: | -----: | -----: | -------: |
+| 浅色长文顶部         |    8 |      8 |      8 |      8 |        8 |
+| 浅色标题／列表       |    8 |      8 |      8 |      8 |        8 |
+| 浅色表格／代码       |    8 |      7 |      8 |      8 |        8 |
+| 浅色资料打开整屏     |    7 |      7 |      8 |      8 |        8 |
+| 浅色审批＋队列       |    7 |      7 |      7 |      8 |        8 |
+| 浅色审批＋队列＋资料 |    7 |      6 |      6 |      8 |        8 |
+| 深色长文顶部         |    8 |      7 |      8 |      8 |        8 |
+| 深色标题／列表       |    8 |      7 |      8 |      8 |        8 |
+| 深色表格／代码       |    8 |      7 |      8 |      8 |        8 |
+| 深色资料打开整屏     |    7 |      7 |      8 |      8 |        8 |
+| 深色审批＋队列       |    7 |      7 |      7 |      8 |        8 |
+| 深色审批＋队列＋资料 |    7 |      6 |      6 |      8 |        8 |
 
 浅色前5图与 ef67 同 fixture／脚本／输入／滚动位置匹配：顶部和列表原8/7/7/8/7→8/8/8/8/8；表代码原8/8/8/8/7→8/7/8/8/8，**保留可读性退步**；资料整屏原7/7/7/8/7→7/7/8/8/8；审批队列不变。深色6图及浅色全组合共7个新增状态无旧图，只评现状。Information卡本身浅7/8/8/8/7、深7/7/8/8/7，不给卡因外部返回行涨分。
 
 保留内嵌返回方向，后续处理47px代价与底部阅读边界，不退回句中浮钮。Back to live实际激活、发送／审批决策、Copy／Edit、完整键盘均未由本专项执行。五参考图、各自分项和来源保留，不拿不同任务拼排行榜。
-
 
 **750历史六张匹配原图索引（保留47px代价，不是b4修复图）：** [固定版本目录与六图](https://github.com/albert-zen/zen/blob/3fe1636f2e8931e43758a321254f9c9577a4e368/docs/ui-quality/evidence/desktop-reading-75015cdc/) · [源码／SHA清单](https://github.com/albert-zen/zen/blob/3fe1636f2e8931e43758a321254f9c9577a4e368/docs/ui-quality/evidence/desktop-reading-75015cdc/manifest.json)。文件为 reading-desktop-{light,dark}-{prose-top,table-code,pending-information}.png；上方750逐项分与空间回归说明保留，图未删除。
 
@@ -153,14 +152,14 @@
 
 精确源码 `ef67bc320b54a4e1c19c2e23b3787b78675f0d4f`。[实际原图及来源包](https://github.com/albert-zen/zen/actions/runs/43028901963/artifacts/13859017562)，对应 [run 43028901963](https://github.com/albert-zen/zen/actions/runs/43028901963)。这不是完整版通过：第五个 approval 宽度断言失败，**深色未覆盖**。
 
-| 实际浅色场景／范围 | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 长文顶部整屏 | 8 | 7 | 7 | 8 | 7 |
-| 标题与列表整屏 | 8 | 7 | 7 | 8 | 7 |
-| 表格与代码整屏 | 8 | 8 | 8 | 8 | 7 |
-| Information 打开整屏 | 7 | 7 | 7 | 8 | 7 |
-| 同图 Information 卡局部 | 7 | 8 | 8 | 8 | 7 |
-| pending＋approval 整屏 | 7 | 7 | 7 | 8 | 8 |
+| 实际浅色场景／范围      | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
+| ----------------------- | -------: | -----: | -----: | -----: | -------: |
+| 长文顶部整屏            |        8 |      7 |      7 |      8 |        7 |
+| 标题与列表整屏          |        8 |      7 |      7 |      8 |        7 |
+| 表格与代码整屏          |        8 |      8 |      8 |      8 |        7 |
+| Information 打开整屏    |        7 |      7 |      7 |      8 |        7 |
+| 同图 Information 卡局部 |        7 |      8 |      8 |      8 |        7 |
+| pending＋approval 整屏  |        7 |      7 |      7 |      8 |        8 |
 
 **已观察变化：**正文与输入框现已对齐；表格与代码有真实像素证据，不再一概 N/O。**仍存在：**Back to live 浮钮遮字；审批条相对共享列仍右偏5px。后续修复在推进，未拿新修复预期替代此版本实图。Information 局部与打开后的整个对话空间是不同评分范围，不混算。
 
@@ -187,10 +186,10 @@
 
 [实际原图与证据](https://github.com/albert-zen/zen/actions/runs/43027899464/artifacts/13857802353)，文件 `reading-desktop-light-prose-top.png`。与 `reading-desktop-light-failed.png` 字节／SHA 相同，**不把失败快照算第二个覆盖状态**。1280×900、浅色、生产 App／Markdown／Composer＋只读合成内容；未执行代码、发送或审批。
 
-| 实际场景／区域 | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 长文顶部＋Sidebar＋已填Composer＋Back to live | 8 | 7 | 7 | 8 | 7 |
-| 同图 Sidebar 局部 | 8 | 8 | 8 | 8 | 7 |
+| 实际场景／区域                                | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
+| --------------------------------------------- | -------: | -----: | -----: | -----: | -------: |
+| 长文顶部＋Sidebar＋已填Composer＋Back to live |        8 |      7 |      7 |      8 |        7 |
+| 同图 Sidebar 局部                             |        8 |      8 |      8 |      8 |        7 |
 
 **实际用于上述评分的 a2 首帧（不是后续 ef67 修复图）：**
 
@@ -210,12 +209,12 @@
 
 [715c 浅／深主图及来源](https://github.com/albert-zen/zen/actions/runs/43025546958/artifacts/13855999050) · [085 精确匹配基线原图](https://github.com/albert-zen/zen/actions/runs/43021443268/artifacts/13854274049)。两版均 1280×900、相同主题／浏览器／输入模式、相同可见合成对话与空 Composer；可见文本哈希相同，但 fixture 源文件有变化，不声称整个夹具相同。085 已补齐并实际查看，不用源码推测截图。
 
-| 实际场景／区域 | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
-| --- | --- | --- | --- | --- | --- |
-| 整屏浅色，085→715c | 8→8 | 8→8 | 8→8 | 8→8 | 6→6 |
-| 整屏深色，085→715c | 8→8 | 7→7 | 8→8 | 8→8 | 6→6 |
-| 715c Sidebar浅色局部 | 8 | 8 | 8 | 8 | 7 |
-| 715c Sidebar深色局部 | 8 | 7 | 8 | 8 | 7 |
+| 实际场景／区域       | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
+| -------------------- | -------- | ------ | ------ | ------ | -------- |
+| 整屏浅色，085→715c   | 8→8      | 8→8    | 8→8    | 8→8    | 6→6      |
+| 整屏深色，085→715c   | 8→8      | 7→7    | 8→8    | 8→8    | 6→6      |
+| 715c Sidebar浅色局部 | 8        | 8      | 8      | 8      | 7        |
+| 715c Sidebar深色局部 | 8        | 7      | 8      | 8      | 7        |
 
 ### 主对话实际配对图：同场景 085 → 715c
 
@@ -223,14 +222,14 @@
 
 **浅色，1280×900，短答与空 Composer。**
 
-| 08559406 基线 | 715c140a 本轮 |
-| --- | --- |
+| 08559406 基线                                                                                                                                                                                | 715c140a 本轮                                                                                                                                                                                 |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | ![Zen085 浅色主对话匹配基线](https://github.com/albert-zen/zen/blob/6be7f7c6853c71684b6acc0877df59620615581f/docs/ui-quality/evidence/main-reading-08559406/main-desktop-light.png?raw=true) | ![Zen715c 浅色主对话本轮原图](https://github.com/albert-zen/zen/blob/6be7f7c6853c71684b6acc0877df59620615581f/docs/ui-quality/evidence/main-reading-715c140a/main-desktop-light.png?raw=true) |
 
 **深色，1280×900，短答与空 Composer。**
 
-| 08559406 基线 | 715c140a 本轮 |
-| --- | --- |
+| 08559406 基线                                                                                                                                                                               | 715c140a 本轮                                                                                                                                                                                |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | ![Zen085 深色主对话匹配基线](https://github.com/albert-zen/zen/blob/6be7f7c6853c71684b6acc0877df59620615581f/docs/ui-quality/evidence/main-reading-08559406/main-desktop-dark.png?raw=true) | ![Zen715c 深色主对话本轮原图](https://github.com/albert-zen/zen/blob/6be7f7c6853c71684b6acc0877df59620615581f/docs/ui-quality/evidence/main-reading-715c140a/main-desktop-dark.png?raw=true) |
 
 [精确源码、匹配条件与四图 SHA256 清单](https://github.com/albert-zen/zen/blob/6be7f7c6853c71684b6acc0877df59620615581f/docs/ui-quality/evidence/main-reading-715c140a/comparison-manifest.json)。生产组件＋合成对话；两主题整屏整数分未跨档，长文／代码／表格仍未证，不因截图成功推定完整交互通过。
@@ -251,20 +250,20 @@
 
 **代价：**footer 高 45px，展开 tray 达 480px 上限并新增内部滚动。初始展开与 Edit 焦点仍有 8 条完整消息，但到 Composer／footer 焦点时 scrollTop=22，第一条 Waiting 被 sticky 标题挡住，**只有 7 条完整无遮挡**；几何字段仍计 8 是盲区，不能写“全程 8 条”。收回保留 scrollTop22，遮挡仍在，Check1 下缘还裁约 3.38px。Composer 仍在视口，但展开宽 840→830、下移约 1.69px，**不再是尺寸位置完全不变**；上方主对话空间也被压缩。
 
-| 本轮实际状态 | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 静息，浅色 | 7 | 8 | 7 | 8 | 8 |
-| 初始展开，浅色 | 8 | 8 | 8 | 8 | 8 |
-| Edit焦点，浅色 | 8 | 8 | 8 | 8 | 8 |
-| Composer焦点，浅色 | 7 | 7 | 7 | 8 | 8 |
-| footer收回控件焦点，浅色 | 7 | 7 | 7 | 8 | 8 |
-| 收回并回Composer，浅色 | 7 | 7 | 7 | 8 | 8 |
-| 静息，深色 | 7 | 7 | 7 | 8 | 8 |
-| 初始展开，深色 | 8 | 7 | 8 | 8 | 8 |
-| Edit焦点，深色 | 8 | 7 | 8 | 8 | 8 |
-| Composer焦点，深色 | 7 | 7 | 7 | 8 | 8 |
-| footer收回控件焦点，深色 | 7 | 7 | 7 | 8 | 8 |
-| 收回并回Composer，深色 | 7 | 7 | 7 | 8 | 8 |
+| 本轮实际状态             | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
+| ------------------------ | -------: | -----: | -----: | -----: | -------: |
+| 静息，浅色               |        7 |      8 |      7 |      8 |        8 |
+| 初始展开，浅色           |        8 |      8 |      8 |      8 |        8 |
+| Edit焦点，浅色           |        8 |      8 |      8 |      8 |        8 |
+| Composer焦点，浅色       |        7 |      7 |      7 |      8 |        8 |
+| footer收回控件焦点，浅色 |        7 |      7 |      7 |      8 |        8 |
+| 收回并回Composer，浅色   |        7 |      7 |      7 |      8 |        8 |
+| 静息，深色               |        7 |      7 |      7 |      8 |        8 |
+| 初始展开，深色           |        8 |      7 |      8 |      8 |        8 |
+| Edit焦点，深色           |        8 |      7 |      8 |      8 |        8 |
+| Composer焦点，深色       |        7 |      7 |      7 |      8 |        8 |
+| footer收回控件焦点，深色 |        7 |      7 |      7 |      8 |        8 |
+| 收回并回Composer，深色   |        7 |      7 |      7 |      8 |        8 |
 
 正向 Edit→Composer 从 21→22 次 Tab，回程更短不意味着全链更短；初始展开 footer 的 hit=false，两处 Less space 连可访问名称也相同，未说明底部按钮会返回输入框。交互线索分不是按键次数公式，不能用 31→1 给未变化状态强行加分。最后一步 446b 聚焦顶部 toggle，本轮聚焦 Composer，也不是完全同焦点态的分数 A/B。其余未执行消息动作与完整无障碍不在本次通过范围。
 
@@ -279,6 +278,7 @@
 本次核验该 SHA 的 **17 个工作流均已结束**。[主 CI](https://github.com/albert-zen/zen/actions/runs/43009644625) 成功，包括 macOS／Windows browser 与 Room journal；Information、主 UI 快图及队列阅读专项均成功。
 
 仍失败两项：
+
 - [Desktop navigation](https://github.com/albert-zen/zen/actions/runs/43009644565)：键盘回到 Projects／恢复展开断言失败，不能用已通过的部分步骤掩盖。
 - [Fullscreen primary chat](https://github.com/albert-zen/zen/actions/runs/43009644585)：Chromium 部分通过，但原生 macOS 阅读前置断言失败。
 
@@ -288,20 +288,20 @@
 
 五维仍为信息层级／可读性／注意力／一致性／交互线索；逐状态打分，不把状态差异伪装为版本提升。
 
-| 实际桌面状态 | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 静息，浅色 | 7 | 8 | 7 | 8 | 8 |
-| 展开，浅色 | 8 | 8 | 8 | 8 | 8 |
-| 展开＋Edit焦点，浅色 | 8 | 8 | 8 | 8 | 8 |
-| 展开＋Composer焦点，浅色 | 8 | 8 | 8 | 8 | 8 |
-| 展开＋Less space焦点，浅色 | 8 | 8 | 8 | 8 | 8 |
-| 收回，浅色 | 7 | 8 | 7 | 8 | 8 |
-| 静息，深色 | 7 | 7 | 7 | 8 | 8 |
-| 展开，深色 | 8 | 7 | 8 | 8 | 8 |
-| 展开＋Edit焦点，深色 | 8 | 7 | 8 | 8 | 8 |
-| 展开＋Composer焦点，深色 | 8 | 7 | 8 | 8 | 8 |
-| 展开＋Less space焦点，深色 | 8 | 7 | 8 | 8 | 8 |
-| 收回，深色 | 7 | 7 | 7 | 8 | 8 |
+| 实际桌面状态               | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
+| -------------------------- | -------: | -----: | -----: | -----: | -------: |
+| 静息，浅色                 |        7 |      8 |      7 |      8 |        8 |
+| 展开，浅色                 |        8 |      8 |      8 |      8 |        8 |
+| 展开＋Edit焦点，浅色       |        8 |      8 |      8 |      8 |        8 |
+| 展开＋Composer焦点，浅色   |        8 |      8 |      8 |      8 |        8 |
+| 展开＋Less space焦点，浅色 |        8 |      8 |      8 |      8 |        8 |
+| 收回，浅色                 |        7 |      8 |      7 |      8 |        8 |
+| 静息，深色                 |        7 |      7 |      7 |      8 |        8 |
+| 展开，深色                 |        8 |      7 |      8 |      8 |        8 |
+| 展开＋Edit焦点，深色       |        8 |      7 |      8 |      8 |        8 |
+| 展开＋Composer焦点，深色   |        8 |      7 |      8 |      8 |        8 |
+| 展开＋Less space焦点，深色 |        8 |      7 |      8 |      8 |        8 |
+| 收回，深色                 |        7 |      7 |      7 |      8 |        8 |
 
 ### 队列专项实际原图：446b8bd4，发表于 60ddca31
 
@@ -309,26 +309,26 @@
 
 **浅色：静息 → 展开。**
 
-| 静息 | 展开 |
-| --- | --- |
+| 静息                                                                                                                                                                                                        | 展开                                                                                                                                                                                                            |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | ![446b 浅色队列静息](https://github.com/albert-zen/zen/blob/60ddca31666f2c3e43481d707df7312f74f0aea4/docs/ui-quality/evidence/desktop-queue-reading-446b8bd4/queue-reading-desktop-light-rest.png?raw=true) | ![446b 浅色队列展开](https://github.com/albert-zen/zen/blob/60ddca31666f2c3e43481d707df7312f74f0aea4/docs/ui-quality/evidence/desktop-queue-reading-446b8bd4/queue-reading-desktop-light-expanded.png?raw=true) |
 
 **浅色：Composer 焦点与 Less space 焦点，保留可达性成本而非只报通过。**
 
-| Composer 焦点 | Less space 焦点 |
-| --- | --- |
+| Composer 焦点                                                                                                                                                                                                             | Less space 焦点                                                                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | ![446b 浅色Composer焦点](https://github.com/albert-zen/zen/blob/60ddca31666f2c3e43481d707df7312f74f0aea4/docs/ui-quality/evidence/desktop-queue-reading-446b8bd4/queue-reading-desktop-light-composer-focus.png?raw=true) | ![446b 浅色Less space焦点](https://github.com/albert-zen/zen/blob/60ddca31666f2c3e43481d707df7312f74f0aea4/docs/ui-quality/evidence/desktop-queue-reading-446b8bd4/queue-reading-desktop-light-collapse-toggle-focus.png?raw=true) |
 
 **深色：静息 → 展开。**
 
-| 静息 | 展开 |
-| --- | --- |
+| 静息                                                                                                                                                                                                       | 展开                                                                                                                                                                                                           |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | ![446b 深色队列静息](https://github.com/albert-zen/zen/blob/60ddca31666f2c3e43481d707df7312f74f0aea4/docs/ui-quality/evidence/desktop-queue-reading-446b8bd4/queue-reading-desktop-dark-rest.png?raw=true) | ![446b 深色队列展开](https://github.com/albert-zen/zen/blob/60ddca31666f2c3e43481d707df7312f74f0aea4/docs/ui-quality/evidence/desktop-queue-reading-446b8bd4/queue-reading-desktop-dark-expanded.png?raw=true) |
 
 **深色：Composer 焦点与 Less space 焦点，保留可达性成本而非只报通过。**
 
-| Composer 焦点 | Less space 焦点 |
-| --- | --- |
+| Composer 焦点                                                                                                                                                                                                            | Less space 焦点                                                                                                                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | ![446b 深色Composer焦点](https://github.com/albert-zen/zen/blob/60ddca31666f2c3e43481d707df7312f74f0aea4/docs/ui-quality/evidence/desktop-queue-reading-446b8bd4/queue-reading-desktop-dark-composer-focus.png?raw=true) | ![446b 深色Less space焦点](https://github.com/albert-zen/zen/blob/60ddca31666f2c3e43481d707df7312f74f0aea4/docs/ui-quality/evidence/desktop-queue-reading-446b8bd4/queue-reading-desktop-dark-collapse-toggle-focus.png?raw=true) |
 
 [准确源码、截图 SHA256 与边界清单](https://github.com/albert-zen/zen/blob/60ddca31666f2c3e43481d707df7312f74f0aea4/docs/ui-quality/evidence/desktop-queue-reading-446b8bd4/manifest.json)。Edit 焦点与收回的其余 4 张已评原图见顶部完整 12 图包；不得将静息／展开当成版本 A/B。
@@ -351,47 +351,45 @@
 
 [16 张原图与证据包](https://github.com/albert-zen/zen/actions/runs/43014523256/artifacts/13851524272)（可能需登录，保留至 2026-11-18）。以下链接指向完整包，文件名标在场景后。**七张匹配浅色图与 376 字节完全相同，原分不变；新深色／恢复场景只有现态分，不编造前后提升。**
 
-| 实际截图／评价区域 | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
-|---|---:|---:|---:|---:|---:|
-| [浅色projects-current：完整主窗，有合成草稿（navigation-desktop-light-projects-current.png）](https://github.com/albert-zen/zen/actions/runs/43014523256/artifacts/13851524272) | 8 | 8 | 8 | 8 | 7 |
-| [浅色information-open：右资料区域（navigation-desktop-light-titlebar-information-open.png）](https://github.com/albert-zen/zen/blob/258042b03f7aa4e33dd447936bda901f4176f945/docs/ui-quality/evidence/desktop-navigation-2e9396d7/navigation-desktop-light-titlebar-information-open.png?raw=true) | 7 | 8 | 8 | 8 | 7 |
-| [浅色information-close-focus：同资料区域＋Close焦点（navigation-desktop-light-information-close-focus.png）](https://github.com/albert-zen/zen/blob/258042b03f7aa4e33dd447936bda901f4176f945/docs/ui-quality/evidence/desktop-navigation-2e9396d7/navigation-desktop-light-information-close-focus.png?raw=true) | 7 | 8 | 8 | 8 | 8 |
-| [浅色escape-return-focus：完整主窗＋入口可见焦点（navigation-desktop-light-escape-return-focus.png）](https://github.com/albert-zen/zen/actions/runs/43014523256/artifacts/13851524272) | 8 | 8 | 8 | 8 | 7 |
-| [浅色close-return-focus：指针Close后完整主窗（navigation-desktop-light-close-return-focus.png）](https://github.com/albert-zen/zen/actions/runs/43014523256/artifacts/13851524272) | 8 | 8 | 8 | 8 | 7 |
-| [浅色recent-fallback：折叠后Sidebar局部（navigation-desktop-light-recent-fallback.png）](https://github.com/albert-zen/zen/actions/runs/43014523256/artifacts/13851524272) | 8 | 8 | 8 | 8 | 8 |
-| [浅色recent-keyboard-focus：Sidebar焦点局部（navigation-desktop-light-recent-keyboard-focus.png）](https://github.com/albert-zen/zen/actions/runs/43014523256/artifacts/13851524272) | 8 | 8 | 8 | 8 | 8 |
-| [浅色projects-restored：恢复展开的Sidebar局部（navigation-desktop-light-projects-restored.png）](https://github.com/albert-zen/zen/blob/258042b03f7aa4e33dd447936bda901f4176f945/docs/ui-quality/evidence/desktop-navigation-2e9396d7/navigation-desktop-light-projects-restored.png?raw=true) | 8 | 8 | 8 | 8 | 8 |
-| [深色projects-current：完整主窗，有合成草稿（navigation-desktop-dark-projects-current.png）](https://github.com/albert-zen/zen/actions/runs/43014523256/artifacts/13851524272) | 8 | 7 | 8 | 8 | 7 |
-| [深色information-open：右资料区域（navigation-desktop-dark-titlebar-information-open.png）](https://github.com/albert-zen/zen/blob/258042b03f7aa4e33dd447936bda901f4176f945/docs/ui-quality/evidence/desktop-navigation-2e9396d7/navigation-desktop-dark-titlebar-information-open.png?raw=true) | 7 | 7 | 8 | 8 | 7 |
-| [深色information-close-focus：同资料区域＋Close焦点（navigation-desktop-dark-information-close-focus.png）](https://github.com/albert-zen/zen/blob/258042b03f7aa4e33dd447936bda901f4176f945/docs/ui-quality/evidence/desktop-navigation-2e9396d7/navigation-desktop-dark-information-close-focus.png?raw=true) | 7 | 7 | 8 | 8 | 8 |
-| [深色escape-return-focus：完整主窗＋入口可见焦点（navigation-desktop-dark-escape-return-focus.png）](https://github.com/albert-zen/zen/actions/runs/43014523256/artifacts/13851524272) | 8 | 7 | 8 | 8 | 7 |
-| [深色close-return-focus：指针Close后完整主窗（navigation-desktop-dark-close-return-focus.png）](https://github.com/albert-zen/zen/actions/runs/43014523256/artifacts/13851524272) | 8 | 7 | 8 | 8 | 7 |
-| [深色recent-fallback：折叠后Sidebar局部（navigation-desktop-dark-recent-fallback.png）](https://github.com/albert-zen/zen/actions/runs/43014523256/artifacts/13851524272) | 8 | 7 | 8 | 8 | 8 |
-| [深色recent-keyboard-focus：Sidebar焦点局部（navigation-desktop-dark-recent-keyboard-focus.png）](https://github.com/albert-zen/zen/actions/runs/43014523256/artifacts/13851524272) | 8 | 7 | 8 | 8 | 8 |
-| [深色projects-restored：恢复展开的Sidebar局部（navigation-desktop-dark-projects-restored.png）](https://github.com/albert-zen/zen/blob/258042b03f7aa4e33dd447936bda901f4176f945/docs/ui-quality/evidence/desktop-navigation-2e9396d7/navigation-desktop-dark-projects-restored.png?raw=true) | 8 | 7 | 8 | 8 | 8 |
-| 浅色recent-keyboard-focus图里的**Thread one元资料预览卡局部** | 7 | 8 | 7 | 8 | 7 |
-| 深色recent-keyboard-focus图里的同一元资料预览卡局部 | 7 | 7 | 7 | 8 | 7 |
-
-
+| 实际截图／评价区域                                                                                                                                                                                                                                                                                               | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------: | -----: | -----: | -----: | -------: |
+| [浅色projects-current：完整主窗，有合成草稿（navigation-desktop-light-projects-current.png）](https://github.com/albert-zen/zen/actions/runs/43014523256/artifacts/13851524272)                                                                                                                                  |        8 |      8 |      8 |      8 |        7 |
+| [浅色information-open：右资料区域（navigation-desktop-light-titlebar-information-open.png）](https://github.com/albert-zen/zen/blob/258042b03f7aa4e33dd447936bda901f4176f945/docs/ui-quality/evidence/desktop-navigation-2e9396d7/navigation-desktop-light-titlebar-information-open.png?raw=true)               |        7 |      8 |      8 |      8 |        7 |
+| [浅色information-close-focus：同资料区域＋Close焦点（navigation-desktop-light-information-close-focus.png）](https://github.com/albert-zen/zen/blob/258042b03f7aa4e33dd447936bda901f4176f945/docs/ui-quality/evidence/desktop-navigation-2e9396d7/navigation-desktop-light-information-close-focus.png?raw=true) |        7 |      8 |      8 |      8 |        8 |
+| [浅色escape-return-focus：完整主窗＋入口可见焦点（navigation-desktop-light-escape-return-focus.png）](https://github.com/albert-zen/zen/actions/runs/43014523256/artifacts/13851524272)                                                                                                                          |        8 |      8 |      8 |      8 |        7 |
+| [浅色close-return-focus：指针Close后完整主窗（navigation-desktop-light-close-return-focus.png）](https://github.com/albert-zen/zen/actions/runs/43014523256/artifacts/13851524272)                                                                                                                               |        8 |      8 |      8 |      8 |        7 |
+| [浅色recent-fallback：折叠后Sidebar局部（navigation-desktop-light-recent-fallback.png）](https://github.com/albert-zen/zen/actions/runs/43014523256/artifacts/13851524272)                                                                                                                                       |        8 |      8 |      8 |      8 |        8 |
+| [浅色recent-keyboard-focus：Sidebar焦点局部（navigation-desktop-light-recent-keyboard-focus.png）](https://github.com/albert-zen/zen/actions/runs/43014523256/artifacts/13851524272)                                                                                                                             |        8 |      8 |      8 |      8 |        8 |
+| [浅色projects-restored：恢复展开的Sidebar局部（navigation-desktop-light-projects-restored.png）](https://github.com/albert-zen/zen/blob/258042b03f7aa4e33dd447936bda901f4176f945/docs/ui-quality/evidence/desktop-navigation-2e9396d7/navigation-desktop-light-projects-restored.png?raw=true)                   |        8 |      8 |      8 |      8 |        8 |
+| [深色projects-current：完整主窗，有合成草稿（navigation-desktop-dark-projects-current.png）](https://github.com/albert-zen/zen/actions/runs/43014523256/artifacts/13851524272)                                                                                                                                   |        8 |      7 |      8 |      8 |        7 |
+| [深色information-open：右资料区域（navigation-desktop-dark-titlebar-information-open.png）](https://github.com/albert-zen/zen/blob/258042b03f7aa4e33dd447936bda901f4176f945/docs/ui-quality/evidence/desktop-navigation-2e9396d7/navigation-desktop-dark-titlebar-information-open.png?raw=true)                 |        7 |      7 |      8 |      8 |        7 |
+| [深色information-close-focus：同资料区域＋Close焦点（navigation-desktop-dark-information-close-focus.png）](https://github.com/albert-zen/zen/blob/258042b03f7aa4e33dd447936bda901f4176f945/docs/ui-quality/evidence/desktop-navigation-2e9396d7/navigation-desktop-dark-information-close-focus.png?raw=true)   |        7 |      7 |      8 |      8 |        8 |
+| [深色escape-return-focus：完整主窗＋入口可见焦点（navigation-desktop-dark-escape-return-focus.png）](https://github.com/albert-zen/zen/actions/runs/43014523256/artifacts/13851524272)                                                                                                                           |        8 |      7 |      8 |      8 |        7 |
+| [深色close-return-focus：指针Close后完整主窗（navigation-desktop-dark-close-return-focus.png）](https://github.com/albert-zen/zen/actions/runs/43014523256/artifacts/13851524272)                                                                                                                                |        8 |      7 |      8 |      8 |        7 |
+| [深色recent-fallback：折叠后Sidebar局部（navigation-desktop-dark-recent-fallback.png）](https://github.com/albert-zen/zen/actions/runs/43014523256/artifacts/13851524272)                                                                                                                                        |        8 |      7 |      8 |      8 |        8 |
+| [深色recent-keyboard-focus：Sidebar焦点局部（navigation-desktop-dark-recent-keyboard-focus.png）](https://github.com/albert-zen/zen/actions/runs/43014523256/artifacts/13851524272)                                                                                                                              |        8 |      7 |      8 |      8 |        8 |
+| [深色projects-restored：恢复展开的Sidebar局部（navigation-desktop-dark-projects-restored.png）](https://github.com/albert-zen/zen/blob/258042b03f7aa4e33dd447936bda901f4176f945/docs/ui-quality/evidence/desktop-navigation-2e9396d7/navigation-desktop-dark-projects-restored.png?raw=true)                     |        8 |      7 |      8 |      8 |        8 |
+| 浅色recent-keyboard-focus图里的**Thread one元资料预览卡局部**                                                                                                                                                                                                                                                    |        7 |      8 |      7 |      8 |        7 |
+| 深色recent-keyboard-focus图里的同一元资料预览卡局部                                                                                                                                                                                                                                                              |        7 |      7 |      7 |      8 |        7 |
 
 ### 2e9396d7 导航实际原图：对应上表场景，非最新 footer 评分
 
 **正常标题栏资料打开**
 
-| 浅色 | 深色 |
-| --- | --- |
+| 浅色                                                                                                                                                                                                                                  | 深色                                                                                                                                                                                                                                 |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | ![2e导航正常标题栏资料打开浅色](https://github.com/albert-zen/zen/blob/258042b03f7aa4e33dd447936bda901f4176f945/docs/ui-quality/evidence/desktop-navigation-2e9396d7/navigation-desktop-light-titlebar-information-open.png?raw=true) | ![2e导航正常标题栏资料打开深色](https://github.com/albert-zen/zen/blob/258042b03f7aa4e33dd447936bda901f4176f945/docs/ui-quality/evidence/desktop-navigation-2e9396d7/navigation-desktop-dark-titlebar-information-open.png?raw=true) |
 
 **Close 键盘聚焦**
 
-| 浅色 | 深色 |
-| --- | --- |
+| 浅色                                                                                                                                                                                                                            | 深色                                                                                                                                                                                                                           |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | ![2e导航Close 键盘聚焦浅色](https://github.com/albert-zen/zen/blob/258042b03f7aa4e33dd447936bda901f4176f945/docs/ui-quality/evidence/desktop-navigation-2e9396d7/navigation-desktop-light-information-close-focus.png?raw=true) | ![2e导航Close 键盘聚焦深色](https://github.com/albert-zen/zen/blob/258042b03f7aa4e33dd447936bda901f4176f945/docs/ui-quality/evidence/desktop-navigation-2e9396d7/navigation-desktop-dark-information-close-focus.png?raw=true) |
 
 **Projects 焦点与 Enter 恢复展开**
 
-| 浅色 | 深色 |
-| --- | --- |
+| 浅色                                                                                                                                                                                                                                      | 深色                                                                                                                                                                                                                                     |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | ![2e导航Projects 焦点与 Enter 恢复展开浅色](https://github.com/albert-zen/zen/blob/258042b03f7aa4e33dd447936bda901f4176f945/docs/ui-quality/evidence/desktop-navigation-2e9396d7/navigation-desktop-light-projects-restored.png?raw=true) | ![2e导航Projects 焦点与 Enter 恢复展开深色](https://github.com/albert-zen/zen/blob/258042b03f7aa4e33dd447936bda901f4176f945/docs/ui-quality/evidence/desktop-navigation-2e9396d7/navigation-desktop-dark-projects-restored.png?raw=true) |
 
 [精确源码、运行、原图哈希与范围清单](https://github.com/albert-zen/zen/blob/258042b03f7aa4e33dd447936bda901f4176f945/docs/ui-quality/evidence/desktop-navigation-2e9396d7/manifest.json)。生产组件＋只读合成 bridge。这里的 Close 图是键盘焦点，不是指针点击后的 focus-visible；Projects 恢复为实际 Enter 目标正确且 expanded false→true。匹配旧浅色图没有像素改善，不以新发布图片宣称涨分。其余 10 张原图见完整 16 图包。
@@ -409,15 +407,15 @@ Recent 焦点图实际有 Thread one 元资料浮层（不是 Information），�
 
 [本轮 7 张实际原图与 source／evidence](https://github.com/albert-zen/zen/actions/runs/43005902871/artifacts/13848047798)（可能需登录，保留至 2026-11-18）。独立逐图评审且 SHA 一致；不是把新场景分数套回 6e6 长名卡，也不是将夹具修正写作生产设计改善。
 
-| 实际场景／评分区域 | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 初始含草稿完整主窗 | 8 | 8 | 8 | 8 | 7 |
-| Escape 关闭并回焦完整主窗 | 8 | 8 | 8 | 8 | 7 |
-| 正常标题栏右资料区，无 Loading 错误 | 7 | 8 | 8 | 8 | 7 |
-| Close 聚焦的右资料区域 | 7 | 8 | 8 | 8 | 8 |
-| Projects 折叠后 Recent 主选中，Sidebar 局部 | 8 | 8 | 8 | 8 | 8 |
-| 同一回退项 Tab 聚焦，Sidebar 局部 | 8 | 8 | 8 | 8 | 8 |
-| 最后画面 Thread one 元资料预览卡局部（不是 Information） | 7 | 8 | 7 | 8 | 7 |
+| 实际场景／评分区域                                       | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
+| -------------------------------------------------------- | -------: | -----: | -----: | -----: | -------: |
+| 初始含草稿完整主窗                                       |        8 |      8 |      8 |      8 |        7 |
+| Escape 关闭并回焦完整主窗                                |        8 |      8 |      8 |      8 |        7 |
+| 正常标题栏右资料区，无 Loading 错误                      |        7 |      8 |      8 |      8 |        7 |
+| Close 聚焦的右资料区域                                   |        7 |      8 |      8 |      8 |        8 |
+| Projects 折叠后 Recent 主选中，Sidebar 局部              |        8 |      8 |      8 |      8 |        8 |
+| 同一回退项 Tab 聚焦，Sidebar 局部                        |        8 |      8 |      8 |      8 |        8 |
+| 最后画面 Thread one 元资料预览卡局部（不是 Information） |        7 |      8 |      7 |      8 |        7 |
 
 **本轮确认：**初始与 Escape 图和 30952 字节相同，主窗分不变。Enter 重开有可信状态记录，但没有单独第八张图；Close 点击后返回焦点 `focused=true`、`focusVisible=false`，不能称该点击后截图出现焦点环。Projects 折叠后 Recent 回退选中及 Tab 聚焦已实测；有焦点的 Close 图与点击后的焦点样式不能混为一谈。
 
@@ -458,16 +456,15 @@ Recent 焦点图实际有 Thread one 元资料浮层（不是 Information），�
 
 [4 张实际原图及证据包](https://github.com/albert-zen/zen/actions/runs/43004064563/artifacts/13847147997)（可能需登录，保留至 2026-11-18）。已逐张查看并核对 SHA；下表是**新实际场景单独评分**，不能与 6e6 无标题栏长名卡直接求差。
 
-| 正常标题栏浅色实际场景／评分范围 | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| projects-current，含草稿全窗 | 8 | 8 | 8 | 8 | 7 |
-| 已打开右资料区：短名＋Loading failed | 7 | 8 | 7 | 8 | 7 |
-| Close 聚焦：右资料区域 | 7 | 8 | 8 | 8 | 8 |
-| Escape 关闭并回焦：全窗 | 8 | 8 | 8 | 8 | 7 |
-| Sidebar 局部 | 8 | 8 | 8 | 8 | 7 |
+| 正常标题栏浅色实际场景／评分范围     | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
+| ------------------------------------ | -------: | -----: | -----: | -----: | -------: |
+| projects-current，含草稿全窗         |        8 |      8 |      8 |      8 |        7 |
+| 已打开右资料区：短名＋Loading failed |        7 |      8 |      7 |      8 |        7 |
+| Close 聚焦：右资料区域               |        7 |      8 |      8 |      8 |        8 |
+| Escape 关闭并回焦：全窗              |        8 |      8 |      8 |      8 |        7 |
+| Sidebar 局部                         |        8 |      8 |      8 |      8 |        7 |
 
 **已观察／验证：**标题栏与 dock 间隔 12px，无可见叠压；Close 焦点环可见；Escape 后面板关闭、焦点返回且草稿保留。**未通过或未覆盖：**图中明确 Loading failed／Retry，不能说资料加载成功；Close 仅聚焦，未证明激活关闭；Enter 复开等待超时导致整体失败；dark 与 Projects／当前项目／Recent 折叠场景未拍。不会隐藏失败图来声称交互全通过。
-
 
 </details>
 
@@ -508,7 +505,6 @@ Recent 焦点图实际有 Thread one 元资料浮层（不是 Information），�
 
 资料卡外框、左侧说明和测试按钮属于合成宿主，不计作真实 App 外观；右上关闭入口叠压单列为宿主集成问题。[原图与 SHA256 来源清单](https://github.com/albert-zen/zen/blob/d2a24f878a8086f804db6cd8f15bed40983df98b/docs/ui-quality/evidence/main-desktop-4e856526/manifest.json)。
 
-
 </details>
 
 ### 本轮资料卡匹配原图：6e6c6bbd
@@ -525,18 +521,18 @@ Recent 焦点图实际有 Thread one 元资料浮层（不是 Information），�
 
 下表保留 **6e6c6bbd → d332d163** 的同场景静息独立复评，10 张桌面图分数持平。资料卡只限无标题栏合成宿主；后续 446b 的展开／收回补证已在顶部独立逐状态表列出，不更改这张历史匹配表。分数为主观视觉设计判断，不是测试通过率；评审未给目标分数，不合并总分。
 
-| 桌面场景 | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
-| --- | --- | --- | --- | --- | --- |
-| 主对话／Sidebar，浅色 | 8→8 | 8→8 | 8→8 | 8→8 | 6→6 |
-| 主对话／Sidebar，深色 | 8→8 | 7→7 | 8→8 | 8→8 | 6→6 |
-| 队列默认，浅色 | 7→7 | 8→8 | 7→7 | 8→8 | 8→8 |
-| 队列默认，深色 | 7→7 | 7→7 | 7→7 | 8→8 | 8→8 |
-| 队列 hover，浅色 | 7→7 | 8→8 | 7→7 | 8→8 | 7→7 |
-| 队列 hover，深色 | 7→7 | 7→7 | 7→7 | 8→8 | 7→7 |
-| 队列 focus，浅色 | 8→8 | 8→8 | 8→8 | 8→8 | 8→8 |
-| 队列 focus，深色 | 8→8 | 7→7 | 8→8 | 8→8 | 8→8 |
-| 资料卡，无标题栏合成宿主浅色 | 7→7 | 7→7 | 7→7 | 7→7 | 7→7 |
-| 资料卡，无标题栏合成宿主深色 | 7→7 | 7→7 | 7→7 | 7→7 | 7→7 |
+| 桌面场景                     | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
+| ---------------------------- | -------- | ------ | ------ | ------ | -------- |
+| 主对话／Sidebar，浅色        | 8→8      | 8→8    | 8→8    | 8→8    | 6→6      |
+| 主对话／Sidebar，深色        | 8→8      | 7→7    | 8→8    | 8→8    | 6→6      |
+| 队列默认，浅色               | 7→7      | 8→8    | 7→7    | 8→8    | 8→8      |
+| 队列默认，深色               | 7→7      | 7→7    | 7→7    | 8→8    | 8→8      |
+| 队列 hover，浅色             | 7→7      | 8→8    | 7→7    | 8→8    | 7→7      |
+| 队列 hover，深色             | 7→7      | 7→7    | 7→7    | 8→8    | 7→7      |
+| 队列 focus，浅色             | 8→8      | 8→8    | 8→8    | 8→8    | 8→8      |
+| 队列 focus，深色             | 8→8      | 7→7    | 8→8    | 8→8    | 8→8      |
+| 资料卡，无标题栏合成宿主浅色 | 7→7      | 7→7    | 7→7    | 7→7    | 7→7      |
+| 资料卡，无标题栏合成宿主深色 | 7→7      | 7→7    | 7→7    | 7→7    | 7→7      |
 
 桌面下一步：补侧栏折叠回退态证据；资料卡 Archived 视觉权重；队列默认阅读容量及完整上下文。展开态双强高亮已降权，不再列为未改动。
 
@@ -548,16 +544,16 @@ Recent 焦点图实际有 Thread one 元资料浮层（不是 Information），�
 
 这一表只评价各图中的导航局部，不是沿用上表整个主界面的分数。T3是运行会话导航，Codex是历史新会话空态旁的导航，Linear是官方局部放大对照图。任务类型类似，但不是同数据压力测试。
 
-| 对象、实际场景与证据 | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
-|---|---:|---:|---:|---:|---:|
-| Zen 306b7029，浅色Sidebar局部，[本轮原图](https://github.com/albert-zen/zen/blob/4ebdb869899269f2e309609073de11fdd0b15e27/docs/ui-quality/evidence/main-desktop-306b7029/main-desktop-light.png?raw=true) | 8 | 8 | 8 | 8 | 7 |
-| Zen 306b7029，深色Sidebar局部，[本轮原图](https://github.com/albert-zen/zen/blob/4ebdb869899269f2e309609073de11fdd0b15e27/docs/ui-quality/evidence/main-desktop-306b7029/main-desktop-dark.png?raw=true) | 8 | 7 | 8 | 8 | 7 |
-| Codex，历史新会话图左栏，V，[官方原图](https://developers.openai.com/images/blog/long-horizon-4.jpeg)、[出处](https://developers.openai.com/blog/run-long-horizon-tasks-with-codex) | 8 | 7 | 8 | 8 | 7 |
-| Codex，官方演示视频20秒帧Sidebar，V，[官方视频](https://cdn.openai.com/devhub/videos-learn/proactive-teammate-v2-1080p-v1.mp4)、[出处](https://learn.chatgpt.com/docs/app) | 8 | 8 | 8 | 8 | 7 |
-| Claude Code，官网解释演示的Sidebar局部，V，[原图见下方](#claude-官方交互演示现场截图)、[官网出处](https://claude.com/product/claude-code) | 8 | 7 | 8 | 8 | 7 |
-| Linear，官方对照图右侧导航局部，V，[设计说明含原图](https://linear.app/now/behind-the-latest-design-refresh) | 8 | N/O | 8 | 8 | 7 |
-| T3 Code，运行会话左栏，V，[官方原图](https://t3.codes/_astro/app-desktop.BHuzLVLF.webp)、[出处](https://t3.codes/) | 8 | 7 | 7 | 8 | 7 |
-| DeepSeek Harness，官方网页完成态演示Sidebar，V，[出处](https://www.deepseek.com/en/harness/) | 8 | 7 | 8 | 8 | 7 |
+| 对象、实际场景与证据                                                                                                                                                                                      | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------: | -----: | -----: | -----: | -------: |
+| Zen 306b7029，浅色Sidebar局部，[本轮原图](https://github.com/albert-zen/zen/blob/4ebdb869899269f2e309609073de11fdd0b15e27/docs/ui-quality/evidence/main-desktop-306b7029/main-desktop-light.png?raw=true) |        8 |      8 |      8 |      8 |        7 |
+| Zen 306b7029，深色Sidebar局部，[本轮原图](https://github.com/albert-zen/zen/blob/4ebdb869899269f2e309609073de11fdd0b15e27/docs/ui-quality/evidence/main-desktop-306b7029/main-desktop-dark.png?raw=true)  |        8 |      7 |      8 |      8 |        7 |
+| Codex，历史新会话图左栏，V，[官方原图](https://developers.openai.com/images/blog/long-horizon-4.jpeg)、[出处](https://developers.openai.com/blog/run-long-horizon-tasks-with-codex)                       |        8 |      7 |      8 |      8 |        7 |
+| Codex，官方演示视频20秒帧Sidebar，V，[官方视频](https://cdn.openai.com/devhub/videos-learn/proactive-teammate-v2-1080p-v1.mp4)、[出处](https://learn.chatgpt.com/docs/app)                                |        8 |      8 |      8 |      8 |        7 |
+| Claude Code，官网解释演示的Sidebar局部，V，[原图见下方](#claude-官方交互演示现场截图)、[官网出处](https://claude.com/product/claude-code)                                                                 |        8 |      7 |      8 |      8 |        7 |
+| Linear，官方对照图右侧导航局部，V，[设计说明含原图](https://linear.app/now/behind-the-latest-design-refresh)                                                                                              |        8 |    N/O |      8 |      8 |        7 |
+| T3 Code，运行会话左栏，V，[官方原图](https://t3.codes/_astro/app-desktop.BHuzLVLF.webp)、[出处](https://t3.codes/)                                                                                        |        8 |      7 |      7 |      8 |        7 |
+| DeepSeek Harness，官方网页完成态演示Sidebar，V，[出处](https://www.deepseek.com/en/harness/)                                                                                                              |        8 |      7 |      8 |      8 |        7 |
 
 ### 实际用于评分的官方参考原图
 
@@ -588,14 +584,14 @@ Recent 焦点图实际有 Thread one 元资料浮层（不是 Information），�
 
 **不是官网发布产品，也不是 main 或完整原生 App。** 本节来自官方开源提案 [PR #28840](https://github.com/pingdotgg/t3code/pull/28840) 的 [`6f13f36fab31131917f178a904985f638913b26c`](https://github.com/pingdotgg/t3code/commit/6f13f36fab31131917f178a904985f638913b26c)，本次 Windows Edge 1280×900、DPR 1、暗色运行，使用官方 Replay 合成场景。未合并方案仍可学习，以下将实现阶段、场景和限制写清楚；不替换上面的官网营销图，也不拿不同场景的新分解释成官网分数下降。
 
-| 实际图／评分区域 | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 主图：单项目单会话 Sidebar | 7 | 7 | 7 | 8 | 6 |
-| 主图：完成态 showcase 对话＋代码／结果表＋Composer | 8 | 7 | 8 | 8 | 7 |
-| Question：问答集成卡 | 8 | 7 | 8 | 8 | 8 |
-| Question：两会话 Input／Approval 侧栏 | 8 | 7 | 8 | 8 | 7 |
-| 三条折叠 Agent 队列局部 | 7 | 7 | 7 | 8 | 7 |
-| 第二条展开＋真实 Tab 到 Steer 的队列局部 | 8 | 7 | 8 | 8 | 8 |
+| 实际图／评分区域                                   | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
+| -------------------------------------------------- | -------: | -----: | -----: | -----: | -------: |
+| 主图：单项目单会话 Sidebar                         |        7 |      7 |      7 |      8 |        6 |
+| 主图：完成态 showcase 对话＋代码／结果表＋Composer |        8 |      7 |      8 |      8 |        7 |
+| Question：问答集成卡                               |        8 |      7 |      8 |      8 |        8 |
+| Question：两会话 Input／Approval 侧栏              |        8 |      7 |      8 |      8 |        7 |
+| 三条折叠 Agent 队列局部                            |        7 |      7 |      7 |      8 |        7 |
+| 第二条展开＋真实 Tab 到 Steer 的队列局部           |        8 |      7 |      8 |      8 |        8 |
 
 主图 Done→要点→代码→结果表清楚，但灰字与代码较小，单会话不能证明长列表导航。队列三行与操作均完整在视野，展开向上占空间而保留 Composer；默认长文本截断、缺明确队列标题／总数，展开后来源摘要与正文重复，tooltip 遮盖部分摘要但正文仍可读。**Edit 禁用是 Agent 来源状态，未验证编辑，不作为编辑故障。** 实际按 Tab 聚焦 Steer，未执行 Steer，不声称发送结果通过。
 
@@ -632,12 +628,12 @@ Recent 焦点图实际有 Thread one 元资料浮层（不是 Information），�
 
 来源官方源码 `fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159`，UI 版本 **0.2.2-rc.1-fcc0ad4**，1234×675、暗色、中文、DPR 2。实际渲染生产 UI，使用官方 source-owned 合成 fixture，无真实账号或 live 模型任务；不称为真实模型执行验收。以下三图已逐张独立评阅，不复用官网演示的分数。
 
-| 实际可见场景／区域 | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| main-conversation-dark：左侧导航 | 8 | 7 | 8 | 8 | 7 |
-| main-conversation-dark：完成回答＋任务摘要＋Composer | 8 | 8 | 8 | 8 | 7 |
-| subagents-dark：仅顶栏子智能体 popover | 7 | 7 | 7 | 8 | 6 |
-| subagent-sidebar-dark：双栏父／子对话整体 | 7 | 7 | 7 | 8 | 7 |
+| 实际可见场景／区域                                   | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
+| ---------------------------------------------------- | -------: | -----: | -----: | -----: | -------: |
+| main-conversation-dark：左侧导航                     |        8 |      7 |      8 |      8 |        7 |
+| main-conversation-dark：完成回答＋任务摘要＋Composer |        8 |      8 |      8 |      8 |        7 |
+| subagents-dark：仅顶栏子智能体 popover               |        7 |      7 |      7 |      8 |        6 |
+| subagent-sidebar-dark：双栏父／子对话整体            |        7 |      7 |      7 |      8 |        7 |
 
 主对话、任务摘要和输入区分工清楚；popover 标题与 identifier 可读，但灰点未标状态、双侧箭头仍依赖推断；双栏父子关系明确，但母对话变窄、两条历史权重相近，tab 标题截断。popover 只评该局部，**不套作 Zen 完整资料卡评分**；待发消息队列、长名会话资料卡、真实键盘焦点仍 N/O。图片归属 DeepSeek，合成 fixture 内容不是用户私人数据。
 
@@ -656,12 +652,12 @@ Recent 焦点图实际有 Thread one 元资料浮层（不是 Information），�
 
 **两张实际评审的官网演示现场截图现已按用户明确批准发布并内嵌，未用历史静态图替代。** 可打开 [Claude Code 官方产品演示](https://claude.com/product/claude-code) 查看来源。下列分数来自 2026-11-11 实际查看的两张演示现场图，不是仅按官网文字推断；网站顶部导航不计分，非已登录原生 App，也没有可确认的原生版本号。
 
-| 实际评审画面及区域 | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 解释演示：Sidebar 局部 | 8 | 7 | 8 | 8 | 7 |
-| 解释演示：解释回答区域 | 8 | 8 | 8 | 8 | 7 |
-| 代码变更演示：diff＋结果区域 | 8 | 7 | 7 | 8 | 8 |
-| 代码变更演示：PR 状态条（非会话卡） | 7 | 7 | 7 | 8 | 6 |
+| 实际评审画面及区域                  | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
+| ----------------------------------- | -------: | -----: | -----: | -----: | -------: |
+| 解释演示：Sidebar 局部              |        8 |      7 |      8 |      8 |        7 |
+| 解释演示：解释回答区域              |        8 |      8 |      8 |      8 |        7 |
+| 代码变更演示：diff＋结果区域        |        8 |      7 |      7 |      8 |        8 |
+| 代码变更演示：PR 状态条（非会话卡） |        7 |      7 |      7 |      8 |        6 |
 
 **解释演示：对应上表 Sidebar 局部与解释回答两行评分。**
 ![Anthropic Claude Code 官网交互演示现场截图：Sidebar与解释回答](https://github.com/albert-zen/zen/blob/fe8a6b1a8fc3dd7a525248e5659796ad7d74e1b2/docs/ui-quality/references/claude-official-demo-20261111/product-demo-explanation.jpg?raw=true)
@@ -677,17 +673,17 @@ Recent 焦点图实际有 Thread one 元资料浮层（不是 Information），�
 
 Zen的运行态包含消息队列，T3为等待四个子任务，Codex是空态。表中列明差异，**不能将它们当作同一个用例的胜负**。队列本身另列在D。
 
-| 对象、实际场景与证据 | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
-|---|---:|---:|---:|---:|---:|
-| Zen，运行中浅色默认，含队列，[本轮原图](https://github.com/albert-zen/zen/blob/d2a24f878a8086f804db6cd8f15bed40983df98b/docs/ui-quality/evidence/main-desktop-4e856526/pending-desktop-light.png?raw=true) | 7 | 8 | 7 | 8 | 8 |
-| Zen，运行中深色默认，含队列，[本轮原图 · pending-desktop-dark.png](https://github.com/albert-zen/zen/actions/runs/42982034742/artifacts/13837573080) | 7 | 7 | 7 | 8 | 8 |
-| Codex，**历史新会话空态，不是运行态**，V，[原图](https://developers.openai.com/images/blog/long-horizon-4.jpeg)、[出处](https://developers.openai.com/blog/run-long-horizon-tasks-with-codex) | 8 | 7 | 8 | 8 | 7 |
-| Codex，官方视频20秒帧：完成态CSV清理结果＋Composer，V，[视频](https://cdn.openai.com/devhub/videos-learn/proactive-teammate-v2-1080p-v1.mp4)、[出处](https://learn.chatgpt.com/docs/app) | 8 | 8 | 8 | 8 | 8 |
-| Claude Code，官网演示解释回答区域，V，[原图见下方](#claude-官方交互演示现场截图)、[出处](https://claude.com/product/claude-code) | 8 | 8 | 8 | 8 | 7 |
-| Claude Code，官网演示代码变更＋结果区域，V，[原图见下方](#claude-官方交互演示现场截图)、[出处](https://claude.com/product/claude-code) | 8 | 7 | 7 | 8 | 8 |
-| Linear，未取得agent对话对等场景，[官方设计资料](https://linear.app/now/behind-the-latest-design-refresh) | N/O | N/O | N/O | N/O | N/O |
-| T3 Code，**四子agent运行态中间区域**，V，[原图](https://t3.codes/_astro/app-desktop.BHuzLVLF.webp)、[出处](https://t3.codes/) | 8 | 8 | 8 | 8 | 8 |
-| DeepSeek Harness，官方网页完成态自我介绍＋Composer，V，[出处](https://www.deepseek.com/en/harness/) | 8 | 7 | 8 | 8 | 7 |
+| 对象、实际场景与证据                                                                                                                                                                                       | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------: | -----: | -----: | -----: | -------: |
+| Zen，运行中浅色默认，含队列，[本轮原图](https://github.com/albert-zen/zen/blob/d2a24f878a8086f804db6cd8f15bed40983df98b/docs/ui-quality/evidence/main-desktop-4e856526/pending-desktop-light.png?raw=true) |        7 |      8 |      7 |      8 |        8 |
+| Zen，运行中深色默认，含队列，[本轮原图 · pending-desktop-dark.png](https://github.com/albert-zen/zen/actions/runs/42982034742/artifacts/13837573080)                                                       |        7 |      7 |      7 |      8 |        8 |
+| Codex，**历史新会话空态，不是运行态**，V，[原图](https://developers.openai.com/images/blog/long-horizon-4.jpeg)、[出处](https://developers.openai.com/blog/run-long-horizon-tasks-with-codex)              |        8 |      7 |      8 |      8 |        7 |
+| Codex，官方视频20秒帧：完成态CSV清理结果＋Composer，V，[视频](https://cdn.openai.com/devhub/videos-learn/proactive-teammate-v2-1080p-v1.mp4)、[出处](https://learn.chatgpt.com/docs/app)                   |        8 |      8 |      8 |      8 |        8 |
+| Claude Code，官网演示解释回答区域，V，[原图见下方](#claude-官方交互演示现场截图)、[出处](https://claude.com/product/claude-code)                                                                           |        8 |      8 |      8 |      8 |        7 |
+| Claude Code，官网演示代码变更＋结果区域，V，[原图见下方](#claude-官方交互演示现场截图)、[出处](https://claude.com/product/claude-code)                                                                     |        8 |      7 |      7 |      8 |        8 |
+| Linear，未取得agent对话对等场景，[官方设计资料](https://linear.app/now/behind-the-latest-design-refresh)                                                                                                   |      N/O |    N/O |    N/O |    N/O |      N/O |
+| T3 Code，**四子agent运行态中间区域**，V，[原图](https://t3.codes/_astro/app-desktop.BHuzLVLF.webp)、[出处](https://t3.codes/)                                                                              |        8 |      8 |      8 |      8 |        8 |
+| DeepSeek Harness，官方网页完成态自我介绍＋Composer，V，[出处](https://www.deepseek.com/en/harness/)                                                                                                        |        8 |      7 |      8 |      8 |        7 |
 
 - **Zen**：正文与composer分开，Waiting与After this turn双分组和Send now文字动作可理解；默认态下方目标行正文/动作被tray底边裁切，不能只靠“中心可命中”证明体验完整。
 - **Codex空态**：主行动区留白充分，建议任务卡和composer形成入口；Open/Commit是带文字动作，执行位置紧邻输入区。缺少运行正文、过程展开及停止态，所以它的**运行对话五维均N/O**，上表分数不可拿来填运行态。
@@ -695,36 +691,36 @@ Zen的运行态包含消息队列，T3为等待四个子任务，Codex是空态�
 
 ## D. 队列：同一功能证据不足时不借其它场景补分
 
-| 对象、队列场景及证据 | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
-|---|---:|---:|---:|---:|---:|
-| Zen，浅色默认，[原图](https://github.com/albert-zen/zen/blob/d2a24f878a8086f804db6cd8f15bed40983df98b/docs/ui-quality/evidence/main-desktop-4e856526/pending-desktop-light.png?raw=true) | 7 | 8 | 7 | 8 | 8 |
-| Zen，浅色hover，[原图 · pending-desktop-light-hover.png](https://github.com/albert-zen/zen/actions/runs/42982034742/artifacts/13837573080) | 7 | 8 | 7 | 8 | 7 |
-| Zen，浅色focus，[原图](https://github.com/albert-zen/zen/blob/d2a24f878a8086f804db6cd8f15bed40983df98b/docs/ui-quality/evidence/main-desktop-4e856526/pending-desktop-light-focus.png?raw=true) | 8 | 8 | 8 | 8 | 8 |
-| Zen 446b，浅色展开阅读／Edit焦点／Composer焦点／Less space焦点（四图各自同分），[专项原图](https://github.com/albert-zen/zen/actions/runs/43009644920/artifacts/13850565488) | 8 | 8 | 8 | 8 | 8 |
-| Zen 446b，深色展开阅读及三种焦点（四图各自同分），[专项原图](https://github.com/albert-zen/zen/actions/runs/43009644920/artifacts/13850565488) | 8 | 7 | 8 | 8 | 8 |
-| Zen 32e，浅／深 Composer焦点、footer焦点及收回回Composer（六图各自同分），[本轮原图](https://github.com/albert-zen/zen/actions/runs/43018417117/artifacts/13854006397) | 7 | 7 | 7 | 8 | 8 |
-| Codex，公开图未展示消息队列，[出处](https://developers.openai.com/blog/run-long-horizon-tasks-with-codex) | N/O | N/O | N/O | N/O | N/O |
-| Claude Code，未查看对应队列像素，[出处](https://code.claude.com/docs/en/desktop) | N/O | N/O | N/O | N/O | N/O |
-| Linear，无对应agent消息队列材料，[出处](https://linear.app/now/behind-the-latest-design-refresh) | N/O | N/O | N/O | N/O | N/O |
-| T3 Code 官网图：子任务状态不是待发队列；未合并提案实跑另见本页独立章节，[官网原图](https://t3.codes/_astro/app-desktop.BHuzLVLF.webp) | N/O | N/O | N/O | N/O | N/O |
-| T3 Code #28840 实跑：三条折叠 Agent 队列局部，[静息原图](https://github.com/albert-zen/zen/blob/d60206bbd715950a8606d4a944c626b09c0aa288/docs/ui-quality/references/t3-runtime-6f13f36f/queue-pointer-away-dark.jpg?raw=true) | 7 | 7 | 7 | 8 | 7 |
-| T3 Code #28840 实跑：展开＋Tab Steer 焦点局部，[原图](https://github.com/albert-zen/zen/blob/4f0b8708566a5529daab33e5f6b4647d44448b15/docs/ui-quality/references/t3-runtime-6f13f36f/queue-expanded-tab-focus-dark.jpg?raw=true) | 8 | 7 | 8 | 8 | 8 |
-| DeepSeek Harness，未查看对应队列像素，[出处](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/client/ui-chat/README.md) | N/O | N/O | N/O | N/O | N/O |
+| 对象、队列场景及证据                                                                                                                                                                                                             | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------: | -----: | -----: | -----: | -------: |
+| Zen，浅色默认，[原图](https://github.com/albert-zen/zen/blob/d2a24f878a8086f804db6cd8f15bed40983df98b/docs/ui-quality/evidence/main-desktop-4e856526/pending-desktop-light.png?raw=true)                                         |        7 |      8 |      7 |      8 |        8 |
+| Zen，浅色hover，[原图 · pending-desktop-light-hover.png](https://github.com/albert-zen/zen/actions/runs/42982034742/artifacts/13837573080)                                                                                       |        7 |      8 |      7 |      8 |        7 |
+| Zen，浅色focus，[原图](https://github.com/albert-zen/zen/blob/d2a24f878a8086f804db6cd8f15bed40983df98b/docs/ui-quality/evidence/main-desktop-4e856526/pending-desktop-light-focus.png?raw=true)                                  |        8 |      8 |      8 |      8 |        8 |
+| Zen 446b，浅色展开阅读／Edit焦点／Composer焦点／Less space焦点（四图各自同分），[专项原图](https://github.com/albert-zen/zen/actions/runs/43009644920/artifacts/13850565488)                                                     |        8 |      8 |      8 |      8 |        8 |
+| Zen 446b，深色展开阅读及三种焦点（四图各自同分），[专项原图](https://github.com/albert-zen/zen/actions/runs/43009644920/artifacts/13850565488)                                                                                   |        8 |      7 |      8 |      8 |        8 |
+| Zen 32e，浅／深 Composer焦点、footer焦点及收回回Composer（六图各自同分），[本轮原图](https://github.com/albert-zen/zen/actions/runs/43018417117/artifacts/13854006397)                                                           |        7 |      7 |      7 |      8 |        8 |
+| Codex，公开图未展示消息队列，[出处](https://developers.openai.com/blog/run-long-horizon-tasks-with-codex)                                                                                                                        |      N/O |    N/O |    N/O |    N/O |      N/O |
+| Claude Code，未查看对应队列像素，[出处](https://code.claude.com/docs/en/desktop)                                                                                                                                                 |      N/O |    N/O |    N/O |    N/O |      N/O |
+| Linear，无对应agent消息队列材料，[出处](https://linear.app/now/behind-the-latest-design-refresh)                                                                                                                                 |      N/O |    N/O |    N/O |    N/O |      N/O |
+| T3 Code 官网图：子任务状态不是待发队列；未合并提案实跑另见本页独立章节，[官网原图](https://t3.codes/_astro/app-desktop.BHuzLVLF.webp)                                                                                            |      N/O |    N/O |    N/O |    N/O |      N/O |
+| T3 Code #28840 实跑：三条折叠 Agent 队列局部，[静息原图](https://github.com/albert-zen/zen/blob/d60206bbd715950a8606d4a944c626b09c0aa288/docs/ui-quality/references/t3-runtime-6f13f36f/queue-pointer-away-dark.jpg?raw=true)    |        7 |      7 |      7 |      8 |        7 |
+| T3 Code #28840 实跑：展开＋Tab Steer 焦点局部，[原图](https://github.com/albert-zen/zen/blob/4f0b8708566a5529daab33e5f6b4647d44448b15/docs/ui-quality/references/t3-runtime-6f13f36f/queue-expanded-tab-focus-dark.jpg?raw=true) |        8 |      7 |      8 |      8 |        8 |
+| DeepSeek Harness，未查看对应队列像素，[出处](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/client/ui-chat/README.md)                                                                                      |      N/O |    N/O |    N/O |    N/O |      N/O |
 
 Zen 静息队列仍高 240px，完整可读 2 Waiting＋1 After；446b 专项已补展开态完整 8 条与收回验证，见顶部逐图表。静息密度没有改变，展开增加可读容量但使上方部分对话移出视野。不同状态不跨主题平均，也不把状态差值当版本涨分。
 
 ## E. 资料卡／当前任务信息
 
-| 对象、实际场景与证据 | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
-|---|---:|---:|---:|---:|---:|
-| Zen 6e6，无标题栏合成宿主浅色长名卡，[本轮原图](https://github.com/albert-zen/zen/blob/d60206bbd715950a8606d4a944c626b09c0aa288/docs/ui-quality/evidence/information-desktop-6e6c6bbd/information-desktop-light.png?raw=true) | 7 | 7 | 7 | 7 | 7 |
-| Zen 6e6，无标题栏合成宿主深色长名卡，[本轮原图](https://github.com/albert-zen/zen/blob/d60206bbd715950a8606d4a944c626b09c0aa288/docs/ui-quality/evidence/information-desktop-6e6c6bbd/information-desktop-dark.png?raw=true) | 7 | 7 | 7 | 7 | 7 |
-| Codex，公开图未展示对应资料卡，[出处](https://developers.openai.com/blog/run-long-horizon-tasks-with-codex) | N/O | N/O | N/O | N/O | N/O |
-| Claude Code，长名会话资料卡未观察，[出处](https://claude.com/product/claude-code) | N/O | N/O | N/O | N/O | N/O |
-| Claude Code，官网演示 PR 状态条（不是会话卡），V，[原图见下方](#claude-官方交互演示现场截图)、[出处](https://claude.com/product/claude-code) | 7 | 7 | 7 | 8 | 6 |
-| Linear，已有图为项目属性/团队选择器，非当前会话卡，[出处](https://linear.app/docs/projects) | N/O | N/O | N/O | N/O | N/O |
-| T3 Code，环境/Changes/Lineage右侧区域，V，[原图](https://t3.codes/_astro/app-desktop.BHuzLVLF.webp)、[出处](https://t3.codes/) | 8 | 8 | 8 | 8 | 7 |
-| DeepSeek Harness，只有右侧栏规则文档，D，[出处](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/subsystems/sidebar-right.md) | N/O | N/O | N/O | N/O | N/O |
+| 对象、实际场景与证据                                                                                                                                                                                                          | 信息层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------: | -----: | -----: | -----: | -------: |
+| Zen 6e6，无标题栏合成宿主浅色长名卡，[本轮原图](https://github.com/albert-zen/zen/blob/d60206bbd715950a8606d4a944c626b09c0aa288/docs/ui-quality/evidence/information-desktop-6e6c6bbd/information-desktop-light.png?raw=true) |        7 |      7 |      7 |      7 |        7 |
+| Zen 6e6，无标题栏合成宿主深色长名卡，[本轮原图](https://github.com/albert-zen/zen/blob/d60206bbd715950a8606d4a944c626b09c0aa288/docs/ui-quality/evidence/information-desktop-6e6c6bbd/information-desktop-dark.png?raw=true)  |        7 |      7 |      7 |      7 |        7 |
+| Codex，公开图未展示对应资料卡，[出处](https://developers.openai.com/blog/run-long-horizon-tasks-with-codex)                                                                                                                   |      N/O |    N/O |    N/O |    N/O |      N/O |
+| Claude Code，长名会话资料卡未观察，[出处](https://claude.com/product/claude-code)                                                                                                                                             |      N/O |    N/O |    N/O |    N/O |      N/O |
+| Claude Code，官网演示 PR 状态条（不是会话卡），V，[原图见下方](#claude-官方交互演示现场截图)、[出处](https://claude.com/product/claude-code)                                                                                  |        7 |      7 |      7 |      8 |        6 |
+| Linear，已有图为项目属性/团队选择器，非当前会话卡，[出处](https://linear.app/docs/projects)                                                                                                                                   |      N/O |    N/O |    N/O |    N/O |      N/O |
+| T3 Code，环境/Changes/Lineage右侧区域，V，[原图](https://t3.codes/_astro/app-desktop.BHuzLVLF.webp)、[出处](https://t3.codes/)                                                                                                |        8 |      8 |      8 |      8 |        7 |
+| DeepSeek Harness，只有右侧栏规则文档，D，[出处](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/subsystems/sidebar-right.md)                                                                                 |      N/O |    N/O |    N/O |    N/O |      N/O |
 
 - **Zen**：长中英文名称完整换行，状态列保持；Archived行比Working更强的背景让注意力语义不清。不能仅凭截图断定这是归档样式错误，也可能是选中态。6e6 已消除无标题栏合成宿主的 Close information 叠压；正常标题栏打开态及关闭／Tab 行为仍未验证。
 - **T3**：环境、版本变化、子任务各自分组，名称与时间能逐行对应；图标与行高统一。多个折叠箭头、文件夹、更多菜单没有展开，准确动作与键盘仍N/O，因此交互线索7。该图没有Zen同样长度的中文名，不能宣称其长名处理优于Zen。
@@ -736,9 +732,6 @@ Zen 静息队列仍高 240px，完整可读 2 Waiting＋1 After；446b 专项已
 3. **限定导航闭环后的剩余覆盖**。2e 浅深路径及 Projects 恢复已验证；补 Close 键盘激活、反向遍历、其它分组／会话及元资料编辑，不把限定路径成功写成全部交互通过。
 
 完整原生Tab路径、焦点进入/退出所有桌面控件、真实发送/取消/排序结果、真实Host资料状态更新和对比度测量：**N/O**。本轮30张细指针捕获通过不等于完整交互验收；粗指针后续Tab断言失败属于历史范围，未因本次转向桌面而改写成通过，也不据此要求继续窄屏适配。
-
-
-
 
 ---
 
@@ -762,23 +755,23 @@ Zen 静息队列仍高 240px，完整可读 2 Waiting＋1 After；446b 专项已
 
 每格按上述三个版本顺序列出分数；五维是**信息层级、可读性、注意力、一致性、交互线索**。主观设计评审，不是通过率，不汇总总分。各轮独立评审未提供目标分数；这些不是服务后端模型身份认证。没有提升的格子保持不变。
 
-| 同名匹配截图／场景 | 层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
-| --- | --- | --- | --- | --- | --- |
-| 主对话 + Sidebar，桌面浅色 | 7→7→7 | 8→8→8 | 8→8→8 | 8→8→8 | 6→6→6 |
-| 主对话 + Sidebar，桌面深色 | 7→7→7 | 7→7→7 | 8→8→8 | 8→8→8 | 6→6→6 |
-| 主对话 + Sidebar，760px 浅色 | 6→6→6 | 7→7→7 | 7→7→7 | 8→8→8 | 6→6→6 |
-| 队列桌面浅色，默认 | 7→7→7 | 8→8→8 | 7→7→7 | 8→8→8 | **6→8→8** |
-| 队列桌面浅色，hover | **6→7→7** | 8→8→8 | 7→7→7 | 8→8→8 | **6→7→7** |
-| 队列桌面浅色，focus | **6→8→8** | 8→8→8 | **7→8→8** | 8→8→8 | **7→8→8** |
-| 队列桌面深色，默认 | 7→7→7 | 7→7→7 | 7→7→7 | 8→8→8 | **6→8→8** |
-| 队列桌面深色，hover | **6→7→7** | 7→7→7 | 7→7→7 | 8→8→8 | **6→7→7** |
-| 队列桌面深色，focus | **6→8→8** | 7→7→7 | **7→8→8** | 8→8→8 | **7→8→8** |
-| 队列760px浅色，默认 | 7→7→7 | 8→8→8 | 7→7→7 | 7→7→7 | **6→8→8** |
-| 队列760px浅色，hover | **6→7→7** | 8→8→8 | 7→7→7 | 7→7→7 | **6→7→7** |
-| 队列760px浅色，focus | **6→8→8** | 8→8→8 | **7→8→8** | 7→7→7 | **7→8→8** |
-| 资料卡桌面浅色 | 7→7→7 | 7→7→7 | 6→6→6 | 7→7→7 | 6→6→6 |
-| 资料卡桌面深色 | 7→7→7 | 7→7→7 | 6→6→6 | 7→7→7 | 6→6→6 |
-| 资料卡760px浅色 | 7→7→7 | 7→7→7 | 7→7→7 | 7→7→7 | 7→7→7 |
+| 同名匹配截图／场景           | 层级      | 可读性 | 注意力    | 一致性 | 交互线索  |
+| ---------------------------- | --------- | ------ | --------- | ------ | --------- |
+| 主对话 + Sidebar，桌面浅色   | 7→7→7     | 8→8→8  | 8→8→8     | 8→8→8  | 6→6→6     |
+| 主对话 + Sidebar，桌面深色   | 7→7→7     | 7→7→7  | 8→8→8     | 8→8→8  | 6→6→6     |
+| 主对话 + Sidebar，760px 浅色 | 6→6→6     | 7→7→7  | 7→7→7     | 8→8→8  | 6→6→6     |
+| 队列桌面浅色，默认           | 7→7→7     | 8→8→8  | 7→7→7     | 8→8→8  | **6→8→8** |
+| 队列桌面浅色，hover          | **6→7→7** | 8→8→8  | 7→7→7     | 8→8→8  | **6→7→7** |
+| 队列桌面浅色，focus          | **6→8→8** | 8→8→8  | **7→8→8** | 8→8→8  | **7→8→8** |
+| 队列桌面深色，默认           | 7→7→7     | 7→7→7  | 7→7→7     | 8→8→8  | **6→8→8** |
+| 队列桌面深色，hover          | **6→7→7** | 7→7→7  | 7→7→7     | 8→8→8  | **6→7→7** |
+| 队列桌面深色，focus          | **6→8→8** | 7→7→7  | **7→8→8** | 8→8→8  | **7→8→8** |
+| 队列760px浅色，默认          | 7→7→7     | 8→8→8  | 7→7→7     | 7→7→7  | **6→8→8** |
+| 队列760px浅色，hover         | **6→7→7** | 8→8→8  | 7→7→7     | 7→7→7  | **6→7→7** |
+| 队列760px浅色，focus         | **6→8→8** | 8→8→8  | **7→8→8** | 7→7→7  | **7→8→8** |
+| 资料卡桌面浅色               | 7→7→7     | 7→7→7  | 6→6→6     | 7→7→7  | 6→6→6     |
+| 资料卡桌面深色               | 7→7→7     | 7→7→7  | 6→6→6     | 7→7→7  | 6→6→6     |
+| 资料卡760px浅色              | 7→7→7     | 7→7→7  | 7→7→7     | 7→7→7  | 7→7→7     |
 
 比较条件：桌面 1280×900、窄窗 760×900，相同主题／合成会话／focus 目标；三版均记录 fine pointer、hover 与开启浏览器沙箱。主对话和资料卡六图逐像素相同，**没有本轮提升证据**。9fdd 的输入媒体记录不足，不用于这张表的提升归因。
 
@@ -786,15 +779,15 @@ Zen 静息队列仍高 240px，完整可读 2 Waiting＋1 After；446b 专项已
 
 ### 07daf 新增场景：只评现状，没有匹配旧基线
 
-| 场景 | 层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 队列760px深色，默认 | 7 | 7 | 7 | 7 | 8 |
-| 队列760px深色，hover | 7 | 7 | 7 | 7 | 7 |
-| 队列760px深色，focus | 8 | 7 | 8 | 7 | 8 |
-| 队列390px浅色，默认 | 6 | 7 | 6 | 7 | 6 |
-| 队列390px浅色，hover／focus（两图各自同分） | 7 | 7 | 7 | 7 | 7 |
-| 队列390px深色，默认 | 6 | 6 | 6 | 7 | 6 |
-| 队列390px深色，hover／focus（两图各自同分） | 7 | 6 | 7 | 7 | 7 |
+| 场景                                        | 层级 | 可读性 | 注意力 | 一致性 | 交互线索 |
+| ------------------------------------------- | ---: | -----: | -----: | -----: | -------: |
+| 队列760px深色，默认                         |    7 |      7 |      7 |      7 |        8 |
+| 队列760px深色，hover                        |    7 |      7 |      7 |      7 |        7 |
+| 队列760px深色，focus                        |    8 |      7 |      8 |      7 |        8 |
+| 队列390px浅色，默认                         |    6 |      7 |      6 |      7 |        6 |
+| 队列390px浅色，hover／focus（两图各自同分） |    7 |      7 |      7 |      7 |        7 |
+| 队列390px深色，默认                         |    6 |      6 |      6 |      7 |        6 |
+| 队列390px深色，hover／focus（两图各自同分） |    7 |      6 |      7 |      7 |        7 |
 
 390px 图是精细指针窄窗口，不是触屏验收。07daf 默认首条后续消息被底缘截断、操作分三行，这是后续 4e856526 改进所针对的问题，**新改动是否解决须待新图复评**。
 
@@ -822,23 +815,23 @@ Zen 静息队列仍高 240px，完整可读 2 Waiting＋1 After；446b 专项已
 
 隔离 Electron 中生产 SettingsView 的合成数据原始截图，不是设计稿或全应用验收。**这是历史已公开轮次，不代表当前 head 的新截图验收。**
 
-| Q：403584e4 | 后续 R：292a768e |
-| --- | --- |
+| Q：403584e4                                                                                                                                                           | 后续 R：292a768e                                                                                                                                                      |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | ![Q 浅色](https://github.com/albert-zen/zen/blob/ddc9f32ead745125c616b42f9f4c22ac26e16448/docs/ui-quality/evidence/appearance-followup-20261109/Q-light.jpg?raw=true) | ![R 浅色](https://github.com/albert-zen/zen/blob/ddc9f32ead745125c616b42f9f4c22ac26e16448/docs/ui-quality/evidence/appearance-followup-20261109/R-light.jpg?raw=true) |
-| ![Q 深色](https://github.com/albert-zen/zen/blob/ddc9f32ead745125c616b42f9f4c22ac26e16448/docs/ui-quality/evidence/appearance-followup-20261109/Q-dark.jpg?raw=true) | ![R 深色](https://github.com/albert-zen/zen/blob/ddc9f32ead745125c616b42f9f4c22ac26e16448/docs/ui-quality/evidence/appearance-followup-20261109/R-dark.jpg?raw=true) |
+| ![Q 深色](https://github.com/albert-zen/zen/blob/ddc9f32ead745125c616b42f9f4c22ac26e16448/docs/ui-quality/evidence/appearance-followup-20261109/Q-dark.jpg?raw=true)  | ![R 深色](https://github.com/albert-zen/zen/blob/ddc9f32ead745125c616b42f9f4c22ac26e16448/docs/ui-quality/evidence/appearance-followup-20261109/R-dark.jpg?raw=true)  |
 
 变化：保留选中项边框及勾选，增强未选项文字，降低“可用却像禁用”的视觉风险；不是大幅重排布局。
 
 ### 分项分数变化（0–4）
 
-| 维度 | Primary Q→R | Challenge Q→R |
-| --- | --- | --- |
-| 信息层级 | 3→3 | 3→3 |
-| 可读性/密度 | 3→3 | 3→3 |
-| 色彩用途 | 3→3 | 3→3 |
-| 材质一致性 | 3→3 | 3→3 |
-| 注意力分配 | 3→3 | 3→3 |
-| 固定宽度布局 | 3→3 | 3→3 |
+| 维度         | Primary Q→R | Challenge Q→R |
+| ------------ | ----------- | ------------- |
+| 信息层级     | 3→3         | 3→3           |
+| 可读性/密度  | 3→3         | 3→3           |
+| 色彩用途     | 3→3         | 3→3           |
+| 材质一致性   | 3→3         | 3→3           |
+| 注意力分配   | 3→3         | 3→3           |
+| 固定宽度布局 | 3→3         | 3→3           |
 
 局部改进没有跨评分档，不人为涨分。两份历史记录缺可靠模型身份，不冒称 Sol/Terra；R 是同评审者补评，非全新盲评。未计算全应用总分。
 
@@ -859,13 +852,16 @@ Information、Models、Plugins 的较新源码已同步。已公开的安全合�
 2026-11-11 d41a36c5 恢复检查点的历史核验（不是当前分支差距）：相对当时 main `b3565098e35ea9c182b462c39a9c0f7d59cd6e45`，分支 ahead 36 / behind 27，共同基线 `d7f93b83f54ba873b61f19bd72ac3a6f6010aa4a`。本 PR 保持 Draft，尚未完成与当前 main 的最终整合，也未证明可直接合并。
 
 ## 已在本分支的工作
+
 - 对话任务层级、Fork 分界与来源入口、agent 信息卡和通信来源导航。
 - 发送/准备/排队/错误反馈，草稿、召回和 Side chat 的状态可读性。
 - 项目房间、侧栏、模型/账号/外观等设置布局和辅助文字可读性。
 - 对应组件及交互测试、UI 规范、合成验收脚本与历史评审记录。
 
 ## 逐轮记录与多模型评分
+
 现有公开入口：
+
 - [工作流、覆盖范围与限制](https://github.com/albert-zen/zen/blob/tod/ui-quality-contrast-followup/docs/ui-quality/README.md)
 - [逐维评审标准](https://github.com/albert-zen/zen/blob/tod/ui-quality-contrast-followup/docs/ui-quality/rubric.md)
 - [评分历史证据账本（未完成全量对账）](https://github.com/albert-zen/zen/blob/tod/ui-quality-contrast-followup/docs/ui-quality/reviews/score-history-evidence-ledger.md)
@@ -875,21 +871,23 @@ Information、Models、Plugins 的较新源码已同步。已公开的安全合�
 
 保留每位评审模型自己的分项分数、参考项目的独立分项分数和原始理由，不做平均或推算。每轮须对应冻结版本、截图来源、模型身份、可比性与未观察项。历史没有直接参考证据的单元格保持空白。评审不提供目标分数，也不以得分替代功能验收。
 
-| 证据阶段 | 目前公开状态 | 限制 |
-| --- | --- | --- |
-| 历史基线、分段实现、Sol/Terra 与 Astra/Luna 报告 | 已有原始记录和部分索引 | 不是完整、统一且可直接求差的时间序列 |
-| Appearance A/B、P/Q/R | 账本与合成图已在分支 | A/B 极近；R 是补评；重复图片、未观察焦点/窄屏等限制已在原记录说明 |
-| qa6/qa7 及后续旅程 | 部分检查点已在分支 | 不应从代码或邻近截图推定全部旅程通过 |
-| Information、Models、Plugins 后续源码 | 已包含在 d41a36c5，与 c0d632ba 内容一致 | 安全历史截图及原始评审已在 ec7abf03，不能视为当前全应用验收 |
-| Context | 独立基线评分与安全原图已在 ec7abf03 | 只有基线，不能给出前后分数变化或新改动验收结论 |
+| 证据阶段                                         | 目前公开状态                            | 限制                                                              |
+| ------------------------------------------------ | --------------------------------------- | ----------------------------------------------------------------- |
+| 历史基线、分段实现、Sol/Terra 与 Astra/Luna 报告 | 已有原始记录和部分索引                  | 不是完整、统一且可直接求差的时间序列                              |
+| Appearance A/B、P/Q/R                            | 账本与合成图已在分支                    | A/B 极近；R 是补评；重复图片、未观察焦点/窄屏等限制已在原记录说明 |
+| qa6/qa7 及后续旅程                               | 部分检查点已在分支                      | 不应从代码或邻近截图推定全部旅程通过                              |
+| Information、Models、Plugins 后续源码            | 已包含在 d41a36c5，与 c0d632ba 内容一致 | 安全历史截图及原始评审已在 ec7abf03，不能视为当前全应用验收       |
+| Context                                          | 独立基线评分与安全原图已在 ec7abf03     | 只有基线，不能给出前后分数变化或新改动验收结论                    |
 
 ## 两项后续候选已发布
+
 - 队列操作图标对比度与禁用色调整。
 - 资料面板中已归档子代理名称换行。
 
 两项已在 `9fdddf7c` 发布，不再是未发布本地候选；`c771207c` 补充明确指针 hover 条件、耗时记录与长名交互回归测试。快速生产组件截图已产出，完整原生应用验收仍独立进行。
 
 ## 合并前必须补齐
+
 - [x] 将批准的 c0d632ba 源码与恢复备份对账，并以同内容树 d41a36c5 同步到本分支。
 - [x] 发布两项候选，并完成合成生产组件截图与专项交互检查；不等于全应用验收。
 - [ ] 补齐每轮、每模型、本项目及参考项目逐维评分，并保留原始报告与不可比项。
@@ -901,13 +899,13 @@ Information、Models、Plugins 的较新源码已同步。已公开的安全合�
 
 历史测试和截图只证明其记录的冻结版本与范围，**不等于当前 main 上的全应用通过，不构成 WCAG 达标声明**。此草稿不请求合并。
 
-
 ---
 
 <details>
 <summary>历史 0–4 分设置评审：固定版本原图、逐项表与原始报告</summary>
 
 此历史量表为0–4，与当前主界面10分制维度不同，不换算、不平均、不当当前head验收。Models／Information配对分数未提高，Plugins部分维度提高，Context只有基线。保留原始逐项分、评审理由与比较限制，详情使用以下已公开固定版本，不删除唯一证据：
+
 - [完整逐维表（含参考对象各自分数）](https://github.com/albert-zen/zen/blob/ec7abf031f52f5827fda7c83bce335fa2e1d4491/docs/ui-quality/evidence/pr755-settings-20261110/SCORES.md)
 - [原始评审逐文件目录](https://github.com/albert-zen/zen/tree/ec7abf031f52f5827fda7c83bce335fa2e1d4491/docs/ui-quality/reviews/pr755-settings-20261110)
 - [Models／Plugins／Context历史安全原图](https://github.com/albert-zen/zen/tree/ec7abf031f52f5827fda7c83bce335fa2e1d4491/docs/ui-quality/evidence/pr755-settings-20261110)
@@ -916,6 +914,5 @@ Information、Models、Plugins 的较新源码已同步。已公开的安全合�
 Sol／Terra是原评审任务标签，不作后端身份独立认证；Models v2是原评审者匹配展开态补评，不冒充新盲评。Plugins底部对齐图不是相同滚动偏移因果A/B；Information含环境标识的完整原图未公开。历史静态图不证明安装、权限、持久化、键盘或WCAG达标。
 
 </details>
-
 
 </details>

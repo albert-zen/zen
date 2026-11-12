@@ -15,10 +15,10 @@ The sampled dark wheel/focus thumb RGB changes from approximately (63,63,63) to 
 
 ## Representative originals
 
-| State | Light | Dark |
-| --- | --- | --- |
-| Idle | ![Light idle](scrollbar-desktop-light-idle.png) | ![Dark idle](scrollbar-desktop-dark-idle.png) |
-| Wheel | ![Light wheel](scrollbar-desktop-light-wheel.png) | ![Dark wheel](scrollbar-desktop-dark-wheel.png) |
+| State               | Light                                                           | Dark                                                          |
+| ------------------- | --------------------------------------------------------------- | ------------------------------------------------------------- |
+| Idle                | ![Light idle](scrollbar-desktop-light-idle.png)                 | ![Dark idle](scrollbar-desktop-dark-idle.png)                 |
+| Wheel               | ![Light wheel](scrollbar-desktop-light-wheel.png)               | ![Dark wheel](scrollbar-desktop-dark-wheel.png)               |
 | Held keyboard focus | ![Light focus](scrollbar-desktop-light-keyboard-focus-held.png) | ![Dark focus](scrollbar-desktop-dark-keyboard-focus-held.png) |
 
 ## Limits

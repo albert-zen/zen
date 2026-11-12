@@ -415,7 +415,13 @@ export async function captureDesktopReading({
     await openThread();
     await scroll();
     await save("prose-top", {});
-    await captureScrollbarStates({ send, evaluate, capture, evidence, options });
+    await captureScrollbarStates({
+      send,
+      evaluate,
+      capture,
+      evidence,
+      options,
+    });
     await scroll();
     await scroll(".agent-copy h3");
     const list = await save("heading-list", {});

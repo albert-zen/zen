@@ -2,13 +2,13 @@
 
 Source bf6acf41d0143475675f058cdeea49bab12e2d1f (published candidate 3dfdff84), compared with a770fe749f7848317bb9e3f62356257b82aec06c. Production components, synthetic English data, 1280×900 actual light/dark screenshots; not full native App/live account acceptance. Unpublished candidate 9644 is NOT included.
 
-| Dimension /10 | a770 | bf6 |
-|---|---:|---:|
-| Information hierarchy | 7.5 | 8 |
-| Readability | 7.5 | 7.5 |
-| Attention balance | 8.5 | 8 |
-| Consistency | 8 | 8.5 |
-| Interaction discoverability | 6.5 | 7 |
+| Dimension /10               | a770 | bf6 |
+| --------------------------- | ---: | --: |
+| Information hierarchy       |  7.5 |   8 |
+| Readability                 |  7.5 | 7.5 |
+| Attention balance           |  8.5 |   8 |
+| Consistency                 |    8 | 8.5 |
+| Interaction discoverability |  6.5 |   7 |
 
 Isolated row and Sidebar heading disappear; shared conversation/Information surface and inline Side chat remain. Light-theme scrollbar is still 6px and darker than in the a770 screenshot; do not claim it became thinner or unconditionally better. Long names, multiple widgets, actual hover and keyboard interactions are not verified. Installing production scrollbar visibility in the fixture alone is not proof of interaction acceptance. This is a bounded visual review, not whole-product completion.
 

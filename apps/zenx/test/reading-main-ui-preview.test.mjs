@@ -400,12 +400,16 @@ test("Information readiness follows the sole expanded toggle and visible dock, n
   assert.doesNotMatch(source, /information-dismiss-toolbar/);
 });
 
-
 test("scrollbar lifecycle changes trigger both short-reading path gates", async () => {
   const path = "apps/zenx/src/renderer/src/scrollbar-visibility.ts";
   assert.equal(readingPathsChanged([path]), true);
-  assert.equal(readingPathsChanged(["docs/ui-quality/evidence/example.png"]), false);
-  const workflow = await read("../../../.github/workflows/desktop-reading-ui.yml");
+  assert.equal(
+    readingPathsChanged(["docs/ui-quality/evidence/example.png"]),
+    false,
+  );
+  const workflow = await read(
+    "../../../.github/workflows/desktop-reading-ui.yml",
+  );
   assert(workflow.includes(`      - ${path}\n`));
   assert.match(workflow, /timeout-minutes: 6/);
 });
