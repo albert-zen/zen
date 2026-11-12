@@ -18,9 +18,10 @@ test("desktop assistant table cells reserve content width without selecting colu
   assert.ok(rule);
   assert.match(rule, /min-inline-size: calc\(6ch \+ 26px\);/u);
   assert.match(rule, /padding: 10px 12px;/u);
+  assert.match(rule, /vertical-align: top;/u);
   assert.doesNotMatch(
     rule,
-    /white-space|word-break|overflow-wrap|vertical-align|nth-child|font-size|line-height|table-layout/u,
+    /white-space|word-break|overflow-wrap|nth-child|font-size|line-height|table-layout/u,
   );
   assert.equal(
     (css.match(/min-inline-size: calc\(6ch \+ 26px\);/gu) ?? []).length,
