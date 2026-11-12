@@ -13479,29 +13479,37 @@ button:disabled {
     border-color: var(--color-focus-ring);
   }
 }
-/* Docked subagent identities lead; secondary status must not squeeze long names. */
+/* Preserve standalone rows; the desktop dock can wrap identity metadata. */
+.subagent-tree-identity {
+  display: contents;
+}
 @media (min-width: 961px) {
   .information-dock .subagent-tree-row {
     display: grid;
     grid-template-columns: 16px minmax(0, 1fr);
     column-gap: 8px;
-    row-gap: 3px;
     align-items: start;
   }
   .information-dock .subagent-tree-row > svg {
-    grid-column: 1;
-    grid-row: 1;
     margin-top: 2px;
   }
+  .information-dock .subagent-tree-identity {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: 8px;
+    row-gap: 3px;
+    min-width: 0;
+  }
   .information-dock .subagent-tree-title {
-    grid-column: 2;
-    grid-row: 1;
+    flex: 0 1 auto;
+    width: max-content;
+    max-width: 100%;
     line-height: 1.5;
   }
   .information-dock .subagent-tree-status {
-    grid-column: 2;
-    grid-row: 2;
     white-space: normal;
     overflow-wrap: anywhere;
+    max-width: 100%;
   }
 }

@@ -523,17 +523,19 @@ function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
                 }
               >
                 <Icon name="users" />
-                <span className="subagent-tree-title">
-                  {threadTitle(child)}
-                </span>
-                <span className="subagent-tree-status">
-                  {child.archived
-                    ? i18n.t("panels:archivedStatus")
-                    : child.status === "active"
-                      ? i18n.t("shell:working")
-                      : child.status === "systemError"
-                        ? i18n.t("panels:unavailable")
-                        : i18n.t("panels:idleStatus")}
+                <span className="subagent-tree-identity">
+                  <span className="subagent-tree-title">
+                    {threadTitle(child)}
+                  </span>
+                  <span className="subagent-tree-status">
+                    {child.archived
+                      ? i18n.t("panels:archivedStatus")
+                      : child.status === "active"
+                        ? i18n.t("shell:working")
+                        : child.status === "systemError"
+                          ? i18n.t("panels:unavailable")
+                          : i18n.t("panels:idleStatus")}
+                  </span>
                 </span>
               </button>
               <SubagentSidebarVisibility thread={child} />
