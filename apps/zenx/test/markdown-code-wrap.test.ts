@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-import { Markdown } from "../src/renderer/src/Markdown.js";
+import { Markdown, MessageLinkContext } from "../src/renderer/src/Markdown.js";
 import { i18n } from "../src/renderer/src/i18n.js";
 
 test("explicit code wrapping preserves the original payload and native button semantics", async () => {
@@ -133,7 +133,9 @@ test("closed code retains toggle identity and focus across streaming updates wit
     );
     assert.equal(buttons.length, 2);
     assert.equal(buttons[0], wrap);
-    assert.equal(buttons[1].getAttribute("aria-pressed"), "false");
+    const second = buttons[1];
+    assert.ok(second);
+    assert.equal(second.getAttribute("aria-pressed"), "false");
     assert.equal(document.activeElement, wrap);
     // Beginning and closing another streamed fence must not remount earlier blocks.
     await render(two + "\n\n```txt\nthird block");
@@ -146,10 +148,14 @@ test("closed code retains toggle identity and focus across streaming updates wit
     const all = container.querySelectorAll<HTMLButtonElement>(
       ".markdown-code-wrap",
     );
-    await act(async () => all[1].click());
+    const secondAfterUpdate = all[1];
+    const third = all[2];
+    assert.ok(secondAfterUpdate);
+    assert.ok(third);
+    await act(async () => secondAfterUpdate.click());
     await act(async () => wrap.click());
-    assert.equal(all[1].getAttribute("aria-pressed"), "true");
-    assert.equal(all[2].getAttribute("aria-pressed"), "false");
+    assert.equal(secondAfterUpdate.getAttribute("aria-pressed"), "true");
+    assert.equal(third.getAttribute("aria-pressed"), "false");
     assert.equal(wrap.getAttribute("aria-pressed"), "false");
   } finally {
     await act(async () => root.unmount());
@@ -238,5 +244,77 @@ test("nested and indented code remains conservative without exposing an unconfir
     assert.ok(container.querySelector(".markdown-code-wrap"));
   } finally {
     await act(async () => root.unmount());
+  }
+});
+
+test("file path Open, Copy and Wrap remain separate in both locales", async () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const path = "/synthetic/file-sidebar-preview/src/long-source.ts";
+  const opened: unknown[] = [];
+  const writes: string[] = [];
+  const oldNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      clipboard: {
+        writeText: async (text: string) => {
+          writes.push(text);
+        },
+      },
+    },
+  });
+  try {
+    for (const lang of ["en", "zh-CN"]) {
+      await act(async () => i18n.changeLanguage(lang));
+      await act(async () =>
+        root.render(
+          createElement(
+            MessageLinkContext.Provider,
+            {
+              value: (target) => {
+                opened.push(target);
+              },
+            },
+            createElement(Markdown, { text: "```text\n" + path + "\n```" }),
+          ),
+        ),
+      );
+      const open = container.querySelector<HTMLButtonElement>(
+        ".markdown-code-actions button:not(.markdown-code-copy):not(.markdown-code-wrap)",
+      );
+      const copy = container.querySelector<HTMLButtonElement>(
+        ".markdown-code-copy",
+      );
+      const wrap = container.querySelector<HTMLButtonElement>(
+        ".markdown-code-wrap",
+      );
+      assert.ok(open);
+      assert.ok(copy);
+      assert.ok(wrap);
+      assert.equal(new Set([open, copy, wrap]).size, 3);
+      assert.equal(open.textContent, lang === "en" ? "Open file" : "打开文件");
+      assert.equal(copy.textContent, lang === "en" ? "Copy" : "复制");
+      assert.equal(wrap.textContent, lang === "en" ? "Wrap lines" : "代码换行");
+      const before = opened.length;
+      await act(async () => wrap.click());
+      assert.equal(opened.length, before);
+      assert.equal(container.querySelector("pre code")?.textContent, path);
+      await act(async () => copy.click());
+      assert.equal(writes.at(-1), path);
+      assert.equal(opened.length, before);
+      await act(async () => open.click());
+      assert.deepEqual(opened.at(-1), { kind: "file", value: path });
+      assert.equal(opened.length, before + 1);
+      await act(async () => root.render(null));
+    }
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    await i18n.changeLanguage("en");
+    if (oldNavigator)
+      Object.defineProperty(globalThis, "navigator", oldNavigator);
+    else Reflect.deleteProperty(globalThis, "navigator");
   }
 });

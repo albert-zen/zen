@@ -17,37 +17,34 @@
 
 以下每项10分，全部16状态和4参考原图实际查看。截图评分不是功能验收，也不是跨产品公平排名；参考任务不同。Linear缺原图本轮N/O，不伪造评分。
 
-
-| 对象 | 主题 | 截图状态 | 长行可读性 | 控制发现与反馈 | 主对话层级 | 空间一致性 | 整体完成度 |
-|---|---|---|---:|---:|---:|---:|---:|
-| M | 深色 | long-unwrapped | 5.0 | 5.5 | 8.0 | 8.0 | 7.0 |
-| M | 深色 | horizontal-scroll | 5.5 | 6.0 | 8.0 | 8.0 | 7.0 |
-| M | 浅色 | long-unwrapped | 5.0 | 5.5 | 8.0 | 8.0 | 7.0 |
-| M | 浅色 | horizontal-scroll | 5.5 | 6.0 | 8.0 | 8.0 | 7.0 |
-| N | 深色 | long-unwrapped | 5.0 | 6.5 | 8.0 | 8.0 | 7.5 |
-| N | 深色 | horizontal-scroll | 5.5 | 7.0 | 8.0 | 8.0 | 7.5 |
-| N | 深色 | wrap-keyboard-focus | 5.5 | 7.0 | 8.0 | 8.0 | 7.5 |
-| N | 深色 | wrapped | 8.0 | 7.5 | 8.0 | 8.0 | 8.0 |
-| N | 深色 | copied | 8.0 | 8.0 | 8.0 | 7.5 | 8.0 |
-| N | 深色 | unwrapped-restored | 5.0 | 7.5 | 8.0 | 7.5 | 7.5 |
-| N | 浅色 | long-unwrapped | 5.0 | 6.5 | 8.0 | 8.0 | 7.5 |
-| N | 浅色 | horizontal-scroll | 5.5 | 7.0 | 8.0 | 8.0 | 7.5 |
-| N | 浅色 | wrap-keyboard-focus | 5.5 | 7.0 | 8.0 | 8.0 | 7.5 |
-| N | 浅色 | wrapped | 8.0 | 7.5 | 8.0 | 8.0 | 8.0 |
-| N | 浅色 | copied | 8.0 | 8.0 | 8.0 | 7.5 | 8.0 |
-| N | 浅色 | unwrapped-restored | 5.0 | 7.5 | 8.0 | 7.5 | 7.5 |
-
+| 对象 | 主题 | 截图状态            | 长行可读性 | 控制发现与反馈 | 主对话层级 | 空间一致性 | 整体完成度 |
+| ---- | ---- | ------------------- | ---------: | -------------: | ---------: | ---------: | ---------: |
+| M    | 深色 | long-unwrapped      |        5.0 |            5.5 |        8.0 |        8.0 |        7.0 |
+| M    | 深色 | horizontal-scroll   |        5.5 |            6.0 |        8.0 |        8.0 |        7.0 |
+| M    | 浅色 | long-unwrapped      |        5.0 |            5.5 |        8.0 |        8.0 |        7.0 |
+| M    | 浅色 | horizontal-scroll   |        5.5 |            6.0 |        8.0 |        8.0 |        7.0 |
+| N    | 深色 | long-unwrapped      |        5.0 |            6.5 |        8.0 |        8.0 |        7.5 |
+| N    | 深色 | horizontal-scroll   |        5.5 |            7.0 |        8.0 |        8.0 |        7.5 |
+| N    | 深色 | wrap-keyboard-focus |        5.5 |            7.0 |        8.0 |        8.0 |        7.5 |
+| N    | 深色 | wrapped             |        8.0 |            7.5 |        8.0 |        8.0 |        8.0 |
+| N    | 深色 | copied              |        8.0 |            8.0 |        8.0 |        7.5 |        8.0 |
+| N    | 深色 | unwrapped-restored  |        5.0 |            7.5 |        8.0 |        7.5 |        7.5 |
+| N    | 浅色 | long-unwrapped      |        5.0 |            6.5 |        8.0 |        8.0 |        7.5 |
+| N    | 浅色 | horizontal-scroll   |        5.5 |            7.0 |        8.0 |        8.0 |        7.5 |
+| N    | 浅色 | wrap-keyboard-focus |        5.5 |            7.0 |        8.0 |        8.0 |        7.5 |
+| N    | 浅色 | wrapped             |        8.0 |            7.5 |        8.0 |        8.0 |        8.0 |
+| N    | 浅色 | copied              |        8.0 |            8.0 |        8.0 |        7.5 |        8.0 |
+| N    | 浅色 | unwrapped-restored  |        5.0 |            7.5 |        8.0 |        7.5 |        7.5 |
 
 ### 参考对象
 
-| 参考对象 | 可见内容 / 主题 | 长行或结果可读性 | 控制发现与反馈 | 主对话层级 | 空间一致性 | 整体完成度 |
-|---|---|---:|---:|---:|---:|---:|
-| T3 | 深色，短代码及结果表格 | 8.0 | 7.0 | 8.5 | 8.5 | 8.5 |
-| Codex | 浅色，结果摘要及文件链接 | 8.5 | 8.0 | 8.5 | 8.5 | 9.0 |
-| Claude | 浅色，代码差异及执行摘要 | 7.5 | 7.0 | 8.0 | 8.0 | 8.0 |
-| DSH | 深色，完成摘要及任务状态 | 8.0 | 8.0 | 8.0 | 8.0 | 8.0 |
-| Linear | 无截图 | N/O | N/O | N/O | N/O | N/O |
-
+| 参考对象 | 可见内容 / 主题          | 长行或结果可读性 | 控制发现与反馈 | 主对话层级 | 空间一致性 | 整体完成度 |
+| -------- | ------------------------ | ---------------: | -------------: | ---------: | ---------: | ---------: |
+| T3       | 深色，短代码及结果表格   |              8.0 |            7.0 |        8.5 |        8.5 |        8.5 |
+| Codex    | 浅色，结果摘要及文件链接 |              8.5 |            8.0 |        8.5 |        8.5 |        9.0 |
+| Claude   | 浅色，代码差异及执行摘要 |              7.5 |            7.0 |        8.0 |        8.0 |        8.0 |
+| DSH      | 深色，完成摘要及任务状态 |              8.0 |            8.0 |        8.0 |        8.0 |        8.0 |
+| Linear   | 无截图                   |              N/O |            N/O |        N/O |        N/O |        N/O |
 
 完整论据、代价及建议见[原始盲评](BLIND-REVIEW.md)。新控制不提高默认截断文本可读性；开启后5→8，控制发现性有所改善。主要代价：块高增加、逻辑行/视觉续行边界不清、开启与焦点状态外观区分不足。保留默认横滚，不默认开启。
 
@@ -90,6 +87,7 @@
 ![after dark unwrapped-restored](after/reading-desktop-dark-code-unwrapped-restored.png)
 
 ## 本轮实际参考原图
+
 ![Codex actual reference](https://github.com/albert-zen/zen/blob/745389d3938e969b3d54592fc098a956a9bbd529/docs/ui-quality/references/official-desktop-demos-20261111/proactive-20s.png?raw=true)
 
 ![Claude Code actual reference](https://github.com/albert-zen/zen/blob/745389d3938e969b3d54592fc098a956a9bbd529/docs/ui-quality/references/claude-official-demo-20261111/product-demo-conversation.jpg?raw=true)
@@ -97,6 +95,5 @@
 ![T3 Code actual reference](https://github.com/albert-zen/zen/blob/745389d3938e969b3d54592fc098a956a9bbd529/docs/ui-quality/references/t3-runtime-6f13f36f/main-conversation-dark%281%29.jpg?raw=true)
 
 ![DeepSeek Harness actual reference](https://github.com/albert-zen/zen/blob/745389d3938e969b3d54592fc098a956a9bbd529/docs/ui-quality/references/deepseek-harness-production-fcc0ad4/subagents-dark.jpg?raw=true)
-
 
 T3固定版本[代码块源码](https://github.com/pingdotgg/t3code/blob/6f13f36fab31131917f178a904985f638913b26c/apps/web/src/components/chat/MarkdownCodeBlock.tsx)提供Wrap/Copy实现线索；原图只显示短代码，不声称已测其长行交互。后续值得评估的是清晰的开启/焦点状态与续行结构，而非继续压正文。更长真实代码、屏幕阅读器、缩放和原生应用仍未验收。
