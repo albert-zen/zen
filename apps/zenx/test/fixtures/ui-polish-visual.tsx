@@ -24,6 +24,7 @@ import {
   createReadingApprovalFixture,
   readingBrowserCommand,
 } from "./ui-polish-reading.js";
+import { codeWrapMarkdown, codeWrapText } from "./code-wrap-content.js";
 import { supportingRailsData } from "./supporting-rails-data.js";
 import type { NativeInformationApi } from "../../src/native-information.js";
 import { installScrollbarVisibility } from "../../src/renderer/src/scrollbar-visibility.js";
@@ -35,6 +36,24 @@ Object.assign(globalThis, { React });
 const params = new URLSearchParams(location.search);
 const rails = supportingRailsData(params.get("rails"));
 const readingScene = params.get("scene") === "reading";
+const codeWrapScene = readingScene && params.get("codeWrap") === "1";
+// This opt-in synthetic probe records writes only; it never reads or writes the OS clipboard.
+if (codeWrapScene) {
+  const probe = {
+    text: codeWrapText,
+    copied: [] as string[],
+    kind: "synthetic-clipboard-only",
+  };
+  Object.assign(window, { __codeWrapFixture: probe });
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText: async (text: string) => {
+        probe.copied.push(text);
+      },
+    },
+  });
+}
 const readingPending = readingScene && params.get("pending") === "1";
 const readingApprovalFixture = readingScene
   ? createReadingApprovalFixture(readingPending)
@@ -88,7 +107,13 @@ const options = {
   request: async (method: string, request?: unknown) => {
     uiPolishTelemetry.protocolCalls.push(method);
     if (readingScene)
-      return readReadingRequest(method, request, thread(), readingPending);
+      return readReadingRequest(
+        method,
+        request,
+        thread(),
+        readingPending,
+        codeWrapScene ? codeWrapMarkdown : undefined,
+      );
     if (
       params.get("scene") === "navigation" &&
       method === "zen/thread/questions/list"

@@ -66,7 +66,11 @@ The most revealing moment is often a transition rather than a still image. Openi
 This closing section deliberately extends the document beyond the first viewport. It provides another heading and a sustained paragraph for reviewing scroll position, comfortable line length, and the relationship between the bottom of the answer and the composer. All content is deterministic, all names are generic, and no external service is contacted. A screenshot is evidence of this particular synthetic scene, not evidence that a real task was executed.
 `;
 
-export function readingRecovery(base: Thread, pending: boolean) {
+export function readingRecovery(
+  base: Thread,
+  pending: boolean,
+  markdown = readingMarkdown,
+) {
   if (base.id !== "thread-1") throw new Error("Unexpected reading owner");
   const recovery = nativeRecoveryForThread(
     {
@@ -88,7 +92,7 @@ export function readingRecovery(base: Thread, pending: boolean) {
             {
               id: "reading-answer",
               type: "agentMessage",
-              text: readingMarkdown,
+              text: markdown,
               phase: "final_answer",
               memoryCitation: null,
             },
@@ -154,6 +158,7 @@ export function readReadingRequest(
   request: unknown,
   base: Thread,
   pending: boolean,
+  markdown = readingMarkdown,
 ) {
   if (method === "zen/initialize") {
     if (
@@ -170,9 +175,9 @@ export function readReadingRequest(
   if (method === "zen/thread/questions/list")
     return readNavigationQuestions(request);
   if (method === "zen/thread/resume" || method === "zen/thread/resume-window")
-    return readingRecovery(base, pending);
+    return readingRecovery(base, pending, markdown);
   if (method === "zen/thread/read")
-    return { thread: readingRecovery(base, pending).thread };
+    return { thread: readingRecovery(base, pending, markdown).thread };
   throw new Error(`Unsupported read-only reading protocol: ${method}`);
 }
 

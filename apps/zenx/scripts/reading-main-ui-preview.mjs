@@ -1,3 +1,4 @@
+import { captureCodeWrap } from "./code-wrap-main-ui-preview.mjs";
 import { captureScrollbarStates } from "./scrollbar-main-ui-preview.mjs";
 import assert from "node:assert/strict";
 import { dispatchNavigationKey } from "./navigation-main-ui-preview.mjs";
@@ -658,6 +659,17 @@ export async function captureDesktopReading({
       "New request does not take focus from Composer",
     );
     assert.match(newer.approvalScopeText, /once|one.time|this call/i);
+    await captureCodeWrap({
+      send,
+      evaluate,
+      wait,
+      click,
+      capture,
+      evidence,
+      options,
+      url,
+      scrollToTop: () => scroll(),
+    });
     (evidence.approvalReadingTrips ??= []).push({
       theme: options.theme,
       defaultCardHeight: fullApproval.approval.rect.height,
@@ -681,6 +693,9 @@ export async function captureDesktopReading({
 }
 
 export const readingPaths = [
+  "apps/zenx/scripts/code-wrap-main-ui-preview.mjs",
+  "apps/zenx/test/code-wrap-main-ui-preview.test.mjs",
+  "apps/zenx/test/fixtures/code-wrap-content.ts",
   "apps/zenx/src/renderer/src/Sidebar.tsx",
   "apps/zenx/test/sidebar-information-interaction.test.ts",
   "apps/zenx/test/sidebar-name-preview.test.mjs",
