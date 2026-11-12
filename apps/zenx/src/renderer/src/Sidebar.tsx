@@ -1762,6 +1762,15 @@ function ProjectRows({
           />
           <Icon name="folder" size={14} />
           <span>{group.label}</span>
+          {group.threads.length === 0 && open && !projectReorder?.dragging ? (
+            <span
+              className="project-empty-inline"
+              aria-hidden="true"
+              title={i18n.t("shell:noThreadsYet")}
+            >
+              {i18n.t("shell:emptyProjectStatus")}
+            </span>
+          ) : null}
           {pinnedProject ? (
             <Icon
               name="pin"
@@ -3304,3 +3313,4 @@ async function reorderAndRestoreFocus(
     }
   }
 }
+
