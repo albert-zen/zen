@@ -731,6 +731,7 @@ export const readingPaths = [
   "apps/zenx/src/renderer/src/subagents.css",
   "apps/zenx/test/subagents-ui.test.ts",
   "apps/zenx/scripts/child-question-main-ui-preview.mjs",
+  "apps/zenx/scripts/child-question-main-ui-preview.d.mts",
   "apps/zenx/test/fixtures/child-question-data.ts",
   "apps/zenx/test/child-question-main-ui-preview.test.ts",
   "apps/zenx/scripts/empty-project-main-ui-preview.mjs",

@@ -59,6 +59,7 @@ const sources = new Set([
   "apps/zenx/test/preview-fonts.test.mjs",
   "apps/zenx/scripts/reading-main-ui-preview.mjs",
   "apps/zenx/scripts/child-question-main-ui-preview.mjs",
+  "apps/zenx/scripts/child-question-main-ui-preview.d.mts",
   "apps/zenx/test/fixtures/child-question-data.ts",
   "apps/zenx/test/child-question-main-ui-preview.test.ts",
   "apps/zenx/scripts/empty-project-main-ui-preview.mjs",

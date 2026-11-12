@@ -7,6 +7,7 @@ on:
       - apps/zenx/src/renderer/src/subagents.css
       - apps/zenx/test/subagents-ui.test.ts
       - apps/zenx/scripts/child-question-main-ui-preview.mjs
+      - apps/zenx/scripts/child-question-main-ui-preview.d.mts
       - apps/zenx/test/fixtures/child-question-data.ts
       - apps/zenx/test/child-question-main-ui-preview.test.ts
       - apps/zenx/src/renderer/src/Markdown.tsx
@@ -88,7 +89,7 @@ jobs:
         if: steps.selection.outputs.needsCapture == 'true'
         run: npm run build --workspace @zenx/plugin-sdk
       - if: steps.selection.outputs.needsCapture == 'true'
-        run: node --import tsx --test apps/zenx/test/preview-fonts.test.mjs apps/zenx/test/reading-main-ui-preview.test.mjs apps/zenx/test/reading-fixture.test.ts apps/zenx/test/scrollbar-main-ui-preview.test.mjs apps/zenx/test/subagents-ui.test.ts apps/zenx/test/child-question-main-ui-preview.test.ts
+        run: node --import tsx --test apps/zenx/test/preview-fonts.test.mjs apps/zenx/test/reading-main-ui-preview.test.mjs apps/zenx/test/reading-fixture.test.ts apps/zenx/test/scrollbar-main-ui-preview.test.mjs apps/zenx/test/child-question-main-ui-preview.test.ts
       - if: steps.selection.outputs.needsCapture == 'true'
         run: node apps/zenx/scripts/build-main-ui-preview.mjs "${{ runner.temp }}/desktop-reading" reading
         timeout-minutes: 2
@@ -98,6 +99,9 @@ jobs:
           ZENX_PREVIEW_FONT_RECEIPT: ${{ runner.temp }}/preview-fonts/fonts.json
         run: node apps/zenx/scripts/capture-main-ui-preview.mjs "${{ runner.temp }}/desktop-reading" desktop-reading
         timeout-minutes: 2
+      - name: Targeted question-attention DOM checks (baseline without matching tests is not acceptance)
+        if: steps.selection.outputs.needsCapture == 'true'
+        run: timeout 30s node --import tsx --test --test-timeout=10000 --test-name-pattern='^subagent question attention follows Host summaries independently of activity' apps/zenx/test/subagents-ui.test.ts
       - uses: actions/upload-artifact@v4
         if: always() && steps.selection.outputs.needsCapture == 'true'
         with:

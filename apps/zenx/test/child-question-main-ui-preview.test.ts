@@ -134,9 +134,23 @@ test("workflow and last-commit gates retain short budget and cover product chang
   }
   assert.match(workflow, /timeout-minutes: 6/);
   assert.match(workflow, /contents: read/);
-  assert.match(
-    workflow,
-    /run: node --import tsx --test .*subagents-ui.test.ts/,
+  assert(
+    workflow.includes(
+      "timeout 30s node --import tsx --test --test-timeout=10000 --test-name-pattern='^subagent question attention follows Host summaries independently of activity'",
+    ),
+  );
+  assert(
+    workflow.indexOf("Targeted question-attention DOM checks") >
+      workflow.indexOf(
+        "run: node apps/zenx/scripts/capture-main-ui-preview.mjs",
+      ),
+  );
+  assert(
+    workflow.indexOf("Targeted question-attention DOM checks") <
+      workflow.indexOf("- uses: actions/upload-artifact@v4"),
+  );
+  assert(
+    workflow.includes("if: always() && steps.selection.outputs.needsCapture"),
   );
 });
 
