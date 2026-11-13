@@ -413,3 +413,210 @@ test("scrollbar lifecycle changes trigger both short-reading path gates", async 
   assert(workflow.includes(`      - ${path}\n`));
   assert.match(workflow, /timeout-minutes: 6/);
 });
+
+// Optional data scene, exercised by the existing desktop-reading capture only.
+import {
+  inlineTraceGeometryReady,
+  verifyInlineTrace,
+} from "../scripts/inline-trace-main-ui-preview.mjs";
+
+test("inline trace waits when output becomes visible before its full panel", () => {
+  const state = {
+    turns: [
+      { answerMarker: { visible: true } },
+      {
+        answerMarker: { visible: true },
+        failedOutput: { visible: true },
+        traces: [{ expanded: "true", visible: true, detailVisible: false }],
+      },
+    ],
+    dockOpen: true,
+    dockVisible: true,
+  };
+  assert.equal(inlineTraceGeometryReady(state, true), false);
+  state.turns[1].traces[0].detailVisible = true;
+  assert.equal(inlineTraceGeometryReady(state, true), true);
+  state.turns[0].answerMarker.visible = false;
+  assert.equal(inlineTraceGeometryReady(state, true), false);
+  state.turns[0].answerMarker.visible = true;
+  assert.equal(inlineTraceGeometryReady(state, false), false);
+  state.turns[1].failedOutput.visible = false;
+  assert.equal(inlineTraceGeometryReady(state, false), true);
+  assert.equal(inlineTraceGeometryReady({ ...state, turns: [] }, false), false);
+});
+test("inline trace preserves answers, Information and mutation-free bridge", () => {
+  const baseline = {
+    turns: [
+      {
+        answer: "Summary checked",
+        expanded: "false",
+        traces: [],
+        answerMarker: { visible: true },
+        failedOutput: { visible: false },
+      },
+      {
+        answer: "Label check needs attention",
+        expanded: "true",
+        traces: [{ expanded: "false" }],
+        answerMarker: { visible: true },
+        failedOutput: { visible: false },
+      },
+    ],
+    dockOpen: true,
+    dockVisible: true,
+    telemetry: {
+      informationUpdates: 0,
+      machineThreadCreateCalls: 0,
+      sideChatCreateCommandCalls: 0,
+      protocolCalls: [],
+      informationReads: [],
+    },
+  };
+  verifyInlineTrace(baseline, null, false);
+  const next = structuredClone(baseline);
+  next.turns[1].failedOutput.visible = true;
+  next.turns[1].text = "Expected reader_name, received reader_label";
+  next.turns[1].traces = [
+    {
+      expanded: "true",
+      visible: true,
+      detailVisible: true,
+      detailText: "Expected reader_name, received reader_label",
+    },
+  ];
+  next.telemetry.informationReads.push({ kind: "thread", id: "thread-1" });
+  verifyInlineTrace(next, baseline, true);
+  for (const mutate of [
+    (s) => (s.dockVisible = false),
+    (s) => (s.turns[0].answerMarker.visible = false),
+    (s) => (s.turns[1].failedOutput.visible = false),
+    (s) => (s.turns[0].expanded = "true"),
+    (s) => (s.turns[1].answer = "lost"),
+    (s) => s.telemetry.informationUpdates++,
+    (s) => s.telemetry.sideChatCreateCommandCalls++,
+    (s) => s.telemetry.protocolCalls.push("zen/turn/send"),
+  ]) {
+    const bad = structuredClone(next);
+    mutate(bad);
+    assert.throws(() => verifyInlineTrace(bad, baseline, true));
+  }
+});
+test("inline trace uses native pointer and stays desktop scoped", async () => {
+  const module = await read("../scripts/inline-trace-main-ui-preview.mjs");
+  const parent = await read("../scripts/reading-main-ui-preview.mjs");
+  assert.match(
+    module,
+    /section\.turn:has\(\.agent-copy \[data-thread-find-item-id=/,
+  );
+  assert.doesNotMatch(module, /section\.turn\[data-read-message-id=/);
+  assert.match(module, /mousePressed/);
+  assert.match(module, /mouseReleased/);
+  assert.match(module, /mouseWheel/);
+  assert.doesNotMatch(module, /\.click\(\)|dispatchEvent\(/);
+  assert.match(module, /inlineTrace.*1/);
+  assert.match(parent, /await captureInlineTrace/);
+  assert.match(
+    await read("../scripts/build-main-ui-preview.mjs"),
+    /"apps\/zenx\/scripts\/inline-trace-main-ui-preview\.mjs"/,
+  );
+  assert.equal(
+    readingPathsChanged(["apps/zenx/scripts/inline-trace-main-ui-preview.mjs"]),
+    true,
+  );
+});
+
+test("inline trace observer rejects retained, ancestor-hidden and clipped original output", async () => {
+  const { JSDOM } = await import("jsdom");
+  const { observeInlineTrace } =
+    await import("../scripts/inline-trace-main-ui-preview.mjs");
+  const dom = new JSDOM(
+    `<div class="messages"><section class="turn"><div class="agent-copy"><h2>Summary checked</h2></div></section><section class="turn"><div class="agent-copy"><h2>Label check needs attention</h2></div><div id="clip" style="overflow-x:hidden;overflow-y:hidden"><div id="detail"><span>Expected reader_name, received reader_label</span></div></div></section></div><div class="composer"></div><div class="information-dock"></div>`,
+  );
+  const keys = [
+    "document",
+    "window",
+    "NodeFilter",
+    "getComputedStyle",
+    "innerWidth",
+    "innerHeight",
+  ];
+  const saved = Object.fromEntries(keys.map((k) => [k, globalThis[k]]));
+  let clipHeight = 100,
+    outputX = 100;
+  const rect = (x, y, width, height) => ({
+    x,
+    y,
+    left: x,
+    top: y,
+    width,
+    height,
+    right: x + width,
+    bottom: y + height,
+  });
+  dom.window.HTMLElement.prototype.getBoundingClientRect = function () {
+    if (this.className === "messages") return rect(0, 0, 900, 700);
+    if (this.className === "composer") return rect(0, 700, 900, 100);
+    if (this.id === "clip") return rect(90, 280, 600, clipHeight);
+    return rect(90, 290, 600, 60);
+  };
+  for (const [name, dimension] of [
+    ["clientWidth", "width"],
+    ["clientHeight", "height"],
+  ])
+    Object.defineProperty(dom.window.HTMLElement.prototype, name, {
+      get() {
+        return this.getBoundingClientRect()[dimension];
+      },
+    });
+  dom.window.Range.prototype.getBoundingClientRect = function () {
+    return rect(
+      this.startContainer.textContent.includes("Expected") ? outputX : 100,
+      300,
+      300,
+      20,
+    );
+  };
+  Object.assign(globalThis, {
+    document: dom.window.document,
+    window: dom.window,
+    NodeFilter: dom.window.NodeFilter,
+    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+    innerWidth: 1280,
+    innerHeight: 900,
+  });
+  dom.window.__uiPolishTelemetry = {};
+  try {
+    const read = () => observeInlineTrace().turns[1].failedOutput;
+    const clip = document.getElementById("clip");
+    assert.equal(read().visible, true);
+    clipHeight = 10;
+    assert.equal(
+      read().visible,
+      false,
+      "Range can stay full while overflow parent clips",
+    );
+    clipHeight = 100;
+    for (const attr of ["hidden", "inert", "aria-hidden"]) {
+      clip.setAttribute(attr, attr === "aria-hidden" ? "true" : "");
+      assert.equal(read().visible, false, attr);
+      clip.removeAttribute(attr);
+    }
+    clip.style.visibility = "hidden";
+    assert.equal(read().visible, false);
+    clip.style.visibility = "";
+    clip.style.opacity = "0";
+    assert.equal(read().visible, false);
+    clip.style.opacity = "";
+    outputX = 1000;
+    assert.equal(
+      read().visible,
+      false,
+      "off transcript even if DOM range exists",
+    );
+    outputX = 100;
+    assert.equal(read().visible, true, "restored visible geometry");
+  } finally {
+    Object.assign(globalThis, saved);
+    dom.window.close();
+  }
+});

@@ -61,6 +61,7 @@ const childQuestionData = childQuestionScene
 const questionListeners = new Set<(method: string, params: unknown) => void>();
 const readingScene = params.get("scene") === "reading";
 const resultScene = readingScene && params.get("results") === "1";
+const inlineTraceScene = resultScene && params.get("inlineTrace") === "1";
 const codeWrapScene = readingScene && params.get("codeWrap") === "1";
 // Independent synthetic keyboard probe; existing scenes retain their exact text.
 const tableKeyboardMode =
@@ -164,6 +165,7 @@ const options = {
         readingPending,
         codeWrapScene ? codeWrapMarkdown : tableKeyboardMarkdown,
         resultScene,
+        inlineTraceScene,
       );
     if (
       params.get("scene") === "navigation" &&

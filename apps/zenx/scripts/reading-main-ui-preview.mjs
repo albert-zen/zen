@@ -1,3 +1,4 @@
+import { captureInlineTrace } from "./inline-trace-main-ui-preview.mjs";
 import { captureChildQuestions } from "./child-question-main-ui-preview.mjs";
 import { captureEmptyProjects } from "./empty-project-main-ui-preview.mjs";
 import { captureResultReading } from "./result-reading-main-ui-preview.mjs";
@@ -693,6 +694,15 @@ export async function captureDesktopReading({
       url,
       scroll,
     });
+    await captureInlineTrace({
+      send,
+      evaluate,
+      wait,
+      capture,
+      evidence,
+      options,
+      url,
+    });
     await captureCodeWrap({
       send,
       evaluate,
@@ -727,6 +737,7 @@ export async function captureDesktopReading({
 }
 
 export const readingPaths = [
+  "apps/zenx/scripts/inline-trace-main-ui-preview.mjs",
   "apps/zenx/src/renderer/src/subagents-ui.tsx",
   "apps/zenx/src/renderer/src/subagents.css",
   "apps/zenx/test/subagents-ui.test.ts",

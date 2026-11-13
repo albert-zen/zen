@@ -354,3 +354,38 @@ test("replacement hook remains reading-only and never relaxes approval response 
     /Reading bridge denied/,
   );
 });
+
+test("optional inline trace preserves failed shell result through production projection", () => {
+  for (const pending of [false, true])
+    for (const results of [false, true]) {
+      assert.deepEqual(
+        readingRecovery(base, pending, undefined, results),
+        readingRecovery(base, pending, undefined, results, false),
+      );
+    }
+  const recovery = readingRecovery(base, false, undefined, true, true);
+  const projected = projectNativeThread(recovery.thread);
+  assert.equal(projected.turns.length, 2);
+  const first = projected.turns[0],
+    second = projected.turns[1];
+  assert(first && second);
+  assert.equal(first.status, "completed");
+  assert.equal(second.status, "completed");
+  const success = first.items.find((i) => i.type === "commandExecution");
+  const failed = second.items.find((i) => i.type === "commandExecution");
+  assert(
+    success?.type === "commandExecution" && failed?.type === "commandExecution",
+  );
+  assert.equal(success.exitCode, 0);
+  assert.equal(failed.exitCode, 1);
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.command, "synthetic-check labels");
+  assert.match(
+    failed.aggregatedOutput ?? "",
+    /Expected reader_name, received reader_label/,
+  );
+  const answer = second.items.find((i) => i.type === "agentMessage");
+  assert(answer?.type === "agentMessage");
+  assert.match(answer.text, /Label check needs attention/);
+  assert.equal(projected.queuedMessages?.length ?? 0, 0);
+});

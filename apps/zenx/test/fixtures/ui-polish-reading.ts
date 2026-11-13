@@ -2,7 +2,7 @@ import {
   resultReadingPrompts,
   resultReadingAnswers,
 } from "./result-reading-content.js";
-import type { Thread } from "../../src/protocol-client/index.js";
+import type { Thread, ThreadItem } from "../../src/protocol-client/index.js";
 import type {
   ApprovalRequestEvent,
   ApprovalResolvedEvent,
@@ -70,11 +70,39 @@ The most revealing moment is often a transition rather than a still image. Openi
 This closing section deliberately extends the document beyond the first viewport. It provides another heading and a sustained paragraph for reviewing scroll position, comfortable line length, and the relationship between the bottom of the answer and the composer. All content is deterministic, all names are generic, and no external service is contacted. A screenshot is evidence of this particular synthetic scene, not evidence that a real task was executed.
 `;
 
+/** Display-only execution records. No command is dispatched or retried. */
+function inlineReadingCommand(index: number): ThreadItem {
+  return {
+    type: "commandExecution",
+    id: `inline-reading-command-${index}`,
+    pluginId: null,
+    scriptPath: null,
+    command: index === 0 ? "synthetic-check summary" : "synthetic-check labels",
+    cwd: "/synthetic-display-only",
+    toolName: "shell",
+    toolArguments: {
+      command:
+        index === 0 ? "synthetic-check summary" : "synthetic-check labels",
+    },
+    processId: null,
+    source: "agent",
+    status: index === 0 ? "completed" : "failed",
+    commandActions: [],
+    aggregatedOutput:
+      index === 0
+        ? "Synthetic display record: summary matched. No command was executed."
+        : "Synthetic display record: label mismatch. Expected reader_name, received reader_label. No command was executed.",
+    exitCode: index === 0 ? 0 : 1,
+    durationMs: null,
+  };
+}
+
 export function readingRecovery(
   base: Thread,
   pending: boolean,
   markdown = readingMarkdown,
   resultScene = false,
+  inlineTrace = false,
 ) {
   if (base.id !== "thread-1") throw new Error("Unexpected reading owner");
   const recovery = nativeRecoveryForThread(
@@ -85,7 +113,13 @@ export function readingRecovery(
           ? base.name
           : "A quieter workspace for careful reading",
       turns: resultScene
-        ? resultReadingAnswers.map((text, index) => ({
+        ? (inlineTrace
+            ? [
+                "## Summary checked\n\nThe synthetic summary matched. This is display-only data; no command was executed.",
+                "## Label check needs attention\n\nThe synthetic label check failed: expected reader_name, received reader_label. The answer is complete, but this check did not pass. Inspect the failed execution detail for the original display-only output. No command was executed or retried.",
+              ]
+            : resultReadingAnswers
+          ).map((text, index) => ({
             id: `result-turn-${index}`,
             itemsView: "full",
             status: "completed",
@@ -101,11 +135,16 @@ export function readingRecovery(
                 content: [
                   {
                     type: "text",
-                    text: resultReadingPrompts[index]!,
+                    text: inlineTrace
+                      ? index === 0
+                        ? "Review the synthetic summary."
+                        : "Review the synthetic labels; do not run commands."
+                      : resultReadingPrompts[index]!,
                     text_elements: [],
                   },
                 ],
               },
+              ...(inlineTrace ? [inlineReadingCommand(index)] : []),
               {
                 id: `result-answer-${index}`,
                 type: "agentMessage",
@@ -196,6 +235,7 @@ export function readReadingRequest(
   pending: boolean,
   markdown = readingMarkdown,
   resultScene = false,
+  inlineTrace = false,
 ) {
   if (method === "zen/initialize") {
     if (
@@ -212,10 +252,11 @@ export function readReadingRequest(
   if (method === "zen/thread/questions/list")
     return readNavigationQuestions(request);
   if (method === "zen/thread/resume" || method === "zen/thread/resume-window")
-    return readingRecovery(base, pending, markdown, resultScene);
+    return readingRecovery(base, pending, markdown, resultScene, inlineTrace);
   if (method === "zen/thread/read")
     return {
-      thread: readingRecovery(base, pending, markdown, resultScene).thread,
+      thread: readingRecovery(base, pending, markdown, resultScene, inlineTrace)
+        .thread,
     };
   throw new Error(`Unsupported read-only reading protocol: ${method}`);
 }
