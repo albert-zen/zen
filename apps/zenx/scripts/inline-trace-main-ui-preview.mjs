@@ -136,6 +136,11 @@ export function observeInlineTrace() {
           text: b.textContent,
           expanded: b.getAttribute("aria-expanded"),
           visible: visible(b),
+          exitFact: b.querySelector(".trace-shell-exit")?.textContent?.trim(),
+          exitFactVisible: measure(
+            b.querySelector(".trace-shell-exit"),
+            "Exit code 1",
+          ).visible,
           detailVisible: visible(
             document.getElementById(b.getAttribute("aria-controls")),
           ),
@@ -185,6 +190,12 @@ export function verifyInlineTrace(state, baseline, expanded) {
     "Earlier turn stays collapsed",
   );
   assert.equal(state.turns[1].expanded, "true");
+  assert(
+    state.turns[1].traces.some(
+      (t) => t.visible && t.exitFactVisible && t.exitFact === "· Exit code 1",
+    ),
+    "Direct shell exit fact is visible before and after disclosure",
+  );
   assert(
     state.turns.every((t) => t.answerMarker.visible),
     "Both final answer markers fully visible in transcript above Composer",

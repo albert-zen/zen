@@ -522,7 +522,14 @@ test("inline trace preserves answers, Information and mutation-free bridge", () 
       {
         answer: "Label check needs attention",
         expanded: "true",
-        traces: [{ expanded: "false" }],
+        traces: [
+          {
+            expanded: "false",
+            visible: true,
+            exitFact: "· Exit code 1",
+            exitFactVisible: true,
+          },
+        ],
         answerMarker: { visible: true },
         failedOutput: { visible: false },
       },
@@ -545,6 +552,8 @@ test("inline trace preserves answers, Information and mutation-free bridge", () 
     {
       expanded: "true",
       visible: true,
+      exitFact: "· Exit code 1",
+      exitFactVisible: true,
       detailVisible: true,
       detailText: "Expected reader_name, received reader_label",
     },
@@ -555,6 +564,8 @@ test("inline trace preserves answers, Information and mutation-free bridge", () 
     (s) => (s.dockVisible = false),
     (s) => (s.turns[0].answerMarker.visible = false),
     (s) => (s.turns[1].failedOutput.visible = false),
+    (s) => (s.turns[1].traces[0].exitFact = undefined),
+    (s) => (s.turns[1].traces[0].exitFactVisible = false),
     (s) => (s.turns[0].expanded = "true"),
     (s) => (s.turns[1].answer = "lost"),
     (s) => s.telemetry.informationUpdates++,
