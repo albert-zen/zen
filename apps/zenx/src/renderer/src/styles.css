@@ -13574,3 +13574,11 @@ button:disabled {
     }
   }
 }
+
+/* Desktop Sidebar: retain readable secondary copy on its darker surfaces. */
+@media (min-width: 961px) {
+  .sidebar .project-empty,
+  .sidebar .thread-row.selected .thread-model {
+    color: var(--color-text-secondary);
+  }
+}
