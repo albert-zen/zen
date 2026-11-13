@@ -43,6 +43,34 @@ await withPreviewBrowser(
       })
     };
   })()`);
+    const key = async (key, windowsVirtualKeyCode) => {
+      for (const type of ["keyDown", "keyUp"]) {
+        await send("Input.dispatchKeyEvent", {
+          type,
+          key,
+          code: key,
+          windowsVirtualKeyCode,
+        });
+      }
+    };
+    const revealSelector = ".workspace-conversation-title-reveal";
+    const reveal = () =>
+      evaluate(`(() => {
+      const element = document.querySelector('${revealSelector}');
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return { text: element.textContent, ariaHidden: element.getAttribute('aria-hidden'),
+        visible: rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none',
+        fits: rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight,
+        x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+    })()`);
+    const waitReveal = (text) =>
+      wait(
+        `document.querySelector('${revealSelector}')?.textContent === ${JSON.stringify(text)}`,
+      );
+    const waitNoReveal = () =>
+      wait(`!document.querySelector('${revealSelector}')`);
     // Evidence baseline, not a claim that clipped titles are visually distinguishable.
     // Keep this separate so the existing distinct-title and many-tab checks stay intact.
     for (const language of ["en", "zh"]) {
@@ -75,6 +103,7 @@ await withPreviewBrowser(
             const rail = document.querySelector('[role="tablist"]');
             return {
               selected: window.__uiPolishAuxiliary.getState().selected,
+              openChangeRequests: [...window.__uiPolishAuxiliary.getState().openChangeRequests],
               sourceConversations: window.__uiPolishAuxiliary.getState().sourceConversations,
               renderedThreadId: document.querySelector('[role="tabpanel"]:not([hidden]) [data-synthetic-thread-id]')?.getAttribute('data-synthetic-thread-id'),
               conversationHeading: document.querySelector('[role="tabpanel"]:not([hidden]) .auxiliary-conversation-heading > span')?.textContent,
@@ -104,10 +133,9 @@ await withPreviewBrowser(
             names,
             "DOM labels preserve full synthetic source names",
           );
-          assert.deepEqual(
-            before.tabs.map((tab) => tab.title),
-            names,
-            "full names remain available in native title metadata",
+          assert.ok(
+            before.tabs.every((tab) => tab.title === ""),
+            "conversation reveal replaces duplicate native title tooltip",
           );
           assert.equal(before.selected, "thread:synthetic-lookalike-1");
           assert.equal(
@@ -117,6 +145,129 @@ await withPreviewBrowser(
           );
           assert.equal((await geometry()).overflowControls, 0);
           await screenshot(`tabs-lookalike-${language}-${width}-${theme}.png`);
+          const restingGeometry = await geometry();
+          const hoverPoint = before.tabs[0].labelRect;
+          await send("Input.dispatchMouseEvent", {
+            type: "mouseMoved",
+            x: hoverPoint.x + hoverPoint.width / 2,
+            y: hoverPoint.y + hoverPoint.height / 2,
+          });
+          await waitReveal(names[0]);
+          const pointerReveal = await reveal();
+          assert.ok(pointerReveal.visible && pointerReveal.fits);
+          assert.equal(
+            pointerReveal.ariaHidden,
+            "true",
+            "visual duplicate is not an extra accessible name",
+          );
+          assert.deepEqual(
+            await geometry(),
+            restingGeometry,
+            "hover does not resize, scroll or select tabs",
+          );
+          assert.equal((await readNames()).selected, before.selected);
+          await screenshot(
+            `tabs-lookalike-${language}-${width}-${theme}-pointer-reveal.png`,
+          );
+          await send("Input.dispatchMouseEvent", {
+            type: "mouseMoved",
+            x: pointerReveal.x + pointerReveal.width / 2,
+            y: pointerReveal.y + pointerReveal.height / 2,
+          });
+          await delay(400);
+          assert.equal(
+            (await reveal())?.text,
+            names[0],
+            "pointer can enter and read the reveal without dismissal",
+          );
+          await send("Input.dispatchMouseEvent", {
+            type: "mouseMoved",
+            x: 20,
+            y: 500,
+          });
+          await waitNoReveal();
+          const betaPoint = before.tabs[1].labelRect;
+          await send("Input.dispatchMouseEvent", {
+            type: "mouseMoved",
+            x: betaPoint.x + betaPoint.width / 2,
+            y: betaPoint.y + betaPoint.height / 2,
+          });
+          await waitReveal(names[1]);
+          const pointerBetaReveal = await reveal();
+          assert.ok(pointerBetaReveal.visible && pointerBetaReveal.fits);
+          assert.equal(
+            (await readNames()).selected,
+            before.selected,
+            "pointer inspection does not activate a conversation",
+          );
+          for (const type of ["mousePressed", "mouseReleased"]) {
+            await send("Input.dispatchMouseEvent", {
+              type,
+              button: "left",
+              clickCount: 1,
+              x: betaPoint.x + betaPoint.width / 2,
+              y: betaPoint.y + betaPoint.height / 2,
+            });
+          }
+          await wait(
+            `document.activeElement?.id === 'aux-tab-thread:synthetic-lookalike-1'`,
+          );
+          assert.equal(
+            await evaluate(`document.activeElement.matches(':focus-visible')`),
+            false,
+            "real pointer click leaves Beta mouse-focused, not keyboard focus-visible",
+          );
+          await send("Input.dispatchMouseEvent", {
+            type: "mouseMoved",
+            x: hoverPoint.x + hoverPoint.width / 2,
+            y: hoverPoint.y + hoverPoint.height / 2,
+          });
+          await waitReveal(names[0]);
+          await key("Escape", 27);
+          await waitNoReveal();
+          await delay(450);
+          assert.equal(
+            await reveal(),
+            null,
+            "Escape stays dismissed while hovered",
+          );
+          const mouseFocusedEscape = await readNames();
+          assert.equal(mouseFocusedEscape.selected, before.selected);
+          assert.equal(
+            mouseFocusedEscape.renderedThreadId,
+            "synthetic-lookalike-1",
+          );
+          assert.ok(
+            mouseFocusedEscape.tabs[1].focused,
+            "Escape dismisses inactive Alpha reveal without moving mouse focus from Beta",
+          );
+          assert.deepEqual(
+            mouseFocusedEscape.openChangeRequests,
+            [],
+            "Escape with a reveal must not request workspace closure",
+          );
+          await send("Input.dispatchMouseEvent", {
+            type: "mouseMoved",
+            x: 20,
+            y: 500,
+          });
+          await send("Input.dispatchMouseEvent", {
+            type: "mouseMoved",
+            x: hoverPoint.x + hoverPoint.width / 2,
+            y: hoverPoint.y + hoverPoint.height / 2,
+          });
+          await waitReveal(names[0]);
+          assert.deepEqual(
+            await geometry(),
+            restingGeometry,
+            "repeated pointer inspection preserves layout and selection",
+          );
+          await send("Input.dispatchMouseEvent", {
+            type: "mouseMoved",
+            x: 20,
+            y: 500,
+          });
+          await waitNoReveal();
           await evaluate(
             `document.querySelector('[role="tab"][aria-selected="true"]').focus()`,
           );
@@ -139,10 +290,7 @@ await withPreviewBrowser(
           );
           assert.equal(after.renderedThreadId, "synthetic-lookalike-0");
           assert.equal(after.conversationHeading, names[0]);
-          assert.deepEqual(
-            after.tabs.map((tab) => tab.title),
-            names,
-          );
+          assert.ok(after.tabs.every((tab) => tab.title === ""));
           assert.equal(
             after.heading,
             names[0],
@@ -158,9 +306,48 @@ await withPreviewBrowser(
             "keyboard navigation focuses the Alpha/甲组 identity",
           );
           assert.equal(after.tabs[0].selected, "true");
+          await waitReveal(names[0]);
+          const keyboardReveal = await reveal();
+          assert.ok(keyboardReveal.visible && keyboardReveal.fits);
+          assert.equal(keyboardReveal.ariaHidden, "true");
+          const keyboardGeometry = await geometry();
           await screenshot(
             `tabs-lookalike-${language}-${width}-${theme}-keyboard.png`,
           );
+          await key("Escape", 27);
+          await waitNoReveal();
+          await delay(450);
+          assert.equal(
+            await reveal(),
+            null,
+            "Escape stays dismissed while focused",
+          );
+          assert.deepEqual(
+            await geometry(),
+            keyboardGeometry,
+            "Escape preserves geometry and selection",
+          );
+          const escaped = await readNames();
+          assert.equal(escaped.selected, after.selected);
+          assert.ok(escaped.tabs[0].focused);
+          assert.deepEqual(
+            escaped.sourceConversations,
+            before.sourceConversations,
+          );
+          await key("ArrowRight", 39);
+          await waitReveal(names[1]);
+          await key("ArrowLeft", 37);
+          await waitReveal(names[0]);
+          const repeated = await readNames();
+          assert.equal(repeated.selected, after.selected);
+          assert.equal(repeated.renderedThreadId, "synthetic-lookalike-0");
+          assert.ok(repeated.tabs[0].focused);
+          assert.deepEqual(
+            repeated.sourceConversations,
+            before.sourceConversations,
+          );
+          await key("Escape", 27);
+          await waitNoReveal();
           lookalikeResults.push({
             language,
             width,
@@ -168,6 +355,12 @@ await withPreviewBrowser(
             names,
             before,
             after,
+            pointerReveal,
+            pointerBetaReveal,
+            mouseFocusedEscape,
+            keyboardReveal,
+            escaped,
+            repeated,
             geometry: await geometry(),
           });
         }
@@ -297,7 +490,7 @@ await writeFile(
         "Production AuxiliaryPanel/styles; synthetic tab data and information control; Chromium renderer, not a native OS window.",
       results,
       lookalikeScope:
-        "Production side-conversation tab and heading path populated through conversations with synthetic thread IDs and read-only body. No live child Thread, pending approval, rename editor or persistence coverage. Full DOM text and title attribute are measured separately, not an AX tree or tooltip popup measurement. Geometry is not visual suffix-recognition proof; inspect screenshots. No requirement that clipping remain in a later candidate.",
+        "Production side-conversation tab and heading path populated through conversations with synthetic thread IDs and read-only body. No live child Thread, pending approval, rename editor or persistence coverage. Full DOM text, visual reveal contents and geometry are measured separately. aria-hidden duplication guard is not an AX-tree validation. Native tooltip suppression is intentional for these conversation tabs. Geometry is not visual suffix-recognition proof; inspect screenshots. No requirement that clipping remain in a later candidate.",
       lookalikeResults,
     },
     null,

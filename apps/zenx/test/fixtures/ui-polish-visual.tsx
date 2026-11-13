@@ -950,6 +950,7 @@ function AuxiliaryFixture() {
           ],
   );
   const writes = React.useRef<string[][]>([]);
+  const openChangeRequests = React.useRef<boolean[]>([]);
   const customTabs = [
     ["files", discovery ? "项目反馈汇总与下一阶段计划" : "PLAN.md", "file"],
     [
@@ -968,6 +969,7 @@ function AuxiliaryFixture() {
           order,
           selected,
           writes: writes.current,
+          openChangeRequests: openChangeRequests.current,
           sourceConversations: conversations.map(({ threadId, title }) => ({
             threadId,
             title,
@@ -1011,7 +1013,9 @@ function AuxiliaryFixture() {
           threadId="synthetic-ui-polish-thread"
           title="Synthetic workspace"
           open
-          onOpenChange={() => {}}
+          onOpenChange={(next) => {
+            if (lookalikeTitles) openChangeRequests.current.push(next);
+          }}
           onWidthChange={setWidth}
           snapshot={null}
           selectedTab={selected}

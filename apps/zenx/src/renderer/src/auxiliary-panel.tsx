@@ -1,4 +1,4 @@
-import { flushSync } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { ShellTargetNavigationContext } from "./shell-target-navigation.js";
 import {
   sidebarTabId,
@@ -55,6 +55,198 @@ interface ContentTab {
   externalBrowser?: BrowserThreadTarget;
   previewOutcome?: "completed" | "failed";
   render?: () => React.ReactNode;
+}
+
+function useConversationTitleReveal() {
+  const nativeTitleQuery =
+    "(min-width: 721px) and (hover: hover) and (pointer: fine)";
+  const [replacesNativeTitle, setReplacesNativeTitle] = useState(
+    () => window.matchMedia(nativeTitleQuery).matches,
+  );
+  useEffect(() => {
+    const media = window.matchMedia(nativeTitleQuery);
+    const update = () => setReplacesNativeTitle(media.matches);
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  const [preview, setPreview] = useState<{
+    anchor: HTMLButtonElement;
+    title: string;
+    left: number;
+    top: number;
+  } | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dismiss = useCallback(() => {
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = null;
+    setPreview(null);
+  }, []);
+  const keepOpen = () => {
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = null;
+  };
+  const leave = () => {
+    keepOpen();
+    timer.current = setTimeout(() => {
+      timer.current = null;
+      setPreview((current) =>
+        current?.anchor.matches(":focus-visible") ? current : null,
+      );
+    }, 150);
+  };
+  const show = (anchor: HTMLButtonElement, title: string, delayed: boolean) => {
+    // Incidental pointer movement must not replace an open keyboard label.
+    if (
+      delayed &&
+      preview?.anchor !== anchor &&
+      preview?.anchor === document.activeElement &&
+      preview.anchor.matches(":focus-visible")
+    )
+      return;
+    dismiss();
+    if (
+      !window.matchMedia("(min-width: 721px)").matches ||
+      (delayed &&
+        !window.matchMedia("(hover: hover) and (pointer: fine)").matches)
+    )
+      return;
+    const reveal = () => {
+      timer.current = null;
+      const label = anchor.querySelector<HTMLElement>(".workspace-tab-title");
+      if (
+        !anchor.isConnected ||
+        !label ||
+        label.scrollWidth <= label.clientWidth + 1
+      )
+        return;
+      const bounds = anchor.getBoundingClientRect();
+      setPreview({
+        anchor,
+        title,
+        left: Math.max(12, Math.min(bounds.left, window.innerWidth - 372)),
+        top: bounds.bottom + 6,
+      });
+    };
+    if (delayed) timer.current = setTimeout(reveal, 350);
+    else reveal();
+  };
+  useEffect(() => {
+    const onEscape = (event: KeyboardEvent) => {
+      if (
+        event.key === "Escape" &&
+        !event.isComposing &&
+        !event.defaultPrevented
+      )
+        dismiss();
+    };
+    const onScroll = (event: Event) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest(".workspace-conversation-title-reveal")
+      )
+        return;
+      keepOpen();
+      // Keyboard activation can scroll the tab strip after its focus event.
+      // Keep that label attached to its focused tab rather than flashing closed.
+      setPreview((current) => {
+        if (
+          !current?.anchor.isConnected ||
+          !current.anchor.matches(":focus-visible")
+        )
+          return null;
+        const bounds = current.anchor.getBoundingClientRect();
+        const rail = current.anchor
+          .closest('[role="tablist"]')
+          ?.getBoundingClientRect();
+        const visible =
+          rail &&
+          bounds.right > rail.left &&
+          bounds.left < rail.right &&
+          bounds.bottom > 0 &&
+          bounds.top < window.innerHeight;
+        return bounds.width > 0 && visible
+          ? {
+              ...current,
+              left: Math.max(
+                12,
+                Math.min(bounds.left, window.innerWidth - 372),
+              ),
+              top: bounds.bottom + 6,
+            }
+          : null;
+      });
+    };
+    window.addEventListener("resize", dismiss);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("blur", dismiss);
+    document.addEventListener("keydown", onEscape);
+    return () => {
+      if (timer.current !== null) clearTimeout(timer.current);
+      window.removeEventListener("resize", dismiss);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("blur", dismiss);
+      document.removeEventListener("keydown", onEscape);
+    };
+  }, [dismiss]);
+  useLayoutEffect(() => {
+    if (
+      preview &&
+      (!preview.anchor.isConnected ||
+        preview.anchor.getBoundingClientRect().width === 0 ||
+        preview.anchor.querySelector(".workspace-tab-title")?.textContent !==
+          preview.title)
+    )
+      dismiss();
+  });
+  return {
+    replacesNativeTitle,
+    handlers: (title: string) => ({
+      onPointerEnter: (event: React.PointerEvent<HTMLButtonElement>) => {
+        if (event.pointerType !== "touch")
+          show(event.currentTarget, title, true);
+      },
+      onPointerLeave: leave,
+      onPointerDown: dismiss,
+      onFocus: (event: React.FocusEvent<HTMLButtonElement>) => {
+        if (event.currentTarget.matches(":focus-visible"))
+          show(event.currentTarget, title, false);
+      },
+      onBlur: dismiss,
+    }),
+    dismissOnEscape: (event: React.KeyboardEvent<HTMLElement>) => {
+      if (
+        event.key !== "Escape" ||
+        event.nativeEvent.isComposing ||
+        event.nativeEvent.keyCode === 229 ||
+        event.defaultPrevented ||
+        !preview
+      )
+        return false;
+      event.preventDefault();
+      event.stopPropagation();
+      dismiss();
+      return true;
+    },
+    element:
+      preview && preview.anchor.isConnected
+        ? createPortal(
+            <div
+              className="workspace-conversation-title-reveal"
+              aria-hidden="true"
+              onPointerEnter={keepOpen}
+              onPointerLeave={leave}
+              style={{
+                left: preview.left,
+                top: preview.top,
+                maxHeight: Math.max(40, window.innerHeight - preview.top - 12),
+              }}
+            >
+              {preview.title}
+            </div>,
+            document.body,
+          )
+        : null,
+  };
 }
 
 const PRIMARY_CONVERSATION_TAB = "primary-conversation";
@@ -233,6 +425,7 @@ export function AuxiliaryPanel({
       finishResize();
     };
   }, [finishResize]);
+  const titleReveal = useConversationTitleReveal();
   const panel = useRef<HTMLElement>(null);
   const tabRail = useRef<HTMLDivElement>(null);
   const pointerDrag = useRef<{
@@ -1428,6 +1621,7 @@ export function AuxiliaryPanel({
             input?.select();
           });
         }
+        if (titleReveal.dismissOnEscape(event)) return;
         if (event.key === "Escape" && !event.defaultPrevented) {
           event.preventDefault();
           if (choosing) {
@@ -1588,12 +1782,20 @@ export function AuxiliaryPanel({
                       ? `${tab.title} — ${tab.browserActivityLabel}`
                       : undefined
                   }
-                  title={[
-                    tab.path ?? tab.browser?.url ?? tab.title,
-                    tab.browserActivityLabel,
-                  ]
-                    .filter(Boolean)
-                    .join("\n")}
+                  {...(tab.id.startsWith("thread:")
+                    ? titleReveal.handlers(tab.title)
+                    : {})}
+                  title={
+                    tab.id.startsWith("thread:") &&
+                    titleReveal.replacesNativeTitle
+                      ? undefined
+                      : [
+                          tab.path ?? tab.browser?.url ?? tab.title,
+                          tab.browserActivityLabel,
+                        ]
+                          .filter(Boolean)
+                          .join("\n")
+                  }
                   onClick={() => select(tab.id)}
                   onKeyDown={(event) => {
                     if (
@@ -2154,6 +2356,7 @@ export function AuxiliaryPanel({
           })}
         </div>
       </div>
+      {titleReveal.element}
     </aside>
   );
 }
