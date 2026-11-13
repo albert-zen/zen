@@ -904,20 +904,50 @@ function SideChatFixture() {
 }
 
 function AuxiliaryFixture() {
-  const discovery = params.has("tabDiscovery");
+  // Test-only synthetic entries use the genuine side-conversation tab path.
+  const lookalike = params.get("tabLookalike");
+  const lookalikeTitles =
+    lookalike === "en"
+      ? [
+          "Cross-project implementation consistency and detailed interaction validation - Alpha",
+          "Cross-project implementation consistency and detailed interaction validation - Beta",
+        ]
+      : lookalike === "zh"
+        ? [
+            "跨项目实施一致性与详细交互验证甲组",
+            "跨项目实施一致性与详细交互验证乙组",
+          ]
+        : null;
+  const conversations = (lookalikeTitles ?? []).map((title, index) => ({
+    threadId: `synthetic-lookalike-${index}`,
+    title,
+    render: (threadId: string) => (
+      <div style={{ padding: 24 }} data-synthetic-thread-id={threadId}>
+        <p>
+          Synthetic read-only conversation. No account, approval or rename
+          action.
+        </p>
+      </div>
+    ),
+  }));
+  const discovery = params.has("tabDiscovery") || lookalikeTitles !== null;
   const [collapsed, setCollapsed] = React.useState(window.innerWidth <= 720);
   const [width, setWidth] = React.useState(520);
-  const [selected, setSelected] = React.useState("custom:browser");
+  const [selected, setSelected] = React.useState(
+    lookalikeTitles ? "thread:synthetic-lookalike-1" : "custom:browser",
+  );
   const [order, setOrder] = React.useState(
-    discovery
-      ? ["custom:files", "custom:browser"]
-      : [
-          "custom:files",
-          "custom:browser",
-          "custom:computer",
-          "custom:subagents",
-          "custom:triggers",
-        ],
+    lookalikeTitles
+      ? conversations.map(({ threadId }) => `thread:${threadId}`)
+      : discovery
+        ? ["custom:files", "custom:browser"]
+        : [
+            "custom:files",
+            "custom:browser",
+            "custom:computer",
+            "custom:subagents",
+            "custom:triggers",
+          ],
   );
   const writes = React.useRef<string[][]>([]);
   const customTabs = [
@@ -934,7 +964,15 @@ function AuxiliaryFixture() {
   React.useEffect(() => {
     Object.assign(window, {
       __uiPolishAuxiliary: {
-        getState: () => ({ order, selected, writes: writes.current }),
+        getState: () => ({
+          order,
+          selected,
+          writes: writes.current,
+          sourceConversations: conversations.map(({ threadId, title }) => ({
+            threadId,
+            title,
+          })),
+        }),
       },
     });
   }, [order, selected]);
@@ -983,17 +1021,22 @@ function AuxiliaryFixture() {
             writes.current.push(next);
             setOrder(next);
           }}
-          customTabs={customTabs.map(([id, title, icon]) => ({
-            id,
-            title,
-            icon,
-            render: () => (
-              <div style={{ padding: 24 }}>
-                <h2>{title}</h2>
-                <p>Synthetic preview data only. No Host, model, or network.</p>
-              </div>
-            ),
-          }))}
+          conversations={conversations}
+          customTabs={(lookalikeTitles ? [] : customTabs).map(
+            ([id, title, icon]) => ({
+              id,
+              title,
+              icon,
+              render: () => (
+                <div style={{ padding: 24 }}>
+                  <h2>{title}</h2>
+                  <p>
+                    Synthetic preview data only. No Host, model, or network.
+                  </p>
+                </div>
+              ),
+            }),
+          )}
         />
         {discovery ? (
           <div className="information-toolbar">

@@ -15,6 +15,7 @@ assert.equal(
 );
 process.env.ZENX_PREVIEW_DESKTOP_INPUT = "1";
 const results = [];
+const lookalikeResults = [];
 await withPreviewBrowser(
   directory,
   async ({ send, evaluate, url, screenshot }) => {
@@ -42,6 +43,136 @@ await withPreviewBrowser(
       })
     };
   })()`);
+    // Evidence baseline, not a claim that clipped titles are visually distinguishable.
+    // Keep this separate so the existing distinct-title and many-tab checks stay intact.
+    for (const language of ["en", "zh"]) {
+      const names =
+        language === "en"
+          ? [
+              "Cross-project implementation consistency and detailed interaction validation - Alpha",
+              "Cross-project implementation consistency and detailed interaction validation - Beta",
+            ]
+          : [
+              "跨项目实施一致性与详细交互验证甲组",
+              "跨项目实施一致性与详细交互验证乙组",
+            ];
+      for (const width of [1280]) {
+        for (const theme of ["light", "dark"]) {
+          await send("Emulation.setDeviceMetricsOverride", {
+            width,
+            height: 720,
+            deviceScaleFactor: 1,
+            mobile: false,
+          });
+          const destination = `${url}/ui-polish-visual.html?scene=auxiliary&tabLookalike=${language}&lang=${language === "zh" ? "zh-CN" : "en"}&platform=darwin&theme=${theme}`;
+          await send("Page.navigate", { url: destination });
+          await wait(
+            `location.href === ${JSON.stringify(destination)} && document.body?.dataset.previewReady === 'true' && document.querySelectorAll('[role=tab]').length === 2`,
+          );
+          await delay(300);
+          const readNames = () =>
+            evaluate(`(() => {
+            const rail = document.querySelector('[role="tablist"]');
+            return {
+              selected: window.__uiPolishAuxiliary.getState().selected,
+              sourceConversations: window.__uiPolishAuxiliary.getState().sourceConversations,
+              renderedThreadId: document.querySelector('[role="tabpanel"]:not([hidden]) [data-synthetic-thread-id]')?.getAttribute('data-synthetic-thread-id'),
+              conversationHeading: document.querySelector('[role="tabpanel"]:not([hidden]) .auxiliary-conversation-heading > span')?.textContent,
+              heading: document.getElementById(document.querySelector('[role="tab"][aria-selected="true"]').getAttribute('aria-controls'))?.querySelector('.auxiliary-conversation-heading > span')?.textContent ?? null,
+              tabs: [...rail.querySelectorAll('[role="tab"]')].map(tab => {
+                const label = tab.querySelector('.workspace-tab-title');
+                const r = label.getBoundingClientRect();
+                const tabRect = tab.getBoundingClientRect();
+                const style = getComputedStyle(label);
+                return { id: tab.id, title: tab.title, ariaLabelAttribute: tab.getAttribute('aria-label'),
+                  text: label.textContent, titleClientWidth: label.clientWidth, titleScrollWidth: label.scrollWidth, tabWidth: tabRect.width,
+                  labelRect: { x: r.x, y: r.y, width: r.width, height: r.height },
+                  font: style.font, textOverflow: style.textOverflow, overflow: style.overflow,
+                  focused: tab === document.activeElement, selected: tab.getAttribute('aria-selected') };
+              })
+            };
+          })()`);
+          const before = await readNames();
+          assert.deepEqual(
+            before.sourceConversations.map((entry) => entry.title),
+            names,
+          );
+          assert.equal(before.renderedThreadId, "synthetic-lookalike-1");
+          assert.equal(before.conversationHeading, names[1]);
+          assert.deepEqual(
+            before.tabs.map((tab) => tab.text),
+            names,
+            "DOM labels preserve full synthetic source names",
+          );
+          assert.deepEqual(
+            before.tabs.map((tab) => tab.title),
+            names,
+            "full names remain available in native title metadata",
+          );
+          assert.equal(before.selected, "thread:synthetic-lookalike-1");
+          assert.equal(
+            before.heading,
+            names[1],
+            "selected content keeps the full Beta/乙组 source name",
+          );
+          assert.equal((await geometry()).overflowControls, 0);
+          await screenshot(`tabs-lookalike-${language}-${width}-${theme}.png`);
+          await evaluate(
+            `document.querySelector('[role="tab"][aria-selected="true"]').focus()`,
+          );
+          for (const type of ["keyDown", "keyUp"]) {
+            await send("Input.dispatchKeyEvent", {
+              type,
+              key: "ArrowLeft",
+              code: "ArrowLeft",
+              windowsVirtualKeyCode: 37,
+            });
+          }
+          await wait(
+            `window.__uiPolishAuxiliary.getState().selected === 'thread:synthetic-lookalike-0' && document.activeElement?.id === 'aux-tab-thread:synthetic-lookalike-0' && document.querySelector('[role=tabpanel]:not([hidden]) [data-synthetic-thread-id]')?.getAttribute('data-synthetic-thread-id') === 'synthetic-lookalike-0'`,
+          );
+          const after = await readNames();
+          assert.deepEqual(
+            after.sourceConversations,
+            before.sourceConversations,
+            "keyboard selection leaves full synthetic source names and IDs intact",
+          );
+          assert.equal(after.renderedThreadId, "synthetic-lookalike-0");
+          assert.equal(after.conversationHeading, names[0]);
+          assert.deepEqual(
+            after.tabs.map((tab) => tab.title),
+            names,
+          );
+          assert.equal(
+            after.heading,
+            names[0],
+            "keyboard selection opens Alpha/甲组 content",
+          );
+          assert.deepEqual(
+            after.tabs.map((tab) => tab.text),
+            names,
+            "selection does not rewrite source names",
+          );
+          assert.ok(
+            after.tabs[0].focused,
+            "keyboard navigation focuses the Alpha/甲组 identity",
+          );
+          assert.equal(after.tabs[0].selected, "true");
+          await screenshot(
+            `tabs-lookalike-${language}-${width}-${theme}-keyboard.png`,
+          );
+          lookalikeResults.push({
+            language,
+            width,
+            theme,
+            names,
+            before,
+            after,
+            geometry: await geometry(),
+          });
+        }
+      }
+    }
     for (const [width, platform, theme] of [
       [1280, "darwin", "light"],
       [1280, "darwin", "dark"],
@@ -165,6 +296,9 @@ await writeFile(
       scope:
         "Production AuxiliaryPanel/styles; synthetic tab data and information control; Chromium renderer, not a native OS window.",
       results,
+      lookalikeScope:
+        "Production side-conversation tab and heading path populated through conversations with synthetic thread IDs and read-only body. No live child Thread, pending approval, rename editor or persistence coverage. Full DOM text and title attribute are measured separately, not an AX tree or tooltip popup measurement. Geometry is not visual suffix-recognition proof; inspect screenshots. No requirement that clipping remain in a later candidate.",
+      lookalikeResults,
     },
     null,
     2,
