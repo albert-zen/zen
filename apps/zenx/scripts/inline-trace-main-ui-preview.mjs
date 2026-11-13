@@ -251,6 +251,146 @@ export function verifyInlineTrace(state, baseline, expanded) {
     );
   }
 }
+export function observeInlineClick(selector, transcriptControl) {
+  const el = document.querySelector(selector);
+  const scroller = document.querySelector(".messages");
+  const composer = document.querySelector(".composer");
+  const rect = (e) => e?.getBoundingClientRect().toJSON() ?? null;
+  const target = rect(el);
+  const scroll = rect(scroller);
+  const composerBox = rect(composer);
+  const point = target && {
+    x: target.left + target.width / 2,
+    y: target.top + target.height / 2,
+  };
+  const hit = point && document.elementFromPoint(point.x, point.y);
+  const available = scroll && {
+    top: Math.max(0, scroll.top),
+    bottom: Math.min(
+      innerHeight,
+      scroll.bottom,
+      composerBox?.top ?? innerHeight,
+    ),
+  };
+  const inside =
+    !!point &&
+    point.x >= 0 &&
+    point.x < innerWidth &&
+    point.y >= 0 &&
+    point.y < innerHeight;
+  const readable =
+    !transcriptControl ||
+    (!!available && point?.y >= available.top && point.y < available.bottom);
+  const wheel =
+    available && scroll && available.bottom - available.top > 40
+      ? {
+          x: scroll.left + Math.min(48, scroll.width / 2),
+          y: available.top + 24,
+        }
+      : null;
+  const layout = (e) => {
+    const style = getComputedStyle(e);
+    return {
+      tag: e.tagName,
+      className: e.getAttribute("class"),
+      box: rect(e),
+      transform: style.transform,
+      display: style.display,
+      visibility: style.visibility,
+      opacity: style.opacity,
+      overflowY: style.overflowY,
+    };
+  };
+  const ancestors = [];
+  for (
+    let e = el?.parentElement;
+    transcriptControl && e && ancestors.length < 10;
+    e = e.parentElement
+  ) {
+    ancestors.push(layout(e));
+    if (e === scroller) break;
+  }
+  return {
+    point,
+    target,
+    disabled: !!el?.disabled,
+    hit: hit && { tag: hit.tagName, className: hit.getAttribute("class") },
+    ready: !!(
+      target?.width &&
+      target.height &&
+      !el.disabled &&
+      inside &&
+      readable &&
+      el.contains(hit)
+    ),
+    scroll: scroller && {
+      box: scroll,
+      top: scroller.scrollTop,
+      scrollHeight: scroller.scrollHeight,
+      clientHeight: scroller.clientHeight,
+      maxTop: Math.max(0, scroller.scrollHeight - scroller.clientHeight),
+      wheelOwned:
+        !!wheel &&
+        scroller.contains(document.elementFromPoint(wheel.x, wheel.y)),
+    },
+    available,
+    wheel,
+    composer: composerBox,
+    ancestors,
+    rows:
+      transcriptControl && scroller
+        ? [...scroller.querySelectorAll("section.turn")].slice(0, 2).map(layout)
+        : [],
+  };
+}
+
+export function inlineWheelDelta(state) {
+  const { point, available, scroll, wheel, target, disabled } = state;
+  if (
+    !point ||
+    !available ||
+    !wheel ||
+    !scroll?.wheelOwned ||
+    !target?.width ||
+    !target.height ||
+    disabled
+  )
+    return 0;
+  // Never scroll to work around a control that is within the reading band
+  // but covered by some other element. Only bring off-band targets into view.
+  if (point.y >= available.top && point.y < available.bottom) return 0;
+  if (point.y < available.top && scroll.top <= 1) return 0;
+  if (point.y >= available.bottom && scroll.top >= scroll.maxTop - 1) return 0;
+  const towardMiddle = point.y - (available.top + available.bottom) / 2;
+  return Math.round(Math.max(-360, Math.min(360, towardMiddle)));
+}
+
+export async function seekInlineClick({
+  sample,
+  settle,
+  wheel,
+  samples,
+  transcriptControl,
+}) {
+  let previous = null;
+  for (let i = 0; i < 12; i++) {
+    await settle();
+    const state = await sample();
+    const deltaY =
+      transcriptControl && !state.ready ? inlineWheelDelta(state) : 0;
+    samples.push({ ...state, deltaY });
+    if (
+      state.ready &&
+      previous?.x === state.point.x &&
+      previous.y === state.point.y
+    )
+      return state.point;
+    previous = state.ready ? state.point : null;
+    if (deltaY && i < 11) await wheel({ ...state.wheel, deltaY });
+  }
+  return null;
+}
+
 export async function captureInlineTrace({
   send,
   evaluate,
@@ -277,11 +417,40 @@ export async function captureInlineTrace({
   await wait(
     `location.href===${JSON.stringify(target.href)} && !window.__previousInlineTraceDocument && !!document.querySelector('.thread-row')`,
   );
-  const click = async (selector) => {
-    const point = await evaluate(
-      `(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e||e.disabled)throw Error('Missing/enabled target');const r=e.getBoundingClientRect();const x=r.x+r.width/2,y=r.y+r.height/2;if(x<0||y<0||x>innerWidth||y>innerHeight||!e.contains(document.elementFromPoint(x,y)))throw Error('Target not visible/hittable');return{x,y}})()`,
+  const settle = () =>
+    evaluate(
+      "new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))",
     );
+  const click = async (selector, transcriptControl = false) => {
+    const attempt = { theme: options.theme, selector, samples: [] };
+    (evidence.inlineTraceClickAttempts ??= []).push(attempt);
+    const sample = () =>
+      evaluate(
+        `(${observeInlineClick.toString()})(${JSON.stringify(selector)},${transcriptControl})`,
+      );
+    const point = await seekInlineClick({
+      sample,
+      settle,
+      wheel: (p) =>
+        send("Input.dispatchMouseEvent", {
+          type: "mouseWheel",
+          deltaX: 0,
+          ...p,
+        }),
+      samples: attempt.samples,
+      transcriptControl,
+    });
+    assert(point, `Inline Trace target not visible/hittable: ${selector}`);
     await send("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
+    await settle();
+    const afterHover = await sample();
+    attempt.afterHover = afterHover;
+    assert(
+      afterHover.ready &&
+        afterHover.point.x === point.x &&
+        afterHover.point.y === point.y,
+      `Inline Trace target moved/occluded on hover: ${selector}`,
+    );
     await send("Input.dispatchMouseEvent", {
       type: "mousePressed",
       button: "left",
@@ -320,27 +489,15 @@ export async function captureInlineTrace({
       `section.turn:has(.agent-copy [data-thread-find-item-id=${JSON.stringify(t.answerItemId)}])`,
   );
   assert.notEqual(selectors[0], selectors[1]);
-  // Native wheel scrolling, no DOM scroll or synthetic button activation.
-  const top = async () => {
-    const r = await evaluate(
-      "(()=>{const r=document.querySelector('.messages').getBoundingClientRect();return{x:r.x+40,y:r.y+40}})()",
-    );
-    await send("Input.dispatchMouseEvent", {
-      type: "mouseWheel",
-      ...r,
-      deltaX: 0,
-      deltaY: -10000,
-    });
-    await wait("document.querySelector('.messages').scrollTop<2");
-  };
-  await top();
+  // Preserve the current viewport; use native wheel input only if a real
+  // transcript target is off the readable band and there is room to scroll.
   for (let i = 0; i < 2; i++)
-    if (state.turns[i].expanded === "true")
-      await click(`${selectors[i]} .turn-toggle`);
+    if ((await observe()).turns[i].expanded === "true")
+      await click(`${selectors[i]} .turn-toggle`, true);
   await wait(
     "[...document.querySelectorAll('.messages .turn-toggle')].every(e=>e.getAttribute('aria-expanded')==='false')",
   );
-  await click(`${selectors[1]} .turn-toggle`);
+  await click(`${selectors[1]} .turn-toggle`, true);
   await wait(
     `document.querySelector(${JSON.stringify(selectors[1] + " .turn-toggle")})?.getAttribute('aria-expanded')==='true'`,
   );
@@ -351,7 +508,7 @@ export async function captureInlineTrace({
       `document.querySelector(${JSON.stringify(traceSelector)}).getAttribute('aria-expanded')==='true'`,
     )
   )
-    await click(traceSelector);
+    await click(traceSelector, true);
   await wait(
     `document.querySelector(${JSON.stringify(traceSelector)}).getAttribute('aria-expanded')==='false'`,
   );
@@ -413,7 +570,7 @@ export async function captureInlineTrace({
       `document.querySelector(${JSON.stringify(traceSelector)}).getAttribute('aria-expanded')!=='true'`,
     )
   )
-    await click(traceSelector);
+    await click(traceSelector, true);
   await wait(
     `document.querySelector(${JSON.stringify(selectors[1])}).textContent.includes('Expected reader_name, received reader_label')`,
   );

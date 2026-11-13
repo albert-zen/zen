@@ -417,8 +417,73 @@ test("scrollbar lifecycle changes trigger both short-reading path gates", async 
 // Optional data scene, exercised by the existing desktop-reading capture only.
 import {
   inlineTraceGeometryReady,
+  inlineWheelDelta,
+  seekInlineClick,
   verifyInlineTrace,
 } from "../scripts/inline-trace-main-ui-preview.mjs";
+
+const inlinePointerProbe = {
+  point: { x: 400, y: 820 },
+  available: { top: 88, bottom: 774 },
+  wheel: { x: 312, y: 112 },
+  target: { width: 100, height: 25 },
+  scroll: { top: 12, maxTop: 500, wheelOwned: true },
+  disabled: false,
+  ready: false,
+};
+
+test("inline pointer scrolls only an off-band target within owned native range", () => {
+  const s = inlinePointerProbe;
+  assert.equal(inlineWheelDelta(s), 360);
+  assert.equal(inlineWheelDelta({ ...s, point: { x: 400, y: 0 } }), -360);
+  assert.equal(inlineWheelDelta({ ...s, point: { x: 400, y: 500 } }), 0);
+  assert.equal(
+    inlineWheelDelta({ ...s, scroll: { ...s.scroll, top: 500 } }),
+    0,
+  );
+  assert.equal(
+    inlineWheelDelta({ ...s, scroll: { ...s.scroll, wheelOwned: false } }),
+    0,
+  );
+  assert.equal(inlineWheelDelta({ ...s, target: null }), 0);
+});
+
+test("inline pointer waits for a stable actual hit, never clicks through a cover", async () => {
+  const s = inlinePointerProbe;
+  const ready = { ...s, ready: true, point: { x: 400, y: 450 } };
+  const states = [s, { ...ready, point: { x: 400, y: 490 } }, ready, ready];
+  const wheels = [],
+    samples = [];
+  let settles = 0;
+  const point = await seekInlineClick({
+    sample: async () => states.shift(),
+    settle: async () => settles++,
+    wheel: async (step) => wheels.push(step),
+    samples,
+    transcriptControl: true,
+  });
+  assert.deepEqual(point, ready.point);
+  assert.equal(settles, 4);
+  assert.equal(samples.length, 4);
+  assert.deepEqual(wheels, [{ x: 312, y: 112, deltaY: 360 }]);
+  const blocked = [];
+  assert.equal(
+    await seekInlineClick({
+      sample: async () => ({
+        ...ready,
+        ready: false,
+        hit: { tag: "DIV", className: "cover" },
+      }),
+      settle: async () => {},
+      wheel: async () => assert.fail("Do not scroll around an in-band cover"),
+      samples: blocked,
+      transcriptControl: true,
+    }),
+    null,
+  );
+  assert.equal(blocked.length, 12);
+  assert.equal(blocked.at(-1).hit.className, "cover");
+});
 
 test("inline trace waits when output becomes visible before its full panel", () => {
   const state = {
