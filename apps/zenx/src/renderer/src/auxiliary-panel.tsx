@@ -61,10 +61,11 @@ function useConversationTitleReveal() {
   const nativeTitleQuery =
     "(min-width: 721px) and (hover: hover) and (pointer: fine)";
   const [replacesNativeTitle, setReplacesNativeTitle] = useState(
-    () => window.matchMedia(nativeTitleQuery).matches,
+    () => window.matchMedia?.(nativeTitleQuery)?.matches ?? false,
   );
   useEffect(() => {
-    const media = window.matchMedia(nativeTitleQuery);
+    const media = window.matchMedia?.(nativeTitleQuery);
+    if (!media) return;
     const update = () => setReplacesNativeTitle(media.matches);
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
@@ -105,9 +106,15 @@ function useConversationTitleReveal() {
       return;
     dismiss();
     if (
-      !window.matchMedia("(min-width: 721px)").matches ||
+      !(
+        window.matchMedia?.("(min-width: 721px)")?.matches ??
+        window.innerWidth >= 721
+      ) ||
       (delayed &&
-        !window.matchMedia("(hover: hover) and (pointer: fine)").matches)
+        !(
+          window.matchMedia?.("(hover: hover) and (pointer: fine)")?.matches ??
+          false
+        ))
     )
       return;
     const reveal = () => {
