@@ -492,9 +492,15 @@ export const SubagentsInformationVisibilityContext = createContext<{
   embedded?: boolean;
 } | null>(null);
 
+/** Read-only native attention membership; never copied into plugin SDK. */
+export const ChildThreadApprovalContext = createContext<ReadonlySet<string>>(
+  new Set(),
+);
+
 function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
   useTranslation("panels");
   const sidebar = useContext(ChildThreadSidebarContext);
+  const approvalThreads = useContext(ChildThreadApprovalContext);
   const { parent, all, error, refresh } = useRelatedThreads(sdk);
   const [showArchived, setShowArchived] = useState(false);
   const render = (
@@ -548,6 +554,11 @@ function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
                         })}
                       >
                         {i18n.t("shell:threadAsking")}
+                      </span>
+                    ) : null}
+                    {approvalThreads.has(child.threadId) ? (
+                      <span className="subagent-approval-attention">
+                        {i18n.t("shell:needsYourApproval")}
                       </span>
                     ) : null}
                   </span>

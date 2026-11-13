@@ -287,7 +287,8 @@
 }
 
 /* Question attention accompanies activity; it never changes execution status. */
-.subagent-tree-status:has(.thread-asking-badge) {
+.subagent-tree-status:has(.thread-asking-badge),
+.subagent-tree-status:has(.subagent-approval-attention) {
   display: inline-flex;
   align-items: baseline;
   flex-wrap: wrap;
@@ -295,4 +296,26 @@
   min-width: 0;
   max-width: 100%;
   flex-shrink: 1;
+}
+
+/* Passive attention, same warning token as sidebar; not an action. */
+.subagent-approval-attention {
+  color: var(--warn);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.subagent-approval-attention::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+:root[data-appearance="light"]
+  .subagent-tree-row:is(:hover, :focus-visible)
+  .subagent-approval-attention {
+  color: color-mix(in srgb, var(--warn) 80%, black);
 }

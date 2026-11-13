@@ -243,6 +243,7 @@ import {
 } from "./queue-edit-state.js";
 import {
   ChildThreadSidebarContext,
+  ChildThreadApprovalContext,
   PluginThreadHeaders,
   ThreadBreadcrumbAncestors,
   SubagentCreationModelsContext,
@@ -5270,14 +5271,16 @@ function AppContent() {
     </AppConversationProviders>
   );
   return (
-    <ChildThreadSidebarContext.Provider
-      value={{
-        visibleSubagentThreadIds,
-        setVisible: setSubagentThreadSidebarVisible,
-      }}
-    >
-      {shell}
-    </ChildThreadSidebarContext.Provider>
+    <ChildThreadApprovalContext.Provider value={pendingThreadIds}>
+      <ChildThreadSidebarContext.Provider
+        value={{
+          visibleSubagentThreadIds,
+          setVisible: setSubagentThreadSidebarVisible,
+        }}
+      >
+        {shell}
+      </ChildThreadSidebarContext.Provider>
+    </ChildThreadApprovalContext.Provider>
   );
 }
 

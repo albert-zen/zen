@@ -15,6 +15,7 @@ import {
   createPluginUiRegistry,
 } from "../src/renderer/src/plugin-ui-host.js";
 import {
+  ChildThreadApprovalContext,
   ChildThreadSidebarContext,
   SubagentsInformationVisibilityContext,
   SubagentCreationModelsContext,
@@ -78,6 +79,7 @@ async function fixture(
   information: React.ContextType<
     typeof SubagentsInformationVisibilityContext
   > = null,
+  approvals: { threadIds: string[] } = { threadIds: [] },
 ) {
   const dom = new JSDOM('<div id="root"></div>', {
     url: "https://zenx.local/",
@@ -134,57 +136,61 @@ async function fixture(
     await act(async () => {
       root.render(
         React.createElement(
-          SubagentsInformationVisibilityContext.Provider,
-          { value: information },
+          ChildThreadApprovalContext.Provider,
+          { value: new Set(approvals.threadIds) },
           React.createElement(
-            SideChatDraftContext.Provider,
-            {
-              value: async (input) => {
-                const call = {
-                  pluginId: "zenx-app",
-                  commandId: "open-draft",
-                  input,
-                };
-                calls.push(call);
-                await execute(call);
-              },
-            },
+            SubagentsInformationVisibilityContext.Provider,
+            { value: information },
             React.createElement(
-              ChildThreadSidebarContext.Provider,
-              { value: sidebar ?? null },
+              SideChatDraftContext.Provider,
+              {
+                value: async (input) => {
+                  const call = {
+                    pluginId: "zenx-app",
+                    commandId: "open-draft",
+                    input,
+                  };
+                  calls.push(call);
+                  await execute(call);
+                },
+              },
               React.createElement(
-                SubagentCreationModelsContext.Provider,
-                { value: { ...modelCatalog } },
-                surface === "header"
-                  ? React.createElement(PluginThreadHeaders, {
-                      snapshot,
-                      threadId: parent,
-                      threads,
-                      navigate,
-                      registry,
-                    })
-                  : surface === "breadcrumb"
-                    ? React.createElement(ThreadBreadcrumbAncestors, {
+                ChildThreadSidebarContext.Provider,
+                { value: sidebar ?? null },
+                React.createElement(
+                  SubagentCreationModelsContext.Provider,
+                  { value: { ...modelCatalog } },
+                  surface === "header"
+                    ? React.createElement(PluginThreadHeaders, {
+                        snapshot,
                         threadId: parent,
                         threads,
                         navigate,
-                      })
-                    : React.createElement(GenericPluginUiHost, {
                         registry,
-                        snapshot,
-                        pluginId: "zenx-subagents",
-                        surfaceId: "subagents-panel",
-                        context: {
+                      })
+                    : surface === "breadcrumb"
+                      ? React.createElement(ThreadBreadcrumbAncestors, {
                           threadId: parent,
-                          quickCreate: surface === "quick-create",
                           threads,
-                          ...(active === undefined ? {} : { active }),
-                        },
-                        theme: "light",
-                        navigate,
-                        executeCommand,
-                        readHandle,
-                      }),
+                          navigate,
+                        })
+                      : React.createElement(GenericPluginUiHost, {
+                          registry,
+                          snapshot,
+                          pluginId: "zenx-subagents",
+                          surfaceId: "subagents-panel",
+                          context: {
+                            threadId: parent,
+                            quickCreate: surface === "quick-create",
+                            threads,
+                            ...(active === undefined ? {} : { active }),
+                          },
+                          theme: "light",
+                          navigate,
+                          executeCommand,
+                          readHandle,
+                        }),
+                ),
               ),
             ),
           ),
@@ -500,7 +506,12 @@ for (const language of ["en", "zh-CN"]) {
       );
       const status = archivedRow.querySelector(".subagent-tree-status");
       assert.equal(status?.textContent, i18n.t("panels:archivedStatus"));
-      assert.equal(status?.parentElement, archivedRow);
+      assert.equal(status?.parentElement?.className, "subagent-tree-identity");
+      assert.equal(
+        status?.closest(".subagent-tree-row") === archivedRow,
+        true,
+        "Archived status remains inside its own navigation row",
+      );
       assert.equal(status?.closest(".subagent-tree-title"), null);
 
       const sidebarLabel = i18n.t("shell:showSubagentInSidebar", {
@@ -1494,3 +1505,49 @@ for (const language of ["en", "zh-CN"] as const) {
     }
   });
 }
+
+test("approval-only attention preserves activity, focus, navigation and clearing without Asking", async () => {
+  const rows = [
+    summary("active-only", "parent", { status: "active" }),
+    summary("idle-only", "parent"),
+    summary("plain", "parent"),
+  ];
+  const approvals = { threadIds: ["active-only", "idle-only"] };
+  const f = await fixture(
+    async () => ({ threads: rows }),
+    undefined,
+    null,
+    approvals,
+  );
+  try {
+    await f.render("parent", "panel", rows);
+    const doc = f.dom.window.document;
+    const buttons = () => [
+      ...doc.querySelectorAll<HTMLButtonElement>(".subagent-tree-row"),
+    ];
+    assert.equal(doc.querySelectorAll(".thread-asking-badge").length, 0);
+    assert.equal(
+      doc.querySelectorAll(".subagent-approval-attention").length,
+      2,
+    );
+    assert.match(buttons()[0]!.textContent!, /Working/);
+    assert.match(buttons()[1]!.textContent!, /Idle/);
+    const focused = buttons()[0]!;
+    focused.focus();
+    const calls = f.calls.length;
+    approvals.threadIds = [];
+    await f.render("parent", "panel", rows);
+    assert.equal(
+      doc.querySelectorAll(".subagent-approval-attention").length,
+      0,
+    );
+    assert.equal(doc.activeElement, focused);
+    assert.equal(f.calls.length, calls);
+    assert.deepEqual(f.routes, []);
+    await f.click(focused);
+    assert.deepEqual(f.routes, ["/threads/active-only?view=panel"]);
+  } finally {
+    approvals.threadIds = [];
+    await f.close();
+  }
+});
