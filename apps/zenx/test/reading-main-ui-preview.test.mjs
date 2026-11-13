@@ -527,7 +527,7 @@ test("inline trace preserves answers, Information and mutation-free bridge", () 
             expanded: "false",
             visible: true,
             exitFact: "· Exit code 1",
-            exitFactVisible: true,
+            exitFactGeometry: { visible: true },
           },
         ],
         answerMarker: { visible: true },
@@ -553,7 +553,7 @@ test("inline trace preserves answers, Information and mutation-free bridge", () 
       expanded: "true",
       visible: true,
       exitFact: "· Exit code 1",
-      exitFactVisible: true,
+      exitFactGeometry: { visible: true },
       detailVisible: true,
       detailText: "Expected reader_name, received reader_label",
     },
@@ -565,7 +565,7 @@ test("inline trace preserves answers, Information and mutation-free bridge", () 
     (s) => (s.turns[0].answerMarker.visible = false),
     (s) => (s.turns[1].failedOutput.visible = false),
     (s) => (s.turns[1].traces[0].exitFact = undefined),
-    (s) => (s.turns[1].traces[0].exitFactVisible = false),
+    (s) => (s.turns[1].traces[0].exitFactGeometry.visible = false),
     (s) => (s.turns[0].expanded = "true"),
     (s) => (s.turns[1].answer = "lost"),
     (s) => s.telemetry.informationUpdates++,
@@ -606,7 +606,7 @@ test("inline trace observer rejects retained, ancestor-hidden and clipped origin
   const { observeInlineTrace } =
     await import("../scripts/inline-trace-main-ui-preview.mjs");
   const dom = new JSDOM(
-    `<div class="messages"><section class="turn"><div class="agent-copy"><h2>Summary checked</h2></div></section><section class="turn"><div class="agent-copy"><h2>Label check needs attention</h2></div><div id="clip" style="overflow-x:hidden;overflow-y:hidden"><div id="detail"><span>Expected reader_name, received reader_label</span></div></div></section></div><div class="composer"></div><div class="information-dock"></div>`,
+    `<div class="messages"><section class="turn"><div class="agent-copy"><h2>Summary checked</h2></div></section><section class="turn"><div class="agent-copy"><h2>Label check needs attention</h2></div><div id="clip" style="overflow-x:hidden;overflow-y:hidden"><button class="trace-item-toggle"><span class="trace-item-status" style="overflow-x:hidden;overflow-y:hidden;border-left-width:0px;border-right-width:0px"><small class="trace-shell-exit">· Exit code 1</small></span></button><div id="detail"><span>Expected reader_name, received reader_label</span></div></div></section></div><div class="composer"></div><div class="information-dock"></div>`,
   );
   const keys = [
     "document",
@@ -618,7 +618,9 @@ test("inline trace observer rejects retained, ancestor-hidden and clipped origin
   ];
   const saved = Object.fromEntries(keys.map((k) => [k, globalThis[k]]));
   let clipHeight = 100,
-    outputX = 100;
+    outputX = 100,
+    exitWidth = 80.375,
+    statusWidth = 100.375;
   const rect = (x, y, width, height) => ({
     x,
     y,
@@ -633,6 +635,8 @@ test("inline trace observer rejects retained, ancestor-hidden and clipped origin
     if (this.className === "messages") return rect(0, 0, 900, 700);
     if (this.className === "composer") return rect(0, 700, 900, 100);
     if (this.id === "clip") return rect(90, 280, 600, clipHeight);
+    if (this.className === "trace-item-status")
+      return rect(500, 290, statusWidth, 60);
     return rect(90, 290, 600, 60);
   };
   for (const [name, dimension] of [
@@ -641,10 +645,12 @@ test("inline trace observer rejects retained, ancestor-hidden and clipped origin
   ])
     Object.defineProperty(dom.window.HTMLElement.prototype, name, {
       get() {
-        return this.getBoundingClientRect()[dimension];
+        return Math.round(this.getBoundingClientRect()[dimension]);
       },
     });
   dom.window.Range.prototype.getBoundingClientRect = function () {
+    if (this.startContainer.textContent.includes("Exit code"))
+      return rect(520, 300, exitWidth, 20);
     return rect(
       this.startContainer.textContent.includes("Expected") ? outputX : 100,
       300,
@@ -663,9 +669,26 @@ test("inline trace observer rejects retained, ancestor-hidden and clipped origin
   dom.window.__uiPolishTelemetry = {};
   try {
     const read = () => observeInlineTrace().turns[1].failedOutput;
+    const exit = () => observeInlineTrace().turns[1].traces[0].exitFactGeometry;
     const clip = document.getElementById("clip");
     assert.equal(read().visible, true);
+    assert.equal(
+      exit().visible,
+      true,
+      "fractional clip edge is not rounded in",
+    );
+    assert.equal(exit().clips[0].roundedRight, 600);
+    assert.equal(exit().clips[0].right, 600.375);
+    exitWidth += 0.125;
+    assert.equal(exit().visible, false, "real fractional overflow still fails");
+    exitWidth = 80.375;
+    statusWidth = 99.75;
+    exitWidth = 79.875;
+    assert.equal(exit().visible, false, "rounded-up width cannot hide a clip");
+    statusWidth = 100.375;
+    exitWidth = 80.375;
     clipHeight = 10;
+    assert.equal(exit().visible, false, "outer clipping still fails");
     assert.equal(
       read().visible,
       false,

@@ -30,8 +30,22 @@ export function observeInlineTrace() {
         const r = e.getBoundingClientRect();
         const left = r.left + e.clientLeft,
           top = r.top + e.clientTop;
-        const right = left + e.clientWidth,
-          bottom = top + e.clientHeight;
+        const roundedRight = left + e.clientWidth;
+        // Chromium exposes an integer clientWidth even for a fractional grid
+        // track. For the borderless, non-scrolling status clip, its precise
+        // client edge is the DOMRect edge, not the rounded integer receipt.
+        // Other ancestors (notably the scrollport) retain their original clip.
+        const preciseStatusClip =
+          e.classList.contains("trace-item-status") &&
+          ["hidden", "clip"].includes(style.overflowX) &&
+          ["hidden", "clip"].includes(style.overflowY) &&
+          (!style.scrollbarGutter || style.scrollbarGutter === "auto") &&
+          (!style.transform || style.transform === "none") &&
+          style.borderLeftWidth === "0px" &&
+          style.borderRightWidth === "0px" &&
+          Math.round(r.width) === e.clientWidth;
+        const right = preciseStatusClip ? r.right : roundedRight;
+        const bottom = top + e.clientHeight;
         if (x || paint) {
           limit.left = Math.max(limit.left, left);
           limit.right = Math.min(limit.right, right);
@@ -45,6 +59,7 @@ export function observeInlineTrace() {
           left,
           top,
           right,
+          roundedRight,
           bottom,
           x,
           y,
@@ -137,10 +152,10 @@ export function observeInlineTrace() {
           expanded: b.getAttribute("aria-expanded"),
           visible: visible(b),
           exitFact: b.querySelector(".trace-shell-exit")?.textContent?.trim(),
-          exitFactVisible: measure(
+          exitFactGeometry: measure(
             b.querySelector(".trace-shell-exit"),
             "Exit code 1",
-          ).visible,
+          ),
           detailVisible: visible(
             document.getElementById(b.getAttribute("aria-controls")),
           ),
@@ -190,11 +205,13 @@ export function verifyInlineTrace(state, baseline, expanded) {
     "Earlier turn stays collapsed",
   );
   assert.equal(state.turns[1].expanded, "true");
+  const exitRow = state.turns[1].traces.find((t) => t.exitFact !== undefined);
+  assert(exitRow, "Direct shell exit fact exists on the second turn");
+  assert.equal(exitRow.exitFact, "· Exit code 1", "Direct shell exit text");
+  assert(exitRow.visible, "The shell row is in view");
   assert(
-    state.turns[1].traces.some(
-      (t) => t.visible && t.exitFactVisible && t.exitFact === "· Exit code 1",
-    ),
-    "Direct shell exit fact is visible before and after disclosure",
+    exitRow.exitFactGeometry?.visible,
+    `Direct shell exit phrase is clipped or hidden: ${JSON.stringify(exitRow.exitFactGeometry)}`,
   );
   assert(
     state.turns.every((t) => t.answerMarker.visible),
@@ -524,6 +541,19 @@ export async function captureInlineTrace({
     `document.querySelector(${JSON.stringify(traceSelector)}).getAttribute('aria-expanded')==='false'`,
   );
   const stableCapture = async (step, baseline, expanded) => {
+    const verify = (state) => {
+      try {
+        verifyInlineTrace(state, baseline, expanded);
+      } catch (error) {
+        evidence.inlineTraceAssertionFailure = {
+          theme: options.theme,
+          step,
+          message: String(error),
+          traces: state.turns[1]?.traces,
+        };
+        throw error;
+      }
+    };
     await wait(
       `(${inlineTraceGeometryReady.toString()})(${observation},${expanded})`,
     );
@@ -543,7 +573,7 @@ export async function captureInlineTrace({
         prior = null;
         continue;
       }
-      verifyInlineTrace(now, baseline, expanded);
+      verify(now);
       if (
         prior &&
         JSON.stringify(shape(prior)) === JSON.stringify(shape(now))
@@ -560,7 +590,7 @@ export async function captureInlineTrace({
       "reading",
     );
     const after = await observe();
-    verifyInlineTrace(after, baseline, expanded);
+    verify(after);
     assert.deepEqual(
       shape(after),
       shape(stable),
