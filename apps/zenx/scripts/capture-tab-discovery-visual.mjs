@@ -43,6 +43,19 @@ await withPreviewBrowser(
       })
     };
   })()`);
+    // Existing hover/selection styling may change colors without moving layout.
+    // Keep those colors in evidence and the original selection contrast checks.
+    const layoutGeometry = async () => {
+      const state = await geometry();
+      return {
+        ...state,
+        tabs: state.tabs.map(({ width, titleWidth, full }) => ({
+          width,
+          titleWidth,
+          full,
+        })),
+      };
+    };
     const key = async (key, windowsVirtualKeyCode) => {
       for (const type of ["keyDown", "keyUp"]) {
         await send("Input.dispatchKeyEvent", {
@@ -145,7 +158,7 @@ await withPreviewBrowser(
           );
           assert.equal((await geometry()).overflowControls, 0);
           await screenshot(`tabs-lookalike-${language}-${width}-${theme}.png`);
-          const restingGeometry = await geometry();
+          const restingGeometry = await layoutGeometry();
           const hoverPoint = before.tabs[0].labelRect;
           await send("Input.dispatchMouseEvent", {
             type: "mouseMoved",
@@ -161,7 +174,7 @@ await withPreviewBrowser(
             "visual duplicate is not an extra accessible name",
           );
           assert.deepEqual(
-            await geometry(),
+            await layoutGeometry(),
             restingGeometry,
             "hover does not resize, scroll or select tabs",
           );
@@ -258,7 +271,7 @@ await withPreviewBrowser(
           });
           await waitReveal(names[0]);
           assert.deepEqual(
-            await geometry(),
+            await layoutGeometry(),
             restingGeometry,
             "repeated pointer inspection preserves layout and selection",
           );
@@ -310,7 +323,7 @@ await withPreviewBrowser(
           const keyboardReveal = await reveal();
           assert.ok(keyboardReveal.visible && keyboardReveal.fits);
           assert.equal(keyboardReveal.ariaHidden, "true");
-          const keyboardGeometry = await geometry();
+          const keyboardGeometry = await layoutGeometry();
           await screenshot(
             `tabs-lookalike-${language}-${width}-${theme}-keyboard.png`,
           );
@@ -323,7 +336,7 @@ await withPreviewBrowser(
             "Escape stays dismissed while focused",
           );
           assert.deepEqual(
-            await geometry(),
+            await layoutGeometry(),
             keyboardGeometry,
             "Escape preserves geometry and selection",
           );
