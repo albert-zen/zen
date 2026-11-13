@@ -1,0 +1,74 @@
+[
+  {
+    "approval": 1,
+    "asking": 0,
+    "color": "rgb(224, 178, 102)",
+    "display": "flex",
+    "gap": "6px",
+    "text": "WorkingNeeds your approval",
+    "wrap": "wrap"
+  },
+  {
+    "approval": 1,
+    "asking": 0,
+    "color": "rgb(224, 178, 102)",
+    "display": "flex",
+    "gap": "6px",
+    "text": "IdleNeeds your approval",
+    "wrap": "wrap"
+  },
+  {
+    "approval": 1,
+    "asking": 0,
+    "color": "rgb(224, 178, 102)",
+    "display": "flex",
+    "gap": "6px",
+    "text": "WorkingNeeds your approval",
+    "wrap": "wrap"
+  },
+  {
+    "approval": 1,
+    "asking": 0,
+    "color": "rgb(224, 178, 102)",
+    "display": "flex",
+    "gap": "6px",
+    "text": "IdleNeeds your approval",
+    "wrap": "wrap"
+  },
+  {
+    "approval": 1,
+    "asking": 0,
+    "color": "rgb(224, 178, 102)",
+    "display": "flex",
+    "gap": "6px",
+    "text": "WorkingNeeds your approval",
+    "wrap": "wrap"
+  },
+  {
+    "approval": 1,
+    "asking": 0,
+    "color": "rgb(224, 178, 102)",
+    "display": "flex",
+    "gap": "6px",
+    "text": "IdleNeeds your approval",
+    "wrap": "wrap"
+  },
+  {
+    "approval": 1,
+    "asking": 0,
+    "color": "rgb(224, 178, 102)",
+    "display": "flex",
+    "gap": "6px",
+    "text": "WorkingNeeds your approval",
+    "wrap": "wrap"
+  },
+  {
+    "approval": 1,
+    "asking": 0,
+    "color": "rgb(224, 178, 102)",
+    "display": "flex",
+    "gap": "6px",
+    "text": "IdleNeeds your approval",
+    "wrap": "wrap"
+  }
+]
