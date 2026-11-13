@@ -41,19 +41,18 @@
   }
 }
 
-/* Visual duplicate only: the conversation tab keeps its full accessible name. */
+/* In-flow visual duplicate: tabs keep their full accessible names.
+   This temporary slot moves content, never the tab strip or its controls. */
 .workspace-conversation-title-reveal {
-  position: fixed;
   box-sizing: border-box;
-  z-index: var(--z-popover);
-  width: max-content;
-  max-width: min(360px, calc(100vw - 24px));
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
+  max-height: min(6lh, 25vh);
   padding: 7px 9px;
-  border: 1px solid var(--color-border-control);
-  border-radius: 8px;
-  background: var(--color-surface-elevated);
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-main);
   color: var(--color-text-primary);
-  box-shadow: 0 4px 12px var(--color-shadow-low);
   font-size: var(--font-size-caption);
   line-height: 1.4;
   overflow-wrap: anywhere;

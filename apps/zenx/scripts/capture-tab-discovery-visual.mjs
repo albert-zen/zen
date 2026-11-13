@@ -14,6 +14,8 @@ assert.equal(
   manifest.artifact.htmlSha256,
 );
 process.env.ZENX_PREVIEW_DESKTOP_INPUT = "1";
+// Opt in only for the in-flow candidate; default preserves overlay baseline capture.
+const inflowAcceptance = process.env.ZENX_EXPECT_INFLOW_REVEAL !== "0";
 const results = [];
 const lookalikeResults = [];
 const crowdedConversationResults = [];
@@ -422,6 +424,61 @@ await withPreviewBrowser(
             overlapHit:w*h ? hit(x+w/2,y+h/2) : null };
         }) };
       })()`);
+      const contentGeometry = () =>
+        evaluate(`(() => {
+        const heading = document.querySelector('[role=tabpanel]:not([hidden]) .auxiliary-conversation-heading');
+        const button = heading.querySelector('button');
+        const rail = document.querySelector('[role=tablist]').getBoundingClientRect();
+        const h = heading.getBoundingClientRect(), b = button.getBoundingClientRect();
+        const popup = document.querySelector('${revealSelector}');
+        const p = popup?.getBoundingClientRect();
+        return { headingY:h.y, buttonY:b.y, railY:rail.y, railHeight:rail.height,
+          fullscreenCenterHit:button.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)),
+          revealHeight:p?.height ?? 0, maxShift:innerHeight/4 };
+      })()`);
+      const checkInflow = async (resting, label) => {
+        const current = await contentGeometry();
+        const measured = await measure();
+        assert.ok(
+          measured.targets.every((target) => target.overlapArea === 0),
+          label + ": reveal does not cover heading/control/tabs",
+        );
+        assert.ok(
+          current.fullscreenCenterHit,
+          label + ": fullscreen center hits its own button",
+        );
+        const shift = current.headingY - resting.headingY;
+        assert.ok(
+          shift > 0 && shift <= current.maxShift + 1,
+          label + ": bounded in-flow shift",
+        );
+        assert.ok(
+          Math.abs(shift - current.revealHeight) <= 1,
+          label + ": shift matches reveal height",
+        );
+        assert.ok(
+          Math.abs(current.buttonY - resting.buttonY - shift) <= 1,
+          label + ": control moves with heading",
+        );
+        assert.equal(current.railY, resting.railY);
+        assert.equal(current.railHeight, resting.railHeight);
+        return current;
+      };
+      const checkRestored = async (resting) => {
+        const current = await contentGeometry();
+        for (const field of ["headingY", "buttonY", "railY", "railHeight"]) {
+          assert.ok(
+            Math.abs(current[field] - resting[field]) <= 1,
+            field + ": restored after Escape",
+          );
+        }
+        assert.ok(
+          current.fullscreenCenterHit,
+          "fullscreen center remains reachable after dismissal",
+        );
+        return current;
+      };
+      const restingContent = await contentGeometry();
       const before = await state();
       assert.equal(before.sourceConversations.length, 5);
       assert.ok(
@@ -455,17 +512,61 @@ await withPreviewBrowser(
       const pointerMeasurement = await measure();
       assert.deepEqual(await layoutGeometry(), restingGeometry);
       await screenshot(`tabs-crowded-conversations-${theme}-pointer.png`);
-      await send("Input.dispatchMouseEvent", {
-        type: "mouseMoved",
-        x: pointerReveal.x + pointerReveal.width / 2,
-        y: pointerReveal.y + pointerReveal.height / 2,
-      });
+      const trajectory = [];
+      if (inflowAcceptance) {
+        const exposedContent = await checkInflow(
+          restingContent,
+          "pointer before crossing",
+        );
+        const pointerState = await state();
+        // Eight actual input moves, including a checked midpoint, over nominal 160ms.
+        // This crosses the real route rather than teleporting across the leave-grace gap.
+        for (let step = 1; step <= 8; step++) {
+          const fraction = step / 8;
+          const x =
+            point.x +
+            (pointerReveal.x + pointerReveal.width / 2 - point.x) * fraction;
+          const y =
+            point.y +
+            (pointerReveal.y + pointerReveal.height / 2 - point.y) * fraction;
+          await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+          await delay(20);
+          const visible = await reveal();
+          assert.equal(
+            visible?.text,
+            before.sourceConversations[1].title,
+            "reveal survives crossing step " + step,
+          );
+          assert.ok(visible.visible, "reveal is visible mid-crossing");
+          const content = await checkInflow(
+            restingContent,
+            "crossing step " + step,
+          );
+          assert.deepEqual(
+            content,
+            exposedContent,
+            "content does not jump while crossing",
+          );
+          assert.deepEqual(await layoutGeometry(), restingGeometry);
+          const currentState = await state();
+          assert.equal(currentState.focus, pointerState.focus);
+          assert.equal(currentState.selected, pointerState.selected);
+          trajectory.push({ step, x, y, reveal: visible, content });
+        }
+      } else {
+        await send("Input.dispatchMouseEvent", {
+          type: "mouseMoved",
+          x: pointerReveal.x + pointerReveal.width / 2,
+          y: pointerReveal.y + pointerReveal.height / 2,
+        });
+      }
       await delay(400);
       assert.equal(
         (await reveal())?.text,
         before.sourceConversations[1].title,
         "pointer transfer keeps reveal readable",
       );
+      const beforePointerEscape = await state();
       await key("Escape", 27);
       await waitNoReveal();
       await delay(450);
@@ -475,6 +576,13 @@ await withPreviewBrowser(
         "Escape stays dismissed under pointer",
       );
       assert.deepEqual(await layoutGeometry(), restingGeometry);
+      const afterPointerEscape = await state();
+      assert.equal(afterPointerEscape.focus, beforePointerEscape.focus);
+      assert.equal(afterPointerEscape.selected, beforePointerEscape.selected);
+      assert.deepEqual(afterPointerEscape.openChangeRequests, []);
+      const pointerRestored = inflowAcceptance
+        ? await checkRestored(restingContent)
+        : null;
       await send("Input.dispatchMouseEvent", {
         type: "mouseMoved",
         x: 20,
@@ -507,6 +615,9 @@ await withPreviewBrowser(
       const keyboardReveal = await reveal();
       assert.ok(keyboardReveal.visible && keyboardReveal.fits);
       const keyboardMeasurement = await measure();
+      const keyboardContent = inflowAcceptance
+        ? await checkInflow(restingContent, "keyboard End")
+        : null;
       const keyboardGeometry = await layoutGeometry();
       await screenshot(`tabs-crowded-conversations-${theme}-keyboard.png`);
       await key("Escape", 27);
@@ -517,6 +628,9 @@ await withPreviewBrowser(
       assert.equal(escaped.focus, end.focus);
       assert.equal(escaped.selected, end.selected);
       assert.deepEqual(await layoutGeometry(), keyboardGeometry);
+      const keyboardRestored = inflowAcceptance
+        ? await checkRestored(restingContent)
+        : null;
       await key("Home", 36);
       await wait(
         `document.activeElement?.id === 'aux-tab-thread:synthetic-lookalike-0' && document.querySelector('[role=tablist]').scrollLeft < 2`,
@@ -535,6 +649,12 @@ await withPreviewBrowser(
       await key("Escape", 27);
       await waitNoReveal();
       crowdedConversationResults.push({
+        inflowAcceptance,
+        trajectory,
+        restingContent,
+        pointerRestored,
+        keyboardContent,
+        keyboardRestored,
         theme,
         width: 1280,
         before,
@@ -674,7 +794,7 @@ await writeFile(
         "Production side-conversation tab and heading path populated through conversations with synthetic thread IDs and read-only body. No live child Thread, pending approval, rename editor or persistence coverage. Full DOM text, visual reveal contents and geometry are measured separately. aria-hidden duplication guard is not an AX-tree validation. Native tooltip suppression is intentional for these conversation tabs. Geometry is not visual suffix-recognition proof; inspect screenshots. No requirement that clipping remain in a later candidate.",
       lookalikeResults,
       crowdedConversationScope:
-        "Desktop 1280x720, five synthetic conversations through production conversation tabs. Records bounding-box overlap and elementFromPoint hit stacks with current heading, heading text, fullscreen target and tabs; overlap is not a pass/fail gate. Not native desktop, live Host, mobile, rename, approval or AX-tree coverage.",
+        "Desktop 1280x720, five synthetic conversations through production conversation tabs. Records bounding-box overlap and elementFromPoint hit stacks with current heading, heading text, fullscreen target and tabs; overlap is observational only when ZENX_EXPECT_INFLOW_REVEAL=0. By default this gates no overlap, fullscreen center hit, bounded/restored content displacement, and eight-step pointer crossing with midpoint samples. Center hit testing does not activate fullscreen. Not native desktop, live Host, mobile, rename, approval or AX-tree coverage.",
       crowdedConversationResults,
     },
     null,

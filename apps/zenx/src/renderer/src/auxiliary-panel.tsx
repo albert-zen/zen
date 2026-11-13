@@ -1,4 +1,4 @@
-import { createPortal, flushSync } from "react-dom";
+import { flushSync } from "react-dom";
 import { ShellTargetNavigationContext } from "./shell-target-navigation.js";
 import {
   sidebarTabId,
@@ -73,8 +73,6 @@ function useConversationTitleReveal() {
   const [preview, setPreview] = useState<{
     anchor: HTMLButtonElement;
     title: string;
-    left: number;
-    top: number;
   } | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dismiss = useCallback(() => {
@@ -126,13 +124,7 @@ function useConversationTitleReveal() {
         label.scrollWidth <= label.clientWidth + 1
       )
         return;
-      const bounds = anchor.getBoundingClientRect();
-      setPreview({
-        anchor,
-        title,
-        left: Math.max(12, Math.min(bounds.left, window.innerWidth - 372)),
-        top: bounds.bottom + 6,
-      });
+      setPreview({ anchor, title });
     };
     if (delayed) timer.current = setTimeout(reveal, 350);
     else reveal();
@@ -171,16 +163,7 @@ function useConversationTitleReveal() {
           bounds.left < rail.right &&
           bounds.bottom > 0 &&
           bounds.top < window.innerHeight;
-        return bounds.width > 0 && visible
-          ? {
-              ...current,
-              left: Math.max(
-                12,
-                Math.min(bounds.left, window.innerWidth - 372),
-              ),
-              top: bounds.bottom + 6,
-            }
-          : null;
+        return bounds.width > 0 && visible ? current : null;
       });
     };
     window.addEventListener("resize", dismiss);
@@ -235,24 +218,16 @@ function useConversationTitleReveal() {
       return true;
     },
     element:
-      preview && preview.anchor.isConnected
-        ? createPortal(
-            <div
-              className="workspace-conversation-title-reveal"
-              aria-hidden="true"
-              onPointerEnter={keepOpen}
-              onPointerLeave={leave}
-              style={{
-                left: preview.left,
-                top: preview.top,
-                maxHeight: Math.max(40, window.innerHeight - preview.top - 12),
-              }}
-            >
-              {preview.title}
-            </div>,
-            document.body,
-          )
-        : null,
+      preview && preview.anchor.isConnected ? (
+        <div
+          className="workspace-conversation-title-reveal"
+          aria-hidden="true"
+          onPointerEnter={keepOpen}
+          onPointerLeave={leave}
+        >
+          {preview.title}
+        </div>
+      ) : null,
   };
 }
 
@@ -1944,6 +1919,7 @@ export function AuxiliaryPanel({
           <Icon name="panel-right" />
         </button>
       </header>
+      {titleReveal.element}
       {contextControl ? (
         <div className="auxiliary-context-control">{contextControl}</div>
       ) : null}
@@ -2363,7 +2339,6 @@ export function AuxiliaryPanel({
           })}
         </div>
       </div>
-      {titleReveal.element}
     </aside>
   );
 }
