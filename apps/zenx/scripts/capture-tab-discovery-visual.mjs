@@ -16,6 +16,7 @@ assert.equal(
 process.env.ZENX_PREVIEW_DESKTOP_INPUT = "1";
 const results = [];
 const lookalikeResults = [];
+const crowdedConversationResults = [];
 await withPreviewBrowser(
   directory,
   async ({ send, evaluate, url, screenshot }) => {
@@ -379,6 +380,173 @@ await withPreviewBrowser(
         }
       }
     }
+    // Desktop-only genuine conversations, unlike the legacy five custom tabs below.
+    // Overlap is an observed baseline, deliberately NOT a no-overlap assertion.
+    for (const theme of ["light", "dark"]) {
+      await send("Emulation.setDeviceMetricsOverride", {
+        width: 1280,
+        height: 720,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+      const destination = `${url}/ui-polish-visual.html?scene=auxiliary&tabLookalike=en&tabCrowded&lang=en&platform=darwin&theme=${theme}`;
+      await send("Page.navigate", { url: destination });
+      await wait(
+        `location.href === ${JSON.stringify(destination)} && document.body?.dataset.previewReady === 'true' && document.querySelectorAll('[role=tab]').length === 5`,
+      );
+      await delay(300);
+      const state = () =>
+        evaluate(`(() => {
+        const rail = document.querySelector('[role=tablist]');
+        const panel = document.querySelector('[role=tabpanel]:not([hidden])');
+        return { ...window.__uiPolishAuxiliary.getState(),
+          focus: document.activeElement?.id,
+          renderedThreadId: panel.querySelector('[data-synthetic-thread-id]')?.dataset.syntheticThreadId,
+          heading: panel.querySelector('.auxiliary-conversation-heading > span')?.textContent,
+          scroll: rail.scrollLeft, clientWidth: rail.clientWidth, scrollWidth: rail.scrollWidth };
+      })()`);
+      const measure = () =>
+        evaluate(`(() => {
+        const popup = document.querySelector('${revealSelector}');
+        const panel = document.querySelector('[role=tabpanel]:not([hidden])');
+        const rect = el => { const r = el.getBoundingClientRect(); return { x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom }; };
+        const describe = el => el ? { tag:el.tagName,id:el.id,className:el.className,role:el.getAttribute('role'),label:el.getAttribute('aria-label') } : null;
+        const hit = (x,y) => ({ x,y, top:describe(document.elementFromPoint(x,y)), stack:document.elementsFromPoint(x,y).slice(0,8).map(describe), revealWins:popup.contains(document.elementFromPoint(x,y)) });
+        const pr = rect(popup);
+        const targets = [panel.querySelector('.auxiliary-conversation-heading'), panel.querySelector('.auxiliary-conversation-heading > span'), panel.querySelector('.auxiliary-conversation-heading button'), ...document.querySelectorAll('[role=tab]')];
+        return { reveal:pr, revealCenterHit:hit(pr.x+pr.width/2,pr.y+pr.height/2), targets:targets.map(el => {
+          const r=rect(el), x=Math.max(r.x,pr.x), y=Math.max(r.y,pr.y), right=Math.min(r.right,pr.right), bottom=Math.min(r.bottom,pr.bottom);
+          const w=Math.max(0,right-x), h=Math.max(0,bottom-y);
+          return { target:describe(el),rect:r,overlapArea:w*h,
+            centerHit:hit(r.x+r.width/2,r.y+r.height/2),
+            overlapHit:w*h ? hit(x+w/2,y+h/2) : null };
+        }) };
+      })()`);
+      const before = await state();
+      assert.equal(before.sourceConversations.length, 5);
+      assert.ok(
+        before.scrollWidth > before.clientWidth,
+        "genuine conversation strip overflows",
+      );
+      assert.ok(
+        (await geometry()).tabs.some((tab) => !tab.full),
+        "some genuine conversations are clipped",
+      );
+      assert.equal(before.renderedThreadId, "synthetic-lookalike-1");
+      assert.equal(before.heading, before.sourceConversations[1].title);
+      const restingGeometry = await layoutGeometry();
+      const point = await evaluate(`(() => {
+        const rail = document.querySelector('[role=tablist]').getBoundingClientRect();
+        const tab = document.getElementById('aux-tab-thread:synthetic-lookalike-1');
+        const r = tab.querySelector('.workspace-tab-title').getBoundingClientRect();
+        const x = (Math.max(r.left,rail.left)+Math.min(r.right,rail.right))/2;
+        const y = r.top+r.height/2;
+        return {x,y,hit:tab.contains(document.elementFromPoint(x,y))};
+      })()`);
+      assert.ok(point.hit, "hover uses a real visible conversation target");
+      await send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: point.x,
+        y: point.y,
+      });
+      await waitReveal(before.sourceConversations[1].title);
+      const pointerReveal = await reveal();
+      assert.ok(pointerReveal.visible && pointerReveal.fits);
+      const pointerMeasurement = await measure();
+      assert.deepEqual(await layoutGeometry(), restingGeometry);
+      await screenshot(`tabs-crowded-conversations-${theme}-pointer.png`);
+      await send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: pointerReveal.x + pointerReveal.width / 2,
+        y: pointerReveal.y + pointerReveal.height / 2,
+      });
+      await delay(400);
+      assert.equal(
+        (await reveal())?.text,
+        before.sourceConversations[1].title,
+        "pointer transfer keeps reveal readable",
+      );
+      await key("Escape", 27);
+      await waitNoReveal();
+      await delay(450);
+      assert.equal(
+        await reveal(),
+        null,
+        "Escape stays dismissed under pointer",
+      );
+      assert.deepEqual(await layoutGeometry(), restingGeometry);
+      await send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: 20,
+        y: 500,
+      });
+      await evaluate(
+        `document.getElementById('aux-tab-thread:synthetic-lookalike-1').focus()`,
+      );
+      await key("End", 35);
+      await wait(
+        `document.activeElement?.id === 'aux-tab-thread:synthetic-lookalike-4' && window.__uiPolishAuxiliary.getState().selected === 'thread:synthetic-lookalike-4'`,
+      );
+      await wait(
+        `(() => { const r=document.querySelector('[role=tablist]').getBoundingClientRect(); const t=document.activeElement.getBoundingClientRect(); return t.left>=r.left+1 && t.right<=r.right-1; })()`,
+      );
+      await waitReveal(before.sourceConversations[4].title);
+      await delay(300);
+      assert.equal(
+        (await reveal())?.text,
+        before.sourceConversations[4].title,
+        "keyboard reveal survives auto-scroll settling",
+      );
+      const end = await state();
+      assert.ok(
+        end.scroll > before.scroll,
+        "keyboard auto-scroll exposes last conversation",
+      );
+      assert.equal(end.renderedThreadId, "synthetic-lookalike-4");
+      assert.equal(end.heading, before.sourceConversations[4].title);
+      const keyboardReveal = await reveal();
+      assert.ok(keyboardReveal.visible && keyboardReveal.fits);
+      const keyboardMeasurement = await measure();
+      const keyboardGeometry = await layoutGeometry();
+      await screenshot(`tabs-crowded-conversations-${theme}-keyboard.png`);
+      await key("Escape", 27);
+      await waitNoReveal();
+      await delay(450);
+      assert.equal(await reveal(), null);
+      const escaped = await state();
+      assert.equal(escaped.focus, end.focus);
+      assert.equal(escaped.selected, end.selected);
+      assert.deepEqual(await layoutGeometry(), keyboardGeometry);
+      await key("Home", 36);
+      await wait(
+        `document.activeElement?.id === 'aux-tab-thread:synthetic-lookalike-0' && document.querySelector('[role=tablist]').scrollLeft < 2`,
+      );
+      await waitReveal(before.sourceConversations[0].title);
+      const home = await state();
+      assert.equal(home.selected, "thread:synthetic-lookalike-0");
+      assert.equal(home.renderedThreadId, "synthetic-lookalike-0");
+      assert.deepEqual(home.sourceConversations, before.sourceConversations);
+      assert.deepEqual(home.openChangeRequests, []);
+      assert.deepEqual(
+        home.writes,
+        [],
+        "inspection and keyboard navigation do not reorder or persist tabs",
+      );
+      await key("Escape", 27);
+      await waitNoReveal();
+      crowdedConversationResults.push({
+        theme,
+        width: 1280,
+        before,
+        pointerReveal,
+        pointerMeasurement,
+        end,
+        keyboardReveal,
+        keyboardMeasurement,
+        escaped,
+        home,
+      });
+    }
     for (const [width, platform, theme] of [
       [1280, "darwin", "light"],
       [1280, "darwin", "dark"],
@@ -505,6 +673,9 @@ await writeFile(
       lookalikeScope:
         "Production side-conversation tab and heading path populated through conversations with synthetic thread IDs and read-only body. No live child Thread, pending approval, rename editor or persistence coverage. Full DOM text, visual reveal contents and geometry are measured separately. aria-hidden duplication guard is not an AX-tree validation. Native tooltip suppression is intentional for these conversation tabs. Geometry is not visual suffix-recognition proof; inspect screenshots. No requirement that clipping remain in a later candidate.",
       lookalikeResults,
+      crowdedConversationScope:
+        "Desktop 1280x720, five synthetic conversations through production conversation tabs. Records bounding-box overlap and elementFromPoint hit stacks with current heading, heading text, fullscreen target and tabs; overlap is not a pass/fail gate. Not native desktop, live Host, mobile, rename, approval or AX-tree coverage.",
+      crowdedConversationResults,
     },
     null,
     2,

@@ -906,7 +906,7 @@ function SideChatFixture() {
 function AuxiliaryFixture() {
   // Test-only synthetic entries use the genuine side-conversation tab path.
   const lookalike = params.get("tabLookalike");
-  const lookalikeTitles =
+  const pairTitles =
     lookalike === "en"
       ? [
           "Cross-project implementation consistency and detailed interaction validation - Alpha",
@@ -918,6 +918,16 @@ function AuxiliaryFixture() {
             "跨项目实施一致性与详细交互验证乙组",
           ]
         : null;
+  // Opt-in desktop overflow scene; the original two-conversation cases are unchanged.
+  const lookalikeTitles =
+    params.has("tabCrowded") && pairTitles
+      ? [
+          ...pairTitles,
+          ...["Gamma", "Delta", "Epsilon"].map(
+            (suffix) => `${pairTitles[0]} · ${suffix}`,
+          ),
+        ]
+      : pairTitles;
   const conversations = (lookalikeTitles ?? []).map((title, index) => ({
     threadId: `synthetic-lookalike-${index}`,
     title,
