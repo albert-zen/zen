@@ -272,6 +272,85 @@ async function screenshot(name) {
     (await window.webContents.capturePage()).toPNG(),
   );
 }
+// Serialize only DOM geometry and computed layout properties from the owned App.
+function informationBoundaryMetrics() {
+  const viewport = document.documentElement;
+  const cssLengths = [
+    "width",
+    "max-width",
+    "min-width",
+    "box-sizing",
+    "padding-inline-start",
+    "padding-inline-end",
+    "border-inline-start-width",
+    "border-inline-end-width",
+    "margin-inline-start",
+    "margin-inline-end",
+    "overflow-x",
+    "overflow-y",
+    "scrollbar-width",
+    "scrollbar-gutter",
+    "--conversation-gutter",
+    "--conversation-width",
+  ];
+  const selectors = {
+    workspace: ".workspace",
+    chat: ".agent-surface",
+    thread: ".thread-view",
+    bottomZone: ".bottom-zone",
+    composer: ".bottom-zone .composer",
+    editor: "#thread-composer",
+    transcript: ".messages",
+    transcriptColumn: ".messages-inner",
+    informationDock: ".information-dock",
+    informationPopover: ".information-popover",
+  };
+  return {
+    viewport: {
+      innerWidth,
+      innerHeight,
+      devicePixelRatio,
+      visualViewportScale: window.visualViewport?.scale ?? null,
+      clientWidth: viewport.clientWidth,
+      clientHeight: viewport.clientHeight,
+    },
+    elements: Object.fromEntries(
+      Object.entries(selectors).map(([name, selector]) => {
+        const node = document.querySelector(selector);
+        if (!node) return [name, null];
+        const { left, right, width, height } = node.getBoundingClientRect();
+        const {
+          offsetWidth,
+          clientWidth,
+          clientHeight,
+          scrollWidth,
+          scrollHeight,
+        } = node;
+        const style = getComputedStyle(node);
+        return [
+          name,
+          {
+            left,
+            right,
+            width,
+            height,
+            offsetWidth,
+            clientWidth,
+            clientHeight,
+            scrollWidth,
+            scrollHeight,
+            css: Object.fromEntries(
+              cssLengths.map((property) => [
+                property,
+                style.getPropertyValue(property).trim(),
+              ]),
+            ),
+          },
+        ];
+      }),
+    ),
+  };
+}
 async function capture(name, mode) {
   await until(
     () =>
@@ -395,6 +474,23 @@ async function capture(name, mode) {
     );
   }
   await screenshot(name + ".png");
+  if (
+    name === "08c-920px-allocation-dock" ||
+    name === "08d-919px-allocation-overlay"
+  ) {
+    try {
+      geometry.boundaryMetrics = {
+        ...(await evaluate(`(${informationBoundaryMetrics.toString()})()`)),
+        electron: process.versions.electron,
+        chromium: process.versions.chrome,
+        arch: process.arch,
+        zoomFactor: window.webContents.getZoomFactor(),
+      };
+    } catch {
+      // Diagnostic failure must not replace the existing acceptance result.
+      geometry.boundaryMetrics = { status: "unavailable" };
+    }
+  }
   result.cases.push({ name, mode, geometry });
 }
 const networkReady = app.whenReady().then(() =>
