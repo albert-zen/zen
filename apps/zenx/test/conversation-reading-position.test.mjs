@@ -16,7 +16,7 @@ test("desktop history return replaces floating action with a normal-flow reading
   assert.doesNotMatch(css, /position:\s*(absolute|fixed|sticky)/u);
 });
 
-test("desktop return has a quiet contained boundary without changing typography, geometry or focus", () => {
+test("desktop return preserves quiet styling, typography, geometry and focus", () => {
   const control = css.match(
     /\.composer-reading-position \.quiet-button\s*\{([^}]+)\}/u,
   )?.[1];
@@ -25,14 +25,9 @@ test("desktop return has a quiet contained boundary without changing typography,
     "min-height: 32px",
     "gap: 6px",
     "color: var(--color-text-secondary)",
-    "border-color: var(--color-border-strong)",
-    "background: var(--color-surface-control)",
   ])
     assert(control.includes(declaration), declaration);
-  assert.match(
-    css,
-    /\.composer-reading-position \.quiet-button:hover\s*\{\s*background: var\(--color-surface-control-hover\);/u,
-  );
+  assert.doesNotMatch(css, /(?:border-color|background)\s*:/u);
   assert.doesNotMatch(
     control,
     /(?:^|;)\s*(?:width|height|max-width|padding|margin|font-size|font-weight|outline|border-width|pointer-events|transform|position)\s*:/u,
