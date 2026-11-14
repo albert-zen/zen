@@ -3,6 +3,9 @@ const assert = require("node:assert/strict");
 const {
   informationOverflowMetrics,
   verifyInformationOverflowCue,
+  informationCueLabelMetrics,
+  assertChineseInformationCue,
+  classifySingleSiblingCueFit,
 } = require("./information-overflow-acceptance.cjs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -348,6 +351,12 @@ async function verifyDisposableOverlayKeyboardAnswer() {
     keyboardQuestionAttempts.length,
     1,
     "no duplicate respond after native activation settles",
+  );
+  await observeSingleSiblingCueFit(threadId, sibling.request.callItemId);
+  assert.equal(
+    keyboardQuestionAttempts.length,
+    1,
+    "read-only fitting observation sends no extra response",
   );
   receipt.status = "passed";
   keyboardQuestionOwner = null;
@@ -1003,6 +1012,176 @@ async function settledLayout() {
     "native layout write settled",
   );
 }
+const readCueLabel = () =>
+  evaluate(
+    `(${informationCueLabelMetrics.toString()})(()=>(${informationOverflowMetrics.toString()})(${informationReachabilityMetrics.toString()}))`,
+  );
+async function stableCueLabel(label) {
+  let previous = await readCueLabel();
+  for (let attempt = 0; attempt < 20; attempt++) {
+    await pause(50);
+    const current = await readCueLabel();
+    if (JSON.stringify(current) === JSON.stringify(previous)) return current;
+    previous = current;
+  }
+  throw Error(`${label}: cue observation did not settle`);
+}
+
+async function verifyChineseSplitCueLabel() {
+  const receipt = {
+    name: "desktop-split-chinese-cue-label",
+    status: "running",
+    languageInput:
+      "existing disposable same-origin language preference receiver; original key/value restored",
+    scope:
+      "Chinese inner-span fitting only; no dark, forced-colors or new response claim",
+  };
+  result.cases.push(receipt);
+  let before,
+    switched = false,
+    failure;
+  try {
+    before = await stableCueLabel("before-Chinese");
+    receipt.before = before;
+    switched = true;
+    await evaluate(
+      "(()=>{const oldValue=localStorage.getItem('zenx.language');localStorage.setItem('zenx.language','zh-CN');dispatchEvent(new StorageEvent('storage',{key:'zenx.language',oldValue,newValue:'zh-CN',storageArea:localStorage}));return true})()",
+    );
+    await until(
+      () =>
+        evaluate(
+          "document.documentElement.lang==='zh-CN' && document.querySelector('.information-overflow-cue > span')?.textContent==='下方还有内容'",
+        ),
+      "real Chinese document locale and cue label",
+    );
+    receipt.chinese = await stableCueLabel("Chinese-label");
+    assertChineseInformationCue(receipt.chinese, before);
+    await screenshot("03i-overflow-cue-Chinese-label.png");
+  } catch (error) {
+    failure = error;
+    receipt.error = String(error);
+    try {
+      receipt.failureSample = await readCueLabel();
+      await screenshot("03i-overflow-cue-Chinese-label-failed.png");
+    } catch {}
+  }
+  if (switched) {
+    try {
+      const value = JSON.stringify(before.storedLanguage);
+      await evaluate(
+        `(()=>{const oldValue=localStorage.getItem('zenx.language'),value=${value};if(value===null)localStorage.removeItem('zenx.language');else localStorage.setItem('zenx.language',value);dispatchEvent(new StorageEvent('storage',{key:'zenx.language',oldValue,newValue:value,storageArea:localStorage}));return true})()`,
+      );
+      await until(
+        () =>
+          evaluate(
+            `document.documentElement.lang===${JSON.stringify(before.language)} && localStorage.getItem('zenx.language')===${value}`,
+          ),
+        "original exact locale key/value and document lang restored",
+      );
+      receipt.restored = await stableCueLabel("restored-locale");
+      for (const key of [
+        "language",
+        "storedLanguage",
+        "viewport",
+        "resource",
+        "ownerKey",
+        "popover",
+        "toolbar",
+        "panel",
+        "clientHeight",
+        "scrollHeight",
+        "composer",
+        "composerDraft",
+        "toggle",
+        "dismiss",
+        "transcript",
+        "transcriptScroll",
+        "active",
+      ])
+        assert.deepEqual(
+          receipt.restored[key],
+          before[key],
+          `locale restoration preserves ${key}`,
+        );
+      assert.deepEqual(
+        receipt.restored.questions.map((q) => q.id),
+        before.questions.map((q) => q.id),
+      );
+      assert.ok(
+        Math.abs(receipt.restored.panelScroll - before.panelScroll) <= 1,
+        "only existing fractional inner-scroll cleanup tolerance",
+      );
+    } catch (error) {
+      receipt.restorationError = String(error);
+      failure ??= error;
+    }
+  }
+  receipt.status = failure ? "failed" : "passed";
+  if (failure) throw failure;
+}
+
+async function observeSingleSiblingCueFit(threadId, siblingId) {
+  const receipt = {
+    name: "desktop-single-sibling-cue-fit",
+    status: "running",
+    scope:
+      "passive observation after the existing sole verified submission; no scene or theme changes",
+  };
+  result.cases.push(receipt);
+  try {
+    // Only this already scoped panel must settle; new transcript work is not
+    // manipulated or used to manufacture a fitting state.
+    const scoped = async () => {
+      const s = await readCueLabel();
+      return {
+        viewport: s.viewport,
+        resource: s.resource,
+        overlayCount: s.overlayCount,
+        dockCount: s.dockCount,
+        ownerKey: s.ownerKey,
+        panel: s.panel,
+        owned: s.owned,
+        clientHeight: s.clientHeight,
+        scrollHeight: s.scrollHeight,
+        panelScroll: s.panelScroll,
+        remaining: s.remaining,
+        cue: s.cue,
+        questions: s.questions.map((q) => ({ id: q.id })),
+      };
+    };
+    let previous = await scoped(),
+      stable = false;
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await pause(50);
+      const next = await scoped();
+      receipt.observation = next;
+      if (JSON.stringify(next) === JSON.stringify(previous)) {
+        stable = true;
+        break;
+      }
+      previous = next;
+    }
+    if (!stable) {
+      receipt.status = "not-exercised";
+      receipt.reason =
+        "single-sibling observation did not settle; no retry or mutation";
+      return;
+    }
+    Object.assign(
+      receipt,
+      classifySingleSiblingCueFit(
+        receipt.observation,
+        `thread:${threadId}`,
+        siblingId,
+      ),
+    );
+  } catch (error) {
+    receipt.status = "failed";
+    receipt.error = String(error);
+    throw error;
+  }
+}
+
 async function selectValue(selector, value, label) {
   // macOS's native select popup is outside webContents key dispatch. Exercise
   // the real controlled DOM select/change handler, not an OS menu, and record
@@ -1840,6 +2019,7 @@ async function run() {
   });
   await measureInformationOverlayReachability(revealPrompt);
   await verifyInformationDarkSplitCue(revealPrompt);
+  await verifyChineseSplitCueLabel();
   window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Escape" });
   window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
   await until(

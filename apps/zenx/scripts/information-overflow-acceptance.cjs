@@ -438,4 +438,185 @@ async function verifyInformationOverflowCue({
   }
 }
 
-module.exports = { informationOverflowMetrics, verifyInformationOverflowCue };
+// Separate read-only observation: do not change existing English/dark receipts.
+function informationCueLabelMetrics(readBase) {
+  const sample = readBase();
+  const label = document.querySelector(
+    ".information-popover .information-overflow-cue > span",
+  );
+  const r = label?.getBoundingClientRect();
+  return {
+    ...sample,
+    language: document.documentElement.lang,
+    storedLanguage: localStorage.getItem("zenx.language"),
+    innerLabel: label
+      ? {
+          text: label.textContent?.trim(),
+          clientWidth: label.clientWidth,
+          scrollWidth: label.scrollWidth,
+          rect: {
+            left: r.left,
+            top: r.top,
+            right: r.right,
+            bottom: r.bottom,
+            width: r.width,
+            height: r.height,
+          },
+          fontFamily: getComputedStyle(label).fontFamily,
+        }
+      : null,
+  };
+}
+
+function assertChineseInformationCue(sample, before) {
+  assert.equal(
+    sample.language,
+    "zh-CN",
+    "actual document locale, not an assumed translation",
+  );
+  assert.equal(sample.storedLanguage, "zh-CN");
+  assert.equal(sample.viewport.width, 1600, "same ordinary desktop width");
+  assert.ok(
+    sample.overlayCount === 1 &&
+      sample.dockCount === 0 &&
+      sample.resource?.open === "true" &&
+      sample.resource.expanded !== "true" &&
+      sample.resource.primaryActive !== "true",
+    "ordinary resource split, not dock or narrow",
+  );
+  assert.ok(
+    before.ownerKey &&
+      before.questions.length === 2 &&
+      before.questions.every((q) => q.id),
+    "original scoped two-question scene exists",
+  );
+  assert.equal(sample.ownerKey, before.ownerKey);
+  assert.deepEqual(
+    sample.questions.map((q) => q.id),
+    before.questions.map((q) => q.id),
+    "locale switch never answers or changes pending questions",
+  );
+  assert.ok(
+    sample.panel?.width > 0 &&
+      sample.panel?.height > 0 &&
+      sample.clientHeight > 0 &&
+      sample.scrollHeight > sample.clientHeight &&
+      sample.remaining > 1,
+    "Chinese cue is tested with real content remaining below",
+  );
+  const cue = sample.cue,
+    label = sample.innerLabel;
+  assert.ok(
+    cue &&
+      !cue.hidden &&
+      cue.display !== "none" &&
+      cue.visibility === "visible",
+    "actual Chinese cue is rendered",
+  );
+  assert.equal(cue.text, "下方还有内容");
+  assert.ok(
+    label &&
+      label.text === "下方还有内容" &&
+      label.clientWidth > 0 &&
+      label.scrollWidth <= label.clientWidth &&
+      label.rect.width > 0 &&
+      label.rect.height > 0,
+    "inner Chinese text fits without ellipsis or horizontal clipping",
+  );
+  assert.ok(
+    cue.ariaHidden === "true" &&
+      cue.tabIndex === -1 &&
+      cue.interactiveCount === 0 &&
+      cue.pointerEvents === "none" &&
+      !cue.ownsPointer,
+    "label adds no action or pointer surface",
+  );
+  const r = cue.rect,
+    t = sample.toolbar,
+    c = sample.dismiss,
+    l = label.rect;
+  assert.ok(
+    r.left >= t.left &&
+      r.right <= t.right &&
+      r.top >= t.top &&
+      r.bottom <= t.bottom,
+    "Chinese cue remains inside toolbar",
+  );
+  assert.ok(
+    l.left >= r.left &&
+      l.right <= r.right &&
+      l.top >= r.top &&
+      l.bottom <= r.bottom,
+    "inner Chinese label remains inside cue",
+  );
+  assert.ok(
+    r.right <= c.left ||
+      r.left >= c.right ||
+      r.bottom <= c.top ||
+      r.top >= c.bottom,
+    "Chinese cue does not overlap translated Close",
+  );
+  assert.ok(sample.closeHit, "translated Close remains hit-testable");
+}
+
+function classifySingleSiblingCueFit(sample, ownerKey, siblingId) {
+  const scope =
+    sample.viewport.width === 1600 &&
+    sample.overlayCount === 1 &&
+    sample.dockCount === 0 &&
+    sample.resource?.open === "true" &&
+    sample.resource.expanded !== "true" &&
+    sample.resource.primaryActive !== "true" &&
+    sample.ownerKey === ownerKey &&
+    sample.questions.length === 1 &&
+    sample.questions[0].id === siblingId;
+  if (
+    !scope ||
+    !sample.owned ||
+    !sample.panel ||
+    sample.panel.width <= 0 ||
+    sample.panel.height <= 0 ||
+    !(sample.clientHeight > 0)
+  )
+    return {
+      status: "not-exercised",
+      reason: "exact visible single-sibling desktop split was not observed",
+    };
+  // A scrolled-to-bottom panel is NOT a fitting/no-overflow scene.
+  if (!(sample.scrollHeight <= sample.clientHeight && sample.panelScroll === 0))
+    return {
+      status: "not-exercised",
+      reason:
+        "single sibling still overflows or is not at zero scroll; no scene alteration attempted",
+    };
+  const cue = sample.cue;
+  assert.ok(
+    cue &&
+      cue.hidden &&
+      cue.display === "none" &&
+      cue.rect.width === 0 &&
+      cue.rect.height === 0,
+    "genuinely fitting owner hides the cue with no layout box",
+  );
+  assert.ok(
+    cue.ariaHidden === "true" &&
+      cue.tabIndex === -1 &&
+      cue.interactiveCount === 0 &&
+      cue.pointerEvents === "none" &&
+      !cue.ownsPointer,
+    "hidden fitting cue cannot become an action",
+  );
+  return {
+    status: "passed",
+    reason:
+      "visible owner has positive clientHeight, scrollHeight<=clientHeight and exact zero scroll; no rounding tolerance",
+  };
+}
+
+module.exports = {
+  informationOverflowMetrics,
+  verifyInformationOverflowCue,
+  informationCueLabelMetrics,
+  assertChineseInformationCue,
+  classifySingleSiblingCueFit,
+};
