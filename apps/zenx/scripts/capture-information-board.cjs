@@ -4,6 +4,7 @@ const {
   informationOverflowMetrics,
   verifyInformationOverflowCue,
   informationCueLabelMetrics,
+  informationLocaleLayoutMetrics,
   assertChineseInformationCue,
   classifySingleSiblingCueFit,
 } = require("./information-overflow-acceptance.cjs");
@@ -1016,21 +1017,61 @@ const readCueLabel = () =>
   evaluate(
     `(${informationCueLabelMetrics.toString()})(()=>(${informationOverflowMetrics.toString()})(${informationReachabilityMetrics.toString()}))`,
   );
-async function stableCueLabel(label) {
-  let previous = await readCueLabel();
+// Same renderer call / original sample comparison and polling schedule. The
+// sidecar may change independently; it must never extend or satisfy settling.
+const readCueObservation = () =>
+  evaluate(
+    `(()=>{const sample=(${informationCueLabelMetrics.toString()})(()=>(${informationOverflowMetrics.toString()})(${informationReachabilityMetrics.toString()}));let layout;try{layout=(${informationLocaleLayoutMetrics.toString()})()}catch{layout={status:"unavailable"}}return {sample,layout}})()`,
+  );
+async function stableCueLabel(label, layouts) {
+  let previous = await readCueObservation();
   for (let attempt = 0; attempt < 20; attempt++) {
     await pause(50);
-    const current = await readCueLabel();
-    if (JSON.stringify(current) === JSON.stringify(previous)) return current;
+    const current = await readCueObservation();
+    if (JSON.stringify(current.sample) === JSON.stringify(previous.sample)) {
+      layouts[label] = current.layout;
+      return current.sample;
+    }
     previous = current;
   }
   throw Error(`${label}: cue observation did not settle`);
+}
+
+async function recordLocaleFailureTimeline(receipt) {
+  const started = Date.now();
+  receipt.layoutFailureTimeline = [];
+  for (let index = 0; index < 4; index++) {
+    if (index) await pause(100);
+    let timer;
+    try {
+      const layout = await Promise.race([
+        evaluate(`(${informationLocaleLayoutMetrics.toString()})()`),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(Error("diagnostic timeout")), 250);
+        }),
+      ]);
+      receipt.layoutFailureTimeline.push({
+        elapsedMs: Date.now() - started,
+        layout,
+      });
+    } catch {
+      // No exception text or retry: the original acceptance error stays primary.
+      receipt.layoutFailureTimeline.push({
+        elapsedMs: Date.now() - started,
+        unavailable: true,
+      });
+      break;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 }
 
 async function verifyChineseSplitCueLabel() {
   const receipt = {
     name: "desktop-split-chinese-cue-label",
     status: "running",
+    layouts: {},
     languageInput:
       "existing disposable same-origin language preference receiver; original key/value restored",
     scope:
@@ -1041,7 +1082,7 @@ async function verifyChineseSplitCueLabel() {
     switched = false,
     failure;
   try {
-    before = await stableCueLabel("before-Chinese");
+    before = await stableCueLabel("before-Chinese", receipt.layouts);
     receipt.before = before;
     switched = true;
     await evaluate(
@@ -1054,7 +1095,7 @@ async function verifyChineseSplitCueLabel() {
         ),
       "real Chinese document locale and cue label",
     );
-    receipt.chinese = await stableCueLabel("Chinese-label");
+    receipt.chinese = await stableCueLabel("Chinese-label", receipt.layouts);
     assertChineseInformationCue(receipt.chinese, before);
     await screenshot("03i-overflow-cue-Chinese-label.png");
   } catch (error) {
@@ -1078,7 +1119,10 @@ async function verifyChineseSplitCueLabel() {
           ),
         "original exact locale key/value and document lang restored",
       );
-      receipt.restored = await stableCueLabel("restored-locale");
+      receipt.restored = await stableCueLabel(
+        "restored-locale",
+        receipt.layouts,
+      );
       for (const key of [
         "language",
         "storedLanguage",
@@ -1117,7 +1161,12 @@ async function verifyChineseSplitCueLabel() {
     }
   }
   receipt.status = failure ? "failed" : "passed";
-  if (failure) throw failure;
+  if (failure) {
+    try {
+      await recordLocaleFailureTimeline(receipt);
+    } catch {}
+    throw failure;
+  }
 }
 
 async function observeSingleSiblingCueFit(threadId, siblingId) {

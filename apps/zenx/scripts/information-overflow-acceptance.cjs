@@ -466,6 +466,76 @@ async function verifyInformationOverflowCue({
 }
 
 // Separate read-only observation: do not change existing English/dark receipts.
+// Diagnostic only: no text, titles, custom IDs, frame URLs or frame contents.
+// Kept outside the cue-settling sample and every acceptance predicate.
+function informationLocaleLayoutMetrics() {
+  const root = document.querySelector(
+    ".information-popover > .information-content",
+  );
+  const box = (node) => {
+    if (!node) return null;
+    const r = node.getBoundingClientRect(),
+      style = getComputedStyle(node);
+    return {
+      rect: { x: r.x, y: r.y, width: r.width, height: r.height },
+      clientHeight: node.clientHeight,
+      scrollHeight: node.scrollHeight,
+      scrollTop: node.scrollTop,
+      hidden: node.hidden === true,
+      displayNone: style.display === "none",
+      visibilityHidden: style.visibility !== "visible",
+    };
+  };
+  const panel = root?.querySelector(".editable-information-panel");
+  const widgets = [
+    ...(panel?.querySelectorAll(".information-widget[data-widget-id]") ?? []),
+  ];
+  const knownKeys = new Set([
+    "default:pull-requests",
+    "default:lineage",
+    "default:artifacts",
+    "default:triggers",
+    "default:shell",
+    "default:room-members",
+    "default:board",
+  ]);
+  return {
+    status: "observed",
+    root: box(root),
+    panel: box(panel),
+    busy: panel?.getAttribute("data-busy") === "true",
+    attention: box(panel?.querySelector(".information-attention")),
+    toolbar: box(panel?.querySelector(".information-settings-toolbar")),
+    list: box(panel?.querySelector(".information-widget-list")),
+    widgetCount: widgets.length,
+    widgets: widgets.slice(0, 24).map((widget, index) => {
+      const id = widget.getAttribute("data-widget-id");
+      const frames = [...widget.querySelectorAll("iframe")];
+      const details = [...widget.querySelectorAll("details")];
+      return {
+        index,
+        key: knownKeys.has(id) ? id : "custom",
+        outer: box(widget),
+        body: box(widget.querySelector(".information-widget-body")),
+        board: box(widget.querySelector(".board-surface")),
+        expanded:
+          widget
+            .querySelector(".information-widget-disclosure")
+            ?.getAttribute("aria-expanded") === "true",
+        visible: widget.getAttribute("data-visible") === "true",
+        statusCount: widget.querySelectorAll('[role="status"]').length,
+        alertCount: widget.querySelectorAll('[role="alert"]').length,
+        iframeCount: frames.length,
+        iframes: frames.slice(0, 4).map(box),
+        detailsCount: details.length,
+        details: details
+          .slice(0, 16)
+          .map((node) => ({ open: node.open === true, box: box(node) })),
+      };
+    }),
+  };
+}
+
 function informationCueLabelMetrics(readBase) {
   const sample = readBase();
   const label = document.querySelector(
@@ -641,6 +711,7 @@ function classifySingleSiblingCueFit(sample, ownerKey, siblingId) {
 }
 
 module.exports = {
+  informationLocaleLayoutMetrics,
   informationOverflowMetrics,
   verifyInformationOverflowCue,
   informationCueLabelMetrics,

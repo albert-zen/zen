@@ -6,6 +6,7 @@ const {
   assertChineseInformationCue,
   classifySingleSiblingCueFit,
   informationCueLabelMetrics,
+  informationLocaleLayoutMetrics,
 } = require("../scripts/information-overflow-acceptance.cjs");
 const rect = (left, top, width, height) => ({
   left,
@@ -169,6 +170,7 @@ function harness(options = {}) {
     map = new Map(original === null ? [] : [["zenx.language", original]]),
     writes = [],
     images = [],
+    pauses = [],
     result = { cases: [] };
   const document = {
     documentElement: { lang: "en" },
@@ -223,23 +225,50 @@ function harness(options = {}) {
       s.panelScroll = 500;
       s.remaining = 0;
     }
+    if (options.restoreHeight && writes.length === 2 && s.language === "en")
+      s.scrollHeight = options.restoreHeight;
     return s;
   };
+  let layoutReads = 0;
+  const layout = () => ({
+    status: "observed",
+    root: { scrollHeight: 1760 },
+    widgetCount: ++layoutReads,
+  });
   const context = {
     assert,
     result,
     assertChineseInformationCue,
     classifySingleSiblingCueFit,
     informationCueLabelMetrics: function () {},
+    informationLocaleLayoutMetrics,
     informationOverflowMetrics: function () {},
     informationReachabilityMetrics: function () {},
-    pause: async () => {},
+    pause: async (ms) => pauses.push(ms),
+    setTimeout,
+    clearTimeout,
     screenshot: async (name) => images.push(name),
-    evaluate: async (expression) =>
-      expression.startsWith("(function")
+    evaluate: async (expression) => {
+      if (expression.startsWith("(()=>{const sample="))
+        return {
+          sample: read(),
+          layout: options.noLayout ? { status: "unavailable" } : layout(),
+        };
+      if (expression.startsWith("(function informationLocaleLayoutMetrics")) {
+        if (options.timelineHang) return new Promise(() => {});
+        if (options.timelineError)
+          throw Error("private diagnostic error must not be recorded");
+        return layout();
+      }
+      return expression.startsWith("(function")
         ? read()
-        : vm.runInNewContext(expression, browser),
-    until: async (fn, label) => assert.ok(await fn(), label),
+        : vm.runInNewContext(expression, browser);
+    },
+    until: async (fn, label) => {
+      if (options.originalError && label.startsWith("real Chinese"))
+        throw options.originalError;
+      assert.ok(await fn(), label);
+    },
   };
   vm.runInNewContext(
     code +
@@ -249,6 +278,7 @@ function harness(options = {}) {
   return {
     writes,
     images,
+    pauses,
     result,
     storage,
     document,
@@ -313,5 +343,157 @@ test("source boundaries: readonly inner metrics, no forced lang/response/theme/s
   assert.ok(
     source.indexOf('"no duplicate respond after native activation settles"') <
       call,
+  );
+});
+
+test("layout sidecars cannot extend settling or add waits on the successful path", async () => {
+  const f = harness();
+  await f.chinese();
+  const receipt = f.result.cases[0];
+  assert.deepEqual(f.pauses, [50, 50, 50]);
+  assert.deepEqual(Object.keys(receipt.layouts), [
+    "before-Chinese",
+    "Chinese-label",
+    "restored-locale",
+  ]);
+  assert.deepEqual(
+    Object.values(receipt.layouts).map((s) => s.widgetCount),
+    [2, 4, 6],
+  );
+  assert.equal(receipt.layoutFailureTimeline, undefined);
+  assert.equal(receipt.status, "passed");
+  const unavailable = harness({ noLayout: true });
+  await unavailable.chinese();
+  assert.equal(unavailable.result.cases[0].status, "passed");
+  assert.equal(
+    unavailable.result.cases[0].layouts["restored-locale"].status,
+    "unavailable",
+  );
+});
+
+test("restored height mismatch remains a failure with bounded diagnostic-only observations", async () => {
+  const f = harness({ restoreHeight: 1468 });
+  await assert.rejects(
+    f.chinese(),
+    /locale restoration preserves scrollHeight/,
+  );
+  const receipt = f.result.cases[0];
+  assert.equal(receipt.before.scrollHeight, 1760);
+  assert.equal(receipt.restored.scrollHeight, 1468);
+  assert.equal(receipt.status, "failed");
+  assert.equal(receipt.layoutFailureTimeline.length, 4);
+  assert.ok(
+    receipt.layoutFailureTimeline.every(
+      (s) => s.layout.root.scrollHeight === 1760,
+    ),
+    "later recovery cannot replace the failed acceptance observation",
+  );
+  assert.deepEqual(f.pauses, [50, 50, 50, 100, 100, 100]);
+  assert.equal(f.writes.length, 2);
+  assert.deepEqual(f.images, ["03i-overflow-cue-Chinese-label.png"]);
+});
+
+test("unavailable failure diagnostic stops and rethrows the identical original error", async () => {
+  const originalError = Error("original locale verification failure");
+  const f = harness({ originalError, timelineError: true });
+  await assert.rejects(f.chinese(), (error) => error === originalError);
+  const receipt = f.result.cases[0];
+  assert.equal(receipt.status, "failed");
+  assert.equal(receipt.layoutFailureTimeline.length, 1);
+  assert.equal(receipt.layoutFailureTimeline[0].unavailable, true);
+  assert.doesNotMatch(JSON.stringify(receipt), /private diagnostic/);
+  assert.equal(f.storage.getItem("zenx.language"), null);
+});
+
+test("nonreplying diagnostic has a bounded wait and cannot replace the first error", async () => {
+  const originalError = Error("original locale verification failure");
+  const f = harness({ originalError, timelineHang: true });
+  await assert.rejects(f.chinese(), (error) => error === originalError);
+  const receipt = f.result.cases[0];
+  assert.equal(receipt.status, "failed");
+  assert.equal(receipt.layoutFailureTimeline.length, 1);
+  assert.equal(receipt.layoutFailureTimeline[0].unavailable, true);
+  assert.equal(receipt.restored.language, "en");
+});
+
+test("layout observer records bounded keyed widget geometry, not private content or iframe URLs", () => {
+  const node = (height = 260) => ({
+    getBoundingClientRect: () => ({ x: 700, y: 200, width: 360, height }),
+    clientHeight: height,
+    scrollHeight: height,
+    scrollTop: 0,
+    hidden: false,
+    open: true,
+    get textContent() {
+      throw Error("text read forbidden");
+    },
+    get src() {
+      throw Error("frame URL read forbidden");
+    },
+    get contentDocument() {
+      throw Error("frame contents read forbidden");
+    },
+  });
+  const body = node(),
+    frame = node(),
+    detail = node(30);
+  // Do not spread nodes with privacy-guard getters in the observer itself.
+  const widgets = [
+    "default:board",
+    "default:lineage",
+    "default:triggers",
+    ...Array(22).fill("private-owner-id"),
+  ].map((id) =>
+    Object.assign(Object.create(node(292)), {
+      getAttribute: (key) => (key === "data-widget-id" ? id : "true"),
+      querySelector: (selector) =>
+        selector === ".information-widget-disclosure"
+          ? { getAttribute: () => "true" }
+          : body,
+      querySelectorAll: (selector) =>
+        selector === "iframe"
+          ? Array(6).fill(frame)
+          : selector === "details"
+            ? Array(20).fill(detail)
+            : [node()],
+    }),
+  );
+  const panel = Object.assign(node(1760), {
+    getAttribute: () => "false",
+    querySelector: () => body,
+    querySelectorAll: () => widgets,
+  });
+  const root = Object.assign(node(676), {
+    querySelector: () => panel,
+    scrollHeight: 1760,
+  });
+  const observed = vm.runInNewContext(
+    `(${informationLocaleLayoutMetrics.toString()})()`,
+    {
+      document: { querySelector: () => root },
+      getComputedStyle: () => ({ display: "block", visibility: "visible" }),
+    },
+  );
+  assert.equal(observed.root.scrollHeight, 1760);
+  assert.equal(observed.widgetCount, 25);
+  assert.equal(observed.widgets.length, 24);
+  const board = observed.widgets[0];
+  assert.equal(board.key, "default:board");
+  assert.equal(board.outer.rect.height, 292);
+  assert.equal(board.body.rect.height, 260);
+  assert.equal(board.iframeCount, 6);
+  assert.equal(board.iframes.length, 4);
+  assert.equal(board.detailsCount, 20);
+  assert.equal(board.details.length, 16);
+  assert.equal(board.details[0].open, true);
+  assert.equal(board.statusCount, 1);
+  assert.equal(observed.widgets[3].key, "custom");
+  assert.doesNotMatch(
+    JSON.stringify(observed),
+    /private-owner|textContent|contentDocument|src/,
+  );
+  assert.doesNotMatch(
+    informationLocaleLayoutMetrics.toString(),
+    /textContent|innerHTML|\.src|contentDocument|\.click\(|\.focus\(|scrollTop\s*=/,
   );
 });
