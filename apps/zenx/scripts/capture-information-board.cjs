@@ -186,6 +186,268 @@ async function focusWithNativeTab(selector, label) {
   }
   throw Error("Native Tab could not reach: " + label);
 }
+// Measurement-only: the pending questions are reused by later native cases.
+// Do not answer them here or use helpers that scroll/focus before the wheel.
+function informationReachabilityMetrics() {
+  const panel = document.querySelector(
+    ".information-popover .information-content",
+  );
+  const rect = (element) => {
+    if (!element) return null;
+    const r = element.getBoundingClientRect();
+    return {
+      left: r.left,
+      top: r.top,
+      right: r.right,
+      bottom: r.bottom,
+      width: r.width,
+      height: r.height,
+    };
+  };
+  const bounds = rect(panel);
+  // Sample a bounded grid of non-control points. A wheel over a textarea or
+  // nested scrolling child would test that child, not the Information owner.
+  let point = null;
+  let hit = null;
+  if (bounds) {
+    for (const fy of [0.25, 0.5, 0.75]) {
+      for (const inset of [6, bounds.width - 6, bounds.width / 2]) {
+        const candidate = {
+          x: Math.round(bounds.left + inset),
+          y: Math.round(bounds.top + bounds.height * fy),
+        };
+        const target = document.elementFromPoint(candidate.x, candidate.y);
+        if (
+          !target ||
+          !panel.contains(target) ||
+          target.closest(
+            "input, textarea, select, button, [contenteditable=true]",
+          )
+        )
+          continue;
+        let nested = false;
+        for (
+          let node = target;
+          node && node !== panel;
+          node = node.parentElement
+        ) {
+          const style = getComputedStyle(node);
+          if (
+            /auto|scroll/.test(style.overflowY) &&
+            node.scrollHeight > node.clientHeight
+          )
+            nested = true;
+        }
+        if (nested) continue;
+        point = candidate;
+        hit = target;
+        break;
+      }
+      if (point) break;
+    }
+  }
+  return {
+    panel: bounds,
+    point,
+    owned: !!panel && !!hit && panel.contains(hit),
+    panelScroll: panel?.scrollTop,
+    panelMax: panel ? panel.scrollHeight - panel.clientHeight : null,
+    transcriptScroll: document.querySelector(".agent-surface .messages")
+      ?.scrollTop,
+    composer: rect(document.querySelector("#thread-composer")),
+    toggle: rect(document.querySelector(".information-toolbar button")),
+    dismiss: rect(
+      document.querySelector(
+        ".information-popover .information-dismiss-toolbar button",
+      ),
+    ),
+    questions: [...(panel?.querySelectorAll(".user-question-card") ?? [])].map(
+      (card) => ({
+        id: card.dataset.questionCallId,
+        prompts: [...card.querySelectorAll("legend")].map((e) => e.textContent),
+        actions: [
+          ...card.querySelectorAll(".user-question-actions button"),
+        ].map((button) => {
+          const r = rect(button);
+          const h =
+            r &&
+            document.elementFromPoint(
+              r.left + r.width / 2,
+              r.top + r.height / 2,
+            );
+          return {
+            text: button.textContent,
+            type: button.type,
+            answerAction: button.matches(".primary-button"),
+            disabled: button.disabled,
+            rect: r,
+            hit: !!h && button.contains(h),
+            fullyInPanel:
+              !!r &&
+              !!bounds &&
+              r.left >= bounds.left &&
+              r.right <= bounds.right &&
+              r.top >= Math.max(0, bounds.top) &&
+              r.bottom <= Math.min(innerHeight, bounds.bottom),
+            focused: document.activeElement === button,
+            focusVisible: button.matches(":focus-visible"),
+          };
+        }),
+      }),
+    ),
+  };
+}
+async function measureInformationOverlayReachability(expectedSecondPrompt) {
+  const read = () =>
+    evaluate(`(${informationReachabilityMetrics.toString()})()`);
+  const before = await read();
+  const receipt = {
+    name: "desktop-split-overlay-native-wheel",
+    before,
+    activation: "not-attempted-shared-pending-scenario",
+  };
+  result.cases.push(receipt);
+  assert.ok(
+    before.panel && before.panel.height > 0,
+    "desktop overlay body exists",
+  );
+  assert.equal(
+    before.questions.length,
+    2,
+    "preserve the two stacked pending question baseline",
+  );
+  assert.ok(
+    before.questions[1].id &&
+      before.questions[1].prompts.includes(expectedSecondPrompt),
+    "second card is the known foreground synthetic question",
+  );
+  receipt.secondQuestionId = before.questions[1].id;
+  receipt.wheel =
+    before.panelMax > 0
+      ? "overflow-owner-tested"
+      : "not-needed-no-inner-overflow";
+  if (before.panelMax > 0) {
+    assert.ok(
+      before.owned,
+      "non-control inner Information scroll point is hit-testable",
+    );
+    const deltaY = before.panelScroll < before.panelMax ? -360 : 360;
+    window.webContents.sendInputEvent({ type: "mouseMove", ...before.point });
+    window.webContents.sendInputEvent({
+      type: "mouseWheel",
+      ...before.point,
+      deltaY,
+      deltaX: 0,
+      canScroll: true,
+    });
+    await until(async () => {
+      receipt.after = await read();
+      return deltaY < 0
+        ? receipt.after.panelScroll > before.panelScroll
+        : receipt.after.panelScroll < before.panelScroll;
+    }, "native wheel moves inner Information panel without a scroll helper");
+    await pause(250);
+  }
+  receipt.after = await read();
+  assert.equal(
+    receipt.after.transcriptScroll,
+    before.transcriptScroll,
+    "Information wheel does not scroll main transcript",
+  );
+  assert.deepEqual(
+    receipt.after.composer,
+    before.composer,
+    "Information wheel leaves Composer geometry unchanged",
+  );
+  assert.deepEqual(
+    receipt.after.toggle,
+    before.toggle,
+    "dismiss toggle stays outside the scrolling body",
+  );
+  assert.deepEqual(
+    receipt.after.questions.map((q) => q.id),
+    before.questions.map((q) => q.id),
+    "wheel cannot answer or replace either scoped question",
+  );
+  if (before.panelMax > 0) await screenshot("03a-overlay-native-wheel.png");
+  assert.deepEqual(
+    receipt.after.dismiss,
+    before.dismiss,
+    "in-popover dismiss remains outside scrolling body",
+  );
+  const target = receipt.after.questions[1]?.actions.findIndex(
+    (action) => action.answerAction,
+  );
+  assert.ok(
+    target >= 0,
+    "known second question has its production answer action",
+  );
+  receipt.keyboard = {
+    attempted: false,
+    tabs: 0,
+    reason: "second-send-disabled",
+  };
+  if (!receipt.after.questions[1].actions[target].disabled) {
+    receipt.keyboard.attempted = true;
+    receipt.keyboard.reason = "natural-tab-only-no-activation";
+    for (let index = 0; index < 80; index++) {
+      const state = await read();
+      if (state.questions[1]?.actions[target]?.focused) {
+        receipt.keyboard.focus = state.questions[1].actions[target];
+        break;
+      }
+      window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Tab" });
+      window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Tab" });
+      receipt.keyboard.tabs++;
+      await pause(35);
+    }
+    // Final read includes arrival on the last bounded Tab, after frame settling.
+    await pause(100);
+    receipt.afterTab = await read();
+    receipt.keyboard.focus = receipt.afterTab.questions[1]?.actions[target];
+    await pause(80);
+    receipt.stableTab = await read();
+    assert.deepEqual(
+      receipt.stableTab.questions[1]?.actions[target],
+      receipt.keyboard.focus,
+      "post-Tab target state and geometry settle before screenshot",
+    );
+    assert.ok(
+      receipt.keyboard.focus?.focused &&
+        receipt.keyboard.focus.focusVisible &&
+        receipt.keyboard.focus.hit &&
+        receipt.keyboard.focus.fullyInPanel,
+      "natural Tab reaches visible, unobscured second Submit",
+    );
+    assert.equal(receipt.afterTab.transcriptScroll, before.transcriptScroll);
+    assert.deepEqual(receipt.afterTab.composer, before.composer);
+    await screenshot("03b-overlay-second-send-keyboard-focus.png");
+  }
+  // Restore this pre-existing screenshot scene with real wheel input only.
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const current = await read();
+    if (Math.abs(current.panelScroll - before.panelScroll) <= 1) break;
+    assert.ok(
+      current.owned,
+      "restoration still uses an owned non-control point",
+    );
+    window.webContents.sendInputEvent({
+      type: "mouseWheel",
+      ...current.point,
+      deltaY: current.panelScroll - before.panelScroll,
+      deltaX: 0,
+      canScroll: true,
+    });
+    await pause(80);
+  }
+  receipt.restored = await read();
+  assert.ok(
+    Math.abs(receipt.restored.panelScroll - before.panelScroll) <= 1,
+    "native wheel restored original overlay scroll before existing cases",
+  );
+  assert.equal(receipt.restored.transcriptScroll, before.transcriptScroll);
+}
+
 async function settledLayout() {
   await until(
     () =>
@@ -1019,6 +1281,7 @@ async function run() {
     "Manually reopen information beside workspace",
   );
   await capture("03-workspace-reopen-overlay", "overlay");
+  await measureInformationOverlayReachability(revealPrompt);
   window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Escape" });
   window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
   await until(
