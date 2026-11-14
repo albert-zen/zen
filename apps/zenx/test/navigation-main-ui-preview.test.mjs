@@ -856,3 +856,69 @@ test("fresh transition proof rejects historical owner reads or missing native ke
     );
   }
 });
+
+test("only child navigation reads the production Markdown body, excluding sibling message actions", async () => {
+  const { JSDOM } = await import("jsdom");
+  const dom = new JSDOM(
+    `<div class="messages"><article class="agent-copy"><div data-message-quote-body><div class="markdown-body"><p>${childNavigationAnswer}</p></div></div><div class="assistant-message-actions">Oct 15 03:00</div></article></div>`,
+    { runScripts: "outside-only" },
+  );
+  try {
+    dom.window.document.elementFromPoint = () => null;
+    dom.window.__uiPolishTelemetry = {};
+    dom.window.__childSidebarPreference = { receipt: () => ({}) };
+    const read = (childNavigation) =>
+      dom.window.eval(
+        `(${observeNavigation.toString()})(true, ${childNavigation})`,
+      ).childSidebar.answers;
+    const baseline = childState();
+    const actual = journeyState();
+    actual.childSidebar.answers = Array.from(read(true));
+    assert.deepEqual(actual.childSidebar.answers, [childNavigationAnswer]);
+    assert.doesNotThrow(() =>
+      assertChildNavigationState(
+        actual,
+        "design-child",
+        childNavigationDraft,
+        baseline,
+      ),
+    );
+    assert.deepEqual(
+      Array.from(read(false)),
+      [`${childNavigationAnswer}Oct 15 03:00`],
+      "The existing preference-only observer remains unchanged",
+    );
+    dom.window.document.querySelector(".markdown-body p").textContent =
+      "Wrong conversation body.";
+    dom.window.document.querySelector(
+      ".assistant-message-actions",
+    ).textContent = `${childNavigationAnswer}Oct 15 03:00`;
+    actual.childSidebar.answers = Array.from(read(true));
+    assert.deepEqual(actual.childSidebar.answers, ["Wrong conversation body."]);
+    assert.throws(
+      () =>
+        assertChildNavigationState(
+          actual,
+          "design-child",
+          childNavigationDraft,
+          baseline,
+        ),
+      /Actual child answer/,
+    );
+    dom.window.document.querySelector("[data-message-quote-body]").remove();
+    actual.childSidebar.answers = Array.from(read(true));
+    assert.deepEqual(actual.childSidebar.answers, []);
+    assert.throws(
+      () =>
+        assertChildNavigationState(
+          actual,
+          "design-child",
+          childNavigationDraft,
+          baseline,
+        ),
+      /Actual child answer/,
+    );
+  } finally {
+    dom.window.close();
+  }
+});

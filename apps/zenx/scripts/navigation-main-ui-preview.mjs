@@ -147,7 +147,11 @@ export function observeNavigation(
               ".information-dock .subagent-sidebar-error",
             ).length,
             answers: [
-              ...document.querySelectorAll(".messages .agent-copy"),
+              ...document.querySelectorAll(
+                childNavigation
+                  ? ".messages .agent-copy > [data-message-quote-body]"
+                  : ".messages .agent-copy",
+              ),
             ].map((e) => e.textContent),
             preference: window.__childSidebarPreference.receipt(),
           },
