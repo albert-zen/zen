@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-export function observeInlineTrace() {
+export function observeInlineTrace(continuation = false) {
   const exposed = (element, rect, initial) => {
     const limit = { ...initial };
     const clips = [];
@@ -74,11 +74,10 @@ export function observeInlineTrace() {
       right: innerWidth,
       bottom: innerHeight,
     }).visible;
-  const transcript = document
-    .querySelector(".messages")
-    .getBoundingClientRect();
+  const scroller = document.querySelector(".messages");
+  const transcript = scroller.getBoundingClientRect();
   const composer = document.querySelector(".composer")?.getBoundingClientRect();
-  const measure = (root, needle) => {
+  const measure = (root, needle, hitTest = false) => {
     if (!root) return { visible: false };
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     let node;
@@ -89,6 +88,9 @@ export function observeInlineTrace() {
       range.setStart(node, start);
       range.setEnd(node, start + needle.length);
       const rect = range.getBoundingClientRect();
+      const fragments = hitTest
+        ? [...range.getClientRects()].filter((r) => r.width > 0 && r.height > 0)
+        : [];
       const limit = {
         left: Math.max(0, transcript.left),
         top: Math.max(0, transcript.top),
@@ -109,12 +111,86 @@ export function observeInlineTrace() {
           bottom: rect.bottom,
         },
         ...exposed(node.parentElement, rect, limit),
+        ...(hitTest
+          ? {
+              hit:
+                fragments.length > 0 &&
+                fragments.every((r) =>
+                  node.parentElement.contains(
+                    document.elementFromPoint(
+                      r.left + r.width / 2,
+                      r.top + r.height / 2,
+                    ),
+                  ),
+                ),
+            }
+          : {}),
       };
     }
     return { visible: false };
   };
   const turns = [...document.querySelectorAll(".messages section.turn")];
+  let continuationState;
+  if (continuation) {
+    const top = Math.max(0, transcript.top),
+      bottom = Math.min(
+        innerHeight,
+        transcript.bottom,
+        composer?.top ?? innerHeight,
+      );
+    let wheel = null;
+    for (const fraction of [0.2, 0.5, 0.8]) {
+      const point = {
+        x: transcript.left + 8,
+        y: top + (bottom - top) * fraction,
+      };
+      const hit = document.elementFromPoint(point.x, point.y);
+      if (
+        !hit ||
+        !scroller.contains(hit) ||
+        hit.closest(
+          'button,a,input,textarea,select,[contenteditable="true"],[role="button"],.trace-output',
+        )
+      )
+        continue;
+      let owner = hit;
+      while (
+        owner !== scroller &&
+        !/(auto|scroll)/.test(getComputedStyle(owner).overflowY)
+      )
+        owner = owner.parentElement;
+      if (
+        owner === scroller &&
+        /(auto|scroll)/.test(getComputedStyle(scroller).overflowY)
+      ) {
+        wheel = point;
+        break;
+      }
+    }
+    const editor = document.querySelector(
+      '.composer textarea, .composer [contenteditable="true"]',
+    );
+    continuationState = {
+      top: scroller.scrollTop,
+      left: scroller.scrollLeft,
+      maxTop: Math.max(0, scroller.scrollHeight - scroller.clientHeight),
+      wheel,
+      output: [...scroller.querySelectorAll(".trace-output")].map((e) => [
+        e.scrollTop,
+        e.scrollLeft,
+      ]),
+      page: [window.scrollX, window.scrollY],
+      draft: editor?.value ?? editor?.textContent ?? null,
+      composer: composer && [
+        composer.x,
+        composer.y,
+        composer.width,
+        composer.height,
+      ],
+    };
+  }
   return {
+    ...(continuation ? { continuation: continuationState } : {}),
     turns: turns.map((e) => ({
       label: e.getAttribute("aria-label"),
       endItemId: e.getAttribute("data-read-message-id"),
@@ -128,6 +204,15 @@ export function observeInlineTrace() {
           : "Label check needs attention",
       ),
       failedOutput: measure(e, "Expected reader_name, received reader_label"),
+      ...(continuation
+        ? {
+            answerEnd: measure(
+              e.querySelector(".agent-copy"),
+              "No command was executed or retried.",
+              true,
+            ),
+          }
+        : {}),
       text: e.textContent,
       answer: e.querySelector(".agent-copy")?.textContent ?? "",
       expanded: e.querySelector(".turn-toggle")?.getAttribute("aria-expanded"),
@@ -391,6 +476,158 @@ export async function seekInlineClick({
   return null;
 }
 
+// This is continuation coverage, not a claim that the baseline had a reading defect.
+export async function captureInlineContinuation({
+  send,
+  observe,
+  settle,
+  capture,
+  evidence,
+  options,
+}) {
+  const trip = {
+    theme: options.theme,
+    status: "running",
+    samples: [],
+    wheels: [],
+  };
+  (evidence.inlineContinuationTrips ??= []).push(trip);
+  const identity = (s) => ({
+    turns: s.turns.map((t) => [
+      t.answerItemId,
+      t.endItemId,
+      t.text,
+      t.answer,
+      t.expanded,
+      t.traces.map((d) => [d.expanded, d.detailText]),
+    ]),
+    dock: [s.dockOpen, s.dockVisible],
+    preserved: ["output", "page", "draft", "composer", "left"].map(
+      (k) => s.continuation[k],
+    ),
+    mutations: [
+      "informationUpdates",
+      "machineThreadCreateCalls",
+      "sideChatCreateCommandCalls",
+    ].map((k) => s.telemetry[k]),
+    calls: s.telemetry.protocolCalls.filter(
+      (m) =>
+        ![
+          "zen/thread/read",
+          "zen/thread/resume",
+          "zen/thread/resume-window",
+          "zen/thread/questions/list",
+        ].includes(m),
+    ),
+  });
+  const frame = (s) => ({ end: s.turns[1].answerEnd, top: s.continuation.top });
+  try {
+    const baseline = await observe();
+    assert.deepEqual(
+      baseline.turns.map((t) => t.answerItemId),
+      ["result-answer-0", "result-answer-1"],
+    );
+    assert(
+      baseline.dockOpen &&
+        baseline.dockVisible &&
+        baseline.continuation.composer,
+    );
+    assert(baseline.turns[1].traces.some((t) => t.expanded === "true"));
+    assert.deepEqual(
+      baseline.turns.map((t) => t.expanded),
+      ["false", "true"],
+    );
+    for (let attempt = 0; attempt < 6; attempt++) {
+      await settle();
+      const state = await observe(),
+        end = state.turns[1]?.answerEnd;
+      trip.samples.push(state);
+      assert.deepEqual(
+        identity(state),
+        identity(baseline),
+        "Answers, disclosure, dock, Composer and non-transcript offsets unchanged",
+      );
+      assert(
+        end?.rect && !end.hiddenBy,
+        "Original final sentence exists in the displayed answer",
+      );
+      if (end.visible && end.hit) {
+        await settle();
+        const stable = await observe();
+        assert.deepEqual(identity(stable), identity(baseline));
+        if (JSON.stringify(frame(stable)) !== JSON.stringify(frame(state)))
+          continue;
+        trip.screenshotBefore = stable;
+        await capture(
+          `reading-${options.name}-inline-trace-answer-end`,
+          options,
+          "reading",
+        );
+        const after = await observe();
+        assert.deepEqual(identity(after), identity(baseline));
+        assert.deepEqual(
+          frame(after),
+          frame(stable),
+          "Screenshot-time final Range and outer offset stay stable",
+        );
+        assert(
+          after.turns[1].answerEnd.visible && after.turns[1].answerEnd.hit,
+          "Sentence remains exposed after screenshot",
+        );
+        trip.after = after;
+        trip.status = "passed";
+        trip.outcome = trip.wheels.length
+          ? "reached-with-wheel"
+          : "already-visible";
+        return;
+      }
+      const { top, maxTop, wheel } = state.continuation;
+      assert(
+        attempt < 5 &&
+          wheel &&
+          end.rect.bottom > end.limit.bottom &&
+          top < maxTop - 1,
+        "No safe transcript-owned continuation scroll; do not scroll around an in-band cover",
+      );
+      const deltaY = Math.min(
+        240,
+        maxTop - top,
+        Math.ceil(end.rect.bottom - end.limit.bottom + 8),
+      );
+      trip.wheels.push({ ...wheel, deltaY, beforeTop: top });
+      await send("Input.dispatchMouseEvent", {
+        type: "mouseWheel",
+        ...wheel,
+        deltaX: 0,
+        deltaY,
+      });
+      let next;
+      for (let sample = 0; sample < 8; sample++) {
+        await settle();
+        next = await observe();
+        assert.deepEqual(
+          identity(next),
+          identity(baseline),
+          "Wheel did not move output or page",
+        );
+        if (next.continuation.top > top) break;
+      }
+      trip.wheels.at(-1).afterTop = next.continuation.top;
+      assert(
+        next.continuation.top > top,
+        "Native wheel advances the transcript",
+      );
+    }
+    assert.fail(
+      "Final sentence geometry did not settle within the bounded probe",
+    );
+  } catch (error) {
+    trip.status = "failed";
+    trip.error = String(error);
+    throw error;
+  }
+}
+
 export async function captureInlineTrace({
   send,
   evaluate,
@@ -575,4 +812,12 @@ export async function captureInlineTrace({
     `document.querySelector(${JSON.stringify(selectors[1])}).textContent.includes('Expected reader_name, received reader_label')`,
   );
   await stableCapture("failed-expanded", baseline, true);
+  await captureInlineContinuation({
+    send,
+    settle,
+    capture,
+    evidence,
+    options,
+    observe: () => evaluate(`(${observeInlineTrace.toString()})(true)`),
+  });
 }

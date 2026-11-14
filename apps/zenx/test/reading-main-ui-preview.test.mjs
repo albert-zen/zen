@@ -685,3 +685,233 @@ test("inline trace observer rejects retained, ancestor-hidden and clipped origin
     dom.window.close();
   }
 });
+
+// Synthetic observations exercise the capture guard, never claim real pixels.
+function continuationState() {
+  return {
+    turns: ["result-answer-0", "result-answer-1"].map((answerItemId, i) => ({
+      answerItemId,
+      endItemId: `terminal-${i}`,
+      text: `turn-${i}`,
+      answer: i ? "No command was executed or retried." : "Summary checked",
+      expanded: i ? "true" : "false",
+      traces: i ? [{ expanded: "true", detailText: "Exit code 1" }] : [],
+      answerEnd: {
+        visible: false,
+        hit: true,
+        rect: { bottom: 820 },
+        limit: { bottom: 774 },
+        hiddenBy: null,
+      },
+    })),
+    dockOpen: true,
+    dockVisible: true,
+    continuation: {
+      top: 0,
+      left: 0,
+      maxTop: 500,
+      wheel: { x: 272, y: 240 },
+      output: [[0, 0]],
+      page: [0, 0],
+      draft: "",
+      composer: [288, 774, 592, 108],
+    },
+    telemetry: {
+      informationUpdates: 0,
+      machineThreadCreateCalls: 0,
+      sideChatCreateCommandCalls: 0,
+      protocolCalls: [],
+    },
+  };
+}
+test("continuation reaches existing end with bounded native outer wheel and preserves prior screenshots", async () => {
+  const { captureInlineContinuation } =
+    await import("../scripts/inline-trace-main-ui-preview.mjs");
+  for (const mode of ["wheel", "delayed-wheel", "already"]) {
+    const already = mode === "already";
+    let pendingFrames = 0;
+    const s = continuationState(),
+      evidence = {},
+      calls = [],
+      captures = [];
+    s.turns[1].answerEnd.visible = already;
+    await captureInlineContinuation({
+      options: { theme: "light", name: "desktop-light" },
+      evidence,
+      observe: async () => structuredClone(s),
+      settle: async () => {
+        if (pendingFrames && --pendingFrames === 0) {
+          s.continuation.top = 100;
+          s.turns[1].answerEnd.visible = true;
+        }
+      },
+      send: async (m, p) => {
+        calls.push([m, p]);
+        if (mode === "delayed-wheel") pendingFrames = 3;
+        else {
+          s.continuation.top = 100;
+          s.turns[1].answerEnd.visible = true;
+        }
+      },
+      capture: async (name) => captures.push(name),
+    });
+    assert.equal(calls.length, already ? 0 : 1);
+    if (!already) {
+      assert.equal(calls[0][0], "Input.dispatchMouseEvent");
+      assert.equal(calls[0][1].type, "mouseWheel");
+      assert.equal(calls[0][1].deltaX, 0);
+      assert(calls[0][1].deltaY > 0 && calls[0][1].deltaY <= 240);
+    }
+    assert.deepEqual(captures, [
+      "reading-desktop-light-inline-trace-answer-end",
+    ]);
+    assert.equal(
+      evidence.inlineContinuationTrips[0].outcome,
+      already ? "already-visible" : "reached-with-wheel",
+    );
+  }
+  const source = await read("../scripts/inline-trace-main-ui-preview.mjs");
+  assert(
+    source.indexOf('await stableCapture("failed-expanded", baseline, true)') <
+      source.lastIndexOf("await captureInlineContinuation"),
+  );
+  assert.doesNotMatch(
+    source,
+    /\.scrollTop\s*=|\.scrollTo\(|\.scrollIntoView\(/,
+  );
+});
+test("continuation cannot pass wrong ownership, cover, unrelated scrolling or lost content", async () => {
+  const { captureInlineContinuation } =
+    await import("../scripts/inline-trace-main-ui-preview.mjs");
+  for (const fault of [
+    "owner",
+    "covered",
+    "output",
+    "page",
+    "answer",
+    "turn-id",
+    "turn-text",
+    "no-progress",
+    "budget",
+    "after-screenshot-moved",
+    "unstable",
+  ]) {
+    const s = continuationState(),
+      evidence = {};
+    let wheels = 0;
+    if (fault === "owner") s.continuation.wheel = null;
+    if (["after-screenshot-moved", "unstable"].includes(fault))
+      s.turns[1].answerEnd.visible = true;
+    if (fault === "covered") {
+      s.turns[1].answerEnd.rect.bottom = 760;
+      s.turns[1].answerEnd.hit = false;
+    }
+    if (fault === "budget") {
+      s.continuation.maxTop = 5000;
+      s.turns[1].answerEnd.rect.bottom = 4000;
+    }
+    await assert.rejects(
+      captureInlineContinuation({
+        options: { theme: "dark" },
+        evidence,
+        observe: async () => {
+          if (fault === "unstable") s.turns[1].answerEnd.rect.bottom++;
+          return structuredClone(s);
+        },
+        settle: async () => {},
+        capture: async () => {
+          if (fault === "after-screenshot-moved")
+            s.turns[1].answerEnd.rect.bottom++;
+          else assert.fail("No acceptance image");
+        },
+        send: async () => {
+          wheels++;
+          if (fault !== "no-progress") s.continuation.top += 100;
+          if (fault === "output") s.continuation.output[0][0]++;
+          if (fault === "page") s.continuation.page[1]++;
+          if (fault === "answer") s.turns[1].answer = "changed";
+          if (fault === "turn-id") s.turns[1].endItemId = "other";
+          if (fault === "turn-text") s.turns[1].text = "Changed Trace summary";
+        },
+      }),
+    );
+    assert.equal(evidence.inlineContinuationTrips[0].status, "failed");
+    assert(wheels <= 5);
+    if (fault === "owner" || fault === "covered") assert.equal(wheels, 0);
+  }
+});
+test("continuation Range and wheel ownership use actual DOM ancestry, not mere containment", async () => {
+  const { JSDOM } = await import("jsdom");
+  const { observeInlineTrace } =
+    await import("../scripts/inline-trace-main-ui-preview.mjs");
+  const dom = new JSDOM(
+    '<div class="messages" style="overflow-y:auto"><section class="turn"><div class="agent-copy">Summary checked</div></section><section class="turn"><div class="agent-copy"><p id="end">No command was executed or retried.</p></div><div class="trace-output"><span id="nested">Output</span></div><div id="other" style="overflow-y:auto"></div></section></div><div class="composer"></div><div id="cover"></div>',
+  );
+  const keys = [
+    "document",
+    "window",
+    "NodeFilter",
+    "getComputedStyle",
+    "innerWidth",
+    "innerHeight",
+  ];
+  const saved = Object.fromEntries(keys.map((k) => [k, globalThis[k]]));
+  const box = (y, height = 20) => ({
+    x: 100,
+    y,
+    left: 100,
+    top: y,
+    right: 400,
+    bottom: y + height,
+    width: 300,
+    height,
+  });
+  let endY = 300,
+    hit = "messages";
+  dom.window.HTMLElement.prototype.getBoundingClientRect = function () {
+    return this.className === "messages"
+      ? { ...box(0, 700), x: 0, left: 0, width: 900, right: 900 }
+      : this.className === "composer"
+        ? box(700, 100)
+        : box(300);
+  };
+  dom.window.Range.prototype.getBoundingClientRect = () => box(endY);
+  dom.window.Range.prototype.getClientRects = () => [box(endY)];
+  for (const [key, dimension] of [
+    ["clientWidth", "width"],
+    ["clientHeight", "height"],
+  ])
+    Object.defineProperty(dom.window.HTMLElement.prototype, key, {
+      get() {
+        return this.getBoundingClientRect()[dimension];
+      },
+    });
+  const doc = dom.window.document,
+    outer = doc.querySelector(".messages");
+  doc.elementFromPoint = (x) =>
+    x < 30
+      ? hit === "messages"
+        ? outer
+        : doc.getElementById(hit)
+      : doc.getElementById("end");
+  Object.assign(globalThis, {
+    document: doc,
+    window: dom.window,
+    NodeFilter: dom.window.NodeFilter,
+    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+    innerWidth: 1280,
+    innerHeight: 900,
+  });
+  dom.window.__uiPolishTelemetry = {};
+  try {
+    assert(observeInlineTrace(true).continuation.wheel);
+    assert(observeInlineTrace(true).turns[1].answerEnd.visible);
+    endY = 760;
+    assert.equal(observeInlineTrace(true).turns[1].answerEnd.visible, false);
+    for (hit of ["nested", "other", "cover"])
+      assert.equal(observeInlineTrace(true).continuation.wheel, null, hit);
+  } finally {
+    Object.assign(globalThis, saved);
+    dom.window.close();
+  }
+});
