@@ -105,20 +105,6 @@ export function commandStatus(
   return commandPhaseLabel(commandPhase(item, turnStatus));
 }
 
-/** An observed shell receipt fact, separate from the invocation lifecycle. */
-export function traceShellExitCode(item: CommandItem): string | null {
-  if (
-    (item.toolName !== "shell" && item.toolName !== "zenx_shell") ||
-    (item.status !== "completed" && item.status !== "failed") ||
-    commandPhase(item) !== "completed" ||
-    item.contentType === "application/vnd.zen.tool-task+json" ||
-    !Number.isInteger(item.exitCode) ||
-    item.exitCode === 0
-  )
-    return null;
-  return `${i18n.t("panels:exitCode")} ${item.exitCode}`;
-}
-
 /** Past-tense action claims need success evidence, unlike invocation completion. */
 export function commandActionCompleted(item: CommandItem): boolean {
   if (item.status !== "completed" || commandPhase(item) !== "completed")

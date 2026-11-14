@@ -7,9 +7,7 @@ import {
   commandSummary,
   commandTitle,
   toolPresentation,
-  traceShellExitCode,
 } from "../src/renderer/src/tool-presentation.js";
-import { i18n } from "../src/renderer/src/i18n.js";
 
 test("known browser and computer operations have readable labels without inventing target content", () => {
   assert.deepEqual(toolPresentation("browser_inspect"), {
@@ -229,47 +227,6 @@ test("process lifecycle facts stay in the receipt and do not change invocation c
     commandStatus({ ...command("shell"), status: "declined" }),
     "Completed",
   );
-});
-
-test("only a direct known shell return exposes its own nonzero exit fact", async () => {
-  const shell = { ...command("shell"), status: "failed" as const, exitCode: 1 };
-  const before = structuredClone(shell);
-  assert.equal(traceShellExitCode(shell), "Exit code 1");
-  assert.equal(commandStatus(shell), "Completed");
-  assert.deepEqual(shell, before);
-  assert.equal(
-    traceShellExitCode({
-      ...shell,
-      toolName: "zenx_shell",
-      status: "completed",
-      exitCode: 127,
-    }),
-    "Exit code 127",
-  );
-  for (const item of [
-    { ...shell, exitCode: 0 },
-    { ...shell, exitCode: null, aggregatedOutput: "Exit code 1" },
-    { ...shell, exitCode: 1.5 },
-    { ...shell, toolName: "wait" },
-    { ...shell, toolName: "other_tool" },
-    { ...shell, status: "declined" as const },
-    { ...shell, status: "unknown" as const },
-    { ...shell, status: "inProgress" as const },
-    { ...shell, contentType: "zen.imported-tool-result.v1" },
-    {
-      ...shell,
-      contentType: "application/vnd.zen.tool-task+json",
-      structuredContent: { task_id: "task", status: "cancelled", exit_code: 1 },
-    },
-  ])
-    assert.equal(traceShellExitCode(item), null);
-  const language = i18n.language;
-  try {
-    await i18n.changeLanguage("zh-CN");
-    assert.equal(traceShellExitCode(shell), "退出码 1");
-  } finally {
-    await i18n.changeLanguage(language);
-  }
 });
 
 test("wait presentation follows the invocation, not the observed target task", () => {

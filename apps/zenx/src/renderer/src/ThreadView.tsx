@@ -101,7 +101,6 @@ import {
   commandPhase,
   commandStatus,
   toolPresentation,
-  traceShellExitCode,
   commandTitle,
 } from "./tool-presentation.js";
 import { isCompactCommand } from "./compact-command.js";
@@ -4782,16 +4781,10 @@ function StatusMark({
         aria-label={i18n.t("shell:awaitingToolResult")}
       />
     );
-  const exitCode = traceShellExitCode(item);
   return (
-    <>
-      <small className={`tool-status ${phase === "failed" ? "ended" : phase}`}>
-        {status}
-      </small>
-      {exitCode === null ? null : (
-        <small className="trace-shell-exit">{`\u00a0· ${exitCode}`}</small>
-      )}
-    </>
+    <small className={`tool-status ${phase === "failed" ? "ended" : phase}`}>
+      {status}
+    </small>
   );
 }
 

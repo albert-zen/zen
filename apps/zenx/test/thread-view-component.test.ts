@@ -5199,12 +5199,6 @@ test("tool returns complete their invocation without failure or nonzero rollups"
           ?.textContent ?? "",
         /Completed/,
       );
-      assert.equal(
-        singleton.window.document
-          .querySelector(".trace-shell-exit")
-          ?.textContent?.trim(),
-        "· Exit code 1",
-      );
       assert.ok(
         singleton.window.document.querySelector(
           ".tool-status.failed, .tool-status.shell-nonzero",
@@ -5258,7 +5252,6 @@ test("earlier shell rows stay complete regardless of later process settlement", 
   );
   try {
     const marks = [...dom.window.document.querySelectorAll(".tool-status")];
-    assert.equal(dom.window.document.querySelector(".trace-shell-exit"), null);
     assert.equal(marks.length, 2);
     for (const mark of marks) {
       assert.equal(mark.textContent, "Completed");
