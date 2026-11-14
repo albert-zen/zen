@@ -141,6 +141,7 @@ async function verifyInformationOverflowCue({
     status: "running",
     samples: [],
     wheels: [],
+    noInput: [],
     noOverflowScene: "not-exercised; this fixture genuinely overflows",
     baselineGeometryComparison:
       "not performed here; compare source-bound native baseline separately",
@@ -327,9 +328,38 @@ async function verifyInformationOverflowCue({
         );
       }
     };
-    const wheel = async (deltaY, label) => {
+    const wheel = async (deltaY, label, goal = null) => {
       const fresh = await stable(`${label}-before`);
       check(fresh, `${label}-before`);
+      // A previous wheel may keep settling after the prior sample. Plan goal
+      // movement only from this checked fresh state, never a caller's old delta.
+      if (goal) {
+        assert.ok(goal.kind === "bottom" || goal.kind === "restore");
+        const target = goal.kind === "bottom" ? fresh.panelMax : goal.scroll;
+        assert.ok(
+          Number.isFinite(target) && target >= 0 && target <= fresh.panelMax,
+          `${label}: goal remains inside current scroll range`,
+        );
+        const gap = fresh.panelScroll - target;
+        const reached =
+          goal.kind === "bottom" ? fresh.remaining <= 1 : Math.abs(gap) <= 1;
+        if (reached) {
+          receipt.noInput.push({
+            label,
+            reason: "already-at-target",
+            goal: goal.kind,
+            target,
+            from: fresh.panelScroll,
+            remaining: fresh.remaining,
+          });
+          return fresh;
+        }
+        deltaY = Math.sign(gap) * Math.min(360, Math.abs(gap));
+        assert.ok(
+          Math.abs(deltaY) <= Math.abs(gap),
+          `${label}: never overshoot goal`,
+        );
+      }
       assert.ok(
         fresh.owned && fresh.point,
         `${label}: fresh owned non-control wheel point`,
@@ -391,11 +421,10 @@ async function verifyInformationOverflowCue({
     );
     await screenshot("03d-overflow-cue-partial.png");
     if (!darkPartial) {
-      for (let step = 0; current.remaining > 1 && step < 8; step++)
-        current = await wheel(
-          -Math.min(360, current.remaining),
-          `bottom-${step + 1}`,
-        );
+      for (let step = 0; step < 8; step++) {
+        current = await wheel(null, `bottom-${step + 1}`, { kind: "bottom" });
+        if (current.remaining <= 1) break;
+      }
       assert.ok(
         current.remaining <= 1 && current.cue.hidden,
         "bounded native wheel actually reaches bottom and hides cue",
@@ -416,15 +445,13 @@ async function verifyInformationOverflowCue({
       );
       await screenshot("03f-overflow-cue-up.png");
     }
-    for (
-      let step = 0;
-      Math.abs(current.panelScroll - before.panelScroll) > 1 && step < 8;
-      step++
-    )
-      current = await wheel(
-        Math.min(360, current.panelScroll - before.panelScroll),
-        `restore-${step + 1}`,
-      );
+    for (let step = 0; step < 8; step++) {
+      current = await wheel(null, `restore-${step + 1}`, {
+        kind: "restore",
+        scroll: before.panelScroll,
+      });
+      if (Math.abs(current.panelScroll - before.panelScroll) <= 1) break;
+    }
     receipt.restored = current;
     assert.ok(
       Math.abs(current.panelScroll - before.panelScroll) <= 1,

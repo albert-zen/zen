@@ -16,13 +16,24 @@ const rect = (left = 0, top = 0, width = 100, height = 40) => ({
 });
 function fixture(options = {}) {
   let scroll = options.initialScroll ?? 0,
-    reads = 0;
+    reads = 0,
+    wheelCount = 0,
+    readsSinceWheel = 0;
   const maximum = options.maximum ?? 1084;
   const events = [],
     images = [],
     result = { cases: [] };
   const read = async () => {
     reads++;
+    readsSinceWheel++;
+    scroll =
+      options.readScroll?.({
+        scroll,
+        maximum,
+        reads,
+        wheelCount,
+        readsSinceWheel,
+      }) ?? scroll;
     const hidden = maximum - scroll <= 1;
     const snapshot = {
       viewport: { width: 1600, height: 970, dpr: 1 },
@@ -100,11 +111,21 @@ function fixture(options = {}) {
         prefersDark: true,
         forcedColorsActive: false,
       });
-    options.mutate?.(snapshot, { scroll, maximum, reads });
+    options.mutate?.(snapshot, {
+      scroll,
+      maximum,
+      reads,
+      wheelCount,
+      readsSinceWheel,
+    });
     return snapshot;
   };
   const sendInput = (event) => {
     events.push(event);
+    if (event.type === "mouseWheel") {
+      wheelCount++;
+      readsSinceWheel = 0;
+    }
     if (event.type === "mouseWheel" && !options.noProgress) {
       assert.ok(
         event.deltaY < 0 ? scroll < maximum : scroll > 0,
@@ -453,4 +474,96 @@ test("dark starts at the exact fractional Stage1-restored position; original lig
   await assert.rejects(light.run(), /from the top/);
   const outside = fixture({ darkPartial: true, initialScroll: 1.01 });
   await assert.rejects(outside.run(), /from the top/);
+});
+
+test("dark restoration tolerates observed360 to312 then fresh0 without another input", async () => {
+  const f = fixture({
+    darkPartial: true,
+    readScroll: ({ scroll, wheelCount, readsSinceWheel }) =>
+      wheelCount === 2 ? (readsSinceWheel <= 3 ? 312 : 0) : scroll,
+  });
+  await f.run();
+  const r = f.result.cases[0];
+  assert.equal(
+    r.samples.find((s) => s.label === "restore-1").sample.panelScroll,
+    312,
+  );
+  assert.equal(
+    r.samples.find((s) => s.label === "restore-2-before").sample.panelScroll,
+    0,
+  );
+  assert.deepEqual(
+    r.noInput.map((x) => ({ label: x.label, reason: x.reason, from: x.from })),
+    [{ label: "restore-2", reason: "already-at-target", from: 0 }],
+  );
+  assert.deepEqual(
+    f.events.map((e) => e.type),
+    ["mouseMove", "mouseWheel", "mouseMove", "mouseWheel"],
+  );
+  assert.deepEqual(
+    r.wheels.map((x) => x.deltaY),
+    [-360, 360],
+  );
+  assert.equal(r.restored.panelScroll, 0);
+});
+
+for (const fresh of [1084, 1080])
+  test(`forward bottom goal rechecks stale360 against fresh${fresh}`, async () => {
+    const f = fixture({
+      readScroll: ({ scroll, wheelCount, readsSinceWheel }) =>
+        wheelCount === 1 && readsSinceWheel >= 4 ? fresh : scroll,
+    });
+    await f.run();
+    const r = f.result.cases[0];
+    assert.equal(
+      r.samples.find((s) => s.label === "partial").sample.panelScroll,
+      360,
+    );
+    assert.equal(
+      r.samples.find((s) => s.label === "bottom-1-before").sample.panelScroll,
+      fresh,
+    );
+    if (fresh === 1084) {
+      assert.ok(
+        r.noInput.some(
+          (x) => x.label === "bottom-1" && x.reason === "already-at-target",
+        ),
+      );
+      assert.ok(!r.wheels.some((x) => x.label === "bottom-1"));
+    } else
+      assert.equal(r.wheels.find((x) => x.label === "bottom-1").deltaY, -4);
+    assert.equal(r.bottom.panelScroll, 1084);
+    assert.equal(r.restored.panelScroll, 0);
+  });
+
+for (const fresh of [1, 1.01])
+  test(`fresh restoration uses original1px bound at${fresh}`, async () => {
+    const f = fixture({
+      darkPartial: true,
+      readScroll: ({ scroll, wheelCount, readsSinceWheel }) =>
+        wheelCount === 2 ? (readsSinceWheel <= 3 ? 312 : fresh) : scroll,
+    });
+    await f.run();
+    const r = f.result.cases[0];
+    if (fresh === 1) {
+      assert.ok(r.noInput.some((x) => x.label === "restore-2"));
+      assert.equal(r.wheels.length, 2);
+    } else {
+      assert.equal(r.wheels.find((x) => x.label === "restore-2").deltaY, 1.01);
+      assert.equal(r.restored.panelScroll, 0);
+    }
+  });
+
+test("fresh reached goal cannot bypass changed owner invariant", async () => {
+  const f = fixture({
+    darkPartial: true,
+    readScroll: ({ scroll, wheelCount, readsSinceWheel }) =>
+      wheelCount === 2 ? (readsSinceWheel <= 3 ? 312 : 0) : scroll,
+    mutate: (s, c) => {
+      if (c.wheelCount === 2 && c.readsSinceWheel >= 4) s.ownerKey = "replaced";
+    },
+  });
+  await assert.rejects(f.run(), /ownerKey unchanged/);
+  assert.equal(f.events.filter((e) => e.type === "mouseWheel").length, 2);
+  assert.equal(f.result.cases[0].noInput.length, 0);
 });
