@@ -25,7 +25,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { once } from "node:events";
 import { observePreviewChrome } from "./preview-browser-lifecycle.mjs";
-import { captureDesktopNavigation } from "./navigation-main-ui-preview.mjs";
+import {
+  captureDesktopNavigation,
+  captureChildSidebar,
+} from "./navigation-main-ui-preview.mjs";
 
 // Do not spoof this guard to retry a denied local browser/socket operation.
 assert.equal(
@@ -43,13 +46,16 @@ const desktopReading = captureProfile === "desktop-reading";
 const desktopRoom = captureProfile === "desktop-room";
 const desktopReentry = captureProfile === "desktop-reading-reentry";
 const desktopNested = captureProfile === "desktop-reading-nested-output";
+const desktopChildSidebar = captureProfile === "desktop-child-sidebar";
 // Older profiles must not load this separately scoped receipt/capture helper.
 const roomCapture = desktopRoom
   ? await import("./room-file-owner-main-ui-preview.mjs")
   : null;
 const desktopOnly = desktopQueue || desktopReading;
 const otherPointer =
-  desktopRoom || desktopReentry || desktopNested ? "fine" : captureProfile;
+  desktopRoom || desktopReentry || desktopNested || desktopChildSidebar
+    ? "fine"
+    : captureProfile;
 const pointer = desktopOnly ? "fine" : otherPointer;
 assert(["fine", "coarse"].includes(pointer), "Pointer must be fine or coarse");
 const coarse = pointer === "coarse";
@@ -109,16 +115,19 @@ if (desktopRoom) {
   assert.equal(source.clean, true);
   assert.deepEqual(Object.keys(source.scenes), ["room"]);
 }
-if (desktopReentry || desktopNested) {
+if (desktopReentry || desktopNested || desktopChildSidebar) {
   assert.equal(
     source.commit,
-    desktopNested
-      ? process.env.ZENX_NESTED_EXPECTED_HEAD
-      : process.env.ZENX_REENTRY_EXPECTED_HEAD,
+    desktopChildSidebar
+      ? process.env.ZENX_CHILD_SIDEBAR_EXPECTED_HEAD
+      : desktopNested
+        ? process.env.ZENX_NESTED_EXPECTED_HEAD
+        : process.env.ZENX_REENTRY_EXPECTED_HEAD,
     "Re-entry uses the exact event head",
   );
-  assert.deepEqual(Object.keys(source.scenes), ["reading"]);
-  assert.equal(source.scenes.reading.html, "reading.html");
+  const isolatedScene = desktopChildSidebar ? "navigation" : "reading";
+  assert.deepEqual(Object.keys(source.scenes), [isolatedScene]);
+  assert.equal(source.scenes[isolatedScene].html, `${isolatedScene}.html`);
   assert.deepEqual(
     source.dirtyFiles,
     [],
@@ -570,7 +579,9 @@ try {
         ? cases.filter(
             (c) => c.width === 1280 && c.height === 900 && c.theme === "light",
           )
-        : cases) {
+        : desktopChildSidebar
+          ? cases.filter((c) => c.width === 1280 && c.height === 900)
+          : cases) {
     await send("Emulation.setDeviceMetricsOverride", {
       width: options.width,
       height: options.height,
@@ -595,6 +606,7 @@ try {
       if (scene === "navigation") {
         query.set("scene", "navigation");
         query.set("conversationTabs", "true");
+        if (desktopChildSidebar) query.set("childSidebar", "1");
       }
       if (scene === "pending") {
         query.set("many", "");
@@ -692,7 +704,9 @@ try {
         continue;
       }
       if (scene === "navigation") {
-        await captureDesktopNavigation({
+        await (
+          desktopChildSidebar ? captureChildSidebar : captureDesktopNavigation
+        )({
           send,
           evaluate,
           wait,

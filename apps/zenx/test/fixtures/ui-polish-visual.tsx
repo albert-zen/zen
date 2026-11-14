@@ -19,6 +19,7 @@ import { nativeRecoveryForThread } from "../native-recovery-fixture.js";
 import { encodeModelKey } from "../../../../src/protocol/model-key.js";
 import { createUiPolishTitleBridge } from "./ui-polish-title-bridge.js";
 import { readNavigationQuestions } from "./ui-polish-visual-navigation.js";
+import { createChildSidebarPreference } from "./ui-polish-visual-child-sidebar.mjs";
 import {
   guardReadingBridge,
   readReadingRequest,
@@ -36,6 +37,11 @@ import "../../src/renderer/src/styles.css";
 installScrollbarVisibility(document);
 Object.assign(globalThis, { React });
 const params = new URLSearchParams(location.search);
+const childSidebar =
+  params.get("scene") === "navigation" && params.get("childSidebar") === "1"
+    ? createChildSidebarPreference()
+    : null;
+let childSidebarInputSequence = 0;
 const rails = supportingRailsData(params.get("rails"));
 const emptyProjectScene =
   params.get("scene") === "reading" && params.get("emptyProjects") === "1";
@@ -149,6 +155,7 @@ const uiPolishTelemetry = {
     target: string;
     key?: string;
     trusted: boolean;
+    sequence?: number;
   }[],
 };
 // Deterministic holds for the Side chat UI acceptance scene only. No Host/model calls.
@@ -462,6 +469,7 @@ const zenx = {
       profile: {
         onboardingComplete: true,
         pinnedThreadIds: [],
+        ...(childSidebar?.read() ?? {}),
         ...(childQuestionData
           ? {
               visibleSubagentThreadIds: childQuestionData.rows.map(
@@ -490,6 +498,7 @@ const zenx = {
         profile: {
           onboardingComplete: true,
           pinnedThreadIds: [],
+          ...(childSidebar?.read() ?? {}),
           ...(childQuestionData
             ? {
                 visibleSubagentThreadIds: childQuestionData.rows.map(
@@ -693,6 +702,22 @@ Object.assign(zenx, {
   },
 });
 // Launcher mode mounts the real admitted Subagents/Triggers UI on a synthetic bridge.
+if (childSidebar) {
+  Object.assign(zenx.settings, {
+    setSubagentThreadSidebarVisible: async (
+      threadId: string,
+      visible: boolean,
+    ) => {
+      const profile = childSidebar.setVisible(threadId, visible);
+      return {
+        profile: { ...(await zenx.settings.get()).profile, ...profile },
+      };
+    },
+  });
+  Object.assign(window, {
+    __childSidebarPreference: { receipt: childSidebar.receipt },
+  });
+}
 if (readingScene || params.has("launchers") || params.has("conversationTabs")) {
   Object.assign(zenx.plugins, {
     get: async () =>
@@ -774,13 +799,16 @@ if (params.get("scene") === "navigation" || readingScene) {
             ? "projects"
             : element?.matches(".recent-thread-group .thread-row")
               ? "recent"
-              : null;
+              : childSidebar && element?.matches(".subagent-sidebar-visibility")
+                ? "child-sidebar"
+                : null;
       if (!target) return;
       uiPolishTelemetry.navigationInputEvents.push({
         type,
         target,
         ...(event instanceof KeyboardEvent ? { key: event.key } : {}),
         trusted: event.isTrusted,
+        ...(childSidebar ? { sequence: ++childSidebarInputSequence } : {}),
       });
       if (uiPolishTelemetry.navigationInputEvents.length > 80)
         uiPolishTelemetry.navigationInputEvents.shift();

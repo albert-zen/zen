@@ -35,13 +35,23 @@ export async function dispatchNavigationKey(
 }
 
 /** Read-only browser observation; tests exercise its shape, not simulated layout. */
-export function observeNavigation() {
-  const read = (selector) => {
+export function observeNavigation(childSidebar = false) {
+  const read = (selector, visibility = false) => {
     const element = document.querySelector(selector);
     if (!element) return null;
     const r = element.getBoundingClientRect();
     const style = getComputedStyle(element);
     return {
+      ...(visibility
+        ? {
+            checked: element.getAttribute("aria-checked"),
+            busy: element.getAttribute("aria-busy"),
+            disabled: element.getAttribute("aria-disabled"),
+            role: element.getAttribute("role"),
+            label: element.getAttribute("aria-label"),
+            text: element.textContent,
+          }
+        : {}),
       rect: {
         x: r.x,
         y: r.y,
@@ -79,6 +89,55 @@ export function observeNavigation() {
     '.composer [contenteditable="true"], .composer textarea',
   );
   return {
+    ...(childSidebar
+      ? {
+          childSidebar: {
+            toggle: read(
+              '.information-dock .subagent-sidebar-visibility[aria-label="Show in sidebar: Design review"]',
+              true,
+            ),
+            sibling: read(
+              '.information-dock .subagent-sidebar-visibility[aria-label="Show in sidebar: Test coverage"]',
+              true,
+            ),
+            left: read(
+              '.sidebar .project-group [data-thread-id="design-child"] .thread-row',
+            ),
+            recent: read(
+              '.sidebar .recent-thread-group [data-thread-id="design-child"] .thread-row',
+            ),
+            siblingProject: read(
+              '.sidebar .project-group [data-thread-id="test-child"] .thread-row',
+            ),
+            siblingRecent: read(
+              '.sidebar .recent-thread-group [data-thread-id="test-child"] .thread-row',
+            ),
+            siblingLeftCount: document.querySelectorAll(
+              '.sidebar [data-thread-id="test-child"]',
+            ).length,
+            leftCount: document.querySelectorAll(
+              '.sidebar .project-group [data-thread-id="design-child"] .thread-row',
+            ).length,
+            leftTotalCount: document.querySelectorAll(
+              '.sidebar [data-thread-id="design-child"]',
+            ).length,
+            sidebar: read(".sidebar"),
+            owner: document
+              .querySelector(".information-dock .editable-information-panel")
+              ?.getAttribute("data-owner"),
+            switchCount: document.querySelectorAll(
+              ".information-dock .subagent-sidebar-visibility",
+            ).length,
+            errors: document.querySelectorAll(
+              ".information-dock .subagent-sidebar-error",
+            ).length,
+            answers: [
+              ...document.querySelectorAll(".messages .agent-copy"),
+            ].map((e) => e.textContent),
+            preference: window.__childSidebarPreference.receipt(),
+          },
+        }
+      : {}),
     entry: read(".information-toolbar button"),
     close: read('.information-toolbar button[aria-expanded="true"]'),
     titlebar: read(".window-titlebar-session"),
@@ -346,4 +405,238 @@ export async function captureDesktopNavigation({
     focus: "projects",
     baseline,
   });
+}
+
+export function assertChildSidebarState(state, visible, baseline, writes) {
+  assertNavigationState(state, { mode: "information-open" });
+  const child = state.childSidebar,
+    toggle = child.toggle;
+  assert.equal(child.owner, "thread:thread-1");
+  assert.equal(child.switchCount, 2);
+  assert.equal(child.errors, 0);
+  assert.equal(toggle?.role, "switch");
+  assert.equal(toggle.label, "Show in sidebar: Design review");
+  assert.equal(toggle.checked, String(visible));
+  assert.equal(toggle.busy, "false");
+  assert.equal(toggle.disabled, "false");
+  assert(
+    toggle.focused &&
+      toggle.focusVisible &&
+      toggle.fullyVisible &&
+      toggle.centerHit,
+    "Native keyboard focus stays on the visible child switch",
+  );
+  assert(
+    toggle.outline.style !== "none" && parseFloat(toggle.outline.width) > 0,
+    "Child switch has its production keyboard focus outline",
+  );
+  assert.equal(child.sibling.checked, "true");
+  assert.equal(child.siblingLeftCount, 2);
+  assert(
+    child.siblingProject?.fullyVisible &&
+      child.siblingProject.centerHit &&
+      child.siblingRecent?.fullyVisible &&
+      child.siblingRecent.centerHit,
+    "Unrelated shown sibling keeps both left navigation memberships",
+  );
+  assert.equal(child.leftCount, visible ? 1 : 0);
+  assert.equal(child.leftTotalCount, visible ? 2 : 0);
+  if (visible) {
+    assert(child.left.fullyVisible && child.left.centerHit);
+    assert(
+      child.left.rect.x >= child.sidebar.rect.x &&
+        child.left.rect.right <= child.sidebar.rect.right,
+      "Child appears in left navigation, not the right Information tree",
+    );
+    assert(child.sidebar.rect.right <= state.dock.rect.x);
+    assert.notEqual(child.left.current, "page");
+    assert(child.recent?.fullyVisible && child.recent.centerHit);
+    assert.notEqual(child.recent.current, "page");
+  } else {
+    assert.equal(child.left, null);
+    assert.equal(child.recent, null);
+  }
+  assert.equal(state.project.current, "page");
+  assert.equal(child.preference.scope, "synthetic-in-memory-preference-only");
+  assert.deepEqual(
+    child.preference.visibleSubagentThreadIds,
+    visible ? ["test-child", "design-child"] : ["test-child"],
+  );
+  assert.deepEqual(child.preference.changes, writes);
+  if (baseline) {
+    assert.deepEqual(child.answers, baseline.childSidebar.answers);
+    assert.deepEqual(
+      child.preference.pinnedThreadIds,
+      baseline.childSidebar.preference.pinnedThreadIds,
+    );
+    assert.deepEqual(
+      child.preference.sidebarOrder,
+      baseline.childSidebar.preference.sidebarOrder,
+    );
+    for (const key of [
+      "machineThreadCreateCalls",
+      "sideChatCreateCommandCalls",
+      "informationUpdates",
+      "workspaceUsedCalls",
+    ])
+      assert.equal(
+        state.telemetry[key],
+        baseline.telemetry[key],
+        `No unrelated ${key}`,
+      );
+    assert.deepEqual(
+      state.telemetry.protocolCalls,
+      baseline.telemetry.protocolCalls,
+      "Visibility never navigates, sends or calls the Host",
+    );
+    assert.deepEqual(
+      state.telemetry.informationReads,
+      baseline.telemetry.informationReads,
+      "Information owner is not replaced",
+    );
+  }
+}
+
+/** Separate opt-in synthetic preference probe. Ordinary navigation route stays unchanged. */
+export async function captureChildSidebar({
+  send,
+  evaluate,
+  wait,
+  click,
+  tabTo,
+  capture,
+  evidence,
+  options,
+}) {
+  const started = Date.now();
+  const selector =
+    '.information-dock .subagent-sidebar-visibility[aria-label="Show in sidebar: Design review"]';
+  const receipt = {
+    theme: options.theme,
+    scope: "synthetic-in-memory-preference-only",
+    status: "running",
+    states: [],
+  };
+  (evidence.childSidebarTrips ??= []).push(receipt);
+  const observe = () => evaluate(`(${observeNavigation.toString()})(true)`);
+  const settle = () =>
+    evaluate(
+      "document.fonts.ready.then(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))))",
+    );
+  const record = async (name, visible, baseline, writes) => {
+    let before, prior;
+    for (let attempt = 0; attempt < 12; attempt++) {
+      await settle();
+      const sample = await observe();
+      receipt.lastObservation = sample;
+      if (
+        prior &&
+        JSON.stringify(sample.childSidebar) ===
+          JSON.stringify(prior.childSidebar)
+      ) {
+        before = sample;
+        break;
+      }
+      prior = sample;
+    }
+    assert(
+      before,
+      "Child visibility and left navigation geometry settle before capture",
+    );
+    receipt.states.push({ name, before });
+    assertChildSidebarState(before, visible, baseline, writes);
+    await capture(
+      `child-sidebar-${options.name}-${name}`,
+      options,
+      "navigation",
+    );
+    const after = await observe();
+    receipt.states.at(-1).after = after;
+    assertChildSidebarState(after, visible, baseline, writes);
+    assert.deepEqual(
+      after.childSidebar,
+      before.childSidebar,
+      "Screenshot-time child ownership and geometry are stable",
+    );
+    return after;
+  };
+  try {
+    await wait(
+      `!!document.querySelector(${JSON.stringify(navigationSelectors.project)})`,
+    );
+    await click(navigationSelectors.project);
+    await wait(
+      `!!document.querySelector(${JSON.stringify(navigationSelectors.editor)})`,
+    );
+    await click(navigationSelectors.editor);
+    await send("Input.insertText", { text: navigationDraft });
+    await click(navigationSelectors.entry);
+    await wait(
+      `document.querySelectorAll('.information-dock .subagent-sidebar-visibility').length===2`,
+    );
+    assert(
+      await tabTo(`${selector}:focus-visible`),
+      "Actual Tab reaches the child visibility switch",
+    );
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: 700,
+      y: 220,
+    });
+    const baseline = await record("hidden-focus", false, null, []);
+    const writes = [];
+    for (const visible of [true, false]) {
+      const before = await observe();
+      assertChildSidebarState(before, !visible, baseline, writes);
+      const inputSequence =
+        before.telemetry.navigationInputEvents.at(-1)?.sequence ?? 0;
+      await dispatchNavigationKey(send, "Enter", "Enter", 13);
+      await wait(
+        `document.querySelector(${JSON.stringify(selector)})?.getAttribute('aria-checked')===${JSON.stringify(String(visible))} && document.querySelector(${JSON.stringify(selector)})?.getAttribute('aria-busy')==='false'`,
+      );
+      writes.push({ threadId: "design-child", visible });
+      const after = await record(
+        visible ? "shown" : "hidden-again",
+        visible,
+        baseline,
+        writes,
+      );
+      const native = after.telemetry.navigationInputEvents.filter(
+        (event) => event.sequence > inputSequence,
+      );
+      assert(
+        native.some(
+          (event) =>
+            event.target === "child-sidebar" &&
+            event.type === "keydown" &&
+            event.key === "Enter" &&
+            event.trusted,
+        ),
+      );
+      assert(
+        native.some(
+          (event) =>
+            event.target === "child-sidebar" &&
+            event.type === "keyup" &&
+            event.key === "Enter" &&
+            event.trusted,
+        ),
+      );
+      assert(
+        native.some(
+          (event) =>
+            event.target === "child-sidebar" &&
+            event.type === "click" &&
+            event.trusted,
+        ),
+      );
+    }
+    receipt.status = "passed";
+  } catch (error) {
+    receipt.status = "failed";
+    receipt.error = String(error);
+    throw error;
+  } finally {
+    receipt.elapsedMs = Date.now() - started;
+  }
 }

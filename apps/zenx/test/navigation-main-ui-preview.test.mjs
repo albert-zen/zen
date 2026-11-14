@@ -345,3 +345,233 @@ test("desktop navigation retains only the production information toggle as close
   assert.doesNotMatch(source, /information-dismiss-toolbar/);
   assert.match(source, /Information closes through the same titlebar toggle/);
 });
+
+import { createChildSidebarPreference } from "./fixtures/ui-polish-visual-child-sidebar.mjs";
+import {
+  assertChildSidebarState,
+  captureChildSidebar,
+} from "../scripts/navigation-main-ui-preview.mjs";
+
+function childState(visible = false, writes = []) {
+  const s = state();
+  const sidebar = target({
+    rect: { x: 0, y: 0, right: 264, bottom: 900, width: 264, height: 900 },
+  });
+  const row = () =>
+    target({
+      current: null,
+      rect: { x: 16, y: 240, right: 250, bottom: 270, width: 234, height: 30 },
+    });
+  s.telemetry.navigationInputEvents = [];
+  Object.assign(s.telemetry, {
+    machineThreadCreateCalls: 0,
+    sideChatCreateCommandCalls: 0,
+    workspaceUsedCalls: 1,
+  });
+  s.childSidebar = {
+    owner: "thread:thread-1",
+    switchCount: 2,
+    errors: 0,
+    toggle: target({
+      role: "switch",
+      label: "Show in sidebar: Design review",
+      checked: String(visible),
+      busy: "false",
+      disabled: "false",
+      focused: true,
+      focusVisible: true,
+    }),
+    sibling: target({ checked: "true" }),
+    siblingLeftCount: 2,
+    siblingProject: row(),
+    siblingRecent: row(),
+    leftCount: visible ? 1 : 0,
+    leftTotalCount: visible ? 2 : 0,
+    left: visible ? row() : null,
+    recent: visible ? row() : null,
+    sidebar,
+    answers: ["Synthetic parent conversation"],
+    preference: {
+      scope: "synthetic-in-memory-preference-only",
+      changes: structuredClone(writes),
+      visibleSubagentThreadIds: visible
+        ? ["test-child", "design-child"]
+        : ["test-child"],
+      pinnedThreadIds: [],
+      sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
+    },
+  };
+  return s;
+}
+test("synthetic child preference admits exactly target Show then Hide and preserves sibling", () => {
+  for (const args of [
+    ["test-child", false],
+    ["unknown", true],
+    ["design-child", false],
+    ["design-child", "true"],
+    ["design-child", true, "extra"],
+  ]) {
+    const f = createChildSidebarPreference();
+    assert.throws(() => f.setVisible(...args));
+    assert.deepEqual(f.receipt().changes, []);
+  }
+  const f = createChildSidebarPreference();
+  assert.deepEqual(f.read().visibleSubagentThreadIds, ["test-child"]);
+  assert.deepEqual(
+    f.setVisible("design-child", true).visibleSubagentThreadIds,
+    ["test-child", "design-child"],
+  );
+  assert.deepEqual(
+    f.setVisible("design-child", false).visibleSubagentThreadIds,
+    ["test-child"],
+  );
+  assert.throws(() => f.setVisible("design-child", true));
+  const receipt = f.receipt();
+  receipt.visibleSubagentThreadIds.length = 0;
+  receipt.changes[0].visible = false;
+  assert.deepEqual(f.receipt().changes, [
+    { threadId: "design-child", visible: true },
+    { threadId: "design-child", visible: false },
+  ]);
+  assert.deepEqual(f.read().visibleSubagentThreadIds, ["test-child"]);
+});
+test("child visibility assertions reject right-vs-left confusion, lost focus/draft, lingering aliases and unrelated effects", () => {
+  const before = childState(),
+    writes = [{ threadId: "design-child", visible: true }];
+  assertChildSidebarState(before, false, null, []);
+  assertChildSidebarState(childState(true, writes), true, before, writes);
+  for (const mutate of [
+    (s) => {
+      s.childSidebar.left.rect.x = 930;
+      s.childSidebar.left.rect.right = 1164;
+    },
+    (s) => (s.childSidebar.leftTotalCount = 0),
+    (s) => (s.childSidebar.toggle.focused = false),
+    (s) => (s.childSidebar.toggle.outline.width = "0px"),
+    (s) => (s.childSidebar.sibling.checked = "false"),
+    (s) => (s.childSidebar.siblingRecent = null),
+    (s) => (s.childSidebar.siblingProject.centerHit = false),
+    (s) => (s.childSidebar.siblingRecent.centerHit = false),
+    (s) => (s.childSidebar.owner = "thread:design-child"),
+    (s) => (s.draft = ""),
+    (s) => (s.project.current = null),
+    (s) => s.telemetry.informationUpdates++,
+    (s) => s.telemetry.protocolCalls.push("zen/thread/read"),
+    (s) => s.childSidebar.preference.pinnedThreadIds.push("design-child"),
+  ]) {
+    const bad = childState(true, writes);
+    mutate(bad);
+    assert.throws(() => assertChildSidebarState(bad, true, before, writes));
+  }
+  const hidden = childState();
+  hidden.childSidebar.leftTotalCount = 1;
+  assert.throws(
+    () => assertChildSidebarState(hidden, false, before, []),
+    "Hidden must remove all left navigation aliases",
+  );
+});
+test("separate child probe uses real Tab and native Enter events, requiring trusted switch activation", async () => {
+  for (const trusted of [true, false]) {
+    let s = childState(),
+      shown = false,
+      sequence = 0;
+    const evidence = {},
+      shots = [],
+      calls = [],
+      writes = [],
+      events = [];
+    const action = captureChildSidebar({
+      options: { name: "desktop-light", theme: "light" },
+      evidence,
+      evaluate: async (expression) =>
+        expression.startsWith("(function observeNavigation")
+          ? structuredClone(s)
+          : true,
+      wait: async () => {},
+      click: async (selector) => calls.push(["click", selector]),
+      tabTo: async (selector) => {
+        calls.push(["tabTo", selector]);
+        return true;
+      },
+      capture: async (name) => shots.push(name),
+      send: async (method, input) => {
+        calls.push([method, input]);
+        if (method !== "Input.dispatchKeyEvent") return;
+        events.push({
+          type: input.type === "keyUp" ? "keyup" : "keydown",
+          key: input.key,
+          target: "child-sidebar",
+          trusted,
+          sequence: ++sequence,
+        });
+        if (input.type === "keyUp") {
+          shown = !shown;
+          writes.push({ threadId: "design-child", visible: shown });
+          events.push({
+            type: "click",
+            target: "child-sidebar",
+            trusted,
+            sequence: ++sequence,
+          });
+          s = childState(shown, writes);
+          s.telemetry.navigationInputEvents = structuredClone(events);
+        }
+      },
+    });
+    if (!trusted) {
+      await assert.rejects(action);
+      assert.equal(evidence.childSidebarTrips[0].status, "failed");
+      continue;
+    }
+    await action;
+    assert.equal(evidence.childSidebarTrips[0].status, "passed");
+    assert.deepEqual(shots, [
+      "child-sidebar-desktop-light-hidden-focus",
+      "child-sidebar-desktop-light-shown",
+      "child-sidebar-desktop-light-hidden-again",
+    ]);
+    assert.equal(calls.filter(([method]) => method === "tabTo").length, 1);
+    assert(
+      calls
+        .filter(([method]) => method === "click")
+        .every(([, selector]) => !selector.includes("subagent")),
+    );
+    assert.deepEqual(
+      calls
+        .filter(([method]) => method === "Input.dispatchKeyEvent")
+        .map(([, p]) => [p.type, p.key, p.text]),
+      [
+        ["keyDown", "Enter", "\r"],
+        ["keyUp", "Enter", undefined],
+        ["keyDown", "Enter", "\r"],
+        ["keyUp", "Enter", undefined],
+      ],
+    );
+  }
+});
+test("isolated child profile reuses exact navigation build, sandbox and synthetic-only preferences", async () => {
+  const read = (name) => readFile(new URL(name, import.meta.url), "utf8");
+  const [capture, workflow, fixture, port] = await Promise.all([
+    read("../scripts/capture-main-ui-preview.mjs"),
+    read("../../../.github/workflows/desktop-navigation-ui.yml"),
+    read("./fixtures/ui-polish-visual.tsx"),
+    read("./fixtures/ui-polish-visual-child-sidebar.mjs"),
+  ]);
+  assert.match(capture, /ZENX_CHILD_SIDEBAR_EXPECTED_HEAD/);
+  assert.match(capture, /desktopChildSidebar \? "navigation" : "reading"/);
+  assert.match(capture, /source\.dirtyFiles/);
+  assert.match(capture, /"HEAD\^\{tree\}"/);
+  assert.match(capture, /process.env.GITHUB_ACTIONS,\s*"true"/);
+  assert.match(
+    workflow,
+    /!cancelled\(\).*steps.fonts.outcome == 'success'.*steps.navigationBuild.outcome == 'success'/,
+  );
+  assert.match(workflow, /desktop-child-sidebar" desktop-child-sidebar/);
+  assert.match(workflow, /synthetic in-memory preference only/);
+  assert.match(fixture, /if \(childSidebar\) \{/);
+  assert.match(fixture, /setSubagentThreadSidebarVisible:/);
+  assert.doesNotMatch(
+    port,
+    /localStorage|fetch\(|writeFile|window\.zenx|child_process/,
+  );
+});

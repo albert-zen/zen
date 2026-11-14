@@ -47,6 +47,7 @@ jobs:
       - name: Apply pinned renderer-only dependency fix
         run: node apps/zenx/scripts/prepare-legend-list.mjs
       - name: Use existing CJK fonts or official Ubuntu fonts
+        id: fonts
         timeout-minutes: 2
         run: |
           if [ -z "$(fc-list :lang=zh family)" ]; then
@@ -56,6 +57,7 @@ jobs:
       - name: Validate only desktop navigation contracts
         run: node --test apps/zenx/test/navigation-main-ui-preview.test.mjs
       - name: Bundle only the production App navigation fixture
+        id: navigationBuild
         timeout-minutes: 2
         run: node apps/zenx/scripts/build-main-ui-preview.mjs "${{ runner.temp }}/desktop-navigation-preview" navigation
       - name: Capture light and dark desktop interaction states
@@ -86,3 +88,22 @@ jobs:
           } catch { console.log('Preview incomplete; inspect retained diagnostics.'); }
           console.log('Only 1280x900 light/dark production App rendering with synthetic read-only data and real pointer/keyboard input. Sandbox retained. No narrow/coarse capture, aggregate CI dependency, native Electron or real Host acceptance.');
           NODE
+      - name: Isolated synthetic child visibility preference
+        if: ${{ !cancelled() && steps.fonts.outcome == 'success' && steps.navigationBuild.outcome == 'success' }}
+        timeout-minutes: 1
+        env:
+          ZENX_CHILD_SIDEBAR_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mkdir -p "${{ runner.temp }}/desktop-child-sidebar"
+          cp "${{ runner.temp }}/desktop-navigation-preview/navigation.html" "${{ runner.temp }}/desktop-navigation-preview/source.json" "${{ runner.temp }}/desktop-child-sidebar/"
+          node apps/zenx/scripts/capture-main-ui-preview.mjs "${{ runner.temp }}/desktop-child-sidebar" desktop-child-sidebar
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-child-sidebar-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/desktop-child-sidebar/*
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Child visibility verification boundary
+        if: always()
+        run: echo 'Child visibility probe uses synthetic in-memory preference only. No real Host/account settings, external calls or native Electron acceptance. Inspect its separate receipt for success/failure; ordinary navigation evidence remains separate.' >> "$GITHUB_STEP_SUMMARY"
