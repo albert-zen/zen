@@ -29,6 +29,7 @@ import {
   captureDesktopNavigation,
   captureChildSidebar,
   captureChildNavigation,
+  captureBusyChild,
 } from "./navigation-main-ui-preview.mjs";
 
 // Do not spoof this guard to retry a denied local browser/socket operation.
@@ -49,6 +50,7 @@ const desktopReentry = captureProfile === "desktop-reading-reentry";
 const desktopNested = captureProfile === "desktop-reading-nested-output";
 const desktopChildSidebar = captureProfile === "desktop-child-sidebar";
 const desktopChildNavigation = captureProfile === "desktop-child-navigation";
+const desktopBusyChild = captureProfile === "desktop-busy-child";
 // Older profiles must not load this separately scoped receipt/capture helper.
 const roomCapture = desktopRoom
   ? await import("./room-file-owner-main-ui-preview.mjs")
@@ -59,7 +61,8 @@ const otherPointer =
   desktopReentry ||
   desktopNested ||
   desktopChildSidebar ||
-  desktopChildNavigation
+  desktopChildNavigation ||
+  desktopBusyChild
     ? "fine"
     : captureProfile;
 const pointer = desktopOnly ? "fine" : otherPointer;
@@ -125,21 +128,25 @@ if (
   desktopReentry ||
   desktopNested ||
   desktopChildSidebar ||
-  desktopChildNavigation
+  desktopChildNavigation ||
+  desktopBusyChild
 ) {
   assert.equal(
     source.commit,
-    desktopChildNavigation
-      ? process.env.ZENX_CHILD_NAVIGATION_EXPECTED_HEAD
-      : desktopChildSidebar
-        ? process.env.ZENX_CHILD_SIDEBAR_EXPECTED_HEAD
-        : desktopNested
-          ? process.env.ZENX_NESTED_EXPECTED_HEAD
-          : process.env.ZENX_REENTRY_EXPECTED_HEAD,
+    desktopBusyChild
+      ? process.env.ZENX_BUSY_CHILD_EXPECTED_HEAD
+      : desktopChildNavigation
+        ? process.env.ZENX_CHILD_NAVIGATION_EXPECTED_HEAD
+        : desktopChildSidebar
+          ? process.env.ZENX_CHILD_SIDEBAR_EXPECTED_HEAD
+          : desktopNested
+            ? process.env.ZENX_NESTED_EXPECTED_HEAD
+            : process.env.ZENX_REENTRY_EXPECTED_HEAD,
     "Re-entry uses the exact event head",
   );
   const originalScene = desktopChildSidebar ? "navigation" : "reading";
-  const isolatedScene = desktopChildNavigation ? "navigation" : originalScene;
+  const isolatedScene =
+    desktopChildNavigation || desktopBusyChild ? "navigation" : originalScene;
   assert.deepEqual(Object.keys(source.scenes), [isolatedScene]);
   assert.equal(source.scenes[isolatedScene].html, `${isolatedScene}.html`);
   assert.deepEqual(
@@ -595,7 +602,12 @@ try {
           )
         : desktopChildSidebar
           ? cases.filter((c) => c.width === 1280 && c.height === 900)
-          : cases) {
+          : desktopBusyChild
+            ? cases.filter(
+                (c) =>
+                  c.width === 1280 && c.height === 900 && c.theme === "light",
+              )
+            : cases) {
     await send("Emulation.setDeviceMetricsOverride", {
       width: options.width,
       height: options.height,
@@ -623,6 +635,7 @@ try {
         if (desktopChildSidebar || desktopChildNavigation)
           query.set("childSidebar", "1");
         if (desktopChildNavigation) query.set("childNavigation", "1");
+        if (desktopBusyChild) query.set("busyChild", "approval");
       }
       if (scene === "pending") {
         query.set("many", "");
@@ -721,11 +734,13 @@ try {
       }
       if (scene === "navigation") {
         await (
-          desktopChildNavigation
-            ? captureChildNavigation
-            : desktopChildSidebar
-              ? captureChildSidebar
-              : captureDesktopNavigation
+          desktopBusyChild
+            ? captureBusyChild
+            : desktopChildNavigation
+              ? captureChildNavigation
+              : desktopChildSidebar
+                ? captureChildSidebar
+                : captureDesktopNavigation
         )({
           send,
           evaluate,

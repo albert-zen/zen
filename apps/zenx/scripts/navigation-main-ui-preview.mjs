@@ -991,3 +991,257 @@ export async function captureChildNavigation({
     receipt.elapsedMs = Date.now() - started;
   }
 }
+
+/** Display-only stress observation. Width loss is reported, never patched away. */
+export function observeBusyChild() {
+  const read = (element) => {
+    if (!element) return null;
+    const r = element.getBoundingClientRect(),
+      css = getComputedStyle(element);
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const glyphs = [...range.getClientRects()].map((r) => ({
+      x: r.x,
+      y: r.y,
+      right: r.right,
+      bottom: r.bottom,
+      width: r.width,
+      height: r.height,
+    }));
+    return {
+      text: element.textContent,
+      title: element.getAttribute("title"),
+      rect: {
+        x: r.x,
+        y: r.y,
+        right: r.right,
+        bottom: r.bottom,
+        width: r.width,
+        height: r.height,
+      },
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      ellipsized: element.scrollWidth > element.clientWidth + 1,
+      visible:
+        r.width > 0 &&
+        r.height > 0 &&
+        r.x >= 0 &&
+        r.y >= 0 &&
+        r.right <= innerWidth &&
+        r.bottom <= innerHeight &&
+        css.visibility === "visible" &&
+        Number(css.opacity) > 0,
+      centerHit: element.contains(
+        document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2),
+      ),
+      focused: document.activeElement === element,
+      focusVisible: element.matches(":focus-visible"),
+      outline: {
+        width: css.outlineWidth,
+        style: css.outlineStyle,
+        color: css.outlineColor,
+      },
+      font: css.font,
+      glyphs,
+    };
+  };
+  return {
+    fixture: window.__busyChildFixture,
+    theme: document.documentElement.dataset.appearance,
+    viewport: { width: innerWidth, height: innerHeight },
+    aliases: ["project-group", "recent-thread-group"].map((scope) => {
+      const shell = document.querySelector(
+        `.sidebar .${scope} [data-thread-id="design-child"]`,
+      );
+      const row = shell?.querySelector(".thread-row");
+      return {
+        scope,
+        row: read(row),
+        title: read(row?.querySelector(".thread-title > span")),
+        child: read(row?.querySelector(".thread-child-label")),
+        model: read(row?.querySelector(".thread-model-name")),
+        metadata: read(row?.querySelector(".thread-model")),
+        approval: read(row?.querySelector(".thread-state-inline")),
+        menu: read(shell?.querySelector(".thread-menu-trigger")),
+        asking: !!row?.querySelector(".thread-asking-badge"),
+      };
+    }),
+    reveal: read(document.querySelector(".thread-information-title > span")),
+    selected: [
+      ...document.querySelectorAll('.sidebar .thread-row[aria-current="page"]'),
+    ].map((e) => e.closest("[data-thread-id]")?.dataset.threadId),
+    composer: read(document.querySelector(".composer")),
+    draft: (() => {
+      const e = document.querySelector(
+        '.composer [contenteditable="true"], .composer textarea',
+      );
+      return e ? ("value" in e ? e.value : e.textContent) : null;
+    })(),
+    telemetry: window.__uiPolishTelemetry,
+  };
+}
+
+export function verifyBusyChild(state, focusScope, baseline) {
+  assert.deepEqual(state.viewport, { width: 1280, height: 900 });
+  assert.equal(state.theme, "light");
+  assert(state.fixture?.approval && state.fixture.asking === false);
+  assert.equal(state.aliases.length, 2);
+  assert.deepEqual(
+    state.aliases.map((a) => a.scope),
+    ["project-group", "recent-thread-group"],
+  );
+  for (const alias of state.aliases) {
+    assert(
+      alias.row &&
+        alias.title &&
+        alias.model &&
+        alias.child &&
+        alias.approval &&
+        alias.menu,
+      "Actual busy child and existing controls must render",
+    );
+    assert.equal(alias.title.text, state.fixture.title);
+    assert.equal(alias.model.text, state.fixture.model);
+    assert.equal(alias.model.title, state.fixture.model);
+    assert.equal(alias.child.text, "Child");
+    assert.equal(alias.approval.text, "Needs your approval");
+    assert.equal(
+      alias.asking,
+      false,
+      "Approval-only scene must not be confused with Asking",
+    );
+  }
+  assert(
+    state.selected.length > 0 &&
+      state.selected.every((id) => id === "thread-1"),
+    "Name inspection must not navigate",
+  );
+  assert.equal(state.draft, navigationDraft);
+  assert.equal(state.telemetry.informationUpdates, 0);
+  assert(
+    !state.telemetry.protocolCalls.some((method) =>
+      /send|respond|interrupt|archive|delete|create|answer/.test(method),
+    ),
+    "No real or simulated action is accepted",
+  );
+  if (baseline) {
+    assert.deepEqual(state.composer.rect, baseline.composer.rect);
+    assert.equal(
+      state.telemetry.workspaceUsedCalls,
+      baseline.telemetry.workspaceUsedCalls,
+    );
+  }
+  if (focusScope) {
+    const target = state.aliases.find((a) => a.scope === focusScope).row;
+    assert(
+      target.focused &&
+        target.focusVisible &&
+        target.visible &&
+        target.centerHit,
+    );
+    assert(
+      target.outline.style !== "none" && parseFloat(target.outline.width) > 0,
+    );
+    assert.equal(state.reveal?.text, state.fixture.title);
+    assert(
+      state.reveal.visible &&
+        state.reveal.centerHit &&
+        !state.reveal.ellipsized &&
+        state.reveal.scrollHeight <= state.reveal.clientHeight + 1,
+      "Keyboard reveal must show the exact full title",
+    );
+  }
+}
+
+/** Three images only; separate profile, no preference write or approval decision. */
+export async function captureBusyChild({
+  send,
+  evaluate,
+  wait,
+  click,
+  tabTo,
+  capture,
+  evidence,
+  options,
+}) {
+  const started = Date.now();
+  const trip = {
+    scope: "synthetic-approval-only-sidebar-measurement",
+    status: "running",
+    states: [],
+  };
+  (evidence.busyChildTrips ??= []).push(trip);
+  const observe = () => evaluate(`(${observeBusyChild.toString()})()`);
+  const settle = async () => {
+    let previous;
+    for (let n = 0; n < 12; n++) {
+      await evaluate(
+        "document.fonts.ready.then(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))))",
+      );
+      const state = await observe();
+      trip.lastObservation = state;
+      const value = JSON.stringify({ ...state, telemetry: undefined });
+      if (previous === value) return state;
+      previous = value;
+    }
+    throw Error("Busy child geometry did not settle");
+  };
+  const record = async (name, focusScope, baseline) => {
+    const before = await settle();
+    trip.states.push({ name, before });
+    // These are observation frames, not proof that the compact model line fits.
+    await capture(`busy-child-${options.name}-${name}`, options, "navigation");
+    const after = await observe();
+    trip.states.at(-1).after = after;
+    verifyBusyChild(before, focusScope, baseline);
+    verifyBusyChild(after, focusScope, baseline);
+    assert.deepEqual(
+      { ...after, telemetry: undefined },
+      { ...before, telemetry: undefined },
+      "Screenshot geometry/focus are stable",
+    );
+    return after;
+  };
+  try {
+    await wait(
+      "!!window.__busyChildFixture && document.querySelectorAll('.sidebar [data-thread-id=\"design-child\"] .thread-state-inline').length===2",
+    );
+    await click(navigationSelectors.project);
+    await wait(
+      `!!document.querySelector(${JSON.stringify(navigationSelectors.editor)})`,
+    );
+    await click(navigationSelectors.editor);
+    await send("Input.insertText", { text: navigationDraft });
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: 700,
+      y: 220,
+    });
+    await wait("!document.querySelector('.thread-information')");
+    const baseline = await record("rest", null, null);
+    for (const scope of ["project-group", "recent-thread-group"]) {
+      const row = `.sidebar .${scope} [data-thread-id="design-child"] .thread-row`;
+      assert(
+        await tabTo(`${row}:focus-visible`),
+        "Native Tab reaches the existing child row",
+      );
+      await wait(
+        `document.querySelector('.thread-information-title > span')?.textContent===${JSON.stringify(baseline.fixture.title)}`,
+      );
+      await record(`${scope}-keyboard-reveal`, scope, baseline);
+      await dispatchNavigationKey(send, "Escape", "Escape", 27);
+      await wait("!document.querySelector('.thread-information')");
+    }
+    trip.status = "observed";
+    trip.visualAcceptance =
+      "Not asserted: model clipping and competing labels require pixel/measurement review.";
+  } catch (error) {
+    trip.status = "failed";
+    trip.error = String(error);
+    throw error;
+  } finally {
+    trip.elapsedMs = Date.now() - started;
+  }
+}

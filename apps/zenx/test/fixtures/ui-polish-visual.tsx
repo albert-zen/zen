@@ -41,6 +41,13 @@ const childSidebar =
   params.get("scene") === "navigation" && params.get("childSidebar") === "1"
     ? createChildSidebarPreference()
     : null;
+// Opt-in display-only stress fixture. Ordinary navigation seeds are unchanged.
+const busyChild =
+  params.get("scene") === "navigation" &&
+  params.get("busyChild") === "approval";
+const busyChildTitle =
+  "Design review · shared component accessibility and release readiness";
+const busyChildModel = "Local demonstration model · extended reasoning preview";
 const childNavigation =
   childSidebar !== null && params.get("childNavigation") === "1";
 let childSidebarInputSequence = 0;
@@ -135,7 +142,19 @@ let previewTabs: import("../../src/main/workspace-browser.js").WorkspaceBrowserT
 
 const sideConversations = childQuestionData?.rows ?? [
   {
-    ...summary("design-child", rails?.children[0] ?? "Design review"),
+    ...summary(
+      "design-child",
+      busyChild ? busyChildTitle : (rails?.children[0] ?? "Design review"),
+    ),
+    ...(busyChild
+      ? {
+          currentMetadata: {
+            ...summary().currentMetadata,
+            model: busyChildModel,
+          },
+          userQuestionSummary: { openCount: 0 },
+        }
+      : {}),
     parentThreadId: "thread-1",
   },
   {
@@ -347,13 +366,21 @@ const zenx = {
       reconnected: false,
     }),
     getPendingApprovals: async () =>
-      readingApprovalFixture?.getPendingApprovals() ?? [],
+      busyChild
+        ? createReadingApprovalFixture(true)
+            .getPendingApprovals()
+            .map((request) => ({
+              ...request,
+              requestId: "busy-child-display-only",
+              params: { ...request.params, threadId: "design-child" },
+            }))
+        : (readingApprovalFixture?.getPendingApprovals() ?? []),
     request: async (method: string, params?: unknown) => {
       if (method === "model/list") return { data: [model()], nextCursor: null };
       return await options.request(method, params);
     },
     respondToApproval: async () => {
-      if (readingScene)
+      if (readingScene || busyChild)
         throw new Error("Reading preview cannot respond to approvals");
     },
     onApprovalRequest: (
@@ -493,6 +520,9 @@ const zenx = {
         onboardingComplete: true,
         pinnedThreadIds: [],
         ...(childSidebar?.read() ?? {}),
+        ...(busyChild
+          ? { visibleSubagentThreadIds: ["design-child", "test-child"] }
+          : {}),
         ...(childQuestionData
           ? {
               visibleSubagentThreadIds: childQuestionData.rows.map(
@@ -522,6 +552,9 @@ const zenx = {
           onboardingComplete: true,
           pinnedThreadIds: [],
           ...(childSidebar?.read() ?? {}),
+          ...(busyChild
+            ? { visibleSubagentThreadIds: ["design-child", "test-child"] }
+            : {}),
           ...(childQuestionData
             ? {
                 visibleSubagentThreadIds: childQuestionData.rows.map(
@@ -725,6 +758,15 @@ Object.assign(zenx, {
   },
 });
 // Launcher mode mounts the real admitted Subagents/Triggers UI on a synthetic bridge.
+if (busyChild)
+  Object.assign(window, {
+    __busyChildFixture: {
+      title: busyChildTitle,
+      model: busyChildModel,
+      approval: true,
+      asking: false,
+    },
+  });
 if (childSidebar) {
   Object.assign(zenx.settings, {
     setSubagentThreadSidebarVisible: async (

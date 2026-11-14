@@ -7,10 +7,14 @@ on:
       - apps/zenx/scripts/*main-ui-preview.mjs
       - apps/zenx/scripts/preview-browser-lifecycle.mjs
       - apps/zenx/test/navigation-main-ui-preview.test.mjs
+      - apps/zenx/test/busy-child-main-ui-preview.test.mjs
+      - apps/zenx/test/sidebar-information-interaction.test.ts
       - apps/zenx/test/fixtures/ui-polish-visual*
       - apps/zenx/src/renderer/src/App.tsx
       - apps/zenx/src/renderer/src/Sidebar.tsx
       - apps/zenx/src/renderer/src/sidebar-expansion.ts
+      - apps/zenx/src/renderer/src/sidebar-child-context.ts
+      - apps/zenx/src/renderer/src/i18n/shell.ts
       - apps/zenx/src/renderer/src/plugin-information-host.tsx
       - apps/zenx/src/renderer/src/EditableInformationPanel.tsx
       - apps/zenx/src/renderer/src/ConversationInformationCards.tsx
@@ -55,7 +59,7 @@ jobs:
             sudo apt-get install -y --no-install-recommends fonts-noto-cjk
           fi
       - name: Validate only desktop navigation contracts
-        run: node --test apps/zenx/test/navigation-main-ui-preview.test.mjs
+        run: node --test apps/zenx/test/navigation-main-ui-preview.test.mjs apps/zenx/test/busy-child-main-ui-preview.test.mjs
       - name: Bundle only the production App navigation fixture
         id: navigationBuild
         timeout-minutes: 2
@@ -126,3 +130,24 @@ jobs:
       - name: Child navigation verification boundary
         if: always()
         run: echo 'Child open/return uses synthetic read-only conversations and one in-memory visibility preference, with unsent per-thread drafts. No real Host/account settings, sends or native Electron acceptance. Separate artifact and receipt; ordinary navigation and preference-only evidence remain untouched.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Isolated synthetic crowded child row with pending approval
+        if: ${{ !cancelled() && steps.fonts.outcome == 'success' && steps.navigationBuild.outcome == 'success' }}
+        timeout-minutes: 1
+        env:
+          ZENX_BUSY_CHILD_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mkdir -p "${{ runner.temp }}/desktop-busy-child"
+          cp "${{ runner.temp }}/desktop-navigation-preview/navigation.html" "${{ runner.temp }}/desktop-navigation-preview/source.json" "${{ runner.temp }}/desktop-busy-child/"
+          node apps/zenx/scripts/capture-main-ui-preview.mjs "${{ runner.temp }}/desktop-busy-child" desktop-busy-child
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-busy-child-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/desktop-busy-child/*
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Verify mounted Project and Recent child contexts
+        if: ${{ !cancelled() && steps.navigationBuild.outcome == 'success' }}
+        timeout-minutes: 1
+        working-directory: apps/zenx
+        run: node --import tsx --test test/sidebar-information-interaction.test.ts
