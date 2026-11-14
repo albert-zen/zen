@@ -299,6 +299,7 @@ export const en = {
   sourcePluginUnavailable: "The Triggers plugin is unavailable.",
 
   threadDetails: "Thread details",
+  threadStatusLabel: "Status",
   threadProjectLabel: "Project",
   threadMachineLabel: "Machine",
   threadThisMachine: "This machine",
@@ -1430,6 +1431,7 @@ export const zhCN = {
   sourceTriggerUnavailable: "此触发器不可用或已删除。",
   sourcePluginUnavailable: "触发器插件不可用。",
   threadDetails: "线程详情",
+  threadStatusLabel: "状态",
   threadProjectLabel: "项目",
   threadMachineLabel: "机器",
   threadThisMachine: "本机",

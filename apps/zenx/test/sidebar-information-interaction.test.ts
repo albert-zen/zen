@@ -789,16 +789,77 @@ test("Project/Recent child context keeps names, models and activation, with dist
       "Child conversation",
       "Child conversation",
     ]);
+    const fullModel = "Local demonstration model · extended reasoning preview";
+    child.currentMetadata.model = fullModel;
+    props.threads = [...props.threads];
     props.pendingApprovalThreadIds = new Set(["child"]);
     await render();
     assert(
       rows("child").every((row) => !!row.querySelector(".thread-state-inline")),
       "Approval text is retained alongside context",
     );
-
+    const fact = (kind: string, part = "dd") =>
+      document.querySelector(
+        `.thread-information [data-thread-fact="${kind}"] ${part}`,
+      );
+    const childRows = rows("child");
+    for (const [index, row] of childRows.entries()) {
+      await act(async () => row.focus());
+      assert.equal(
+        document.activeElement,
+        row,
+        "Opening details keeps row focus",
+      );
+      assert.equal(fact("pending-approval", "dt")?.textContent, "Status");
+      assert.equal(
+        fact("pending-approval")?.textContent,
+        "Needs your approval",
+      );
+      assert.equal(fact("model")?.textContent, fullModel);
+      assert.equal(
+        document.querySelectorAll(
+          "[data-thread-fact] button, [data-thread-fact] [tabindex]",
+        ).length,
+        0,
+      );
+      if (index < childRows.length - 1) {
+        await act(async () => {
+          row.dispatchEvent(
+            new dom.window.KeyboardEvent("keydown", {
+              key: "Escape",
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
+        });
+        assert.equal(
+          fact("pending-approval"),
+          null,
+          "Close the first alias before measuring the next",
+        );
+      }
+    }
+    child.currentMetadata.model = "";
+    props.threads = [...props.threads];
+    await render();
+    assert.equal(fact("model"), null, "Missing model is omitted, not invented");
+    child.currentMetadata.model = fullModel;
+    props.threads = [...props.threads];
+    props.pendingApprovalThreadIds = new Set();
+    await render();
+    assert.equal(
+      document.querySelectorAll("[data-thread-fact]").length,
+      0,
+      "Resolved approval removes added facts",
+    );
+    props.pendingApprovalThreadIds = new Set(["child"]);
+    await render();
     await act(async () => {
       await i18n.changeLanguage("zh-CN");
     });
+    assert.equal(fact("pending-approval", "dt")?.textContent, "状态");
+    assert.equal(fact("pending-approval")?.textContent, "需要你的审批");
+    assert.equal(fact("model", "dt")?.textContent, "模型");
     assert.deepEqual(descriptions("child"), [
       "“Shared project · implementation”的子会话",
       "“Shared project · implementation”的子会话",

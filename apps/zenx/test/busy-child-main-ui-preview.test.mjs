@@ -259,3 +259,63 @@ test("busy route records only rest plus two native keyboard reveals without sele
     ["Escape", "Escape", "Escape", "Escape"],
   );
 });
+
+test("busy receipt separately records wrapped detail facts without changing inline observation gates", async () => {
+  const { JSDOM } = await import("jsdom");
+  const { observeBusyChild } =
+    await import("../scripts/navigation-main-ui-preview.mjs");
+  // Unit geometry only: no claim that JSDOM renders or validates wrapping.
+  const dom = new JSDOM(
+    `<div class="thread-information"><dl><div data-thread-fact="pending-approval"><dt>Status</dt><dd>Needs your approval</dd></div><div data-thread-fact="model"><dt>Model</dt><dd>Long genuine model</dd></div></dl></div>`,
+    { runScripts: "outside-only" },
+  );
+  try {
+    const w = dom.window;
+    w.__busyChildFixture = { approval: true, asking: false };
+    w.__uiPolishTelemetry = {};
+    w.HTMLElement.prototype.getBoundingClientRect = () => ({
+      x: 300,
+      y: 100,
+      right: 500,
+      bottom: 140,
+      width: 200,
+      height: 40,
+    });
+    w.Range.prototype.getClientRects = () => [
+      { x: 310, y: 105, right: 490, bottom: 125, width: 180, height: 20 },
+    ];
+    w.document.elementFromPoint = () => null;
+    const result = w.eval(`(${observeBusyChild.toString()})()`);
+    assert.deepEqual(
+      Array.from(result.detailFacts, (f) => [
+        f.kind,
+        f.label.text,
+        f.value.text,
+      ]),
+      [
+        ["pending-approval", "Status", "Needs your approval"],
+        ["model", "Model", "Long genuine model"],
+      ],
+    );
+    assert.equal(result.detailFacts[1].value.glyphs.length, 1);
+    assert.equal(result.detailFacts[1].value.rect.height, 40);
+    assert.equal(typeof result.detailFacts[1].value.scrollWidth, "number");
+    w.document.querySelector(".thread-information").remove();
+    assert.equal(
+      w.eval(`(${observeBusyChild.toString()})()`).detailFacts.length,
+      0,
+    );
+  } finally {
+    dom.window.close();
+  }
+  const helper = await read("../scripts/navigation-main-ui-preview.mjs");
+  const verify = helper.slice(
+    helper.indexOf("export function verifyBusyChild"),
+    helper.indexOf("/** Three images only"),
+  );
+  assert.doesNotMatch(
+    verify,
+    /detailFacts/,
+    "New receipt does not relabel the previous observed inline fit as passed",
+  );
+});

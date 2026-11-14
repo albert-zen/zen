@@ -2281,6 +2281,7 @@ function ThreadRow({
   const detailsContents = (titleEditor: ReactNode) => (
     <ThreadInformation
       titleEditor={titleEditor}
+      pendingChildApproval={isChild && pendingApproval && !menuOpen}
       thread={thread}
       projectName={project?.name ?? threadProject(thread)}
       projectPath={
@@ -2709,6 +2710,7 @@ function ThreadRow({
 
 function ThreadInformation({
   titleEditor,
+  pendingChildApproval = false,
   thread,
   projectName,
   projectPath,
@@ -2717,6 +2719,7 @@ function ThreadInformation({
   onRename,
 }: {
   titleEditor?: ReactNode;
+  pendingChildApproval?: boolean;
   thread: NativeThreadSummary;
   projectName: string;
   projectPath: string | null;
@@ -2724,6 +2727,9 @@ function ThreadInformation({
   triggerStatus: SidebarTriggerState["status"];
   onRename(origin: HTMLButtonElement): void;
 }) {
+  const model = pendingChildApproval
+    ? threadModelIdentity(thread)?.label
+    : null;
   const [now, setNow] = useState(Date.now);
   const next = nextSidebarTrigger(triggers, now);
   useEffect(() => {
@@ -2778,6 +2784,18 @@ function ThreadInformation({
         {titleEditor}
       </div>
       <dl className="thread-information-facts">
+        {pendingChildApproval ? (
+          <div data-thread-fact="pending-approval">
+            <dt>{i18n.t("shell:threadStatusLabel")}</dt>
+            <dd>{i18n.t("shell:needsYourApproval")}</dd>
+          </div>
+        ) : null}
+        {model ? (
+          <div data-thread-fact="model">
+            <dt>{i18n.t("shell:model")}</dt>
+            <dd>{model}</dd>
+          </div>
+        ) : null}
         <div>
           <dt>{i18n.t("shell:threadProjectLabel")}</dt>
           <dd>

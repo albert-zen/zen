@@ -1069,6 +1069,14 @@ export function observeBusyChild() {
       };
     }),
     reveal: read(document.querySelector(".thread-information-title > span")),
+    detailFacts: [
+      ...document.querySelectorAll(".thread-information [data-thread-fact]"),
+    ].map((fact) => ({
+      kind: fact.getAttribute("data-thread-fact"),
+      row: read(fact),
+      label: read(fact.querySelector("dt")),
+      value: read(fact.querySelector("dd")),
+    })),
     selected: [
       ...document.querySelectorAll('.sidebar .thread-row[aria-current="page"]'),
     ].map((e) => e.closest("[data-thread-id]")?.dataset.threadId),
