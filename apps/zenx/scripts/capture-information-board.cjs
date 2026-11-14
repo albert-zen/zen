@@ -3,7 +3,13 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
-const { app, BrowserWindow, session, nativeTheme } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  session,
+  nativeTheme,
+  ipcMain,
+} = require("electron");
 assert.equal(process.env.GITHUB_ACTIONS, "true");
 assert.ok(["darwin", "win32"].includes(process.platform));
 assert.ok(
@@ -34,6 +40,272 @@ const result = {
 };
 let window, taskId, ownedSidebarInput;
 let clickSequence = 0;
+// Passive scoped receipt only: call the production listener once and return its
+// original reply unchanged. Armed only for the fresh late-stage owner below.
+let keyboardQuestionOwner = null;
+const keyboardQuestionAttempts = [];
+const registerQuestionHandle = ipcMain.handle.bind(ipcMain);
+ipcMain.handle = (channel, listener) =>
+  registerQuestionHandle(
+    channel,
+    channel !== "zenx:protocol:request"
+      ? listener
+      : async (event, method, params) => {
+          const tracked =
+            keyboardQuestionOwner &&
+            method === "zen/thread/questions/respond" &&
+            params?.threadId === keyboardQuestionOwner;
+          const attempt = tracked ? { params: structuredClone(params) } : null;
+          if (attempt) keyboardQuestionAttempts.push(attempt);
+          try {
+            const reply = await listener(event, method, params);
+            if (attempt) attempt.reply = structuredClone(reply);
+            return reply;
+          } catch (error) {
+            if (attempt) attempt.error = String(error);
+            throw error;
+          }
+        },
+  );
+async function verifyDisposableOverlayKeyboardAnswer() {
+  await resizeWindow(1600, 1000);
+  await evaluate(
+    "(()=>{localStorage.setItem('zenx.language','en');dispatchEvent(new StorageEvent('storage',{key:'zenx.language',newValue:'en',storageArea:localStorage}));return true})()",
+  );
+  const created = await evaluate(
+    `window.zenx.projects.startThread(${JSON.stringify(path.join(temporary, "workspace"))},{model:'fake'})`,
+  );
+  const threadId = created.thread.id;
+  assert.ok(
+    threadId &&
+      !["information-main", "information-child", "information-other"].includes(
+        threadId,
+      ),
+  );
+  keyboardQuestionOwner = threadId;
+  const receipt = {
+    name: "disposable-desktop-overlay-keyboard-answer",
+    threadId,
+    attempts: keyboardQuestionAttempts,
+    input: "Electron native Tab/Space/Enter; not OS assistive input",
+    published: [],
+  };
+  result.cases.push(receipt);
+  const prompts = [
+    "Disposable sibling: leave this request pending.",
+    "Disposable target: answer only this second request.",
+  ];
+  for (let index = 0; index < 2; index++) {
+    await until(
+      () =>
+        evaluate(
+          `window.zenx.threads.list().then(rows=>rows.find(r=>r.threadId===${JSON.stringify(threadId)})?.status==='idle')`,
+        ),
+      "fresh question owner idle before one publication",
+    );
+    await evaluate(
+      `window.zenx.protocol.request('turn/start',${JSON.stringify({ threadId, clientUserMessageId: `native-overlay-disposable-${index}`, input: [{ type: "text", text: "!tool ask_user_question " + JSON.stringify({ questions: [{ id: "choice", prompt: prompts[index], options: [{ id: "yes", label: "Use this isolated answer" }] }] }) }] })})`,
+    );
+    await until(async () => {
+      const page = await evaluate(
+        `window.zenx.protocol.request('zen/thread/questions/list',{threadId:${JSON.stringify(threadId)}})`,
+      );
+      const question = page.questions.find((q) =>
+        q.specification.questions.some((s) => s.prompt === prompts[index]),
+      );
+      if (!question) return false;
+      receipt.published[index] = question;
+      return question.state === "open";
+    }, "real Host publishes exact fresh question once");
+  }
+  const sibling = receipt.published[0],
+    target = receipt.published[1];
+  assert.notEqual(sibling.request.callItemId, target.request.callItemId);
+  const cards =
+    ".information-popover .information-content article.user-question-card";
+  const card = `${cards}[data-question-call-id=${JSON.stringify(target.request.callItemId)}]`;
+  const siblingCard = `${cards}[data-question-call-id=${JSON.stringify(sibling.request.callItemId)}]`;
+  await click(
+    `.thread-row-shell[data-thread-id=${JSON.stringify(threadId)}] > button.thread-row`,
+    "Open fresh isolated question owner",
+  );
+  if (
+    !(await evaluate(
+      "document.querySelector('.auxiliary-panel')?.dataset.open==='true'",
+    ))
+  )
+    await click("#thread-browser-toggle", "Open disposable split workspace");
+  if (
+    await evaluate(
+      "document.querySelector('.auxiliary-panel')?.dataset.expanded==='true'",
+    )
+  )
+    await click(
+      '.auxiliary-heading button[aria-label="Restore side panel"]',
+      "Restore disposable desktop split",
+    );
+  if (await evaluate("document.querySelector('.information-popover')!==null"))
+    await click(
+      ".information-toolbar button",
+      "Close disposable overlay before keyboard entry",
+    );
+  await click(
+    ".information-toolbar button",
+    "Open disposable overlay from its real toggle",
+  );
+  await until(
+    () =>
+      evaluate(
+        "!!document.querySelector('.information-popover') && document.querySelector('.auxiliary-panel')?.dataset.open==='true' && document.querySelector('.auxiliary-panel')?.dataset.expanded==='false'",
+      ),
+    "desktop split overlay present",
+  );
+  await until(
+    () =>
+      evaluate(
+        `window.zenx.threads.list().then(rows=>rows.find(r=>r.threadId===${JSON.stringify(threadId)})?.status==='idle')`,
+      ),
+    "fresh publication Turn completed before keyboard answer",
+  );
+  receipt.displayedQuestionIds = await evaluate(
+    `Array.from(document.querySelectorAll(${JSON.stringify(cards)}),e=>e.dataset.questionCallId)`,
+  );
+  assert.deepEqual(
+    receipt.displayedQuestionIds,
+    [sibling.request.callItemId, target.request.callItemId],
+    "exact fresh questions appear in intended first/second order",
+  );
+  const option = card + " .user-question-options input";
+  await focusWithNativeTab(
+    option,
+    "Natural Tab to isolated second question option",
+  );
+  assert.equal(
+    await evaluate(`${query(option)}.checked`),
+    false,
+    "fresh second option starts unselected",
+  );
+  await pressKey("Space", "Select second question option without answering");
+  await until(
+    () => evaluate(`${query(option)}?.checked===true`),
+    "native selected option acknowledged",
+  );
+  const send = card + " .user-question-actions > button.primary-button";
+  await focusWithNativeTab(send, "Natural Tab to isolated second Send");
+  const readFocus = () =>
+    evaluate(
+      `(()=>{const b=${query(send)},p=b?.closest('.information-content');if(!b||!p)return null;const r=b.getBoundingClientRect(),c=p.getBoundingClientRect();return {focused:document.activeElement===b,focusVisible:b.matches(':focus-visible'),disabled:b.disabled,hit:b.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2)),rect:{left:r.left,right:r.right,top:r.top,bottom:r.bottom},inside:r.left>=c.left&&r.right<=c.right&&r.top>=Math.max(0,c.top)&&r.bottom<=Math.min(innerHeight,c.bottom)}})()`,
+    );
+  receipt.focus = await readFocus();
+  await pause(100);
+  receipt.stableFocus = await readFocus();
+  assert.deepEqual(receipt.focus, receipt.stableFocus);
+  assert.ok(
+    receipt.focus?.focused &&
+      receipt.focus.focusVisible &&
+      !receipt.focus.disabled &&
+      receipt.focus.hit &&
+      receipt.focus.inside,
+  );
+  assert.equal(
+    keyboardQuestionAttempts.length,
+    0,
+    "selecting and tabbing did not submit",
+  );
+  await evaluate(
+    `(()=>{const b=${query(send)};window.__disposableAnswerClickProof=[];window.__disposableAnswerKeyProof=[];b.addEventListener('keydown',e=>{if(e.key==='Enter')window.__disposableAnswerKeyProof.push({trusted:e.isTrusted,key:e.key,focused:document.activeElement===b})},{capture:true});b.addEventListener('click',e=>window.__disposableAnswerClickProof.push({trusted:e.isTrusted,focused:document.activeElement===b,callItemId:b.closest('article.user-question-card')?.dataset.questionCallId}),{capture:true});return true})()`,
+  );
+  await screenshot("18-disposable-overlay-second-send-focus.png");
+  assert.deepEqual(
+    await readFocus(),
+    receipt.focus,
+    "screenshot did not move the intended target",
+  );
+  await pressKey(
+    "Enter",
+    "Native Enter answers only focused disposable second question",
+  );
+  await until(
+    () =>
+      Promise.resolve(
+        keyboardQuestionAttempts.length === 1 &&
+          !!keyboardQuestionAttempts[0].reply,
+      ),
+    "single real Host response receipt",
+  );
+  receipt.clickAcknowledgement = await evaluate(
+    "window.__disposableAnswerClickProof",
+  );
+  assert.deepEqual(
+    receipt.clickAcknowledgement,
+    [{ trusted: true, focused: true, callItemId: target.request.callItemId }],
+    "one native trusted activation of the focused exact Send",
+  );
+  receipt.keyAcknowledgement = await evaluate(
+    "window.__disposableAnswerKeyProof",
+  );
+  assert.deepEqual(
+    receipt.keyAcknowledgement,
+    [{ trusted: true, key: "Enter", focused: true }],
+    "native Enter arrived at focused Send once",
+  );
+  const attempt = keyboardQuestionAttempts[0];
+  assert.equal(attempt.params.threadId, threadId);
+  assert.equal(attempt.params.questionCallItemId, target.request.callItemId);
+  assert.equal(attempt.params.outcome, "answer");
+  assert.deepEqual(attempt.params.answers, [
+    { questionId: "choice", optionIds: ["yes"] },
+  ]);
+  assert.equal(
+    attempt.reply.question.response.clientId,
+    attempt.params.clientUserMessageId,
+  );
+  await until(async () => {
+    receipt.readback = await evaluate(
+      `window.zenx.protocol.request('zen/thread/questions/read',${JSON.stringify({ threadId, questionCallItemId: target.request.callItemId, clientUserMessageId: attempt.params.clientUserMessageId })})`,
+    );
+    return (
+      receipt.readback.response.status === "claimed" &&
+      receipt.readback.question?.state === "answered"
+    );
+  }, "exact answer is claimed by the real Host");
+  assert.equal(
+    receipt.readback.question.request.callItemId,
+    target.request.callItemId,
+  );
+  assert.equal(
+    receipt.readback.question.response.clientId,
+    attempt.params.clientUserMessageId,
+  );
+  assert.deepEqual(
+    receipt.readback.question.response.reply.answers,
+    attempt.params.answers,
+  );
+  receipt.remaining = await evaluate(
+    `window.zenx.protocol.request('zen/thread/questions/list',{threadId:${JSON.stringify(threadId)}})`,
+  );
+  assert.equal(receipt.remaining.totalPending, 1);
+  assert.equal(receipt.remaining.questions.length, 1);
+  assert.equal(
+    receipt.remaining.questions[0].request.callItemId,
+    sibling.request.callItemId,
+  );
+  assert.equal(receipt.remaining.questions[0].state, "open");
+  await until(
+    () => evaluate(`!${query(card)} && !!${query(siblingCard)}`),
+    "only answered second card leaves attention",
+  );
+  await screenshot("18a-disposable-overlay-sibling-still-pending.png");
+  await pause(250);
+  assert.equal(
+    keyboardQuestionAttempts.length,
+    1,
+    "no duplicate respond after native activation settles",
+  );
+  receipt.status = "passed";
+  keyboardQuestionOwner = null;
+}
+
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function evaluate(expression) {
   const reply = await window.webContents.executeJavaScript(
@@ -2135,6 +2407,7 @@ async function run() {
       throw error;
     }
   }
+  await verifyDisposableOverlayKeyboardAnswer();
   result.ok = true;
 }
 void import(pathToFileURL(path.join(__dirname, "../out/main/index.js")).href)
