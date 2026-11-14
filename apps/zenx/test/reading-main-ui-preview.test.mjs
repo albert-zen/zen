@@ -3,6 +3,8 @@ import { test } from "node:test";
 import { readFile } from "node:fs/promises";
 import {
   informationDockReady,
+  verifyReadingReentry,
+  captureReadingReentry,
   observeReading,
   verifyApprovalMode,
   tabToApprovalToggle,
@@ -914,4 +916,192 @@ test("continuation Range and wheel ownership use actual DOM ancestry, not mere c
     Object.assign(globalThis, saved);
     dom.window.close();
   }
+});
+test("re-entry requires exact native same-item lifecycle and painted complete terminal prose", () => {
+  const before = {
+    receipt: { threadId: "thread-1", turnId: "turn", itemId: "answer" },
+    height: 1000,
+    band: 600,
+    page: [0, 0],
+    left: 0,
+    output: [],
+    draft: "",
+    composer: [0, 700, 800, 100],
+    editorPresent: true,
+    telemetry: { informationUpdates: 0, protocolCalls: [] },
+  };
+  const phase = (n) => ({
+    ...structuredClone(before),
+    receipt: {
+      ...before.receipt,
+      phase: Math.min(n, 2),
+      watermark: n === 3 ? 6 : n + 2,
+      completed: n === 3,
+      text: "## Heading\n\nExact prose.",
+      tail: "Exact prose.",
+    },
+    height: 2000,
+    primary: n === 3 ? "send" : "stop",
+    primaryHit: true,
+    cue: false,
+    cuePresent: false,
+    maxTop: 1400,
+    top: 1400,
+    tail: { visible: true, hit: true },
+    itemCount: 1,
+    paragraphs: ["Heading", "Exact prose."],
+  });
+  for (const n of [1, 2, 3]) {
+    verifyReadingReentry(phase(n), before, n);
+    for (const mutate of [
+      (s) => (s.receipt.itemId = "other"),
+      (s) => (s.receipt.watermark = 99),
+      (s) => (s.tail.hit = false),
+      (s) => (s.tail.visible = false),
+      (s) => (s.cue = true),
+      (s) => (s.cuePresent = true),
+      (s) => (s.top -= 2),
+      (s) => (s.primaryHit = false),
+      (s) => (s.editorPresent = false),
+      (s) => (s.paragraphs = ["Exact prose."]),
+      (s) => (s.itemCount = 2),
+      (s) => (s.page = [0, 20]),
+      (s) => s.telemetry.protocolCalls.push("zen/turn/send"),
+    ]) {
+      const bad = phase(n);
+      mutate(bad);
+      assert.throws(() => verifyReadingReentry(bad, before, n));
+    }
+  }
+  const small = phase(1);
+  small.height = 1200;
+  assert.throws(() => verifyReadingReentry(small, before, 1));
+  const running = phase(3);
+  running.primary = "stop";
+  assert.throws(() => verifyReadingReentry(running, before, 3));
+});
+
+test("one real-wheel/Composer-return sequence advances twice, finalizes once and retains only verified-state screenshots", async () => {
+  for (const fail of [false, true]) {
+    const evidence = {},
+      inputs = [],
+      shots = [];
+    let phase = 0,
+      top = 1000,
+      height = 2000,
+      cue = false,
+      final = false;
+    const state = () => ({
+      top,
+      height,
+      cue,
+      cuePresent: cue,
+      maxTop: height - 1000,
+      receipt: {
+        phase,
+        completed: final,
+        watermark: final ? 6 : phase + 2,
+        threadId: "thread-1",
+        turnId: "turn",
+        itemId: "answer",
+        text: "Prose",
+        tail: "Prose",
+      },
+      band: 600,
+      primary: final ? "send" : "stop",
+      primaryHit: true,
+      editorPresent: true,
+      tail: { visible: !(fail && phase === 1), hit: true, rect: { y: 600 } },
+      itemCount: 1,
+      paragraphs: ["Prose"],
+      wheel: { x: 8, y: 300 },
+      page: [0, 0],
+      left: 0,
+      output: [],
+      draft: "",
+      composer: [0, 700, 800, 100],
+      telemetry: { informationUpdates: 0, protocolCalls: [] },
+    });
+    const task = () =>
+      captureReadingReentry({
+        evidence,
+        options: { width: 1280, height: 900, theme: "light" },
+        wait: async () => {},
+        click: async (selector) => {
+          inputs.push(selector);
+          if (selector.includes("composer-reading-position")) {
+            cue = false;
+            top = 1000;
+          }
+        },
+        send: async (method, params) => {
+          assert.equal(method, "Input.dispatchMouseEvent");
+          assert.equal(params.type, "mouseWheel");
+          assert.equal(params.deltaY, -360);
+          inputs.push("wheel");
+          top = 640;
+          cue = true;
+        },
+        evaluate: async (expression) => {
+          if (expression === "window.__readingStream.advance()") {
+            phase++;
+            height += 1000;
+            top += 1000;
+            inputs.push("advance");
+            return;
+          }
+          if (expression === "window.__readingStream.finalize()") {
+            final = true;
+            inputs.push("finalize");
+            return;
+          }
+          return expression.startsWith("(function observeInlineTrace")
+            ? structuredClone(state())
+            : undefined;
+        },
+        capture: async (name) => shots.push(name),
+      });
+    if (fail) {
+      await assert.rejects(task);
+      assert.equal(evidence.readingReentry.status, "failed");
+      assert.deepEqual(shots, ["reading-reentry-parked-cue"]);
+    } else {
+      await task();
+      assert.equal(evidence.readingReentry.status, "passed");
+      assert.deepEqual(shots, [
+        "reading-reentry-parked-cue",
+        "reading-reentry-terminal",
+      ]);
+      assert.equal(inputs.filter((x) => x === "advance").length, 2);
+      assert.equal(inputs.filter((x) => x === "finalize").length, 1);
+    }
+    assert.equal(inputs.filter((x) => x === "wheel").length, 1);
+    assert.equal(
+      inputs.filter((x) => x.includes("composer-reading-position")).length,
+      1,
+    );
+  }
+});
+
+test("single light profile shares the exact artifact without extending the established capture step", async () => {
+  const capture = await read("../scripts/capture-main-ui-preview.mjs"),
+    workflow = await read("../../../.github/workflows/desktop-reading-ui.yml");
+  assert.match(capture, /desktop-reading-reentry/);
+  assert.match(
+    capture,
+    /c\.width === 1280 && c\.height === 900 && c\.theme === "light"/,
+  );
+  assert.match(capture, /ZENX_REENTRY_EXPECTED_HEAD/);
+  assert.match(capture, /source\.dirtyFiles/);
+  assert.match(
+    workflow,
+    /desktop-reading" desktop-reading\n        timeout-minutes: 2/,
+  );
+  assert.match(workflow, /Isolated standard desktop live re-entry probe/);
+  assert.match(workflow, /desktop-reading-reentry" desktop-reading-reentry/);
+  assert.match(workflow, /name: desktop-reading-reentry-/);
+  assert.doesNotMatch(
+    captureReadingReentry.toString(),
+    /\.scrollTop\s*=|\.scrollTo\(|\.back-live|parked.*advance/,
+  );
 });

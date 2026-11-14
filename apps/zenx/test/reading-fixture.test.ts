@@ -389,3 +389,154 @@ test("optional inline trace preserves failed shell result through production pro
   assert.match(answer.text, /Label check needs attention/);
   assert.equal(projected.queuedMessages?.length ?? 0, 0);
 });
+
+test("fixed native reading stream grows the same production turn/item and synchronizes recovery", async () => {
+  const { createReadingStreamFixture } =
+    await import("./fixtures/ui-polish-reading.js");
+  const { applyNativeThreadEvent, projectNativeRecovery } =
+    await import("../src/renderer/src/thread-view-state.js");
+  const fixture = createReadingStreamFixture(base);
+  const recover = () =>
+    fixture.read("zen/thread/resume", { threadId: "thread-1" }) as ReturnType<
+      typeof readingRecovery
+    >;
+  const initialRecovery = recover();
+  assert.equal(initialRecovery.watermark, 2);
+  const history = readingRecovery(base, false).thread;
+  assert.deepEqual(initialRecovery.thread.turns.slice(0, -1), history.turns);
+  assert.deepEqual(
+    initialRecovery.thread.items.slice(0, history.items.length),
+    history.items,
+  );
+  assert.equal(
+    initialRecovery.thread.items.filter(
+      (item) => item.type === "thread_metadata",
+    ).length,
+    1,
+  );
+  assert(
+    !initialRecovery.thread.items.some(
+      (item) => item.id === "reading-stream-answer",
+    ),
+  );
+  assert.deepEqual(
+    initialRecovery.events.map((e) => [
+      e.processEpoch,
+      e.watermark,
+      e.event.type,
+    ]),
+    [
+      ["test-process-epoch", 1, "item_started"],
+      ["test-process-epoch", 2, "item_delta"],
+    ],
+  );
+  let projected = projectNativeRecovery(initialRecovery);
+  assert.equal(
+    (projected.turns.at(-1)?.items[0] as { text: string }).text,
+    fixture.receipt().text,
+  );
+  const events: Array<{
+    watermark: number;
+    event: Parameters<typeof applyNativeThreadEvent>[1];
+  }> = [];
+  const off = fixture.subscribe((method, raw) => {
+    const envelope = raw as {
+      processEpoch: string;
+      threadId: string;
+      watermark: number;
+      event: Parameters<typeof applyNativeThreadEvent>[1];
+    };
+    assert.equal(method, "zen/thread/event");
+    assert.equal(envelope.processEpoch, "test-process-epoch");
+    assert.equal(envelope.threadId, "thread-1");
+    assert.equal(envelope.watermark, events.length + 3);
+    events.push(envelope);
+    projected = applyNativeThreadEvent(projected, envelope.event, 1792033310);
+    const recovery = recover();
+    assert.equal(recovery.watermark, envelope.watermark);
+    assert.equal(recovery.processEpoch, envelope.processEpoch);
+    assert.equal(
+      recovery.thread.items.some((item) => item.id === "reading-stream-answer"),
+      envelope.watermark >= 5,
+    );
+    const restored = projectNativeRecovery(recovery);
+    assert.deepEqual(
+      projected.turns.map((t) => [t.id, t.status, t.items]),
+      restored.turns.map((t) => [t.id, t.status, t.items]),
+    );
+  });
+  const original = fixture.receipt();
+  for (let phase = 1; phase <= 2; phase++) {
+    const before = fixture.receipt(),
+      next = fixture.advance();
+    assert.equal(next.phase, phase);
+    assert.equal(next.turnId, original.turnId);
+    assert.equal(next.itemId, original.itemId);
+    assert(next.text.startsWith(before.text));
+    assert(next.text.length - before.text.length > 2000);
+    assert(next.text.endsWith(next.tail));
+    assert.equal(next.completed, false);
+    assert.equal(projected.turns.at(-1)?.status, "inProgress");
+  }
+  const final = fixture.finalize();
+  assert(final.completed && final.text.endsWith(final.tail));
+  assert.deepEqual(
+    events.map((e) => e.event.type),
+    ["item_delta", "item_delta", "item_completed", "turn_completed"],
+  );
+  assert.equal(projected.turns.length, 2);
+  assert.equal(projected.turns[0]?.items[0]?.type, "agentMessage");
+  assert.equal(
+    (projected.turns[0]?.items[0] as { text: string }).text,
+    readingMarkdown,
+  );
+  assert.equal(projected.turns[1]?.status, "completed");
+  off();
+  assert.throws(() => fixture.advance());
+  assert.throws(() => fixture.finalize());
+  assert.deepEqual(fixture.receipt(), final);
+});
+
+test("stream keeps the exact read whitelist and rejects premature or excess lifecycle input", async () => {
+  const { createReadingStreamFixture } =
+    await import("./fixtures/ui-polish-reading.js");
+  assert.throws(() => createReadingStreamFixture({ ...base, id: "other" }));
+  const fixture = createReadingStreamFixture(base),
+    initial = fixture.receipt();
+  assert.throws(() => fixture.finalize());
+  for (const [method, request] of [
+    ["zen/thread/send", { threadId: "thread-1" }],
+    ["zen/thread/read", { threadId: "other" }],
+    ["zen/thread/read", { threadId: "thread-1", extra: true }],
+    ["zen/initialize", { extra: true }],
+  ] as const)
+    assert.throws(() => fixture.read(method, request));
+  assert.deepEqual(fixture.receipt(), initial);
+  assert.deepEqual(fixture.read("zen/initialize", {}), {
+    processEpoch: "test-process-epoch",
+  });
+  assert.deepEqual(
+    fixture.read("zen/thread/questions/list", { threadId: "thread-1" }),
+    readReadingRequest(
+      "zen/thread/questions/list",
+      { threadId: "thread-1" },
+      base,
+      false,
+    ),
+  );
+  const unsubscribe = fixture.subscribe(() =>
+    assert.fail("Unsubscribed listener called"),
+  );
+  unsubscribe();
+  fixture.advance();
+  fixture.advance();
+  assert.throws(() => fixture.advance());
+  const read = fixture.read("zen/thread/read", { threadId: "thread-1" }) as {
+    thread: { items: unknown[] };
+  };
+  read.thread.items.length = 0;
+  assert(
+    (fixture.read("zen/thread/read", { threadId: "thread-1" }) as typeof read)
+      .thread.items.length > 0,
+  );
+});

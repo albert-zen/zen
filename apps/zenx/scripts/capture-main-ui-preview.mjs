@@ -1,6 +1,9 @@
 import { fontProbeHTML, probePreviewFonts } from "./preview-font-probe.mjs";
 import { fontRevision, fontAssets } from "./prepare-preview-fonts.mjs";
-import { captureDesktopReading } from "./reading-main-ui-preview.mjs";
+import {
+  captureDesktopReading,
+  captureReadingReentry,
+} from "./reading-main-ui-preview.mjs";
 import { captureQueueReading } from "./queue-reading-main-ui-preview.mjs";
 /** One sandboxed Chrome, bounded scenes; no aggregate CI dependency or browser download. */
 import assert from "node:assert/strict";
@@ -37,12 +40,14 @@ const captureProfile = process.argv[3] ?? "fine";
 const desktopQueue = captureProfile === "desktop-queue";
 const desktopReading = captureProfile === "desktop-reading";
 const desktopRoom = captureProfile === "desktop-room";
+const desktopReentry = captureProfile === "desktop-reading-reentry";
 // Older profiles must not load this separately scoped receipt/capture helper.
 const roomCapture = desktopRoom
   ? await import("./room-file-owner-main-ui-preview.mjs")
   : null;
 const desktopOnly = desktopQueue || desktopReading;
-const pointer = desktopOnly ? "fine" : desktopRoom ? "fine" : captureProfile;
+const otherPointer = desktopRoom || desktopReentry ? "fine" : captureProfile;
+const pointer = desktopOnly ? "fine" : otherPointer;
 assert(["fine", "coarse"].includes(pointer), "Pointer must be fine or coarse");
 const coarse = pointer === "coarse";
 const evidenceFile = coarse ? "evidence-coarse.json" : "evidence.json";
@@ -101,6 +106,34 @@ if (desktopRoom) {
   assert.equal(source.clean, true);
   assert.deepEqual(Object.keys(source.scenes), ["room"]);
 }
+if (desktopReentry) {
+  assert.equal(
+    source.commit,
+    process.env.ZENX_REENTRY_EXPECTED_HEAD,
+    "Re-entry uses the exact event head",
+  );
+  assert.deepEqual(Object.keys(source.scenes), ["reading"]);
+  assert.equal(source.scenes.reading.html, "reading.html");
+  assert.deepEqual(
+    source.dirtyFiles,
+    [],
+    "Re-entry requires a clean source receipt",
+  );
+  assert.equal(
+    execFileSync("git", ["status", "--porcelain"], {
+      cwd: root,
+      encoding: "utf8",
+    }).trim(),
+    "",
+  );
+  assert.equal(
+    execFileSync("git", ["rev-parse", "HEAD^{tree}"], {
+      cwd: root,
+      encoding: "utf8",
+    }).trim(),
+    source.tree,
+  );
+}
 const files = new Map();
 for (const scene of Object.values(source.scenes)) {
   const bytes = await readFile(path.join(directory, scene.html));
@@ -119,7 +152,7 @@ if (source.scenes.information) {
   );
   files.set("/plugin-frame.html", bytes);
 }
-if (desktopReading || desktopRoom)
+if (desktopReading || desktopRoom || desktopReentry)
   files.set("/font-probe.html", Buffer.from(fontProbeHTML));
 const evidence = {
   schemaVersion: 1,
@@ -170,7 +203,7 @@ try {
     evidence.cjkFonts.length,
     "CJK fonts must be available; do not publish tofu screenshots",
   );
-  if (desktopReading || desktopRoom) {
+  if (desktopReading || desktopRoom || desktopReentry) {
     assert(
       process.env.ZENX_PREVIEW_FONT_RECEIPT,
       "Reading preview requires a pinned font receipt",
@@ -326,7 +359,7 @@ try {
     return false;
   };
   lifecycle.captureStarted();
-  if (desktopReading || desktopRoom) {
+  if (desktopReading || desktopRoom || desktopReentry) {
     await send("Emulation.setDeviceMetricsOverride", {
       width: 1280,
       height: 900,
@@ -528,7 +561,11 @@ try {
       ? cases
           .filter((c) => c.width === 1280 && c.height === 900)
           .map((c) => ({ ...c, width: 1440, lang: "zh-CN" }))
-      : cases) {
+      : desktopReentry
+        ? cases.filter(
+            (c) => c.width === 1280 && c.height === 900 && c.theme === "light",
+          )
+        : cases) {
     await send("Emulation.setDeviceMetricsOverride", {
       width: options.width,
       height: options.height,
@@ -548,6 +585,7 @@ try {
         platform: "linux",
       });
       if (scene === "reading") query.set("scene", "reading");
+      if (desktopReentry) query.set("streaming", "1");
       if (scene === "information") query.set("scene", "lineage");
       if (scene === "navigation") {
         query.set("scene", "navigation");
@@ -603,6 +641,18 @@ try {
               acceptance: false,
             };
           },
+        });
+        continue;
+      }
+      if (desktopReentry) {
+        await captureReadingReentry({
+          send,
+          evaluate,
+          wait,
+          click,
+          capture,
+          evidence,
+          options,
         });
         continue;
       }

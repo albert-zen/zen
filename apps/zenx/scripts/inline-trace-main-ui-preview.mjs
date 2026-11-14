@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-export function observeInlineTrace(continuation = false) {
+export function observeInlineTrace(continuation = false, stream = null) {
   const exposed = (element, rect, initial) => {
     const limit = { ...initial };
     const clips = [];
@@ -187,6 +187,55 @@ export function observeInlineTrace(continuation = false) {
         composer.width,
         composer.height,
       ],
+    };
+  }
+  // Dedicated standard-desktop stream probe reuses the exact clipping/Range and wheel owner helpers.
+  // Ordinary Trace receipts and behavior are unchanged when this argument is absent.
+  if (stream) {
+    const root = scroller.querySelector(
+      `.agent-copy[data-read-message-id="${stream.itemId}"]`,
+    );
+    const primary = document.querySelector(
+      ".composer .composer-send-control button.action-orb",
+    );
+    const cue = document.querySelector(
+      ".composer-reading-position button.quiet-button",
+    );
+    const hit = (e) => {
+      if (!visible(e)) return false;
+      const r = e.getBoundingClientRect();
+      return e.contains(
+        document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2),
+      );
+    };
+    return {
+      ...continuationState,
+      receipt: stream,
+      height: scroller.scrollHeight,
+      band:
+        Math.min(transcript.bottom, composer?.top ?? innerHeight) -
+        Math.max(0, transcript.top),
+      editorPresent: !!document.querySelector(
+        '.composer textarea, .composer [contenteditable="true"]',
+      ),
+      primary: primary?.classList.contains("stop")
+        ? "stop"
+        : primary?.classList.contains("send")
+          ? "send"
+          : null,
+      primaryHit: hit(primary),
+      cue: hit(cue),
+      cuePresent: !!cue,
+      tail: measure(root, stream.tail, true),
+      itemCount: scroller.querySelectorAll(
+        `.agent-copy[data-read-message-id="${stream.itemId}"]`,
+      ).length,
+      paragraphs: root
+        ? [...root.querySelectorAll(".markdown-body h2,.markdown-body p")].map(
+            (e) => e.textContent,
+          )
+        : [],
+      telemetry: structuredClone(window.__uiPolishTelemetry),
     };
   }
   return {

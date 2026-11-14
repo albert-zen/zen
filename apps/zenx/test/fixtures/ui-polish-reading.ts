@@ -407,3 +407,184 @@ export function createReadingApprovalFixture(pending: boolean) {
     },
   };
 }
+
+/** Fixed synthetic Host stream; no timers, arbitrary input, writes or model calls. */
+export function createReadingStreamFixture(base: Thread) {
+  if (base.id !== "thread-1") throw new Error("Unexpected reading owner");
+  const threadId = "thread-1",
+    turnId = "reading-stream-turn",
+    itemId = "reading-stream-answer";
+  const seed =
+    "## A synthetic reading stream\n\nThis is an inert layout observation, not an executed task.";
+  const tails = [
+    "Synthetic growth checkpoint one.",
+    "Synthetic growth checkpoint two.",
+  ];
+  const chunks = tails.map(
+    (tail, phase) =>
+      "\n\n" +
+      Array.from(
+        { length: 8 },
+        (_, index) =>
+          `Phase ${phase + 1}, paragraph ${index + 1}. A reader follows this invented discussion of a quiet shared workspace. The explanation deliberately continues across several lines so that new material extends the conversation while an earlier passage remains available for reading. No command, account, file operation or external request is represented here.`,
+      ).join("\n\n") +
+      "\n\n" +
+      tail,
+  );
+  const finalMarker = "Synthetic stream complete. No operation was executed.";
+  let phase = 0,
+    watermark = 2,
+    text = seed,
+    completed = false,
+    itemCompleted = false;
+  type StreamEnvelope = ReturnType<
+    typeof nativeRecoveryForThread
+  >["events"][number];
+  const events: StreamEnvelope[] = [
+    {
+      processEpoch: "test-process-epoch",
+      threadId,
+      watermark: 1,
+      event: {
+        type: "item_started",
+        threadId,
+        turnId,
+        itemId,
+        itemType: "agent_message",
+      },
+    },
+    {
+      processEpoch: "test-process-epoch",
+      threadId,
+      watermark: 2,
+      event: { type: "item_delta", threadId, turnId, itemId, delta: seed },
+    },
+  ];
+  const listeners = new Set<(method: string, params: unknown) => void>();
+  const snapshot = () => {
+    const history = readingRecovery(base, false).thread;
+    const recovery = nativeRecoveryForThread(
+      {
+        ...base,
+        turns: [
+          {
+            id: turnId,
+            itemsView: "full",
+            status: completed ? "completed" : "inProgress",
+            error: null,
+            startedAt: 1792033300,
+            completedAt: completed ? 1792033310 : null,
+            durationMs: completed ? 10000 : null,
+            items: itemCompleted
+              ? [
+                  {
+                    id: itemId,
+                    type: "agentMessage",
+                    text,
+                    phase: "final_answer",
+                    memoryCitation: null,
+                  },
+                ]
+              : [],
+          },
+        ],
+      },
+      {
+        processEpoch: "test-process-epoch",
+        watermark,
+        sandbox: "read-only",
+        approvalPolicy: "on-request",
+      },
+    );
+    return {
+      ...recovery,
+      thread: {
+        ...recovery.thread,
+        items: [
+          ...history.items,
+          ...recovery.thread.items.filter(
+            (item) => item.type !== "thread_metadata",
+          ),
+        ],
+        turns: [...history.turns, ...recovery.thread.turns],
+      },
+      events: structuredClone(events),
+    };
+  };
+  const emit = (event: StreamEnvelope["event"]) => {
+    watermark++;
+    const params = {
+      processEpoch: "test-process-epoch",
+      threadId,
+      watermark,
+      event,
+    };
+    events.push(params);
+    for (const listener of [...listeners])
+      listener("zen/thread/event", structuredClone(params));
+  };
+  const receipt = () => ({
+    phase,
+    watermark,
+    threadId,
+    turnId,
+    itemId,
+    completed,
+    text,
+    tail: completed
+      ? finalMarker
+      : phase
+        ? tails[phase - 1]!
+        : seed.split("\n\n").at(-1)!,
+  });
+  return {
+    receipt,
+    subscribe(listener: (method: string, params: unknown) => void) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    read(method: string, request: unknown) {
+      // Delegate validation first: exactly the established read-only protocol.
+      const validated = readReadingRequest(method, request, base, false);
+      if (
+        method === "zen/thread/resume" ||
+        method === "zen/thread/resume-window"
+      )
+        return snapshot();
+      if (method === "zen/thread/read") return { thread: snapshot().thread };
+      return validated;
+    },
+    advance() {
+      if (completed || phase >= chunks.length)
+        throw new Error("Synthetic stream has no further growth phase");
+      const delta = chunks[phase++]!;
+      text += delta;
+      emit({ type: "item_delta", threadId, turnId, itemId, delta });
+      return receipt();
+    },
+    finalize() {
+      if (completed || phase !== 2)
+        throw new Error(
+          "Synthetic stream requires exactly two growth phases before completion",
+        );
+      text += "\n\n" + finalMarker;
+      itemCompleted = true;
+      emit({
+        type: "item_completed",
+        item: {
+          id: itemId,
+          type: "agent_message",
+          threadId,
+          turnId,
+          createdAt: "2026-10-15T03:00:00.000Z",
+          text,
+        },
+      });
+      completed = true;
+      emit({ type: "turn_completed", threadId, turnId, status: "completed" });
+      return receipt();
+    },
+  };
+}

@@ -23,6 +23,7 @@ import {
   guardReadingBridge,
   readReadingRequest,
   createReadingApprovalFixture,
+  createReadingStreamFixture,
   readingBrowserCommand,
 } from "./ui-polish-reading.js";
 import { codeWrapMarkdown, codeWrapText } from "./code-wrap-content.js";
@@ -60,6 +61,10 @@ const childQuestionData = childQuestionScene
   : null;
 const questionListeners = new Set<(method: string, params: unknown) => void>();
 const readingScene = params.get("scene") === "reading";
+const readingStream =
+  readingScene && params.get("streaming") === "1"
+    ? createReadingStreamFixture(thread())
+    : null;
 const resultScene = readingScene && params.get("results") === "1";
 const inlineTraceScene = resultScene && params.get("inlineTrace") === "1";
 const codeWrapScene = readingScene && params.get("codeWrap") === "1";
@@ -157,6 +162,7 @@ const sideChatFixture = {
 const options = {
   request: async (method: string, request?: unknown) => {
     uiPolishTelemetry.protocolCalls.push(method);
+    if (readingStream) return readingStream.read(method, request);
     if (readingScene)
       return readReadingRequest(
         method,
@@ -333,6 +339,7 @@ const zenx = {
       readingApprovalFixture?.onApprovalResolved(listener) ?? (() => undefined),
     onStatus: () => () => undefined,
     onNotification: (listener: (method: string, params: unknown) => void) => {
+      if (readingStream) return readingStream.subscribe(listener);
       if (!childQuestionScene) return () => undefined;
       questionListeners.add(listener);
       return () => {
@@ -844,6 +851,14 @@ if (childQuestionData) {
     },
   });
 }
+if (readingStream)
+  Object.assign(window, {
+    __readingStream: {
+      advance: readingStream.advance,
+      finalize: readingStream.finalize,
+      receipt: readingStream.receipt,
+    },
+  });
 if (readingApprovalFixture)
   Object.assign(window, {
     __readingApprovalFixture: {

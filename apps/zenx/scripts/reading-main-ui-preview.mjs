@@ -1,4 +1,7 @@
-import { captureInlineTrace } from "./inline-trace-main-ui-preview.mjs";
+import {
+  captureInlineTrace,
+  observeInlineTrace,
+} from "./inline-trace-main-ui-preview.mjs";
 import { captureChildQuestions } from "./child-question-main-ui-preview.mjs";
 import { captureEmptyProjects } from "./empty-project-main-ui-preview.mjs";
 import { captureResultReading } from "./result-reading-main-ui-preview.mjs";
@@ -783,3 +786,196 @@ export const readingPaths = [
 ];
 export const readingPathsChanged = (paths) =>
   paths.some((path) => readingPaths.includes(path));
+/** A fixed synthetic stream, resumed through real standard-desktop UI; no parked-stream duplicate. */
+export function verifyReadingReentry(state, previous, phase) {
+  assert.equal(state.receipt.phase, Math.min(phase, 2));
+  assert.equal(state.receipt.completed, phase === 3);
+  assert.equal(state.receipt.watermark, phase === 3 ? 6 : phase + 2);
+  for (const key of ["itemId", "turnId", "threadId"])
+    assert.equal(state.receipt[key], previous.receipt[key]);
+  assert.equal(state.primary, phase === 3 ? "send" : "stop");
+  assert.equal(
+    state.cuePresent,
+    false,
+    "Live mode has no active Composer return cue, even if it would be hidden",
+  );
+  assert(
+    Math.abs(state.maxTop - state.top) <= 1,
+    "Actual transcript is at its live end within rounding",
+  );
+  assert(
+    state.primaryHit && state.editorPresent,
+    "Actual primary action and Composer editor remain available",
+  );
+  assert(
+    !state.cue && state.tail.visible && state.tail.hit,
+    "Live terminal prose paints inside the actual reading band",
+  );
+  assert.equal(state.itemCount, 1);
+  assert.deepEqual(
+    state.paragraphs,
+    state.receipt.text
+      .split("\n\n")
+      .filter(Boolean)
+      .map((p) => p.replace(/^## /, "")),
+    "Exact fixed synthetic prose renders completely and in order",
+  );
+  if (phase < 3)
+    assert(
+      state.height - previous.height > state.band,
+      "Same-item growth exceeds one available reading band",
+    );
+  for (const key of ["page", "left", "output", "draft", "composer"])
+    assert.deepEqual(
+      state[key],
+      previous[key],
+      `${key} is unchanged during stream growth`,
+    );
+  assert.equal(state.telemetry.informationUpdates, 0);
+  assert(
+    !state.telemetry.protocolCalls.some((m) =>
+      /send|interrupt|respond|retry/.test(m),
+    ),
+    "No real task or approval is requested",
+  );
+}
+
+export async function captureReadingReentry({
+  send,
+  evaluate,
+  wait,
+  click,
+  capture,
+  evidence,
+  options,
+}) {
+  const trip = {
+    status: "running",
+    startedAt: Date.now(),
+    scope: "standard desktop light, explicit Composer re-entry only",
+    phases: [],
+  };
+  evidence.readingReentry = trip;
+  const sample = () =>
+    evaluate(
+      `(${observeInlineTrace.toString()})(true,window.__readingStream.receipt())`,
+    );
+  const signature = (s) =>
+    JSON.stringify([
+      s.top,
+      s.height,
+      s.tail,
+      s.composer,
+      s.cue,
+      s.cuePresent,
+      s.maxTop,
+      s.primary,
+      s.paragraphs,
+    ]);
+  const settle = async (predicate) => {
+    let previous;
+    for (let n = 0; n < 24; n++) {
+      await evaluate(
+        "new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))",
+      );
+      const state = await sample();
+      if (
+        predicate(state) &&
+        previous &&
+        signature(state) === signature(previous)
+      )
+        return state;
+      previous = state;
+    }
+    throw Error("Re-entry geometry did not settle within bounded observations");
+  };
+  try {
+    assert.equal(options.width, 1280);
+    assert.equal(options.height, 900);
+    assert.equal(options.theme, "light");
+    await click('.project-group [data-thread-id="thread-1"] .thread-row');
+    await wait(
+      "!!window.__readingStream && !!document.querySelector('.composer .composer-send-control button.action-orb.stop') && !!document.querySelector('.agent-copy h1')",
+    );
+    let state = await settle(
+      (s) =>
+        s.primary === "stop" &&
+        s.tail.visible &&
+        s.tail.hit &&
+        s.cuePresent === false &&
+        Math.abs(s.maxTop - s.top) <= 1 &&
+        s.top > 480,
+    );
+    trip.initial = state;
+    assert(
+      state.wheel,
+      "Native upward wheel belongs to the actual transcript, not nested output",
+    );
+    trip.wheel = { ...state.wheel, deltaY: -360 };
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseWheel",
+      ...trip.wheel,
+      deltaX: 0,
+    });
+    const parked = await settle(
+      (s) => s.top < state.top && s.top > 120 && s.cuePresent && s.cue,
+    );
+    for (const key of ["page", "left", "output", "draft", "composer"])
+      assert.deepEqual(parked[key], state[key]);
+    trip.afterWheel = parked;
+    await capture("reading-reentry-parked-cue", options, "reading");
+    assert.equal(
+      signature(await sample()),
+      signature(parked),
+      "Visible cue and native parked geometry are unchanged around the screenshot",
+    );
+    trip.parkedScreenshot = {
+      file: "reading-reentry-parked-cue.png",
+      scope:
+        "Precondition only: native wheel exposed the real Composer cue; no growth yet",
+    };
+    await click(".composer-reading-position button.quiet-button");
+    state = await settle(
+      (s) =>
+        s.cuePresent === false &&
+        Math.abs(s.maxTop - s.top) <= 1 &&
+        s.tail.visible &&
+        s.tail.hit &&
+        s.top > parked.top,
+    );
+    trip.resumed = state;
+    for (const phase of [1, 2, 3]) {
+      const previous = state;
+      await evaluate(
+        phase === 3
+          ? "window.__readingStream.finalize()"
+          : "window.__readingStream.advance()",
+      );
+      state = await settle(
+        (s) =>
+          s.receipt.phase === Math.min(phase, 2) &&
+          s.receipt.completed === (phase === 3) &&
+          s.primary === (phase === 3 ? "send" : "stop") &&
+          s.cuePresent === false &&
+          Math.abs(s.maxTop - s.top) <= 1 &&
+          s.tail.visible &&
+          s.tail.hit,
+      );
+      verifyReadingReentry(state, previous, phase);
+      trip.phases.push(state);
+    }
+    await capture("reading-reentry-terminal", options, "reading");
+    assert.equal(
+      signature(await sample()),
+      signature(state),
+      "Terminal Range and offset remain stable around the actual screenshot",
+    );
+    trip.status = "passed";
+  } catch (error) {
+    trip.status = "failed";
+    trip.error = String(error);
+    throw error;
+  } finally {
+    trip.durationMs = Date.now() - trip.startedAt;
+  }
+}

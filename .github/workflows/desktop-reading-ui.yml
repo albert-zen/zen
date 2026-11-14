@@ -102,6 +102,24 @@ jobs:
       - name: Targeted question-attention DOM checks (baseline without matching tests is not acceptance)
         if: steps.selection.outputs.needsCapture == 'true'
         run: timeout 30s node --import tsx --test --test-timeout=10000 --test-name-pattern='^subagent question attention follows Host summaries independently of activity' apps/zenx/test/subagents-ui.test.ts
+      - name: Isolated standard desktop live re-entry probe
+        if: steps.selection.outputs.needsCapture == 'true'
+        timeout-minutes: 1
+        env:
+          FONTCONFIG_FILE: ${{ runner.temp }}/preview-fonts/fonts.conf
+          ZENX_PREVIEW_FONT_RECEIPT: ${{ runner.temp }}/preview-fonts/fonts.json
+          ZENX_REENTRY_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          mkdir -p "${{ runner.temp }}/desktop-reading-reentry"
+          cp "${{ runner.temp }}/desktop-reading/reading.html" "${{ runner.temp }}/desktop-reading/source.json" "${{ runner.temp }}/desktop-reading/font-environment.json" "${{ runner.temp }}/desktop-reading-reentry/"
+          node apps/zenx/scripts/capture-main-ui-preview.mjs "${{ runner.temp }}/desktop-reading-reentry" desktop-reading-reentry
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.selection.outputs.needsCapture == 'true'
+        with:
+          name: desktop-reading-reentry-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/desktop-reading-reentry/*
+          if-no-files-found: warn
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         if: always() && steps.selection.outputs.needsCapture == 'true'
         with:
