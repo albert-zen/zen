@@ -213,7 +213,23 @@ async function verifyDisposableOverlayKeyboardAnswer() {
     "selecting and tabbing did not submit",
   );
   await evaluate(
-    `(()=>{const b=${query(send)};window.__disposableAnswerClickProof=[];window.__disposableAnswerKeyProof=[];b.addEventListener('keydown',e=>{if(e.key==='Enter')window.__disposableAnswerKeyProof.push({trusted:e.isTrusted,key:e.key,focused:document.activeElement===b})},{capture:true});b.addEventListener('click',e=>window.__disposableAnswerClickProof.push({trusted:e.isTrusted,focused:document.activeElement===b,callItemId:b.closest('article.user-question-card')?.dataset.questionCallId}),{capture:true});return true})()`,
+    `(() => {
+      const b = ${query(send)};
+      const proof = window.__disposableAnswerInputProof = [];
+      const observe = e => {
+        if (e.target !== b || proof.length >= 12) return;
+        const entry = {type:e.type, trusted:e.isTrusted, key:e.key ?? null,
+          charCode:e.charCode ?? null, focused:document.activeElement === b,
+          callItemId:b.closest('article.user-question-card')?.dataset.questionCallId,
+          defaultPreventedAtCapture:e.defaultPrevented, defaultPreventedAfterDispatch:null};
+        proof.push(entry);
+        setTimeout(() => {entry.defaultPreventedAfterDispatch=e.defaultPrevented}, 0);
+      };
+      const types = ['keydown','keypress','keyup','click'];
+      types.forEach(type => b.addEventListener(type, observe, true));
+      window.__disposeDisposableAnswerInputProof = () => types.forEach(type => b.removeEventListener(type, observe, true));
+      return true;
+    })()`,
   );
   await screenshot("18-disposable-overlay-second-send-focus.png");
   assert.deepEqual(
@@ -221,34 +237,61 @@ async function verifyDisposableOverlayKeyboardAnswer() {
     receipt.focus,
     "screenshot did not move the intended target",
   );
-  await pressKey(
-    "Enter",
-    "Native Enter answers only focused disposable second question",
+  try {
+    // Electron forwards raw keyDown; native button Enter activation also needs
+    // its character event. This is one sequence, never a retry or DOM click.
+    await pressDisposableAnswerEnter();
+    await until(
+      () =>
+        Promise.resolve(
+          keyboardQuestionAttempts.length === 1 &&
+            !!keyboardQuestionAttempts[0].reply,
+        ),
+      "single real Host response receipt",
+    );
+  } finally {
+    // Persist bounded passive evidence even when zero Host responses time out.
+    // Never mask the original Host/input failure if renderer collection fails.
+    try {
+      receipt.inputAcknowledgement = await evaluate(
+        "(async()=>{await new Promise(resolve=>setTimeout(resolve,0)); window.__disposeDisposableAnswerInputProof?.(); return window.__disposableAnswerInputProof})()",
+      );
+    } catch (error) {
+      receipt.inputAcknowledgementError = String(error);
+    }
+  }
+  receipt.clickAcknowledgement = receipt.inputAcknowledgement.filter(
+    (e) => e.type === "click",
   );
-  await until(
-    () =>
-      Promise.resolve(
-        keyboardQuestionAttempts.length === 1 &&
-          !!keyboardQuestionAttempts[0].reply,
-      ),
-    "single real Host response receipt",
+  receipt.keyAcknowledgement = receipt.inputAcknowledgement.filter(
+    (e) => e.type === "keydown",
   );
-  receipt.clickAcknowledgement = await evaluate(
-    "window.__disposableAnswerClickProof",
+  const characterAcknowledgement = receipt.inputAcknowledgement.filter(
+    (e) => e.type === "keypress",
   );
-  assert.deepEqual(
-    receipt.clickAcknowledgement,
-    [{ trusted: true, focused: true, callItemId: target.request.callItemId }],
-    "one native trusted activation of the focused exact Send",
+  assert.equal(receipt.clickAcknowledgement.length, 1, "one native click only");
+  assert.equal(
+    receipt.keyAcknowledgement.length,
+    1,
+    "one native Enter keydown only",
   );
-  receipt.keyAcknowledgement = await evaluate(
-    "window.__disposableAnswerKeyProof",
+  assert.equal(
+    characterAcknowledgement.length,
+    1,
+    "one native character event only",
   );
-  assert.deepEqual(
-    receipt.keyAcknowledgement,
-    [{ trusted: true, key: "Enter", focused: true }],
-    "native Enter arrived at focused Send once",
-  );
+  assert.equal(receipt.keyAcknowledgement[0].key, "Enter");
+  assert.equal(characterAcknowledgement[0].charCode, 13);
+  for (const entry of [
+    ...receipt.clickAcknowledgement,
+    ...receipt.keyAcknowledgement,
+    ...characterAcknowledgement,
+  ]) {
+    assert.equal(entry.trusted, true);
+    assert.equal(entry.focused, true);
+    assert.equal(entry.callItemId, target.request.callItemId);
+    assert.equal(typeof entry.defaultPreventedAfterDispatch, "boolean");
+  }
   const attempt = keyboardQuestionAttempts[0];
   assert.equal(attempt.params.threadId, threadId);
   assert.equal(attempt.params.questionCallItemId, target.request.callItemId);
@@ -396,6 +439,14 @@ async function pressKey(keyCode, label) {
   window.webContents.sendInputEvent({ type: "keyDown", keyCode });
   window.webContents.sendInputEvent({ type: "keyUp", keyCode });
   result.steps.push(label);
+}
+async function pressDisposableAnswerEnter() {
+  window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Enter" });
+  window.webContents.sendInputEvent({ type: "char", keyCode: "\r" });
+  window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Enter" });
+  result.steps.push(
+    "Native Enter answers only focused disposable second question",
+  );
 }
 async function verifyInformationOsInput() {
   result.informationOsInput = { status: "running", permissionChanges: false };
