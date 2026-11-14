@@ -624,6 +624,43 @@ function informationReachabilityMetrics() {
     ),
   };
 }
+// Read-only renderer probe: no focus, scrolling, styles or bridge mutations.
+function informationSendFocusPaint(callItemId) {
+  const card = [
+    ...document.querySelectorAll(
+      ".information-popover .information-content article.user-question-card[data-question-call-id]",
+    ),
+  ].find((element) => element.dataset.questionCallId === callItemId);
+  const button = card?.querySelector(
+    ".user-question-actions > button.primary-button",
+  );
+  if (!button) return null;
+  const style = getComputedStyle(button);
+  const r = button.getBoundingClientRect();
+  return {
+    callItemId: card.dataset.questionCallId,
+    appearance: document.documentElement.dataset.appearance,
+    forcedColors: matchMedia("(forced-colors: active)").matches,
+    forcedColorAdjust: style.forcedColorAdjust,
+    focusVisible: button.matches(":focus-visible"),
+    outlineStyle: style.outlineStyle,
+    outlineWidth: style.outlineWidth,
+    outlineOffset: style.outlineOffset,
+    outlineColor: style.outlineColor,
+    textColor: style.color,
+    backgroundColor: style.backgroundColor,
+    onAccentToken: style.getPropertyValue("--color-text-on-accent").trim(),
+    accentToken: style.getPropertyValue("--color-accent").trim(),
+    rect: {
+      left: r.left,
+      top: r.top,
+      right: r.right,
+      bottom: r.bottom,
+      width: r.width,
+      height: r.height,
+    },
+  };
+}
 async function measureInformationOverlayReachability(expectedSecondPrompt) {
   const read = () =>
     evaluate(`(${informationReachabilityMetrics.toString()})()`);
@@ -748,6 +785,40 @@ async function measureInformationOverlayReachability(expectedSecondPrompt) {
     );
     assert.equal(receipt.afterTab.transcriptScroll, before.transcriptScroll);
     assert.deepEqual(receipt.afterTab.composer, before.composer);
+    receipt.keyboard.focusPaint = await evaluate(
+      `(${informationSendFocusPaint.toString()})(${JSON.stringify(receipt.afterTab.questions[1].id)})`,
+    );
+    const paint = receipt.keyboard.focusPaint;
+    assert.ok(paint, "exact private second Send still exists");
+    assert.deepEqual(paint.rect, receipt.keyboard.focus.rect);
+    assert.equal(paint.callItemId, receipt.afterTab.questions[1].id);
+    assert.equal(paint.focusVisible, true);
+    assert.equal(paint.outlineStyle, "solid");
+    assert.equal(paint.outlineWidth, "2px");
+    assert.equal(paint.outlineOffset, "-4px");
+    // This existing light fixture is not a forced-colors visual assessment.
+    // Fail explicitly rather than compare authored tokens to forced system paint.
+    assert.equal(
+      paint.forcedColors,
+      false,
+      "regular light-palette evidence only",
+    );
+    assert.equal(paint.appearance, "light");
+    const tokenRgb = (token) => {
+      assert.match(
+        token,
+        /^#[0-9a-f]{6}$/i,
+        "expected exact supported theme token",
+      );
+      return `rgb(${token
+        .slice(1)
+        .match(/../g)
+        .map((v) => parseInt(v, 16))
+        .join(", ")})`;
+    };
+    assert.equal(paint.outlineColor, tokenRgb(paint.onAccentToken));
+    assert.equal(paint.textColor, tokenRgb(paint.onAccentToken));
+    assert.equal(paint.backgroundColor, tokenRgb(paint.accentToken));
     await screenshot("03b-overlay-second-send-keyboard-focus.png");
   }
   // Restore this pre-existing screenshot scene with real wheel input only.
@@ -773,6 +844,154 @@ async function measureInformationOverlayReachability(expectedSecondPrompt) {
     "native wheel restored original overlay scroll before existing cases",
   );
   assert.equal(receipt.restored.transcriptScroll, before.transcriptScroll);
+}
+
+// Same desktop split and pending controls, in this disposable App only.
+// Do not persist appearance preferences, repeat answers or alter forced colors.
+async function verifyInformationDarkSplitCue(expectedSecondPrompt) {
+  const transition = {
+    status: "running",
+    appearanceSource: "disposable Electron nativeTheme; no preference writes",
+    scene: "same 1600 desktop overlay after existing Stage1; not a fresh open",
+    forcedColorsScope: "observed media only; no settings changes or test claim",
+  };
+  result.informationDarkCueTransition = transition;
+  const read = () =>
+    evaluate(`(()=>{
+    const sample=(${informationOverflowMetrics.toString()})(${informationReachabilityMetrics.toString()});
+    const appearance=document.documentElement.dataset.appearance;
+    const color=(selector,property)=>{const element=document.querySelector(selector);return element?getComputedStyle(element)[property]:null;};
+    return {...sample,appearance,
+      prefersDark:matchMedia('(prefers-color-scheme: dark)').matches,
+      forcedColorsActive:matchMedia('(forced-colors: active)').matches,
+      ...(appearance==='dark'?{computedCueColors:{
+        text:color('.information-popover .information-overflow-cue','color'),
+        toolbarBackground:color('.information-popover .information-dismiss-toolbar','backgroundColor'),
+        popoverBackground:color('.information-popover','backgroundColor')
+      }}:{})};
+  })()`);
+  const stableRead = async (label) => {
+    let previous = await read();
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await pause(50);
+      const current = await read();
+      if (JSON.stringify(current) === JSON.stringify(previous)) return current;
+      previous = current;
+    }
+    transition.unsettled = { label, sample: previous };
+    assert.fail(`${label}: appearance observations did not settle`);
+  };
+  try {
+    transition.before = await stableRead("before-dark");
+    assert.equal(
+      transition.before.viewport.width,
+      1600,
+      "reuse exact desktop split width",
+    );
+    assert.equal(
+      transition.before.appearance,
+      "light",
+      "existing light verification completed first",
+    );
+    assert.equal(
+      nativeTheme.themeSource,
+      "light",
+      "original disposable appearance source",
+    );
+    nativeTheme.themeSource = "dark";
+    await until(
+      () => evaluate("document.documentElement.dataset.appearance==='dark'"),
+      "actual app dark appearance for the same desktop split",
+    );
+    assert.equal(nativeTheme.shouldUseDarkColors, true);
+    await verifyInformationOverflowCue({
+      read,
+      sendInput: (event) => window.webContents.sendInputEvent(event),
+      pause,
+      screenshot: async (name) => {
+        const names = {
+          "03c-overflow-cue-initial.png": "03g-overflow-cue-dark-initial.png",
+          "03d-overflow-cue-partial.png": "03h-overflow-cue-dark-partial.png",
+        };
+        assert.ok(names[name], "only the two intended dark frames");
+        await screenshot(names[name]);
+      },
+      result,
+      expectedSecondPrompt,
+      darkPartial: true,
+    });
+    const dark = result.cases.at(-1);
+    assert.equal(
+      dark.name,
+      "desktop-split-information-overflow-cue-dark-partial",
+    );
+    transition.darkStartFocus = dark.before.active;
+    transition.darkRestoredFocus = dark.restored.active;
+    assert.equal(
+      dark.before.ownerKey,
+      transition.before.ownerKey,
+      "same scoped owner across appearance transition",
+    );
+    assert.deepEqual(
+      dark.before.questions.map((q) => ({ id: q.id, prompts: q.prompts })),
+      transition.before.questions.map((q) => ({
+        id: q.id,
+        prompts: q.prompts,
+      })),
+      "same pending questions across appearance transition",
+    );
+    // Theme-to-theme text metrics are observations, not an equality premise.
+    // The shared probe independently checks fixed geometry within dark.
+    nativeTheme.themeSource = "light";
+    await until(
+      () => evaluate("document.documentElement.dataset.appearance==='light'"),
+      "original light appearance restored before existing cases",
+    );
+    transition.restored = await stableRead("restored-light");
+    assert.deepEqual(
+      transition.restored.active,
+      transition.before.active,
+      "native appearance transition restores focus descriptor; no corrective focus is allowed",
+    );
+    const scrollDelta =
+      transition.restored.panelScroll - transition.before.panelScroll;
+    assert.ok(
+      Math.abs(scrollDelta) <= 1,
+      "restored inner scroll stays within existing Stage1 cleanup tolerance",
+    );
+    // Retain raw observations. Only normal-flow descendant Y coordinates move
+    // with the allowed fractional inner scroll; all other fields stay exact.
+    const normalized = structuredClone(transition.restored);
+    if (scrollDelta !== 0) {
+      normalized.panelScroll = transition.before.panelScroll;
+      normalized.remaining += scrollDelta;
+      for (const question of normalized.questions)
+        for (const action of question.actions ?? [])
+          if (action.rect) {
+            action.rect.top += scrollDelta;
+            action.rect.bottom += scrollDelta;
+          }
+      if (normalized.lastVisibleContent?.rect) {
+        normalized.lastVisibleContent.rect.top += scrollDelta;
+        normalized.lastVisibleContent.rect.bottom += scrollDelta;
+      }
+    }
+    transition.scrollNormalization = {
+      delta: scrollDelta,
+      scope:
+        "panelScroll, remaining, question action / last visible content rect top and bottom only; raw restored retained",
+    };
+    assert.deepEqual(
+      normalized,
+      transition.before,
+      "original light split observations restored; only <=1px inner-scroll-derived Y coordinates normalized",
+    );
+    transition.status = "passed";
+  } catch (error) {
+    transition.status = "failed";
+    transition.error = String(error);
+    throw error;
+  }
 }
 
 async function settledLayout() {
@@ -1620,6 +1839,7 @@ async function run() {
     expectedSecondPrompt: revealPrompt,
   });
   await measureInformationOverlayReachability(revealPrompt);
+  await verifyInformationDarkSplitCue(revealPrompt);
   window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Escape" });
   window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
   await until(

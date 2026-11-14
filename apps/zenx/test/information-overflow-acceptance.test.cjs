@@ -15,7 +15,7 @@ const rect = (left = 0, top = 0, width = 100, height = 40) => ({
   bottom: top + height,
 });
 function fixture(options = {}) {
-  let scroll = 0,
+  let scroll = options.initialScroll ?? 0,
     reads = 0;
   const maximum = options.maximum ?? 1084;
   const events = [],
@@ -94,6 +94,12 @@ function fixture(options = {}) {
         rect: rect(800, 730, 180, 36),
       },
     };
+    if (options.darkPartial)
+      Object.assign(snapshot, {
+        appearance: "dark",
+        prefersDark: true,
+        forcedColorsActive: false,
+      });
     options.mutate?.(snapshot, { scroll, maximum, reads });
     return snapshot;
   };
@@ -119,6 +125,7 @@ function fixture(options = {}) {
         screenshot: async (name) => images.push(name),
         result,
         expectedSecondPrompt: "expected",
+        darkPartial: options.darkPartial,
       }),
   };
 }
@@ -380,4 +387,70 @@ test("no false no-overflow coverage; observer stays read-only; insertion precede
   assert.ok(start < cue && cue < stage1);
   assert.match(source, /assert\.equal\(process\.env\.GITHUB_ACTIONS, "true"\)/);
   assert.match(source, /a === "--no-sandbox"/);
+});
+
+test("dark same-overlay variant adds only partial native wheel and restoration, with separate scope", async () => {
+  const f = fixture({ darkPartial: true });
+  await f.run();
+  const r = f.result.cases[0];
+  assert.equal(r.name, "desktop-split-information-overflow-cue-dark-partial");
+  assert.match(r.darkScope, /not fresh open/);
+  assert.match(r.forcedColorsScope, /not changed or tested/);
+  assert.equal(r.before.appearance, "dark");
+  assert.equal(r.restored.panelScroll, 0);
+  assert.equal(r.bottom, undefined);
+  assert.deepEqual(
+    f.events.filter((e) => e.type === "mouseWheel").map((e) => e.deltaY),
+    [-360, 360],
+  );
+  assert.deepEqual(f.images, [
+    "03c-overflow-cue-initial.png",
+    "03d-overflow-cue-partial.png",
+  ]);
+});
+for (const [name, mutate, pattern] of [
+  [
+    "wrong actual appearance",
+    (s) => (s.appearance = "light"),
+    /actual production dark/,
+  ],
+  ["wrong native media", (s) => (s.prefersDark = false), /actual native dark/],
+  [
+    "missing forced-colors observation",
+    (s) => delete s.forcedColorsActive,
+    /observation is explicit/,
+  ],
+  [
+    "cue hides after partial dark scroll",
+    (s, c) => {
+      if (c.scroll) s.cue.hidden = true;
+    },
+    /follows actual/,
+  ],
+])
+  test(`dark variant fails closed: ${name}`, async () => {
+    const f = fixture({ darkPartial: true, mutate });
+    await assert.rejects(f.run(), pattern);
+    assert.equal(f.result.cases[0].status, "failed");
+  });
+test("observed forced-colors active is labeled, not toggled or claimed as a tested setting", async () => {
+  const f = fixture({
+    darkPartial: true,
+    mutate: (s) => (s.forcedColorsActive = true),
+  });
+  await f.run();
+  const r = f.result.cases[0];
+  assert.equal(r.before.forcedColorsActive, true);
+  assert.match(r.forcedColorsScope, /not changed or tested/);
+});
+
+test("dark starts at the exact fractional Stage1-restored position; original light still requires zero", async () => {
+  const dark = fixture({ darkPartial: true, initialScroll: 0.5 });
+  await dark.run();
+  assert.equal(dark.result.cases[0].before.panelScroll, 0.5);
+  assert.equal(dark.result.cases[0].restored.panelScroll, 0.5);
+  const light = fixture({ initialScroll: 0.5 });
+  await assert.rejects(light.run(), /from the top/);
+  const outside = fixture({ darkPartial: true, initialScroll: 1.01 });
+  await assert.rejects(outside.run(), /from the top/);
 });

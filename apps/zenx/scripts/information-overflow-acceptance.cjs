@@ -130,9 +130,12 @@ async function verifyInformationOverflowCue({
   screenshot,
   result,
   expectedSecondPrompt,
+  darkPartial = false,
 }) {
   const receipt = {
-    name: "desktop-split-information-overflow-cue",
+    name: darkPartial
+      ? "desktop-split-information-overflow-cue-dark-partial"
+      : "desktop-split-information-overflow-cue",
     input:
       "existing owned-point probe + Electron native wheel only; no answers or focus helpers",
     status: "running",
@@ -142,6 +145,12 @@ async function verifyInformationOverflowCue({
     baselineGeometryComparison:
       "not performed here; compare source-bound native baseline separately",
   };
+  if (darkPartial) {
+    receipt.darkScope =
+      "same overlay after Stage1, not fresh open: initial and partial native wheel, then restoration; no dark bottom or no-overflow claim";
+    receipt.forcedColorsScope =
+      "media value observed only; not changed or tested";
+  }
   result.cases.push(receipt);
   try {
     const stable = async (label) => {
@@ -197,7 +206,9 @@ async function verifyInformationOverflowCue({
       "same scoped synthetic owner and two pending questions",
     );
     assert.ok(
-      before.panelScroll === 0 && before.remaining > 2,
+      (darkPartial
+        ? Math.abs(before.panelScroll) <= 1
+        : before.panelScroll === 0) && before.remaining > 2,
       "initial fixture has real remaining overflow from the top",
     );
 
@@ -217,6 +228,23 @@ async function verifyInformationOverflowCue({
       }));
     const check = (sample, label) => {
       receipt.samples.push({ label, sample });
+      if (darkPartial) {
+        assert.equal(
+          sample.appearance,
+          "dark",
+          `${label}: actual production dark appearance`,
+        );
+        assert.equal(
+          sample.prefersDark,
+          true,
+          `${label}: actual native dark media`,
+        );
+        assert.equal(
+          typeof sample.forcedColorsActive,
+          "boolean",
+          `${label}: forced-colors observation is explicit`,
+        );
+      }
       for (const key of [
         "viewport",
         "resource",
@@ -362,27 +390,32 @@ async function verifyInformationOverflowCue({
       "partial wheel still leaves content and keeps cue visible",
     );
     await screenshot("03d-overflow-cue-partial.png");
-    for (let step = 0; current.remaining > 1 && step < 8; step++)
-      current = await wheel(
-        -Math.min(360, current.remaining),
-        `bottom-${step + 1}`,
+    if (!darkPartial) {
+      for (let step = 0; current.remaining > 1 && step < 8; step++)
+        current = await wheel(
+          -Math.min(360, current.remaining),
+          `bottom-${step + 1}`,
+        );
+      assert.ok(
+        current.remaining <= 1 && current.cue.hidden,
+        "bounded native wheel actually reaches bottom and hides cue",
       );
-    assert.ok(
-      current.remaining <= 1 && current.cue.hidden,
-      "bounded native wheel actually reaches bottom and hides cue",
-    );
-    assert.ok(
-      current.lastVisibleContent?.text,
-      "actual hit-tested visible provider content is recorded at bottom",
-    );
-    receipt.bottom = current;
-    await screenshot("03e-overflow-cue-bottom.png");
-    current = await wheel(Math.min(360, current.panelScroll), "up-from-bottom");
-    assert.ok(
-      current.remaining > 1 && !current.cue.hidden,
-      "upward native wheel reveals remaining content and cue again",
-    );
-    await screenshot("03f-overflow-cue-up.png");
+      assert.ok(
+        current.lastVisibleContent?.text,
+        "actual hit-tested visible provider content is recorded at bottom",
+      );
+      receipt.bottom = current;
+      await screenshot("03e-overflow-cue-bottom.png");
+      current = await wheel(
+        Math.min(360, current.panelScroll),
+        "up-from-bottom",
+      );
+      assert.ok(
+        current.remaining > 1 && !current.cue.hidden,
+        "upward native wheel reveals remaining content and cue again",
+      );
+      await screenshot("03f-overflow-cue-up.png");
+    }
     for (
       let step = 0;
       Math.abs(current.panelScroll - before.panelScroll) > 1 && step < 8;
