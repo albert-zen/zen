@@ -2,6 +2,8 @@ name: Desktop conversation reading preview
 on:
   pull_request:
     paths:
+      - apps/zenx/test/conversation-reading-position.test.mjs
+      - apps/zenx/src/renderer/src/conversation-reading-position.css
       - .github/workflows/desktop-reading-ui.yml
       - apps/zenx/src/renderer/src/subagents-ui.tsx
       - apps/zenx/src/renderer/src/subagents.css
@@ -89,7 +91,7 @@ jobs:
         if: steps.selection.outputs.needsCapture == 'true'
         run: npm run build --workspace @zenx/plugin-sdk
       - if: steps.selection.outputs.needsCapture == 'true'
-        run: node --import tsx --test apps/zenx/test/preview-fonts.test.mjs apps/zenx/test/reading-main-ui-preview.test.mjs apps/zenx/test/reading-fixture.test.ts apps/zenx/test/scrollbar-main-ui-preview.test.mjs apps/zenx/test/child-question-main-ui-preview.test.ts
+        run: node --import tsx --test apps/zenx/test/conversation-reading-position.test.mjs apps/zenx/test/preview-fonts.test.mjs apps/zenx/test/reading-main-ui-preview.test.mjs apps/zenx/test/reading-fixture.test.ts apps/zenx/test/scrollbar-main-ui-preview.test.mjs apps/zenx/test/child-question-main-ui-preview.test.ts
       - if: steps.selection.outputs.needsCapture == 'true'
         run: node apps/zenx/scripts/build-main-ui-preview.mjs "${{ runner.temp }}/desktop-reading" reading
         timeout-minutes: 2

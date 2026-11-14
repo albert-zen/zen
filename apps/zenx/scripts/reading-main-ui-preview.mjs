@@ -740,6 +740,8 @@ export async function captureDesktopReading({
 }
 
 export const readingPaths = [
+  "apps/zenx/test/conversation-reading-position.test.mjs",
+  "apps/zenx/src/renderer/src/conversation-reading-position.css",
   "apps/zenx/scripts/inline-trace-main-ui-preview.mjs",
   "apps/zenx/src/renderer/src/subagents-ui.tsx",
   "apps/zenx/src/renderer/src/subagents.css",

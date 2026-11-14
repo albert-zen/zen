@@ -22,5 +22,10 @@
     min-height: 32px;
     white-space: nowrap;
     color: var(--color-text-secondary);
+    border-color: var(--color-border-strong);
+    background: var(--color-surface-control);
+  }
+  .composer-reading-position .quiet-button:hover {
+    background: var(--color-surface-control-hover);
   }
 }
