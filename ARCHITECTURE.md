@@ -1430,6 +1430,7 @@ Models cannot invoke trusted-only setup/pause commands.
 
 - **Fullscreen primary conversation tab** — a renderer-only leading tab reveals the already-mounted main Thread/Room surface without reparenting it; its disposable selection is retained by the existing renderer sidebar controller across panel remounts and uses the owner-local presentation-intent fence, never a resource descriptor, second transcript/runtime or Host fact, and collapse restores the retained resource selection.
 - **Conversation workspace presentation** — the main navigation selects either a canonical Thread or a Room conversation; a Room owns its transient right-panel tab selection, while Files, Browser, Computer and Thread-oriented plugin panels receive only an explicitly selected real member Thread, never a Room ID. A room with no selected execution context exposes only Room-scoped tabs.
+- **Room workspace file labels** — Room same-relative-path file labels are a renderer-only projection of existing resource Thread titles; label abbreviation never changes resource routing, tab identity, order, selection, or retained file drafts.
 - **Companion workspace annotations** — an assistant Room may own a bounded, revision-checked notebook of matters, memory and exact Thread/Trigger references in the existing Room store; these are editable planning documents, not execution status, scheduling or a second journal. Actual execution remains authoritative in canonical Threads and Triggers; notebook snapshots enter the model context only through explicit normal tool reads/results, and editing notes never rewrites historical Items.
 
 ### Room message interactions
@@ -1844,5 +1845,3 @@ Question-list read recovery is a disposable mounted-view concern: existing autho
 - **Tiered CI risk policy** — Every PR, draft or ready, receives static feedback and an explicit union of path-based risk lanes plus current-run bound unit files, while the complete aggregate remains on main/manual; unknown evidence retains all PR risk lanes, typed omission receipts never claim full acceptance, and existing native work remains mandatory for its selected risk.
 
 `build:fixtures` 保留第一方插件（含 Plugin SDK）准备并编译既有主进程、preload 和 renderer bundle，供已确认不消费产品资源的独立 Browser/File fixture 使用；默认 `build`、完整 App 验收和打包仍保留插件与 RTK 资源准备，fixture 构建不代表产品完整性验收。
-
-Room same-relative-path file labels are a renderer-only projection of existing resource Thread titles; label abbreviation never changes resource routing, tab identity, order, selection, or retained file drafts.
