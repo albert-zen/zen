@@ -74,6 +74,11 @@ const childQuestionScene =
 const childQuestionData = childQuestionScene
   ? createChildQuestionData(summary)
   : null;
+const syntheticVisibleSubagentThreadIds = childQuestionData
+  ? childQuestionData.rows.map((row) => row.threadId)
+  : busyChild
+    ? ["design-child", "test-child"]
+    : null;
 const questionListeners = new Set<(method: string, params: unknown) => void>();
 const readingScene = params.get("scene") === "reading";
 const readingStream =
@@ -520,15 +525,8 @@ const zenx = {
         onboardingComplete: true,
         pinnedThreadIds: [],
         ...(childSidebar?.read() ?? {}),
-        ...(busyChild
-          ? { visibleSubagentThreadIds: ["design-child", "test-child"] }
-          : {}),
-        ...(childQuestionData
-          ? {
-              visibleSubagentThreadIds: childQuestionData.rows.map(
-                (row) => row.threadId,
-              ),
-            }
+        ...(syntheticVisibleSubagentThreadIds
+          ? { visibleSubagentThreadIds: [...syntheticVisibleSubagentThreadIds] }
           : {}),
         ...(emptyProjectScene
           ? { sidebarOrder: { pinnedProjectKeys: ["/work/design-system"] } }
@@ -552,14 +550,11 @@ const zenx = {
           onboardingComplete: true,
           pinnedThreadIds: [],
           ...(childSidebar?.read() ?? {}),
-          ...(busyChild
-            ? { visibleSubagentThreadIds: ["design-child", "test-child"] }
-            : {}),
-          ...(childQuestionData
+          ...(syntheticVisibleSubagentThreadIds
             ? {
-                visibleSubagentThreadIds: childQuestionData.rows.map(
-                  (row) => row.threadId,
-                ),
+                visibleSubagentThreadIds: [
+                  ...syntheticVisibleSubagentThreadIds,
+                ],
               }
             : {}),
           ...(emptyProjectScene
