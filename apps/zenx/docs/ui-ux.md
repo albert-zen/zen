@@ -267,7 +267,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - Trigger/Room 输入以独立 Host 来源展示，不呈现成人类消息；来源的精确 ID 放详情。Host 与 Agent 排队输入可取消，不提供仅人类输入支持的 Edit；人类 queue 的编辑能力保持。
 - 第一层只显示既有 primary orb，不新增常驻展开按钮。orb 位于 Composer 最右侧，与右下圆角保持既有关系；hover 与 keyboard focus 打开同一个主题化非模态面板。primary 点击始终直接发送或中断，面板顶部只出现一次当前动作与后果说明，运行中其他动作只显示真实 modifier-Enter shortcut，不发明 modifier-click 或新的发送行为。
 - primary orb 保持 44px hit target 与既有较小可见圆。触摸点击直接执行当前 Send / Stop，不拦截为展开，也不添加常驻触摸选项按钮。面板内所有动作的 hit target 至少 44px 高。
-- 面板不冒充 tooltip 或纯 ARIA menu：它包含可聚焦的命令与已有全局偏好 Select，使用 nonmodal dialog。Arrow Up/Down 从 orb 进入面板，Tab 按普通控件顺序导航；primary disabled 时同一命中区域保留键盘可达性以编辑偏好。Escape 关闭并把面板拥有的焦点还给 orb（disabled 时为同位置的焦点区），普通 hover/focus 不抢焦点。真实 hover bridge 与短离开延迟覆盖 pointer gap；在面板内聚焦后保持可用，outside interaction 或 Escape 可关闭。Turn/context 变化丢弃旧动作，保留草稿；持续 hover 可以显示新的当前动作，但不得保留或执行旧 Turn 的动作。
+- 面板不冒充 tooltip 或纯 ARIA menu：它包含可聚焦的命令与已有全局偏好 Select，使用 nonmodal dialog。Arrow Up/Down 从 orb 进入面板，Tab 按普通控件顺序导航；首项 Shift+Tab 关闭面板回到 orb，末项 Tab 关闭并前往 orb 之后的下一个可达页面控件，不在面板内首尾循环；嵌套 Select 保留自身键盘行为；primary disabled 时同一命中区域保留键盘可达性以编辑偏好。Escape 关闭并把面板拥有的焦点还给 orb（disabled 时为同位置的焦点区），普通 hover/focus 不抢焦点。真实 hover bridge 与短离开延迟覆盖 pointer gap；在面板内聚焦后保持可用，outside interaction 或 Escape 可关闭。Turn/context 变化丢弃旧动作，保留草稿；持续 hover 可以显示新的当前动作，但不得保留或执行旧 Turn 的动作。
 - Running 且无内容时 primary 保持红色 Stop / interrupt；纯空白文字按 Empty 处理。沿用既有 draft 判定：附件也是内容，因此只有附件时仍为发送动作，不能为了显示 Stop 丢弃附件。
 - Default while running 只在面板 footer 中编辑，复用共享 Select、主题、键盘与失败反馈；选择偏好从不发送消息，保存失败保留权威旧值，晚到回复不能覆盖更新的 Settings notification。
 - 状态切换不引发 Composer 几何跳动；按钮保持清晰图标、准确 `aria-label` / tooltip 和适合当前输入方式的 hit target。
@@ -276,7 +276,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - 已删除 Provider 或 hidden / Unknown / 不可运行模型的历史 Thread 仍可阅读，但 Composer 在开始或替换 Turn 前明确要求用户选择可运行模型，不自动改写或切换；当前 Turn 的 Steer 仍沿用其冻结 selection。
 - 已确认的视觉校准是缩小 primary action 的**可见圆形轮廓**，但不随之大幅缩小内部图标，也不缩小完整交互 hit target。
 - Composer 底部 toolbar 整体更贴近容器底边；这是相对位置指导，不锁定截图坐标或像素值。
-- 附件、模型、权限与 primary action 共享视觉基线，并按宽度与优先级渐进隐藏。
+- 附件、模型、权限与 primary action 共享视觉基线。窄分栏按 Composer 实际可用宽度分配工具栏：模型文字在自身按钮内省略，完整名称保留于 accessible label 与 tooltip；附件、上下文用量、权限和 Send 保持独立命中区域及原顺序。空间不足时工具换行，不缩小字号或隐藏必要动作；Send 保留最右侧的稳定命中区域。
 - 不在 Composer 重复显示 Turn 已经表达的运行时长或状态。
 - Approval bar 位于聊天流与 Composer 之间，不塞入 Trace Group 或 Composer toolbar。
 - 用户处于实时底部时，新 Item 自动跟随；用户向上阅读后，不改变滚动位置，并显示 **Back to live**。
@@ -292,6 +292,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - 普通消息、Steer 与 Queue 复用正文展示语义：Markdown、typed 引用胶囊、原生结构化问题回答气泡与独立图片行保持可读，图片预览可以关闭并归还焦点。问题呈现只取可信 questionReply 与原始问题，不从相似文字猜测结构。
 - 活动 Turn 内将用户 Queue 转为 Steer 是 Host 的原子晋升：保留 queued ID、client ID 与完整输入，通过 canonical 晋升事实增加 revision 并移入上层。发送回执不等于模型已消费，晋升后的 pending Steer 仍可通过整批原子撤回恢复输入；消费/撤回竞态拒绝时不得假装撤回成功。
 - Queue 保留编辑、删除、向上/向下排序与转 Steer；排序提交完整且有序的 Queue 身份/revision 快照，Host 持久化顺序事实，包含用户、Agent 与 Host 队列行且排除 Steer。Renderer 等 canonical 更新后改序，不乐观移位。快照变化或消息已保留用于处理时明确报告冲突。
+- Queue 的可用行操作保留完整 token 对比，不因鼠标尚未悬停而额外变淡；不可用的编辑、取消与排序使用 disabled token。进行中的编辑/取消保留可读的状态文字、原位置与禁用交互，不把“正在处理”误呈现成空闲不可用。既有 44px 命中区域、tooltip、可访问名称与键盘焦点不变。
 - 操作发送中、只读核实、回执待投影与结果未知时锁定冲突动作。未知态保留原请求身份，允许只读检查精确 canonical receipt，不以重新发送、取消或重建消息代替核验。锁与反馈按 Thread 隔离，切换 Thread、卸载 viewport 与迟到回执不得影响新 Thread 或新草稿。
 - Interrupt / Interrupt & Send 仍是 Composer 的独立中断操作，不进入待发送区的第三组，也不与转 Steer 混用。
 
@@ -323,6 +324,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 
 - General 的“原生跨端工具调用”使用现有设置开关与 Apply 草稿流程，旧配置默认关闭。说明其调用目标设备原生工具、仍需目标独立授权，以及远端目录变化可能影响上下文缓存；保存后对后续采样生效，不要求重启。普通 Fleet 连接、远程会话与独立 Shell 功能不受此开关影响。
 - Settings 是由左下导航进入的 routed page。Host 设置使用独立底部 Apply 保存栏，未保存草稿跨页保留；即时外观设置在本页说明，重启仅按真实 configuration 状态提示。
+- Provider 的独立新增、编辑、删除及已提交结果回读仅更新其权威配置和 revision，不保存或清除其他设置草稿，包括请求期间的新输入。未编辑字段采用 Host 回读；本地修改的 Default/Title 仅在引用仍存在时保留。General 的无效数值输入跨分区保留并阻止全局 Apply，直到用户明确修正或清空，不把浏览器尚未完成的数字输入视为无限制。
 - Settings 明确管理 Archived Threads、Provider/Account 和 Plugins；General 可以承载其他 host-local preferences，但不能改变这些核心分区的所有权。
 - Context compaction prompt 是可选的 host-local preference；省略时使用 Core 默认。它只影响未来
   compaction summary 生成，不重写历史 Thread，也不进入 canonical ItemList。
@@ -338,7 +340,9 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
   和 model IDs。稳定 profile ID 既不展示也不可编辑；已保存 API key 永不回显，空白表示保留。
 - Provider 保存被拒绝时，错误显示在当前表单保存按钮旁并保留输入；仍属于本次提交的焦点才移至错误并最小滚动，切页或新的焦点意图不得被迟到回复打断。凭证错误只显示已证实的固定阶段与本地恢复建议，不回显密钥或原生错误，不提供明文存储降级。
 - Account 额度卡按当前 ZenX 登录账户的真实订阅接口窗口显示剩余/已用及本地重置时间，按返回时长命名；缺失窗口与空分组不渲染，窗口内未知值不补0。进入账户页或登录成功后查询，可显式刷新；失败清空旧值，退出或切换账户使迟到响应失效，不混入 API 余额。
+- Models & providers 中解释 Default / Title 新会话用途、既有会话不受影响及 Provider 管理的说明，使用共享 13px label 字级和 secondary 文字色；它们是决策说明，不降为 disabled / muted 状态。状态标记、禁用控件和错误仍保留各自语义，不以全局提亮替代层级。
 - Settings 的二态开关复用 plugin-switch，Agentic compaction、RTK、前台控制与外观开关保持同一命中区、焦点与禁用样式。共享 Select/Combobox 保留键盘和选择语义，使用统一主题浮层、箭头与留白，字段说明在对应控件下方。
+- General 的运行中发送选项始终显示 Enter/发送按钮采用该选择、既有排队消息不变的说明；可展开的键盘快捷键按当前本地草稿说明 Cmd/Ctrl+Enter 的既有行为及 Shift+Enter 换行，不改变发送语义或自动保存。前台接管的作用、默认关闭与 Apply 生效边界保持直接可见，并作为开关的可访问说明。窄屏下设置标签与开关仍在同一行，影响说明紧接其后；开启/关闭文字描述当前草稿值，不宣称权限已保存或被策略禁止。两处决策说明沿用共享 13px secondary 层级，不与 disabled 状态混淆。
 - Z05 UI 至多配置一个 OpenAI subscription profile；Account 的登录、登出与手动 code
   始终路由到这个 profile，而不是假定固定 ID。删除它会清理 profile-scoped OAuth credential，
   但不会恢复或改写历史 Thread。
@@ -361,6 +365,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - 本地 service state 是弱状态信息：Sidebar 左下 Settings row 的最右侧显示一个不单独可点击的状态点，hover tooltip 与 Settings 的 accessible name 提供具体状态；它不再占用独立文字行，也不得盖过用户可执行设置。主区仍保留 starting、reconnecting 与 error 的阻断说明。
 - 未配置 host 的首次启动进入 provider onboarding；Subscription、OpenAI-compatible API 与 local demo 的 credential/configuration 仍遵守 Host/Core 安全边界。
 - Settings → Plugins / Marketplace 是唯一的插件浏览与管理入口。Agent page 不散落插件管理 UI；五个永久内置条目、外部目录条目与已安装非目录 package 在同一紧凑 inventory 中合并去重，Installed 只是筛选。一个低调的 search/filter rail 是页面的主要结构；npm/Git/tarball/local-copy/dev-link 收进 **Install from source…** 高级入口。每个 inventory row 表达来源、`installed` / `enabled` / `uninstalled` / provider unavailable 状态并原位提供 Enable/Disable、Install/Update、Uninstall/Reinstall 和独立 Delete data。Bundled plugin 也可卸载并以后重装；卸载默认保留数据，破坏性操作使用有焦点的二次确认，外部目录错误与本地生命周期错误各自留在当前面板且不隐藏仍可管理的插件。
+- Plugin inventory 行内 Install / Reinstall / catalog Update 使用既有 secondary button，避免重复强调色争夺注意力；独立 Install from source 提交及权限 review 确认仍使用 primary。来源与生命周期徽标使用既有 caption token，标题行允许换行，不缩小徽标隐藏状态；安装、权限、busy/disabled、错误及破坏性确认语义保持不变。
 - 插件工具策略只呈现默认 `full_access` 与可选 `ask_unknown`。后者按稳定 tool name 展示 Host-owned approved/denied 结果；未知工具只询问一次。不提供 risk level、scope graph、参数权限矩阵或额外 package grant UX。
 
 ## 5. Responsive 与 accessibility guidance
@@ -385,6 +390,8 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - 动画遵守 `prefers-reduced-motion`。
 - Projects 或其他可折叠区域必须始终有可恢复入口，不能通过连续折叠留下无法退出的空 Sidebar。
 - Directory picker 的 Back、Backspace、根目录和空 selection 状态都必须安全，不得因缺失 focus/ref 崩溃。
+- Directory picker 的子目录行是打开目录的导航动作，不以持久选中色冒充将添加的目标；当前路径由面包屑和“要添加的文件夹”明确表达，Add 的可访问说明包含该路径。初次读取没有地点或路径时不占用空导航栏；窄屏地点导航横向排列，长路径可聚焦检查，错误文字可换行，不改变读取、重试或选择语义。
+- 窄屏 Directory picker 使用原生标题栏以下的可用高度，列表填满导航与页脚之间的剩余空间并独立滚动，不以固定视口比例限制目录浏览区。360px 以上的窄屏页脚将目标路径与取消、添加动作并排；更窄时可换行，完整长路径仍可聚焦滚动检查。验收包含 10 项目录的首尾键盘导航、进入/返回与短视口，保持 44px 目标和可见的确认、取消动作。
 
 ## 6. Plugin contribution UI
 
@@ -590,9 +597,10 @@ New PAW setup discloses an hourly heartbeat and model-quota use before Create. I
 - 图标按钮必须有准确的 tooltip 与可访问名称。关闭 Tab、关闭右栏、展开右栏、全屏打开子会话是不同动作；新建 Tab 的加号只打开内容类型选择器，不隐式创建线程。每个操作的作用对象与用途必须从所在侧栏或全屏布局中清楚可见；不是禁止叉号或加号，而是不能让它们脱离被遮挡的 Tab 名称，像无归属的顶栏按钮。
 - 会话滚动、消息列和 Composer 必须在各自分栏的边界内；长标题、多个子线程、错误提示与窄屏不能挤出隐式 Grid 列或让输入框漂浮到另一会话上。Checkbox 等基础控件遵循共享样式与标签布局。
 - Subagents 的常规入口为右侧工作区加号菜单中的 Subagents Tab。Tab 内显示当前会话的子线程，选择后在右栏阅读/对话；不在主标题下重复铺设 Subagents 行或快捷标签。
-- 每个 Subagent / Side chat Thread 的左侧栏显隐独立保存到本机 Host profile，默认隐藏；Subagents 树每一行提供始终可见、可键盘/触控操作的“在侧栏显示”开关，显示/隐藏只影响该 Thread，不递归改变后代。隐藏后仍可从 Subagents 树访问，已打开的独立标签保持不变。
+- 每个 Subagent / Side chat Thread 的左侧栏显隐独立保存到本机 Host profile，默认隐藏；Subagents 树每一行提供始终可见、可键盘/触控操作的“在侧栏显示”开关，显示/隐藏只影响该 Thread，不递归改变后代。开关列上方显示一次弱化的“侧栏 / Sidebar”标题，明确区别于整个信息卡片的隐藏操作；仅在实际子线程行及侧栏显隐控件存在时显示，不占用标题或状态的行内宽度。隐藏后仍可从 Subagents 树访问，已打开的独立标签保持不变。
 - 显隐与 Pin/Unpin 完全独立：显示不会自动置顶，隐藏不会取消置顶；隐藏的已置顶子线程不进入 Pinned 列表，再次显示才恢复既有置顶位置。普通线程与独立 Fork 仍默认显示。旧全局 showSubagents 开关移除，既有 localStorage 值不迁移为逐线程显示授权。
 - Subagents Tab 提供 New side chat：点击新建时固定父会话的完整上下文边界并打开 renderer-local 草稿；首次有效 Send 才以该边界创建 fork 子线程并发送。未发送就关闭不创建真实 Thread，不进入子会话列表、Sidebar 或持久工作区。草稿在本次 renderer 内按创建入口的 Thread/Room 工作区和精确父会话独立保留，导航与切换不串归属；模型与 effort 选择只属于该草稿。 草稿立即显示固定边界的父会话只读记录，不伪装为空白新会话；父会话仍在执行的部分只呈现静态快照，不显示旁聊正在执行。读取、创建子线程与发送消息各阶段均有可访问的进度提示；创建和发送期间不能重复提交，失败保留原输入。创建后的上下文末尾追加明确的 side-chat 身份与等待用户请求的指令，不继承可执行待办队列，也不改变父会话执行。创建已确认而发送失败时，同一草稿重用 child ID 和发送幂等键，不重复创建。主动深入交互时可以全屏打开真实子线程。
+- 未发送的 Side chat 权限显示来自固定上下文边界的同次原生读取，复用普通会话的权限标签且不可编辑；不跟随后来父会话的权限变化。尚无该快照时隐藏权限控件，不以 Full access 猜测。此显示不写入或改变权限，首次 Send 仍由既有 fork 配置继承决定。
 - 全屏子线程在现有 top bar 中使用可返回祖先的路径式面包屑标识位置；不另占标题栏下方一行。普通根会话不显示空面包屑。
 - 验收至少检查浅色/深色、桌面/窄屏、长文本、空状态/错误状态、键盘与焦点、打开/关闭/切换后的草稿和上下文归属。修复前后截图绑定实际构建版本；未实际查看的页面必须明确列为未验。
 - 产品改动在 PR 分支交付，不直接修改主线；独立 Review 和实际操作证据共同支持结论，不能相互替代。
@@ -603,7 +611,7 @@ PAW 导航使用与共享图标相同描边风格的对话气泡，表达一对�
 
 Normal PAW chat keeps only compact, named rename/workspace/settings controls. Do not put model-cycle, quota or background implementation descriptions under its input. Paused delivery and failures remain explicit; Pause/Resume lives in conversation settings. Rename edits the display name only and preserves the Room identity and bound working Thread; Cancel/Escape leaves the name unchanged. PAW/Rooms appear after plugin entries and at the same section hierarchy as Projects, using neutral selected surfaces and spacing instead of extra truncated separators.
 
-Native scrollbars retain their geometry and scrolling behavior. Their track is transparent against each surface; the thumb uses the theme's muted text color while scrolling, keyboard/focus interaction or edge/drag activity is occurring, and becomes transparent at rest. Forced-colors uses native colors. Do not hide overflow to simulate autohide, and do not count Linux/mock evidence as native Windows/macOS validation.
+Native scrollbars retain their geometry and scrolling behavior. The bounded composer-adjacent pending tray is a local exception to thumb autohide: its native thin thumb stays visible whenever the tray actually overflows, so hidden pending messages are discoverable before hover or scrolling. It still uses one existing scroll container, preserves the stable gutter and has no artificial overflow or custom scroll authority. Elsewhere, their track is transparent against each surface; the thumb uses the theme's muted text color while scrolling, keyboard/focus interaction or edge/drag activity is occurring, and becomes transparent at rest. Forced-colors uses native colors. Do not hide overflow to simulate autohide, and do not count Linux/mock evidence as native Windows/macOS validation.
 
 ### 2026-10-08: Room IM presentation references
 
@@ -630,6 +638,8 @@ Only actual running/model activity has a left-to-right text highlight. Waiting, 
 Approvals stay composer-adjacent and name their real once-only or remembered capability scope. A bounded inline preview has a user-opened full-request dialog containing complete code, cwd and arguments. Opening or dismissing review never decides a request; both surfaces share one pending lock and preserve errors. Focus restoration respects the exact request and newer user interaction.
 
 Queued messages occupy the lower group of the unified composer-adjacent pending-send area, below Steer. Both groups share one bounded scrolling container. Their message content aligns with the transcript column; tray borders and native scrollbar gutters sit outside that content box. Text, real image thumbnails and attachment counts remain visible; genuine truncation has a selectable full-text disclosure. Exact ID/client-ID order is canonical; cancellation or resume acknowledgement does not remove rows. Editing uses the native exact-target expected-revision command and append-only edit fact, retaining the current queue position and delivery mode. Separate explicit up/down actions reorder the complete exact Queue identity/revision snapshot through the native atomic command, as defined by the unified pending-send contract; there is no implicit retry. Native delivery errors stay on their exact message; a distinct resume transport error belongs beside Continue. Approval + queue + error + draft must preserve reachable decisions, reachable queue actions (44px targets for touch) and Composer in narrow windows.
+
+Queue reorder remains an icon action with exact-message accessible names. The distinct immediate-delivery action shows localized “Send now” text rather than another upward arrow; while running its existing tooltip explains safe-boundary steering, not interruption. In the shared bounded pending tray, each group keeps its delivery-timing heading sticky within that group, with focus-scroll space reserved above row controls. Fine-pointer windows above 480px give the action cluster up to 192px so the visible immediate-send label does not force a lone Cancel onto another row. Controls still wrap when required by longer status text; coarse-pointer targets retain their existing dimensions. Narrow windows put the complete action group below the full-width message, rather than squeezing actions into an 88px side column. At widths up to 480px and heights of at least 700px, the shared pending tray can use min(360px, 40dvh); shorter viewports retain min(240px, 30dvh) to leave space for the Composer and approval decisions. These are presentation changes only; queue order, admission and receipt semantics are unchanged.
 
 Queued thumbnails read only validated AttachmentRefs from the exact same-thread pending input. Show a compact first set with an actionable full-gallery disclosure; missing references or failed reads remain explicit and retryable without blocking Edit/Cancel. Opening a full image uses the existing viewer and stops being visible when its exact queue owner disappears or the selected thread changes.
 
@@ -665,7 +675,19 @@ Each compaction has one collapsed event and one disclosure. Its Original history
 
 ### Message-level Fork
 
-Only the terminal Agent response exposes Copy and Fork in its hover/focus action row. Intermediate commentary, tool-adjacent replies, and in-progress responses never expose this action row, even when their canonical Items are durable. The existing terminal-response selection remains authoritative (the final completed reply, or the last non-empty reply on a failed/interrupted Turn). Fork appears directly after Copy when that response has a durable canonical Item. The action binds the source Thread and exact canonical Agent Item ID; streaming-only messages cannot be fork boundaries. It uses the native Core fork with the inclusive prefix, never later Items, historical tool replay or an automatic new Turn. The original Thread is unchanged. Pending activation immediately replaces the Fork icon with a spinner; its tooltip and accessible name say that this thread is being forked/copied, and the disabled button prevents duplicate clicks until copying and navigation finish. Pending repeated clicks share one request across viewport remounts; errors retain the source context and exact local details. An uncertain creation reply triggers only a read-only summary refresh so an already-created copy can be found; it never automatically repeats creation or guesses a destination. Creation currently has no protocol idempotency key, so an explicit retry is not claimed safe after an unknown outcome. Forking a genuinely completed final response retains its observed completion and keeps the exact final text outside the collapsed process; the cut before the completion receipt must not invent cancellation or live background ownership. Success opens the new Thread unless newer navigation or a newer fork action superseded that intent. Touch/no-hover actions remain visible with 44px targets and keyboard focus is explicit. The thread-level action uses the same Fork icon and localized Fork label while retaining its latest-complete-Turn boundary and the same working directory. Shared Fork artwork stays within the 16×16 icon viewBox, including all three endpoint strokes.
+The conversation header keeps the working directory and copied-source navigation
+as independent single-line metadata items. A long directory ellipsizes without
+pushing the source action out of view; source labels occupy at most 60% of the
+available metadata row and ellipsize independently. Full directory and source
+labels remain available in tooltips, and the source button retains its complete
+accessible name and exact existing navigation identity. An unavailable source
+uses the same bounded space without becoming an action. This does not add a
+header row or change ancestor breadcrumbs, ordinary threads or workspace
+fullscreen visibility.
+
+A fork transcript marks the end of copied history with a neutral, noninteractive localized separator after all provably inherited rendered Turns and their historical compaction rows, before any new branch Turn. The latest current-Thread canonical fork record is authoritative; copied completion and unmatched-tool closure receipts may follow that record, including for earlier inherited Turns, and still belong above the separator. Paged history shows the separator only when the inherited tail is demonstrably loaded from canonical positions, never from timestamps or the mere presence of a retained fork record. Ordinary/legacy histories and full-context side chats do not infer this boundary. Existing source navigation and Turn/disclosure identities remain unchanged.
+
+Only the terminal Agent response exposes Copy and Fork in its hover/focus action row. Intermediate commentary, tool-adjacent replies, and in-progress responses never expose this action row, even when their canonical Items are durable. The existing terminal-response selection remains authoritative (the final completed reply, or the last non-empty reply on a failed/interrupted Turn). Fork appears directly after Copy when that response has a durable canonical Item. The action binds the source Thread and exact canonical Agent Item ID; streaming-only messages cannot be fork boundaries. It uses the native Core fork with the inclusive prefix, never later Items, historical tool replay or an automatic new Turn. The original Thread is unchanged. Pending activation immediately replaces the Fork icon with a readable local spinner and a compact visible localized Forking label; the pending feedback stays legible while disabled and uses a static indicator with reduced motion. Its tooltip and accessible name still say that this thread is being forked/copied, and the disabled button prevents duplicate clicks until copying and navigation finish. Pending repeated clicks share one request across viewport remounts; errors retain the source context and exact local details. An uncertain creation reply triggers only a read-only summary refresh so an already-created copy can be found; it never automatically repeats creation or guesses a destination. Creation currently has no protocol idempotency key, so an explicit retry is not claimed safe after an unknown outcome. Forking a genuinely completed final response retains its observed completion and keeps the exact final text outside the collapsed process; the cut before the completion receipt must not invent cancellation or live background ownership. Success opens the new Thread unless newer navigation or a newer fork action superseded that intent. Touch/no-hover actions remain visible with 44px targets and keyboard focus is explicit. The thread-level action uses the same Fork icon and localized Fork label while retaining its latest-complete-Turn boundary and the same working directory. Shared Fork artwork stays within the 16×16 icon viewBox, including all three endpoint strokes.
 
 ### Compact activity context
 
@@ -742,6 +764,8 @@ Triggers use the existing clock artwork throughout navigation, workspace tabs an
 ### 2026-10-15: Side chat creation settings
 
 The Subagents panel keeps one-click inherited side-chat drafting and offers a compact model-settings action beside it. Model and reasoning overrides are local to that parent's creation form, use the current Host catalog, and apply atomically before the child becomes visible. Omitted values retain native inheritance/default semantics; a model change clears a stale effort choice. Opening fixes the parent context boundary in renderer memory; first valid Send atomically creates the configured child before delivery. Closing an unsent draft leaves no Thread. The workspace launcher plus remains the inherited one-click drafting action.
+
+The unsent Side chat preview helper and fixed inherited permission label use secondary text contrast in both themes. The inherited label keeps its accessible File permissions name and disabled semantics, but has no dropdown chevron or menu affordance; it is not a permission editor. Unknown/loading snapshots remain hidden. This treatment is scoped to the preview, not all disabled Composer controls.
 
 ### Browser operation previews in the unified workspace (2026-11-02)
 
@@ -902,6 +926,8 @@ Provider 保存错误的稳定摘要不替代本机诊断：编辑器中的失�
 
 Information contributions use the existing top-right Board button. When the actual conversation allocation is at least 920px, an open board occupies a 340px card to the right with 12px outer/inter-column gutters; the conversation and Composer yield that space rather than being covered. These are ZenX responsive choices, not recovered Codex desktop implementation values. At narrower allocations a dismissible popover remains available. Opening the workspace right sidebar closes the board once; manually reopening it while the workspace remains open is allowed. In split mode the information button belongs at the trailing edge of the main conversation title row, immediately before the conversation/resource divider; it is not grouped with the resource maximize/close controls. In a maximized workspace the button is available only on the main-conversation Tab, returning to the trailing shared title-row position. Native window drag regions must exclude the complete button hit target in each presentation. Internal workspace maximization is not OS fullscreen: selecting its main-conversation Tab retains the same conversation DOM and allows the board to dock whenever the resulting allocation is wide enough. The card/popover has no duplicate title or pin header; a compact explicit Close information action returns focus to the Board toggle without changing layout or drafts. The information and workspace toggles share the deeper neutral active surface and primary foreground; no accent is introduced. Accessible pressed/expanded state tracks visibility. The Thread board also projects the admitted Trigger names and enabled/paused state with an exact existing edit route, the existing Subagents lineage surface, and current native Shell session observations. These bounded projections are not scheduling authority; explicit trigger switches use existing native cancel/resume commands, resume carries the definition revision read with the facts, and failures retain a local diagnostic and re-read actual Host state. The trigger header shows a text Retry only after a failed facts read. Trigger names wrap fully at normal weight; switch state replaces redundant visible enabled/paused labels while screen-reader state and edit routes remain available. Background commands list only non-ended observed sessions, with long command text ellipsized and available in the row title; unavailable facts stay explicit and no broad Trigger list/history is read for summaries. Dedicated question UI has a separate attention content slot and must not reuse Board fields or the main Composer draft as its state. Switching a maximized main-conversation Tab back to a resource closes its board. The information host has no separate pin mode and does not read or write the obsolete renderer pin preference. Information contributions are not Browser/File resource tabs and do not replace the Composer. The Board plugin provides questions, forms, metrics, notes, progress and shortcuts as convenience templates alongside arbitrary isolated HTML/CSS/JS. Agents define event behavior: local UI/navigation, explicitly assembled model messages, permission-gated non-model execution, or conditional combinations. Each model-delivery action names the owning Thread or Room member and reports admission, not completion. User fields survive hide/show, owner changes and document updates; stale revisions fail explicitly, without silent overwrites or retries. Background updates never open the board, change the selected conversation or move focus. Popup Escape returns to its trigger, outside dismissal remains available, and the same popup stays usable at narrow widths. Closing and reopening through the Board button preserves user fields without sending or navigating.
 
+The native Thread Lineage wrapper may show “Received from agents”: at most three recent local canonical inbound messages from already loaded history for the exact selected Thread. A bounded plain-text excerpt and the existing exact sender Thread/item/call source action support navigation, not a complete communication graph or a claim of delivery consumption/reply. Queued, remote and unavailable facts are omitted; no child transcript is read in the background. Message excerpts never enter generic plugin context. Switching owners or loading a different Thread clears the projection immediately; Room/PAW and their resource-member bindings never receive it. The subsection follows the existing Lineage placement/visibility and keeps ordinary empty information hidden. Background updates do not open the panel, move focus or send messages. Received-message excerpts use body-level foreground and readable compact text with comfortable line height, not the muted metadata treatment of the subordinate loaded-history scope. This local hierarchy does not change source controls or other Information widgets.
+
 ### Send admission feedback (2026-10-28)
 
 Auxiliary title staging must not block input admission. Its own receipt or failure
@@ -945,6 +971,10 @@ The exact leading legacy `[Message quote; ...]` transport is rendered through th
 
 Copying or cutting a capsule between main and side-chat composers preserves its exact source and selected text through structured clipboard metadata; external plain-text applications receive readable text with real line breaks and no injected source IDs. Pasting into a plain or rich Composer preserves surrounding draft text and existing capsules, positions the caret after the inserted content, and never sends automatically. Cut/paste participates in native editor undo/redo; malformed or mismatched clipboard metadata falls back to ordinary text rather than guessing a source.
 
+### Running Send menu readability
+
+The existing running Send popover uses the shared 13px label and 12px caption tokens, with secondary foreground for action explanations and keyboard shortcuts. Its desktop width is 380px, clamped to the available viewport; a bounded body scroll keeps actions and the default-mode control reachable when height is constrained. The default-mode Select retains a 44px minimum target. At widths up to 480px, shortcuts move below their action explanation and the default-mode control stacks rather than compressing text. These are presentation changes only: default send mode, keyboard shortcuts, Stop, queue and steer admission semantics remain unchanged.
+
 ### Immediate ordinary Send feedback
 
 For an existing Thread, ordinary Send/Steer immediately transfers the exact draft
@@ -952,7 +982,14 @@ and attachments into a visibly local **Sending** row and clears the editor. This
 is presentation only, not a canonical user message or proof of delivery. The
 existing pending-admission guard prevents duplicate sends while newer typing
 remains editable. New-thread and side-chat promotion retain their existing draft
-behavior in this initial rollout.
+behavior in this initial rollout. After a new Thread has been created, its empty
+conversation displays localized **Sending** and **Waiting for confirmation**
+feedback while that first draft's existing submission is pending. This is not
+proof of acceptance or agent work. Local creation and side-chat staging keep
+their own presentation; ordinary immediate Send rows are not duplicated. The
+cue follows only the selected Thread's composer and disappears on existing
+admission, failure or transcript projection, without changing draft recovery,
+navigation, request ordering or retry behavior.
 
 The local row has a stable client identity but never a canonical Item ID.
 Admission ACK changes its label to admitted/waiting for conversation projection,
@@ -961,6 +998,11 @@ duplicate bubble. ACK and event order must both work. Generic post-dispatch IPC
 errors are **delivery unconfirmed**, not invented rejection, and never resend
 automatically. Explicit Check delivery uses the existing authoritative recovery
 read outside the send critical path; absence is not proof of rejection.
+The checked input shows accessible checking progress and retains a qualified
+result while its recovery row remains mounted. A usable read that leaves delivery
+unknown says so; an unavailable or failed read never claims completion. Feedback
+does not transfer to other inputs or threads, survive removal, or override a
+later admission/canonical outcome. It is not a persisted delivery receipt.
 
 Unknown/unsent text and images remain in a recovery row. Add back to draft
 preserves newer text and images, does not send, and warns that resending an
@@ -978,6 +1020,8 @@ the same 1000- and 5000-Turn histories, delayed/rejected admission, newer drafts
 attachments, both ACK/event orders and exactly one canonical user message.
 
 ### Editable conversation information
+
+Subagent rows in the information panel wrap long conversation names, including archived names, rather than hiding distinguishing words behind an ellipsis. Status remains a separate, non-shrinking label; wrapping does not change the navigation target, archive visibility or sidebar preference. The panel's existing scroll surface contains long lists.
 
 Thread and actual Room owners share the same native information layout. PAW uses its existing Room binding and never a third owner. The default typed components are lineage, triggers, background commands and the legacy default Board, with Room members added for Room owners. Thread-source defaults in a Room use only its actual current assistant member; an empty Room never invents one. Provider availability is independent of component placement. The unimplemented PR/artifact types remain valid in saved layouts, but do not appear in the ordinary view or Add menu; Customize still shows their unavailable explanation and Remove action. Reading never migrates their saved placement. Ordinary view shows a card only when its own provider reports actual content. Empty or initially unavailable Board, lineage, trigger, shell and Room-member cards stay out of view; Configure retains their placement controls and available diagnostics. Empty/collapsed providers stay mounted for bounded read-only observation, so content appears automatically. A failed refresh preserves already observed content and its error, rather than converting failure into an empty result. New Thread/Room owners and retired provider admissions never reuse another source’s visibility.
 
@@ -1002,6 +1046,8 @@ Room 或跨作者撤回，也不根据消息正文推断作者。
 不中断工具或压缩、不跳过完成边界、不删除已进入模型上下文的内容。
 
 Composer 上方的待处理区域与 Queue 共用 shelf，数量统一使用“状态 · N 条”（英文区分 message/messages）。Steer 默认直接显示待处理正文，复用参考 outbox 的右对齐气泡层次；标题行本身可折叠，不另加“查看等待中的消息”一行。撤回按钮显示还原图标与“全部撤回”（单条“撤回”），提示中说明恢复到原输入位置，操作目标保持至少 44px，不以图标替代文字含义。内容、图片和引用继续可见，真正被截断的内容可展开；收起或精确输入失效立即关闭所属图片预览。
+Steer 的现有 held 投影（任一待处理输入的 expectedTurnId 与当前运行 Turn ID 不同）只将组标题改为中性的“待提交输入 · N 条”（Pending input · N message/messages），区域可访问名称为“待提交的模型输入”（Pending model input）；全部匹配时保留原等待进入模型文案。此标签不证明 Stop、失败或所有输入均已暂停，断线恢复与混合归属同样不得据此推断生命周期。不改变现有图标、说明、数量、折叠、撤回或投递行为。
+
 Queue 只有全部精确 canonical pending 事实明确等待后续 Turn 时才写“等待当前轮次结束”；Agent guidance、Host steer、混合或身份无法匹配的集合只写中性的“待发送”，不从运行状态推断交付时点。普通消息默认 soft steer 不变。
 
 状态区分接纳中、等待进入模型、正在撤回、已进入模型输入、撤回结果尚未确认、
@@ -1208,3 +1254,145 @@ Question information cards show the default open request heading once, while ret
 Healthy question cards have no manual refresh action. Native/Room question events, connection recovery and returning to the app refresh the list automatically; transient read failures receive at most two delayed retries (1s, 3s). Read failure appears as one compact row: “Loading failed” beside a reload-icon “Retry” button with an explicit accessible name. It does not expose technical details in the card. Recovery only reads lists, keeps independent drafts and uncertain response identities, and retires when the view changes or unmounts.
 
 Question draft-storage limitations appear only as a collapsed, keyboard-accessible disclosure when the current card has editable unsent content. Empty drafts and sending, unconfirmed, accepted or terminal responses do not display an unsent-draft warning. This presentation change does not add persistence or alter answer recovery authority.
+
+### Composer submission error hierarchy
+
+An existing submission error selected by the Composer's unchanged error priority
+shows a localized “Send encountered an error.” alert and a collapsed, keyboard-
+accessible Technical details disclosure containing the complete original error as
+plain text. Diagnostics wrap and scroll locally rather than dominating the
+Composer. The summary does not assert non-delivery, preserved drafts, recovery or
+retry safety. Interrupt, attachment, capability and model errors retain their
+existing presentation; ordinary pending-send unknown-delivery warnings and
+recovery controls are unchanged. This is presentation only: no new request,
+retry, admission classification, draft mutation, empty-state or title change.
+
+### Empty first-send error guidance
+
+A created Thread with no transcript rows uses “Send needs attention” and
+“Review the error details below before continuing.” instead of the default
+new-thread invitation only when its same-revision, non-immediate start submission
+is failed and that submission error wins the existing Composer error priority.
+Custom empty content, local creation and side-chat context retain precedence.
+This guidance is not a second live announcement; the Composer keeps its single
+error alert and complete raw diagnostic disclosure. Pending, accepted, edited,
+ordinary immediate-send and higher-priority error presentations are unchanged.
+The cue asserts neither non-delivery nor retry safety, promises no retained draft,
+and adds no request, classification, recovery action or title change.
+
+### Local agent message source inspection
+
+A received local agent message opens its sender Thread and, when the exact canonical
+sending tool item and call identity remain available, materializes and expands that
+item with the existing brief source highlight. Sending-tool identities are separate
+from delivered-message receipt identities. Missing or mismatched tool provenance
+keeps the existing sender-Thread navigation without guessing another item from text,
+a tool name or a same-name Thread. Remote return-bound source inspection and outgoing
+View sent message links retain their existing routes. Navigation remains read-only;
+owner changes and newer navigation retire stale reads and disclosure work.
+
+### Narrow pending-action reference decisions
+
+[Slack's official mobile editing/deletion flow](https://slack.com/intl/en-gb/help/articles/202395258-Edit-or-delete-messages) groups secondary message actions behind tap-and-hold; [Android accessibility guidance](https://support.google.com/accessibility/android/answer/7101858?hl=en) emphasizes large touch targets rather than tiny glyph hitboxes. Zen retains explicitly visible queue controls instead of introducing an undiscoverable gesture: on narrow windows, message reading and the action toolbar occupy separate full-width rows. Existing fine/coarse-pointer target dimensions, operation labels, action order, disabled states and native queue semantics remain unchanged. This is a layout hypothesis requiring matched browser evidence, not a claim that another product uses Zen's queue behavior.
+
+### Queue keyboard reading context
+
+Focusing a queued-message action reveals its complete owning row in the existing pending tray when that row fits below the sticky heading clearance. Rows taller than that space instead keep the focused control visible; revealing must not scroll the transcript or Composer, change focus, alter queue order, or dispatch any action. This follows the sticky-header concern illustrated in [W3C Focus Not Obscured](https://www.w3.org/WAI/WCAG22/Understanding/focus-not-obscured-minimum) and its scroll-padding technique, while additionally preserving message context where space permits. Geometry tests do not prove visual quality or WCAG conformance; desktop keyboard captures must verify the actual row and heading placement.
+
+### Current conversation across Sidebar locations
+
+Projects/Pinned and Recent retain their existing entries, ordering, current-page semantics and actions. When an expanded Project or Pinned section actually renders the selected conversation, that location keeps the primary selection fill and its Recent alias uses the quieter wash surface (with normal hover feedback). If that location is collapsed or absent, Recent retains the original primary fill. No navigation preference or persistent state is introduced. This applies the clear current-location hierarchy seen in [Linear's sidebar design refresh](https://linear.app/now/behind-the-latest-design-refresh), not an assumption about Linear's thread routing. Verify both themes and collapse/expand fallback in the real Sidebar before visual acceptance; duplicate navigation itself is not treated as a defect.
+
+### Information dock entry clearance
+
+The dock and popover both clear the measured bottom of the information entry as well as the actual title/resource heading. A short or absent host title row must not let the fixed information toggle cover the dock's explicit Close information control. Normal App geometry is unchanged when its heading already extends below the toggle. The information preview omits App's title row, so the observed overlap there is not evidence that ordinary App windows universally overlap; the shared host's fallback geometry still needs to remain usable. This follows the same live-anchor principle as the existing [Radix Popover positioning contract](https://www.radix-ui.com/primitives/docs/components/popover), without replacing the dock's nonmodal semantics, owner state, or focus-return behavior.
+
+### Desktop pending-message reading space
+
+When the shared pending tray overflows, desktop windows wider than 960px expose a localized More space/Less space action in the existing queue header. Explicit expansion lets the same scrolling tray use up to min(480px, 55dvh), while the Composer stays outside it; default height, message disclosure, order, sending and cancellation do not change. Once offered, the control remains available in that conversation even if expansion or delivery makes the content fit, so the focused control is not removed. Expansion is transient per Thread, never persisted or carried to another conversation; smaller windows keep their existing layout.
+
+The actual [T3 Code proposal #28840](https://github.com/pingdotgg/t3code/pull/28840) runtime at `6f13f36f` demonstrates three queued messages and explicit long-message reading while retaining its Composer. Zen borrows the principle of making pending work inspectable, not that product's delivery semantics or a claimed identical layout. DSH's observed main-chat scene is not evidence of an equivalent queue. Match desktop rest/expanded/focus captures to verify useful capacity and Composer access; tests alone do not establish a visual score improvement.
+
+### Send surface closing focus
+
+The nonmodal Send surface becomes inert as soon as it is logically closed, even while its exit animation keeps the DOM mounted. Closed actions must not participate in native Tab navigation or pointer activation. Escape and actions that return focus do so at logical close; animation completion must not steal focus after the user has moved on. The visible exit animation and open-state controls retain their existing behavior.
+
+### Expanded queue return to writing
+
+Desktop expanded reading provides an additional Less space action after the queue rows, adjacent in DOM order to the Composer. This makes the return available from the writing end without traversing every per-message action. The header control remains, every message action retains ordinary keyboard reachability, and neither positive tab indices nor special Tab handling change navigation. The trailing control is not sticky and cannot cover a message; activating it reduces reading space and returns focus to the Composer before the control disappears. It appears only during explicit desktop expansion. Actual browser verification must measure reverse-Tab distance and the footer's space cost; component tests alone do not prove a visual improvement.
+
+The expanded reading return occupies its own normal-flow host immediately after the pending tray, not inside the tray's clipped scrolling viewport. Its reserved space therefore cannot obscure a message or require scrolling to discover the return. The message viewport keeps the existing bounded desktop reading height; the return uses a 32px fine-pointer control and retains 44px coarse-pointer sizing. The collapsed/empty host has no layout box. This trades a small amount of conversation height for a reliably visible return, so acceptance must inspect the whole bottom zone, not only count queue rows.
+
+Within the existing bottom-zone height budget, expanded queue reading is the flexible sibling: its viewport may shrink while the Composer and the reading-return control retain their measured sizes. Do not increase the zone's cap or hide overflow to conceal excess content. This preserves the uncovered conversation lane and keeps scrolling in the message tray when the normal expanded queue, return and Composer fit together. Other unusually tall approvals or attachments retain the existing outer overflow fallback. The externally hosted return uses the same themed button reset and visible focus treatment as queue controls, rather than browser-default styling.
+
+### Desktop conversation reading hierarchy
+
+The desktop Thread conversation uses a distinct themed reading canvas and an 800px shared history/Composer column. Assistant prose leads the surrounding 12–13px controls through 15px type, 1.8 leading, explicit heading scale and paragraph/list rhythm. Structured results remain readable with themed table headers and 13px cells. Keep first/last Markdown margins trimmed, existing overflow behavior, native heading semantics, navigation and message actions unchanged. This is a reading-surface design, not a new chat card around each response; small windows retain their existing layout. Reference direction: the actually rendered T3 #28840 and DeepSeek Harness fcc0ad4 examples distinguish quieter work metadata from a primary response column, while Linear's published design-refresh principle keeps navigation subordinate to the task. Do not infer a better score from these rules: compare the complete rendered main conversation in both themes, including long prose/code/tables and Composer alignment.
+
+The desktop Composer uses the transcript column's measured horizontal box rather than independently centering in the bottom zone. Native scrollbars can reduce the transcript viewport without reducing the overlay; equal widths alone do not establish alignment. Reuse the actual virtualized/nonvirtualized column measurement on resize and pane changes, while keeping queue border/scrollbar compensation distinct from the Composer border box. No fixed scrollbar-width assumption or relaxed screenshot tolerance replaces this geometry.
+
+### Desktop history return without covering prose
+
+While reading earlier messages, the desktop Composer contains a normal-flow reading-position strip with a visible Back to live action. It replaces the floating transcript button on desktop rather than adding another overlapping control. The action retains existing live-tail/follow, selection clearing and reading-position persistence semantics, and returns focus to the editor when the strip disappears without submitting or changing the draft. Smaller windows retain the existing floating entry. The strip's measured height participates in the existing bottom-zone reservation. Verify actual long-document screenshots and native keyboard activation; do not hide the function merely to obtain an unobstructed screenshot. T3/DSH reference captures did not establish equivalent historical-return behavior.
+
+Approval request cards in the same desktop bottom zone use that identical measured column too. Their internal scrolling, maximum height and allow/deny focus behavior stay unchanged; independently centering a card in the overlay would reproduce the native-scrollbar offset even after the Composer is aligned.
+
+The desktop reading-position action lives in the existing Composer action rail, before Send, rather than adding a separate 47px header row. “Back to live” stays visibly labeled; “Reading earlier messages” describes its accessible group. This uses horizontal toolbar space instead of reducing the historical reading area whenever the user leaves the live tail. Verify the full toolbar and approval/Information combination for wrapping and clipping; do not shorten or hide approval details to recover space.
+
+### Explicit approval reading mode
+
+When a request competes with the transcript, queue and Information panel, let the person explicitly choose Read conversation on that approval card. Its compact summary retains the tool, scope and a clear “waiting for review, no decision made” statement. It does not expose Allow/Deny actions until full review is restored, and Full request continues to open the existing detailed dialog. The toggle stays focused and is reversible; changing Thread/request identity opens the new request, and responding or failed requests cannot be collapsed. No request is automatically hidden to improve a screenshot, no approval is inferred, and no dispatch/runtime authority changes. Actual acceptance must show both the default full-review state and the user-selected reading state with queue and Information visible.
+
+### Desktop supporting-rail hierarchy
+
+Sidebar and docked Information are supporting rails around the primary conversation canvas. Sidebar section labels, project labels, selected conversation identities and secondary model/status text retain distinct roles without removing aliases or changing navigation. Empty-project spacing is quieter, not hidden. Docked Information uses the sidebar-tone host with clearly titled, lightly bounded content widgets, distinguishing the panel identity, widget identity and secondary customization controls. Preserve theme tokens, widget order, customization/disclosure behavior, focus rings and all statuses; this is not an opportunity to erase archived or inactive data. Compare whole light/dark screenshots with long identities, expanded/collapsed navigation and the real Information dock. Reference direction comes from the observed Codex/Claude/Linear navigation hierarchy and T3/DSH content-led workspace, not an assertion that unlike screenshots are equivalent.
+
+### Desktop conversation canvas and information (2026-11-11 correction)
+
+The desktop Information region belongs to the conversation, not the sidebar. Both use the same `--color-surface-main` canvas; do not wrap Information in a sidebar-colored shell with nested white cards. The neutral default light/dark surfaces follow the inspected T3 Code proposal `6f13f36f` canvas (#f5f5f5/#151515); optional user color themes and status/accent meaning remain intact. T3 is a visual reference, not copied runtime authority.
+
+The existing Information toggle is the single desktop show/hide control; Escape within the dock still returns focus there. Do not repeat Close information or an Information heading in the dock. Customization stays available as a labeled icon at the top content row. Subagents creation belongs beside its heading, never a separate action-only row when embedded. The standalone plugin retains its own heading/action. Group separation uses space and a subtle separator, not outer plus inner card borders. Native scrollbars have a transparent track and quiet narrow thumb; keyboard scrolling, focus and forced-colors usability remain available.
+
+Evidence must include matching light/dark main conversation with Information open, not tests alone. Check long names and multiple actual cards before claiming that density is resolved. This supersedes the earlier supporting-rails recommendation to add sidebar backgrounds, boxed widgets, and a 14px Information heading.
+
+### Desktop navigation density candidate
+
+Keep the existing detailed/compact preference, project disclosure state and both Projects/Recent routes. Detailed desktop rows retain provider identity and all status text; reduce only row whitespace (50px minimum, 5px vertical padding, 3px row gap). Empty projects remain visible and keep their existing expansion state, with smaller surrounding whitespace. Compact and Inbox layouts are unchanged. This is a source-tested candidate; long names, state badges, keyboard focus and dense lists still require rendered verification.
+
+### Docked subagent identity and status
+
+On desktop, the docked subagent row gives the full wrapping title its own text column and allows status below a long title rather than competing for its horizontal width; short names may share a baseline as described in the content-sized rule below. The icon stays at the title's start and the existing visibility control remains alongside the row. Keep all status labels, archived visibility, navigation actions, tree nesting and standalone panel layouts unchanged. This follows the title-first / secondary-metadata hierarchy observed in T3 and Codex, not an assertion of equivalent subagent controls. Validate long English/Chinese names, light/dark themes, and overall card height in the production-component preview; source tests alone do not establish improved visual quality.
+
+### Content-sized docked identity metadata
+
+In the desktop information dock, keep short subagent names and their status on one baseline when they fit. A name whose natural width fills the available column wraps at full column width, with status below it. Use content-sized wrapping, not language-specific character thresholds, clipped titles, or hidden statuses. Keep the top-aligned icon, existing visibility control and tree nesting. The identity wrapper uses display: contents outside the desktop dock so standalone panel and smaller-window layout remain unchanged. Validate short and long English/Chinese names in both themes, preserving the prior long-name reading space while measuring the actual ordinary-row height.
+
+When name and status share a line, the status aligns at the trailing edge of the identity column with a minimum 12px gap, so it is not read as the name's last word. Wrapped metadata stays at the title start. This addresses the anonymous screenshot review's concern about the initial 8px inline gap.
+
+### Explicit code-line wrapping
+
+Fenced code remains unwrapped by default, retaining horizontal scrolling and its original whitespace. A visibly labeled Wrap lines toggle in the existing header appears only for source-confirmed closed top-level fenced blocks (nested and indented code keeps horizontal scrolling) and allows reversible soft wrapping for that code block; its native button exposes aria-pressed and stays focused when toggled. Wrapping changes only presentation: Copy continues to use the full original payload, never visual line breaks. The choice is local component state that survives appended message text, not a cross-message saved preference or runtime action, and does not alter paragraph leading. Validate long English/Chinese lines, horizontal overflow, native keyboard activation, copying and both themes in the real component preview before claiming improved usability.
+
+### Desktop result-table minimum reading width
+
+Desktop assistant Markdown table cells reserve a minimum inline size of 6ch plus their existing 24px horizontal padding and a conservative 2px border allowance. This protects short status/action columns from collapsing into one-character stacks without identifying columns by position or content. Long content still wraps naturally; oversized tables retain the existing local horizontal scroll. Header/body typography, line height, padding, source text, column order and vertical alignment stay unchanged. This candidate trades possible extra horizontal scrolling and description wrapping for readable short columns; accept it only after matched whole-conversation light/dark captures at both 800px and Information-reduced reading widths. The rule does not apply to smaller windows or tables outside desktop assistant Markdown.
+
+### Desktop result-table first-line alignment
+
+Desktop assistant Markdown table cells align at the top so short status/action labels begin alongside their row’s longer description instead of vertically centering beside its later lines. Keep the existing minimum widths, natural table layout, padding, font, line height, text and local overflow. This supersedes only the unchanged vertical-alignment statement in the previous minimum-width rule. Matched light/dark production-component captures and independent blind comparison support this limited alignment change: long-row association improves while the short-text table remains visually unchanged. It does not improve sidebar/dock layouts or long identifiers, and is not a timed usability or native-app acceptance result. Do not extrapolate this evidence to numeric tables, complex nested cells, accessibility or all interaction states.
+
+### Desktop dock Sidebar-switch context
+
+The desktop Information dock exposes the existing single localized Sidebar column heading above the subagent row switches. It identifies what each Shown/Hidden switch controls, distinguishing these row preferences from the whole widget's Hide action. Keep the existing conditional heading (only when rows and sidebar controls exist), per-row labels, switch semantics, saved preferences, busy/error behavior and task statuses unchanged. Standalone panels, popovers and smaller windows retain their existing presentation. Matched light/dark production-component captures with short English and long English/Chinese names show an 18px dock-height cost without changing the main reading or Composer area. Independent blind review weakly favors the added context, not an overall UI upgrade; group Hide versus folding and the exact destination still need discoverability validation. This limited static evidence does not establish native, touch, assistive-technology, Chinese-interface or high-item-count acceptance.
+
+### Subagent question attention alongside activity
+
+Subagent rows reuse the Sidebar's Asking / 待回答 badge and localized open-question count from the same native userQuestionSummary. It accompanies, never replaces, Idle / Working / Archived activity; systemError summaries and zero or absent counts have no badge. Archived children retain their existing opt-in visibility; when explicitly shown, their factual question summary follows the same predicate as Sidebar, not a new claim that answering is enabled. Keep the navigation button, Sidebar visibility switch, focus and full wrapping title unchanged. Live Host summaries already supersede the initial related-thread list, so this presentation adds no query, polling, state domain or inferred approval/failure status. Validate same-thread Sidebar and Information views, active and idle questions, count removal, long English/Chinese names, both themes and unchanged focus before visual acceptance.
+
+Matched real-component screenshots and two language-specific DOM tests support retaining this limited question-attention consistency fix. Independent blind review favors pending states and ties cleared states, with no name-readability gain. Pending dock height increases about 29.8px in English/light and 25.8px in Chinese/dark; cleared geometry returns to baseline. Keyboard focus opens an existing details popover that obscures part of the conversation, so the images are not unobstructed whole-application acceptance. No native, assistive-technology, high-item-count or overall-product superiority claim follows from this evidence.
+
+### Desktop question attention and revealed row actions
+
+On hover-capable fine-pointer desktop layouts, a Sidebar row with the existing Asking / 待回答 badge allocates the actual menu-button width while hovered, keyboard-focused or its menu is open. Its action rail no longer fades over the badge in that state; ordinary title ellipsis handles the reduced name space. Share the menu-width token between the button and allocation, retaining factual status and shortcut reservations. This intentionally costs 28px of temporary name space, not a permanently empty action column. Full-name preview, navigation, activity, question counts and menu behavior are unchanged. Static rows, rows without question attention, small windows and coarse-pointer targets retain their previous layout; clearing the question count automatically removes this special allocation. Compare actual badge/menu/text geometry and whole light/dark captures before acceptance; geometric separation alone is not pixel-readability or accessibility acceptance.
+
+Only Room file tabs sharing an exact relative path across different resource owners add a second-line source title within the existing tab size. Full path and projected source appear in accessible tab and Close names and in the native hover title. Distinct long titles may use the existing exact-suffix fit policy. Missing, blank or indistinguishable projected titles retain the prior label rather than invent a source identity; no extra resource read or raw ID/path fallback is introduced.

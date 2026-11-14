@@ -1,0 +1,245 @@
+{
+  "schemaVersion": 1,
+  "title": "Fourth slice: final native pending and delivery-check validation",
+  "sourceCommit": "0a72293a9f60c2e48671da0dbd580fdfa7b01ac3",
+  "sourceTree": "dd5334dfc8bf4c24345eb56ebb2ebcde0a3a8b62",
+  "type": "Normal native Electron application with an isolated canonical synthetic profile and corrected local text-only QA model",
+  "evidenceRoot": "/workspace/shared/ui-quality-evidence",
+  "fixtureGuide": "../scripts/live-native/README.md",
+  "sourceVerification": {
+    "sourceFingerprint": {
+      "file": "live-native-fourth-source.json",
+      "bytes": 101764,
+      "sha256": "5d5480fd2071e05825b6505ab85d46b262f547e11edce28604e29dcc95ee08b9"
+    },
+    "fingerprintSha256": "4c1541116dad4cef374805e02c4416aae62b9856c5048b5f245b6b82ccd42b2e",
+    "fingerprintCapturedAtUTC": "2026-11-09T17:34:02.316Z",
+    "sourceWorktreeDirtyReported": true,
+    "productionEntriesComparedToCommit": 640,
+    "productionMismatches": [],
+    "explanation": "All 640 production source/package entries in the recorded source fingerprint match the commit. QA fixture entries account for the additional fingerprint scope. Later unrelated working-tree edits are not capture provenance."
+  },
+  "buildVerification": {
+    "fingerprintFile": {
+      "file": "fourth-final-build.sha256",
+      "bytes": 323,
+      "sha256": "d45fcbbcc5f694b56542a24177b466a5d033122f7b0b05021b9cfa4836e82c09"
+    },
+    "buildLog": {
+      "file": "build-fourth-final.log",
+      "bytes": 7740,
+      "sha256": "cd3b2f0350ba01a55b3f12c3d46c1278753fe6bdae60aa0c01e6a27ada056650"
+    },
+    "artifacts": [
+      {
+        "file": "apps/zenx/out/main/index.js",
+        "sha256": "3c3927332a1352aa8d07b832bdd3c8a87742d7508278e4a3663e5ed059b7778f",
+        "verifiedAgainstArtifactBeforeLaterBuild": true,
+        "presentAtFinalDocumentation": true
+      },
+      {
+        "file": "apps/zenx/out/renderer/assets/index--4Kvjr_j.css",
+        "sha256": "af2d130ca2d1c888aad6fe8350d5971d5c6fc653aef9af6506e7166236e8b24f",
+        "verifiedAgainstArtifactBeforeLaterBuild": true,
+        "presentAtFinalDocumentation": false
+      },
+      {
+        "file": "apps/zenx/out/renderer/assets/index-DKjf5wXV.js",
+        "sha256": "d9314d2eb1421d7540cf619214f7819746822979376f7db870130e32733f5a69",
+        "verifiedAgainstArtifactBeforeLaterBuild": true,
+        "presentAtFinalDocumentation": false
+      }
+    ],
+    "note": "All three hashes were checked against actual artifacts during initial documentation readback, before a later unrelated build replaced the output directory. Uses fourth-final-build.sha256, not the earlier fourth-build-source.sha256 renderer fingerprint; this is not a claim that the current out directory still matches.",
+    "laterOutputReplacement": {
+      "operatorConfirmed": true,
+      "reason": "Separate sidebar caption build after native validation",
+      "sourceCommitPrefix": "58df4ea3",
+      "separateFingerprintFile": "sidebar-caption-build.sha256"
+    }
+  },
+  "captureContext": {
+    "platform": "Linux native Electron",
+    "appearance": "light",
+    "language": "English",
+    "electronVersion": "43.2.0",
+    "actualImageBounds": [1188, 848],
+    "imageExtensionWarning": "All five .png-named originals contain JPEG bytes and were preserved unchanged.",
+    "actions": "Native actions are reported by the parent operator; inspected screenshots corroborate the resulting states. No screenshot-only inference of exact click count or transient timing.",
+    "shutdown": "Parent operator reports the isolated application was stopped with Ctrl+C after capture; no active generation remained."
+  },
+  "files": [
+    {
+      "file": "fourth-native-captures/01-real-pending-overflow.png",
+      "bytes": 102695,
+      "sha256": "fab776b8021f609fb872327c154c0f0075ad2501496f73bdfe4c30ebb6cd0b4a",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "fullyDecoded": true,
+      "fileModifiedAtUTC": "2026-11-09T17:36:12.788821+00:00",
+      "thread": "Held pending · steer and queue · QA",
+      "observation": "The shared tray shows two held steer messages above a three-message pending-send section; its native vertical thumb is visible before tray interaction. Lower rows extend below the visible tray boundary. This image does not demonstrate scrolling or access to every row."
+    },
+    {
+      "file": "fourth-native-captures/02-delivery-unconfirmed-before-check.png",
+      "bytes": 115135,
+      "sha256": "50bec70ae37495360d1c6fdcc643dbb677559e39bbb46004425fa9d46fc4a272",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "fullyDecoded": true,
+      "fileModifiedAtUTC": "2026-11-09T17:36:57.240029+00:00",
+      "thread": "Admission and retry · QA",
+      "observation": "The local QA_REJECT recovery row says Delivery not confirmed, retains the may-already-have-been-accepted warning and offers Check delivery. No completed-check label is present."
+    },
+    {
+      "file": "fourth-native-captures/03-qualified-check-completed.png",
+      "bytes": 117104,
+      "sha256": "a20b20deb36429b602a7a79dd1d2d9f7436e0ee90b89832269d0f4828c0cb697",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "fullyDecoded": true,
+      "fileModifiedAtUTC": "2026-11-09T17:37:09.783805+00:00",
+      "thread": "Admission and retry · QA",
+      "observation": "After the first operator-reported explicit check, the settled row visibly reads: Check completed. Delivery is still unconfirmed. The original recovery copy remains."
+    },
+    {
+      "file": "fourth-native-captures/04-repeat-check-keeps-newer-draft.png",
+      "bytes": 117820,
+      "sha256": "0f94549f0859bb52202ccd40acf8b2aa1028d246260997d11c665da0b9a521b2",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "fullyDecoded": true,
+      "fileModifiedAtUTC": "2026-11-09T17:37:23.607559+00:00",
+      "thread": "Admission and retry · QA",
+      "observation": "After typing Keep this newer draft unsent. and the second operator-reported explicit check, the qualified settled result and recovery row remain, and the newer draft is still in the editor."
+    },
+    {
+      "file": "fourth-native-captures/05-return-preserves-input-resets-check-label.png",
+      "bytes": 115862,
+      "sha256": "0a7e847ba1c53e0877571b9abea5a9fea947bbf6396b1a336840e4c88e1de044",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "fullyDecoded": true,
+      "fileModifiedAtUTC": "2026-11-09T17:37:37.719308+00:00",
+      "thread": "Admission and retry · QA",
+      "observation": "After operator-reported navigation to the pending thread and back, the recovery row and newer draft remain. The previous completed-check label is gone and Check delivery is available again."
+    }
+  ],
+  "readbackVerification": {
+    "synthetic": true,
+    "readAtUTC": "2026-11-09T17:42:40.952961+00:00",
+    "seedResult": {
+      "file": "live-native-fourth/seed-result.json",
+      "bytes": 4719,
+      "sha256": "9a97d72a2ba971ac0e52b2f0580fb0a15c6b5e73b1419d5533cb3130d7e7a08e"
+    },
+    "controls": {
+      "file": "live-native-fourth/live-controls.jsonl",
+      "bytes": 333,
+      "sha256": "b44c5572a480b1b4e6d02505a9a78edee143b4e912da215b44fdfd24246da05a"
+    },
+    "admissionThreadId": "28faff7d-f8e3-49ec-913b-dad8767319c2",
+    "checkedClientId": "6555021b-3144-4811-af47-1b0a87b17281",
+    "liveControls": [
+      {
+        "at": "2026-11-09T17:36:37.113Z",
+        "event": "admission_waiting",
+        "command": "QA_REJECT",
+        "method": "sendMessage",
+        "threadId": "28faff7d-f8e3-49ec-913b-dad8767319c2"
+      },
+      {
+        "at": "2026-11-09T17:36:40.117Z",
+        "event": "admission_rejected",
+        "command": "QA_REJECT",
+        "method": "sendMessage",
+        "threadId": "28faff7d-f8e3-49ec-913b-dad8767319c2",
+        "committed": false
+      }
+    ],
+    "admissionItemList": {
+      "file": "live-native-fourth/data/threads/items/28faff7d-f8e3-49ec-913b-dad8767319c2.jsonl",
+      "bytes": 9159,
+      "sha256": "7d512db6d7ad1673f60c57ae389156555b9bcaa14f6e17e1d07a92b99cf0051e",
+      "totalItems": 4,
+      "userMessages": 1,
+      "assistantMessages": 1,
+      "otherItems": 2,
+      "latestCreatedAtUTC": "2026-11-09T17:33:45.142Z",
+      "rejectedClientPresent": false,
+      "newerUnsentDraftPresent": false
+    },
+    "admissionTraces": [
+      {
+        "file": "live-native-fourth/data/trace/threads/28faff7d-f8e3-49ec-913b-dad8767319c2/46d60c04-f237-4ad2-920d-9e40c150f66c-27cf223e-b6e9-4843-9953-4ac3ebb93c57.jsonl",
+        "bytes": 2296,
+        "sha256": "996b68f5140ae35edb008a8eae7f55a2f35d87e6fe19a30f1f6dbf70fc93d981",
+        "recordCounts": {
+          "client_send_activated": 1,
+          "client_request_received": 1,
+          "client_request_finished": 1
+        },
+        "firstWallTime": "2026-11-09T17:36:37.064Z",
+        "lastWallTime": "2026-11-09T17:36:40.132Z"
+      },
+      {
+        "file": "live-native-fourth/data/trace/threads/28faff7d-f8e3-49ec-913b-dad8767319c2/8cf76063-9684-425a-b137-d8d036596d7c-2029c72f-26e2-4cbb-8e1c-dd3d5c2d3d88.jsonl",
+        "bytes": 20274,
+        "sha256": "d59bef619fb644e4f1050f483dd1871299550da2d715f0aa547421f1053bd656",
+        "recordCounts": {
+          "runtime_item": 6,
+          "context_preparation_started": 1,
+          "context_materialize_started": 1,
+          "context_source": 2,
+          "context_materialize_finished": 1,
+          "context_compile_started": 1,
+          "context_compile_finished": 1,
+          "context_preparation_finished": 1,
+          "model_sample_started": 1,
+          "model_input": 1,
+          "model_event": 2,
+          "model_sample_finished": 1
+        },
+        "firstWallTime": "2026-11-09T17:33:44.810Z",
+        "lastWallTime": "2026-11-09T17:33:45.176Z"
+      }
+    ],
+    "nativePeriodLowerBoundUTC": "2026-11-09T17:35:00Z",
+    "allSeededThreadNativePeriodRecordCounts": {
+      "client_send_activated": 1,
+      "client_request_received": 1,
+      "client_request_finished": 1
+    },
+    "nativePeriodModelSamplesStarted": 0,
+    "nativePeriodRuntimeItems": 0,
+    "allSeededModelSamples": {
+      "started": 35,
+      "finished": 35
+    },
+    "latestRecordedTurnStates": {
+      "turn_completed": 33,
+      "turn_aborted": 2
+    },
+    "conclusion": "The retained synthetic records show one rejected send and no additional accepted input or model run during these checks/navigation. They do not log the read-only check clicks individually, prove real-provider behavior, or turn UI uncertainty into non-delivery authority."
+  },
+  "independentReview": {
+    "file": "../reviews/fourth-delivery-terra.md",
+    "source": {
+      "file": "review-delivery-integrity-terra.md",
+      "bytes": 9904,
+      "sha256": "c91766f1ba027767dec1aecb2fe4ea68b2f1ee6b7d2b65097bee599968daf2b5"
+    },
+    "copiedVerbatim": true,
+    "status": "Original P2 full-read identity and P3 fixture-isolation findings retained; independent rereview marks both resolved within scope."
+  },
+  "limits": [
+    "No native capture of transient Checking delivery; its status/announcement behavior is covered by automated tests only.",
+    "Unavailable/failed reads, same-frame repeat fencing, full-window equal/newer-watermark race, stale epoch/thread/late outcome scenarios and Chinese delivery labels remain automated-only for this checkpoint.",
+    "Repeat check count and navigation sequence come from the native operator; these screenshots show settled states, not an uninterrupted recording.",
+    "No screen-reader, contrast-compliance, touch, reduced-motion, forced-colors, dark-mode or narrow-window claim for these five captures.",
+    "Synthetic local model and pre-admission rejection injection, not a live remote provider/network reliability test. The native IPC presentation correctly remains conservative.",
+    "The corrected QA model emits only text/usage and rejects shell/tool command forms, but the fixture is not an OS firewall or global isolation of manual application/plugin actions.",
+    "The local recovery row and unsent draft remain restart-volatile. Navigation retention is not persistence across application restart.",
+    "Raw runtime profiles, credentials, ItemLists and Trace payloads are not copied into repository evidence; only bounded readback counts and fingerprints are recorded."
+  ]
+}

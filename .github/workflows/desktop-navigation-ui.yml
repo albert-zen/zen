@@ -1,0 +1,88 @@
+name: Desktop navigation preview (short independent feedback)
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/desktop-navigation-ui.yml
+      - apps/zenx/scripts/*main-ui-preview.mjs
+      - apps/zenx/scripts/preview-browser-lifecycle.mjs
+      - apps/zenx/test/navigation-main-ui-preview.test.mjs
+      - apps/zenx/test/fixtures/ui-polish-visual*
+      - apps/zenx/src/renderer/src/App.tsx
+      - apps/zenx/src/renderer/src/Sidebar.tsx
+      - apps/zenx/src/renderer/src/sidebar-expansion.ts
+      - apps/zenx/src/renderer/src/plugin-information-host.tsx
+      - apps/zenx/src/renderer/src/EditableInformationPanel.tsx
+      - apps/zenx/src/renderer/src/ConversationInformationCards.tsx
+      - apps/zenx/src/renderer/src/subagents-ui.tsx
+      - apps/zenx/src/renderer/src/styles.css
+      - apps/zenx/src/renderer/src/shell-thread-panel.css
+      - apps/zenx/src/renderer/src/theme.css
+      - package-lock.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-navigation-ui-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  navigation:
+    name: Titlebar Information and Recent fallback (desktop only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Renderer dependencies only, no native installers
+        timeout-minutes: 3
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Apply pinned renderer-only dependency fix
+        run: node apps/zenx/scripts/prepare-legend-list.mjs
+      - name: Use existing CJK fonts or official Ubuntu fonts
+        timeout-minutes: 2
+        run: |
+          if [ -z "$(fc-list :lang=zh family)" ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+          fi
+      - name: Validate only desktop navigation contracts
+        run: node --test apps/zenx/test/navigation-main-ui-preview.test.mjs
+      - name: Bundle only the production App navigation fixture
+        timeout-minutes: 2
+        run: node apps/zenx/scripts/build-main-ui-preview.mjs "${{ runner.temp }}/desktop-navigation-preview" navigation
+      - name: Capture light and dark desktop interaction states
+        timeout-minutes: 2
+        run: node apps/zenx/scripts/capture-main-ui-preview.mjs "${{ runner.temp }}/desktop-navigation-preview" fine
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-navigation-${{ github.event.pull_request.head.sha }}
+          path: |
+            ${{ runner.temp }}/desktop-navigation-preview/*.png
+            ${{ runner.temp }}/desktop-navigation-preview/*.json
+            ${{ runner.temp }}/desktop-navigation-preview/*.html
+            ${{ runner.temp }}/desktop-navigation-preview/*.log
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Report source, measured time and verification boundary
+        if: always()
+        run: |
+          node --input-type=module <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          import { readFile } from 'node:fs/promises';
+          const dir = process.env.RUNNER_TEMP + '/desktop-navigation-preview/';
+          try {
+            const source = JSON.parse(await readFile(dir + 'source.json'));
+            console.log(`Source: ${source.commit}; tree: ${source.tree}; build: ${(source.buildMs/1000).toFixed(1)}s`);
+            const evidence = JSON.parse(await readFile(dir + 'evidence.json'));
+            console.log(`Desktop capture: ${(evidence.captureMs/1000).toFixed(1)}s; screenshots: ${Object.keys(evidence.screenshots).length}; status: ${evidence.status}.`);
+          } catch { console.log('Preview incomplete; inspect retained diagnostics.'); }
+          console.log('Only 1280x900 light/dark production App rendering with synthetic read-only data and real pointer/keyboard input. Sandbox retained. No narrow/coarse capture, aggregate CI dependency, native Electron or real Host acceptance.');
+          NODE

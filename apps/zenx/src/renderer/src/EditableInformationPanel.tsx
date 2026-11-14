@@ -1,3 +1,4 @@
+import type { InformationCommunications } from "./information-communications.js";
 import React, {
   memo,
   useCallback,
@@ -39,6 +40,7 @@ export interface InformationReceipt {
   resourceThreadId?: string;
 }
 type Props = {
+  communications?: InformationCommunications;
   owner: BoardConversation;
   threads: readonly NativeThreadSummary[];
   snapshot: ZenXPluginSnapshot;
@@ -90,6 +92,7 @@ export function EditableInformationPanel(props: Props) {
 }
 function InformationPanel({
   owner,
+  communications,
   threads,
   snapshot,
   registry,
@@ -488,6 +491,13 @@ function InformationPanel({
       <ConversationInformationCards
         key={contentKey(widget)}
         threadId={threadId!}
+        communications={
+          owner.kind === "thread" &&
+          owner.threadId === threadId &&
+          communications?.ownerThreadId === owner.threadId
+            ? communications
+            : undefined
+        }
         threads={threads}
         snapshot={snapshot}
         registry={registry}
@@ -521,19 +531,15 @@ function InformationPanel({
         </div>
       ) : null}
       <div className="information-settings-toolbar">
-        <span>
-          {editing || hasVisibleContent ? t("informationComponents") : null}
-        </span>
         <button
           type="button"
-          className="quiet-button information-customize"
+          className="icon-button information-customize"
           aria-label={t(editing ? "informationDone" : "informationCustomize")}
           title={t(editing ? "informationDone" : "informationCustomize")}
           aria-pressed={editing}
           onClick={() => setEditing((value) => !value)}
         >
           <Icon name={editing ? "check" : "compose"} size={14} />
-          {t(editing ? "informationDone" : "informationManage")}
         </button>
       </div>
       {error ? (
@@ -597,6 +603,14 @@ function InformationPanel({
             </button>
           </div>
         </div>
+      ) : null}
+      {!editing &&
+      receipt?.owner.kind === owner.kind &&
+      receipt.owner.id === ownerId &&
+      !error &&
+      !pending &&
+      !hasVisibleContent ? (
+        <p className="information-empty">{t("informationEmptyHint")}</p>
       ) : null}
       {!receipt ? (
         editing ? (
@@ -751,6 +765,7 @@ function InformationPanel({
                     />
                     <h3>{title(widget)}</h3>
                   </button>
+                  <span className="information-widget-inline-actions" />
                   {editing ? (
                     <div className="information-widget-actions">
                       <button

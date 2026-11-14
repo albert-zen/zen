@@ -17,6 +17,9 @@ const consumption = /var\((--[a-z0-9_-]+)/giu;
 const dynamicProductTokens = new Set([
   "--zenx-brand-asset",
   "--bottom-zone-height",
+  // ThreadView measures the transcript column for Composer and approval alignment.
+  "--composer-column-left",
+  "--composer-column-width",
   // ThreadView owns pending tray alignment with the transcript column.
   "--pending-tray-gutter",
   "--pending-tray-left",
@@ -31,6 +34,26 @@ const dynamicProductTokens = new Set([
   "--radix-select-content-transform-origin",
   "--radix-select-trigger-width",
 ]);
+
+test("Composer layout seams are the two exact runtime measurements, not a token prefix", () => {
+  assert.deepEqual(
+    [...dynamicProductTokens]
+      .filter((token) => token.startsWith("--composer-column-"))
+      .sort(),
+    ["--composer-column-left", "--composer-column-width"],
+  );
+  for (const token of [
+    "--composer-column-height",
+    "--composer-column-wdith",
+    "--composer-column-left-extra",
+  ]) {
+    assert.equal(
+      dynamicProductTokens.has(token),
+      false,
+      `${token} must remain undefined`,
+    );
+  }
+});
 
 test("renderer product styles keep raw colors in the single theme source", async () => {
   const files = await rendererProductFiles(rendererRoot);

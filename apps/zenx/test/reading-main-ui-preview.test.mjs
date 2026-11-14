@@ -1,0 +1,917 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { readFile } from "node:fs/promises";
+import {
+  informationDockReady,
+  observeReading,
+  verifyApprovalMode,
+  tabToApprovalToggle,
+  verifyReading,
+  scrollReadingTo,
+  readingPathsChanged,
+  readingPaths,
+} from "../scripts/reading-main-ui-preview.mjs";
+const read = (p) => readFile(new URL(p, import.meta.url), "utf8");
+const box = (x = 100, right = 900) => ({
+  visible: true,
+  hit: true,
+  disabled: false,
+  rect: { x, right, y: 100, bottom: 700, width: right - x, height: 600 },
+});
+const state = () => ({
+  horizontalOverflow: false,
+  markdownCounts: Object.fromEntries(
+    ["h1", "h2", "h3", "p", "ul", "ol", "table", "pre", "blockquote"].map(
+      (t) => [t, 1],
+    ),
+  ),
+  column: box(),
+  thread: box(80, 920),
+  composer: box(),
+  editor: box(),
+  primary: box(),
+  table: box(),
+  code: box(),
+  questionReadErrors: [],
+  telemetry: { informationUpdates: 0, protocolCalls: [], informationReads: [] },
+  dock: null,
+  queue: null,
+  approval: null,
+});
+test("desktop reading verifies production rich content, shared width and actual dock/pending combinations", () => {
+  verifyReading(state());
+  const s = state();
+  Object.assign(s, {
+    dock: box(920, 1250),
+    informationClose: box(),
+    queue: box(),
+    approval: box(),
+    queueEdit: box(),
+    allow: box(),
+    deny: box(),
+  });
+  s.telemetry.informationReads.push({ kind: "thread", id: "thread-1" });
+  verifyReading(s, { information: true, pending: true });
+});
+test("overflow, missing Markdown, covered controls and unintended bridge writes cannot pass", () => {
+  for (const fault of [
+    "overflow",
+    "wide",
+    "alignment",
+    "missing-code",
+    "missing-title",
+    "editor",
+    "table",
+    "send",
+    "write",
+    "question-error",
+  ]) {
+    const s = state();
+    if (fault === "overflow") s.horizontalOverflow = true;
+    if (fault === "wide") s.column.rect.width = 900;
+    if (fault === "alignment") s.composer.rect.x += 20;
+    if (fault === "missing-code") s.code = null;
+    if (fault === "missing-title") s.markdownCounts.h2 = 0;
+    if (fault === "editor") s.editor.hit = false;
+    if (fault === "table") s.table.rect.right = 1000;
+    if (fault === "send") s.telemetry.protocolCalls.push("zen/turn/send");
+    if (fault === "write") s.telemetry.informationUpdates = 1;
+    if (fault === "question-error") s.questionReadErrors = ["failed"];
+    assert.throws(() => verifyReading(s), undefined, fault);
+  }
+});
+test("observer executes against production class structure without changing or fabricating geometry", async () => {
+  const { JSDOM } = await import("jsdom");
+  const dom = new JSDOM(
+    '<div class="agent-copy"><div class="markdown-body"><h1>One</h1><h2>Two</h2><h3>Three</h3><p>Text</p><ul><li>Item</li></ul><ol><li>Step</li></ol><blockquote>Note</blockquote><div class="markdown-table-wrap"><table><tbody><tr><td>Result</td></tr></tbody></table></div><div class="markdown-code"><pre>code</pre></div></div></div>',
+    { runScripts: "outside-only" },
+  );
+  try {
+    dom.window.document.elementFromPoint = () => null;
+    const count = dom.window.document.querySelectorAll("*").length;
+    const s = dom.window.eval(`(${observeReading.toString()})()`);
+    assert.equal(s.markdownCounts.h1, 1);
+    assert.equal(s.markdownCounts.table, 1);
+    assert.equal(s.markdownCounts.pre, 1);
+    assert.equal(s.code.rect.height, 0, "JSDOM is not pixel evidence");
+    assert.equal(dom.window.document.querySelectorAll("*").length, count);
+  } finally {
+    dom.window.close();
+  }
+});
+test("scrolling is bounded native wheel input with observed progress, never DOM scroll mutation", async () => {
+  const calls = [],
+    evidence = {};
+  let count = 0;
+  await scrollReadingTo({
+    send: async (...args) => calls.push(args),
+    evaluate: async () => ({
+      scrollTop: count++ ? 0 : 320,
+      x: 500,
+      y: 80,
+      top: 0,
+    }),
+    evidence,
+    theme: "light",
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], "Input.dispatchMouseEvent");
+  assert.equal(calls[0][1].type, "mouseWheel");
+  assert.equal(calls[0][1].deltaY, -320);
+  assert.equal(evidence.readingScrollAttempts[0].matched, true);
+  assert.doesNotMatch(
+    scrollReadingTo.toString(),
+    /scrollTop\s*=|scrollIntoView|\.focus\(|\.click\(/,
+  );
+});
+test("missing reading target fails rather than scrolling to an invented location", async () => {
+  await assert.rejects(
+    scrollReadingTo({
+      send: async () => assert.fail("no input"),
+      evaluate: async () => ({ targetY: null, top: 0 }),
+      evidence: {},
+      theme: "light",
+      target: ".missing",
+    }),
+    /production reading block exists/,
+  );
+});
+test("dedicated profile is desktop-only, source-bound and independent of aggregate CI", async () => {
+  const c = await read("../scripts/capture-main-ui-preview.mjs"),
+    b = await read("../scripts/build-main-ui-preview.mjs"),
+    w = await read("../../../.github/workflows/desktop-reading-ui.yml"),
+    h = await read("../scripts/reading-main-ui-preview.mjs");
+  assert.match(c, /desktopReading = captureProfile === "desktop-reading"/);
+  assert.match(c, /desktopOnly \? "fine"/);
+  assert.match(c, /options of desktopOnly/);
+  assert.match(c, /c.width === 1280 && c.height === 900/);
+  assert.match(c, /process.env.GITHUB_ACTIONS,\s*"true"/);
+  assert.doesNotMatch(c, /['"]--no-sandbox/);
+  assert.match(c, /Object.keys\(source.scenes\),\s*\["reading"\]/);
+  assert.match(b, /reading-main-ui-preview.mjs/);
+  assert.match(b, /connect-src 'none'/);
+  assert.match(w, /desktop-reading" reading/);
+  assert.match(w, /desktop-reading" desktop-reading/);
+  assert.match(w, /fetch-depth: 2/);
+  assert.match(w, /'HEAD\^', 'HEAD'/);
+  assert.match(w, /steps.selection.outputs.needsCapture/);
+  assert.doesNotMatch(w, /\bneeds:| coarse|npm run check/);
+  for (const step of [
+    "prose-top",
+    "heading-list",
+    "table-code",
+    "information-reading",
+    "pending-approval",
+    "pending-information",
+  ])
+    assert(h.includes(`"${step}"`));
+  assert.doesNotMatch(h, /\.click\(|\.focus\(|\.style\./);
+  assert.match(h, /Input.insertText/);
+  for (const path of readingPaths) assert(readingPathsChanged([path]));
+  assert.equal(readingPathsChanged(["docs/ui-quality/evidence.png"]), false);
+});
+
+test("approval coexistence opens the real compact Queue disclosure before judging its actions", async () => {
+  const source = await read("../scripts/reading-main-ui-preview.mjs");
+  assert.match(source, /getAttribute\('aria-expanded'\) === 'false'/);
+  const disclosure = source.indexOf('await click(".queue-shelf-toggle")');
+  const edit = source.indexOf(
+    "await wait(\"!!document.querySelector('.queue-row-edit:not(:disabled)')\")",
+  );
+  assert(disclosure > 0 && edit > disclosure);
+  assert(source.indexOf('await save("pending-approval"', edit) > edit);
+  assert.doesNotMatch(source, /setAttribute\(|\.click\(|\.focus\(/);
+});
+
+test("observer measures both production virtual and legacy content columns, not only the absent legacy node", async () => {
+  const { JSDOM } = await import("jsdom");
+  for (const klass of [
+    "virtual-transcript-header",
+    "virtual-transcript-row",
+    "messages-inner",
+  ]) {
+    const dom = new JSDOM(
+      `<div class="thread-view"><div class="messages"><div class="${klass}"></div></div></div>`,
+      { runScripts: "outside-only" },
+    );
+    try {
+      dom.window.document.elementFromPoint = () => null;
+      const observed = dom.window.eval(`(${observeReading.toString()})()`);
+      assert(observed.column);
+      assert.equal(observed.columnKind, klass);
+      assert.equal(
+        observed.column.rect.width,
+        0,
+        "DOM structure test, not pixel evidence",
+      );
+      assert.equal(observed.messageScrollbarWidth, 0);
+    } finally {
+      dom.window.close();
+    }
+  }
+});
+
+test("the observed five-pixel native-scrollbar drift still fails shared-column alignment", () => {
+  const s = state();
+  s.column = box(366.5, 1166.5);
+  s.thread = box(264, 1279);
+  s.composer = box(371.5, 1171.5);
+  s.table = box(366.5, 1166.5);
+  s.code = box(366.5, 1166.5);
+  assert.throws(() => verifyReading(s), /shared column alignment/);
+  s.column = null;
+  assert.throws(() => verifyReading(s), /reading column respects/);
+});
+
+const approvalState = (reading = false) => ({
+  approvalToggle: {
+    ...box(),
+    expanded: String(!reading),
+    controls: "region",
+    focused: true,
+    focusVisible: true,
+    outline: "solid",
+    outlineWidth: 2,
+  },
+  approvalControlledRegion: true,
+  approvalReading: reading,
+  draft: "synthetic draft",
+  composer: box(),
+  approval: { ...box(), rect: { ...box().rect, height: reading ? 100 : 250 } },
+  approvalRequestId: "same",
+  approvalBody: reading ? null : box(),
+  approvalSummary: reading ? box() : null,
+  allow: reading ? null : box(),
+  deny: reading ? null : box(),
+  approvalSummaryText: reading
+    ? "run_code · Request to remember permission · Waiting for your review. No decision has been made."
+    : null,
+  conversationUncoveredHeight: reading ? 400 : 250,
+});
+test("explicit approval reading preserves scope, no-decision and focus while default and restore keep full review", () => {
+  const full = approvalState();
+  verifyApprovalMode(full, { reading: false });
+  verifyApprovalMode(approvalState(true), {
+    reading: true,
+    baseline: full,
+    focus: true,
+  });
+  verifyApprovalMode(approvalState(), {
+    reading: false,
+    baseline: full,
+    focus: true,
+  });
+  for (const fault of [
+    "decision",
+    "scope",
+    "ambiguous-scope",
+    "pending",
+    "focus",
+    "draft",
+    "no-gain",
+    "owner",
+  ]) {
+    const s = approvalState(true);
+    if (fault === "decision") s.allow = box();
+    if (fault === "scope")
+      s.approvalSummaryText = "run_code Waiting for your review. No decision";
+    if (fault === "ambiguous-scope")
+      s.approvalSummaryText =
+        "run_code · Remembered permission · Waiting for your review. No decision has been made.";
+    if (fault === "pending")
+      s.approvalSummaryText = "run_code Request to remember permission";
+    if (fault === "focus") s.approvalToggle.focusVisible = false;
+    if (fault === "draft") s.draft = "changed";
+    if (fault === "no-gain") s.conversationUncoveredHeight = 250;
+    if (fault === "owner") s.approvalToggle.controls = "wrong-region";
+    assert.throws(
+      () =>
+        verifyApprovalMode(s, { reading: true, baseline: full, focus: true }),
+      undefined,
+      fault,
+    );
+  }
+});
+test("approval disclosure search uses native bounded Tab pairs and observed focus", async () => {
+  const evidence = {},
+    calls = [];
+  let n = 0;
+  const result = await tabToApprovalToggle({
+    send: async (...a) => calls.push(a),
+    evaluate: async () => ({
+      matched: ++n === 2,
+      tag: "BUTTON",
+      id: "synthetic",
+    }),
+    evidence,
+    theme: "dark",
+  });
+  assert.equal(result.steps, 2);
+  assert.equal(result.observations.length, 2);
+  assert(result.matched);
+  assert.equal(calls.length, 4);
+  assert(
+    calls.every(([m, p]) => m === "Input.dispatchKeyEvent" && p.key === "Tab"),
+  );
+  assert.deepEqual(
+    calls.map(([, p]) => p.type),
+    ["rawKeyDown", "keyUp", "rawKeyDown", "keyUp"],
+  );
+});
+test("approval trip adds exactly three frames per theme and never invokes a decision", async () => {
+  const h = await read("../scripts/reading-main-ui-preview.mjs"),
+    w = await read("../../../.github/workflows/desktop-reading-ui.yml");
+  for (const step of [
+    "approval-explicit-reading",
+    "approval-restored",
+    "approval-new-request",
+  ])
+    assert(h.includes(`"${step}"`));
+  assert.match(h, /synthetic-host-request-replacement/);
+  assert.doesNotMatch(
+    h,
+    /click\([^\n]*(?:approval-request-allow|approval-request-deny)|respondToApproval\(/,
+  );
+  assert.match(h, /dispatchNavigationKey\(send, "Enter", "Enter", 13\)/);
+  for (const file of [
+    "ApprovalRequestCard.tsx",
+    "approval-request.css",
+    "i18n/shell.ts",
+  ]) {
+    assert(h.includes(file));
+    assert(w.includes(file));
+  }
+});
+
+// Keep the screenshot contract tied to the production English text, not just
+// a synthetic measurement object. Chinese copy has separate component tests.
+test("reading capture requires request wording from the production permission label", async () => {
+  const copy = await read("../src/renderer/src/i18n/shell.ts");
+  const capture = await read("../scripts/reading-main-ui-preview.mjs");
+  assert.match(
+    copy,
+    /approvalRememberedShortScope: "Request to remember permission"/,
+  );
+  assert.match(copy, /approvalOnceShortScope: "Request: this call only"/);
+  assert.match(
+    capture,
+    /assert\.match\(s\.approvalSummaryText, \/Request to remember permission\/\)/,
+  );
+  assert.doesNotMatch(
+    capture,
+    /assert\.match\(s\.approvalSummaryText, \/Remembered permission\/\)/,
+  );
+});
+
+test("Information readiness follows the sole expanded toggle and visible dock, never a duplicate close control", async () => {
+  const dock = {
+    id: "information-1",
+    hidden: false,
+    getBoundingClientRect: () => ({ width: 340, height: 300 }),
+  };
+  let expanded = true;
+  let controls = "information-1";
+  let mounted = true;
+  const toggle = { disabled: false, getAttribute: () => controls };
+  const root = {
+    querySelector: (selector) =>
+      selector === ".information-dock"
+        ? mounted
+          ? dock
+          : null
+        : expanded
+          ? toggle
+          : null,
+  };
+  assert.equal(informationDockReady(root), true);
+  expanded = false;
+  assert.equal(informationDockReady(root), false);
+  expanded = true;
+  controls = "another-owner";
+  assert.equal(informationDockReady(root), false);
+  controls = dock.id;
+  dock.hidden = true;
+  assert.equal(informationDockReady(root), false);
+  dock.hidden = false;
+  mounted = false;
+  assert.equal(informationDockReady(root), false);
+  const source = await read("../scripts/reading-main-ui-preview.mjs");
+  assert.match(source, /informationDockReady\.toString\(\)/);
+  assert.doesNotMatch(source, /information-dismiss-toolbar/);
+});
+
+test("scrollbar lifecycle changes trigger both short-reading path gates", async () => {
+  const path = "apps/zenx/src/renderer/src/scrollbar-visibility.ts";
+  assert.equal(readingPathsChanged([path]), true);
+  assert.equal(
+    readingPathsChanged(["docs/ui-quality/evidence/example.png"]),
+    false,
+  );
+  const workflow = await read(
+    "../../../.github/workflows/desktop-reading-ui.yml",
+  );
+  assert(workflow.includes(`      - ${path}\n`));
+  assert.match(workflow, /timeout-minutes: 6/);
+});
+
+// Optional data scene, exercised by the existing desktop-reading capture only.
+import {
+  inlineTraceGeometryReady,
+  inlineWheelDelta,
+  seekInlineClick,
+  verifyInlineTrace,
+} from "../scripts/inline-trace-main-ui-preview.mjs";
+
+const inlinePointerProbe = {
+  point: { x: 400, y: 820 },
+  available: { top: 88, bottom: 774 },
+  wheel: { x: 312, y: 112 },
+  target: { width: 100, height: 25 },
+  scroll: { top: 12, maxTop: 500, wheelOwned: true },
+  disabled: false,
+  ready: false,
+};
+
+test("inline pointer scrolls only an off-band target within owned native range", () => {
+  const s = inlinePointerProbe;
+  assert.equal(inlineWheelDelta(s), 360);
+  assert.equal(inlineWheelDelta({ ...s, point: { x: 400, y: 0 } }), -360);
+  assert.equal(inlineWheelDelta({ ...s, point: { x: 400, y: 500 } }), 0);
+  assert.equal(
+    inlineWheelDelta({ ...s, scroll: { ...s.scroll, top: 500 } }),
+    0,
+  );
+  assert.equal(
+    inlineWheelDelta({ ...s, scroll: { ...s.scroll, wheelOwned: false } }),
+    0,
+  );
+  assert.equal(inlineWheelDelta({ ...s, target: null }), 0);
+});
+
+test("inline pointer waits for a stable actual hit, never clicks through a cover", async () => {
+  const s = inlinePointerProbe;
+  const ready = { ...s, ready: true, point: { x: 400, y: 450 } };
+  const states = [s, { ...ready, point: { x: 400, y: 490 } }, ready, ready];
+  const wheels = [],
+    samples = [];
+  let settles = 0;
+  const point = await seekInlineClick({
+    sample: async () => states.shift(),
+    settle: async () => settles++,
+    wheel: async (step) => wheels.push(step),
+    samples,
+    transcriptControl: true,
+  });
+  assert.deepEqual(point, ready.point);
+  assert.equal(settles, 4);
+  assert.equal(samples.length, 4);
+  assert.deepEqual(wheels, [{ x: 312, y: 112, deltaY: 360 }]);
+  const blocked = [];
+  assert.equal(
+    await seekInlineClick({
+      sample: async () => ({
+        ...ready,
+        ready: false,
+        hit: { tag: "DIV", className: "cover" },
+      }),
+      settle: async () => {},
+      wheel: async () => assert.fail("Do not scroll around an in-band cover"),
+      samples: blocked,
+      transcriptControl: true,
+    }),
+    null,
+  );
+  assert.equal(blocked.length, 12);
+  assert.equal(blocked.at(-1).hit.className, "cover");
+});
+
+test("inline trace waits when output becomes visible before its full panel", () => {
+  const state = {
+    turns: [
+      { answerMarker: { visible: true } },
+      {
+        answerMarker: { visible: true },
+        failedOutput: { visible: true },
+        traces: [{ expanded: "true", visible: true, detailVisible: false }],
+      },
+    ],
+    dockOpen: true,
+    dockVisible: true,
+  };
+  assert.equal(inlineTraceGeometryReady(state, true), false);
+  state.turns[1].traces[0].detailVisible = true;
+  assert.equal(inlineTraceGeometryReady(state, true), true);
+  state.turns[0].answerMarker.visible = false;
+  assert.equal(inlineTraceGeometryReady(state, true), false);
+  state.turns[0].answerMarker.visible = true;
+  assert.equal(inlineTraceGeometryReady(state, false), false);
+  state.turns[1].failedOutput.visible = false;
+  assert.equal(inlineTraceGeometryReady(state, false), true);
+  assert.equal(inlineTraceGeometryReady({ ...state, turns: [] }, false), false);
+});
+test("inline trace preserves answers, Information and mutation-free bridge", () => {
+  const baseline = {
+    turns: [
+      {
+        answer: "Summary checked",
+        expanded: "false",
+        traces: [],
+        answerMarker: { visible: true },
+        failedOutput: { visible: false },
+      },
+      {
+        answer: "Label check needs attention",
+        expanded: "true",
+        traces: [{ expanded: "false" }],
+        answerMarker: { visible: true },
+        failedOutput: { visible: false },
+      },
+    ],
+    dockOpen: true,
+    dockVisible: true,
+    telemetry: {
+      informationUpdates: 0,
+      machineThreadCreateCalls: 0,
+      sideChatCreateCommandCalls: 0,
+      protocolCalls: [],
+      informationReads: [],
+    },
+  };
+  verifyInlineTrace(baseline, null, false);
+  const next = structuredClone(baseline);
+  next.turns[1].failedOutput.visible = true;
+  next.turns[1].text = "Expected reader_name, received reader_label";
+  next.turns[1].traces = [
+    {
+      expanded: "true",
+      visible: true,
+      detailVisible: true,
+      detailText: "Expected reader_name, received reader_label",
+    },
+  ];
+  next.telemetry.informationReads.push({ kind: "thread", id: "thread-1" });
+  verifyInlineTrace(next, baseline, true);
+  for (const mutate of [
+    (s) => (s.dockVisible = false),
+    (s) => (s.turns[0].answerMarker.visible = false),
+    (s) => (s.turns[1].failedOutput.visible = false),
+    (s) => (s.turns[0].expanded = "true"),
+    (s) => (s.turns[1].answer = "lost"),
+    (s) => s.telemetry.informationUpdates++,
+    (s) => s.telemetry.sideChatCreateCommandCalls++,
+    (s) => s.telemetry.protocolCalls.push("zen/turn/send"),
+  ]) {
+    const bad = structuredClone(next);
+    mutate(bad);
+    assert.throws(() => verifyInlineTrace(bad, baseline, true));
+  }
+});
+test("inline trace uses native pointer and stays desktop scoped", async () => {
+  const module = await read("../scripts/inline-trace-main-ui-preview.mjs");
+  const parent = await read("../scripts/reading-main-ui-preview.mjs");
+  assert.match(
+    module,
+    /section\.turn:has\(\.agent-copy \[data-thread-find-item-id=/,
+  );
+  assert.doesNotMatch(module, /section\.turn\[data-read-message-id=/);
+  assert.match(module, /mousePressed/);
+  assert.match(module, /mouseReleased/);
+  assert.match(module, /mouseWheel/);
+  assert.doesNotMatch(module, /\.click\(\)|dispatchEvent\(/);
+  assert.match(module, /inlineTrace.*1/);
+  assert.match(parent, /await captureInlineTrace/);
+  assert.match(
+    await read("../scripts/build-main-ui-preview.mjs"),
+    /"apps\/zenx\/scripts\/inline-trace-main-ui-preview\.mjs"/,
+  );
+  assert.equal(
+    readingPathsChanged(["apps/zenx/scripts/inline-trace-main-ui-preview.mjs"]),
+    true,
+  );
+});
+
+test("inline trace observer rejects retained, ancestor-hidden and clipped original output", async () => {
+  const { JSDOM } = await import("jsdom");
+  const { observeInlineTrace } =
+    await import("../scripts/inline-trace-main-ui-preview.mjs");
+  const dom = new JSDOM(
+    `<div class="messages"><section class="turn"><div class="agent-copy"><h2>Summary checked</h2></div></section><section class="turn"><div class="agent-copy"><h2>Label check needs attention</h2></div><div id="clip" style="overflow-x:hidden;overflow-y:hidden"><div id="detail"><span>Expected reader_name, received reader_label</span></div></div></section></div><div class="composer"></div><div class="information-dock"></div>`,
+  );
+  const keys = [
+    "document",
+    "window",
+    "NodeFilter",
+    "getComputedStyle",
+    "innerWidth",
+    "innerHeight",
+  ];
+  const saved = Object.fromEntries(keys.map((k) => [k, globalThis[k]]));
+  let clipHeight = 100,
+    outputX = 100;
+  const rect = (x, y, width, height) => ({
+    x,
+    y,
+    left: x,
+    top: y,
+    width,
+    height,
+    right: x + width,
+    bottom: y + height,
+  });
+  dom.window.HTMLElement.prototype.getBoundingClientRect = function () {
+    if (this.className === "messages") return rect(0, 0, 900, 700);
+    if (this.className === "composer") return rect(0, 700, 900, 100);
+    if (this.id === "clip") return rect(90, 280, 600, clipHeight);
+    return rect(90, 290, 600, 60);
+  };
+  for (const [name, dimension] of [
+    ["clientWidth", "width"],
+    ["clientHeight", "height"],
+  ])
+    Object.defineProperty(dom.window.HTMLElement.prototype, name, {
+      get() {
+        return this.getBoundingClientRect()[dimension];
+      },
+    });
+  dom.window.Range.prototype.getBoundingClientRect = function () {
+    return rect(
+      this.startContainer.textContent.includes("Expected") ? outputX : 100,
+      300,
+      300,
+      20,
+    );
+  };
+  Object.assign(globalThis, {
+    document: dom.window.document,
+    window: dom.window,
+    NodeFilter: dom.window.NodeFilter,
+    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+    innerWidth: 1280,
+    innerHeight: 900,
+  });
+  dom.window.__uiPolishTelemetry = {};
+  try {
+    const read = () => observeInlineTrace().turns[1].failedOutput;
+    const clip = document.getElementById("clip");
+    assert.equal(read().visible, true);
+    clipHeight = 10;
+    assert.equal(
+      read().visible,
+      false,
+      "Range can stay full while overflow parent clips",
+    );
+    clipHeight = 100;
+    for (const attr of ["hidden", "inert", "aria-hidden"]) {
+      clip.setAttribute(attr, attr === "aria-hidden" ? "true" : "");
+      assert.equal(read().visible, false, attr);
+      clip.removeAttribute(attr);
+    }
+    clip.style.visibility = "hidden";
+    assert.equal(read().visible, false);
+    clip.style.visibility = "";
+    clip.style.opacity = "0";
+    assert.equal(read().visible, false);
+    clip.style.opacity = "";
+    outputX = 1000;
+    assert.equal(
+      read().visible,
+      false,
+      "off transcript even if DOM range exists",
+    );
+    outputX = 100;
+    assert.equal(read().visible, true, "restored visible geometry");
+  } finally {
+    Object.assign(globalThis, saved);
+    dom.window.close();
+  }
+});
+
+// Synthetic observations exercise the capture guard, never claim real pixels.
+function continuationState() {
+  return {
+    turns: ["result-answer-0", "result-answer-1"].map((answerItemId, i) => ({
+      answerItemId,
+      endItemId: `terminal-${i}`,
+      text: `turn-${i}`,
+      answer: i ? "No command was executed or retried." : "Summary checked",
+      expanded: i ? "true" : "false",
+      traces: i ? [{ expanded: "true", detailText: "Exit code 1" }] : [],
+      answerEnd: {
+        visible: false,
+        hit: true,
+        rect: { bottom: 820 },
+        limit: { bottom: 774 },
+        hiddenBy: null,
+      },
+    })),
+    dockOpen: true,
+    dockVisible: true,
+    continuation: {
+      top: 0,
+      left: 0,
+      maxTop: 500,
+      wheel: { x: 272, y: 240 },
+      output: [[0, 0]],
+      page: [0, 0],
+      draft: "",
+      composer: [288, 774, 592, 108],
+    },
+    telemetry: {
+      informationUpdates: 0,
+      machineThreadCreateCalls: 0,
+      sideChatCreateCommandCalls: 0,
+      protocolCalls: [],
+    },
+  };
+}
+test("continuation reaches existing end with bounded native outer wheel and preserves prior screenshots", async () => {
+  const { captureInlineContinuation } =
+    await import("../scripts/inline-trace-main-ui-preview.mjs");
+  for (const mode of ["wheel", "delayed-wheel", "already"]) {
+    const already = mode === "already";
+    let pendingFrames = 0;
+    const s = continuationState(),
+      evidence = {},
+      calls = [],
+      captures = [];
+    s.turns[1].answerEnd.visible = already;
+    await captureInlineContinuation({
+      options: { theme: "light", name: "desktop-light" },
+      evidence,
+      observe: async () => structuredClone(s),
+      settle: async () => {
+        if (pendingFrames && --pendingFrames === 0) {
+          s.continuation.top = 100;
+          s.turns[1].answerEnd.visible = true;
+        }
+      },
+      send: async (m, p) => {
+        calls.push([m, p]);
+        if (mode === "delayed-wheel") pendingFrames = 3;
+        else {
+          s.continuation.top = 100;
+          s.turns[1].answerEnd.visible = true;
+        }
+      },
+      capture: async (name) => captures.push(name),
+    });
+    assert.equal(calls.length, already ? 0 : 1);
+    if (!already) {
+      assert.equal(calls[0][0], "Input.dispatchMouseEvent");
+      assert.equal(calls[0][1].type, "mouseWheel");
+      assert.equal(calls[0][1].deltaX, 0);
+      assert(calls[0][1].deltaY > 0 && calls[0][1].deltaY <= 240);
+    }
+    assert.deepEqual(captures, [
+      "reading-desktop-light-inline-trace-answer-end",
+    ]);
+    assert.equal(
+      evidence.inlineContinuationTrips[0].outcome,
+      already ? "already-visible" : "reached-with-wheel",
+    );
+  }
+  const source = await read("../scripts/inline-trace-main-ui-preview.mjs");
+  assert(
+    source.indexOf('await stableCapture("failed-expanded", baseline, true)') <
+      source.lastIndexOf("await captureInlineContinuation"),
+  );
+  assert.doesNotMatch(
+    source,
+    /\.scrollTop\s*=|\.scrollTo\(|\.scrollIntoView\(/,
+  );
+});
+test("continuation cannot pass wrong ownership, cover, unrelated scrolling or lost content", async () => {
+  const { captureInlineContinuation } =
+    await import("../scripts/inline-trace-main-ui-preview.mjs");
+  for (const fault of [
+    "owner",
+    "covered",
+    "output",
+    "page",
+    "answer",
+    "turn-id",
+    "turn-text",
+    "no-progress",
+    "budget",
+    "after-screenshot-moved",
+    "unstable",
+  ]) {
+    const s = continuationState(),
+      evidence = {};
+    let wheels = 0;
+    if (fault === "owner") s.continuation.wheel = null;
+    if (["after-screenshot-moved", "unstable"].includes(fault))
+      s.turns[1].answerEnd.visible = true;
+    if (fault === "covered") {
+      s.turns[1].answerEnd.rect.bottom = 760;
+      s.turns[1].answerEnd.hit = false;
+    }
+    if (fault === "budget") {
+      s.continuation.maxTop = 5000;
+      s.turns[1].answerEnd.rect.bottom = 4000;
+    }
+    await assert.rejects(
+      captureInlineContinuation({
+        options: { theme: "dark" },
+        evidence,
+        observe: async () => {
+          if (fault === "unstable") s.turns[1].answerEnd.rect.bottom++;
+          return structuredClone(s);
+        },
+        settle: async () => {},
+        capture: async () => {
+          if (fault === "after-screenshot-moved")
+            s.turns[1].answerEnd.rect.bottom++;
+          else assert.fail("No acceptance image");
+        },
+        send: async () => {
+          wheels++;
+          if (fault !== "no-progress") s.continuation.top += 100;
+          if (fault === "output") s.continuation.output[0][0]++;
+          if (fault === "page") s.continuation.page[1]++;
+          if (fault === "answer") s.turns[1].answer = "changed";
+          if (fault === "turn-id") s.turns[1].endItemId = "other";
+          if (fault === "turn-text") s.turns[1].text = "Changed Trace summary";
+        },
+      }),
+    );
+    assert.equal(evidence.inlineContinuationTrips[0].status, "failed");
+    assert(wheels <= 5);
+    if (fault === "owner" || fault === "covered") assert.equal(wheels, 0);
+  }
+});
+test("continuation Range and wheel ownership use actual DOM ancestry, not mere containment", async () => {
+  const { JSDOM } = await import("jsdom");
+  const { observeInlineTrace } =
+    await import("../scripts/inline-trace-main-ui-preview.mjs");
+  const dom = new JSDOM(
+    '<div class="messages" style="overflow-y:auto"><section class="turn"><div class="agent-copy">Summary checked</div></section><section class="turn"><div class="agent-copy"><p id="end">No command was executed or retried.</p></div><div class="trace-output"><span id="nested">Output</span></div><div id="other" style="overflow-y:auto"></div></section></div><div class="composer"></div><div id="cover"></div>',
+  );
+  const keys = [
+    "document",
+    "window",
+    "NodeFilter",
+    "getComputedStyle",
+    "innerWidth",
+    "innerHeight",
+  ];
+  const saved = Object.fromEntries(keys.map((k) => [k, globalThis[k]]));
+  const box = (y, height = 20) => ({
+    x: 100,
+    y,
+    left: 100,
+    top: y,
+    right: 400,
+    bottom: y + height,
+    width: 300,
+    height,
+  });
+  let endY = 300,
+    hit = "messages";
+  dom.window.HTMLElement.prototype.getBoundingClientRect = function () {
+    return this.className === "messages"
+      ? { ...box(0, 700), x: 0, left: 0, width: 900, right: 900 }
+      : this.className === "composer"
+        ? box(700, 100)
+        : box(300);
+  };
+  dom.window.Range.prototype.getBoundingClientRect = () => box(endY);
+  dom.window.Range.prototype.getClientRects = () => [box(endY)];
+  for (const [key, dimension] of [
+    ["clientWidth", "width"],
+    ["clientHeight", "height"],
+  ])
+    Object.defineProperty(dom.window.HTMLElement.prototype, key, {
+      get() {
+        return this.getBoundingClientRect()[dimension];
+      },
+    });
+  const doc = dom.window.document,
+    outer = doc.querySelector(".messages");
+  doc.elementFromPoint = (x) =>
+    x < 30
+      ? hit === "messages"
+        ? outer
+        : doc.getElementById(hit)
+      : doc.getElementById("end");
+  Object.assign(globalThis, {
+    document: doc,
+    window: dom.window,
+    NodeFilter: dom.window.NodeFilter,
+    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+    innerWidth: 1280,
+    innerHeight: 900,
+  });
+  dom.window.__uiPolishTelemetry = {};
+  try {
+    assert(observeInlineTrace(true).continuation.wheel);
+    assert(observeInlineTrace(true).turns[1].answerEnd.visible);
+    endY = 760;
+    assert.equal(observeInlineTrace(true).turns[1].answerEnd.visible, false);
+    for (hit of ["nested", "other", "cover"])
+      assert.equal(observeInlineTrace(true).continuation.wheel, null, hit);
+  } finally {
+    Object.assign(globalThis, saved);
+    dom.window.close();
+  }
+});

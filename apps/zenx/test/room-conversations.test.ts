@@ -1,5 +1,6 @@
 import "./dom-primitives.js";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -233,7 +234,7 @@ test("unrelated catalog subscriptions preserve Room rows, focus and disclosure w
       root.render(React.createElement(Observe, { snapshot: base })),
     );
     const row = button("Open room one");
-    row.focus();
+    await act(async () => row.focus());
     const toggle = document.querySelector<HTMLButtonElement>(
       '[aria-controls="sidebar-paw-conversations"]',
     )!;
@@ -259,7 +260,13 @@ test("unrelated catalog subscriptions preserve Room rows, focus and disclosure w
     );
     assert.equal(document.activeElement, row);
     assert.equal(toggle.getAttribute("aria-expanded"), "false");
-    assert.equal(timers.pending.size, 1);
+    // Radix focus/positioning may schedule its own work; only the discovery
+    // polling timer must remain singular across catalog updates.
+    assert.equal(
+      [...timers.pending.values()].filter(({ delay }) => delay === 3_000)
+        .length,
+      1,
+    );
     assert.notEqual(
       roomConversationAdmissionRevision(base),
       roomConversationAdmissionRevision({
@@ -837,5 +844,276 @@ test("first-use welcome can be postponed and resumed, while existing PAWs keep t
     );
     assert.ok(button("Open PAW Daily companion"));
     assert.equal(document.querySelector(".paw-setup-link"), null);
+  });
+});
+
+test("long Room names preserve both edges and keyboard inspection never navigates", async () => {
+  await withDom(async (root) => {
+    const opened: string[] = [];
+    const names = ["Alpha", "Beta"].map(
+      (tail) =>
+        `Research planning room with a very long shared conversation name · ${tail}`,
+    );
+    await act(async () =>
+      root.render(
+        React.createElement(
+          Sidebar,
+          sidebarProps({
+            roomConversations: {
+              rooms: names.map((name, index) => ({
+                ...room,
+                id: `room-${index}`,
+                name,
+              })),
+              error: null,
+              loading: false,
+            },
+            onOpenContribution: (route: string) => opened.push(route),
+          }),
+        ),
+      ),
+    );
+    const rows = [
+      ...document.querySelectorAll<HTMLButtonElement>(".room-conversation-row"),
+    ];
+    for (let index = 0; index < rows.length; index++) {
+      assert.equal(
+        rows[index]!.querySelector("strong")?.textContent,
+        names[index],
+      );
+      assert.ok(
+        rows[index]!.querySelector(
+          ".room-conversation-name-end",
+        )?.textContent?.endsWith(index ? "Beta" : "Alpha"),
+      );
+      await act(async () => rows[index]!.focus());
+      assert.equal(document.activeElement, rows[index]!);
+      assert.equal(
+        document.querySelector(".room-conversation-name-preview")?.textContent,
+        names[index],
+      );
+      assert.deepEqual(opened, []);
+      await act(async () =>
+        rows[index]!.dispatchEvent(
+          new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        ),
+      );
+      assert.equal(
+        document.querySelector(".room-conversation-name-preview"),
+        null,
+      );
+      assert.equal(document.activeElement, rows[index]!);
+    }
+    // Rapid focus transitions retire the previous owner, and leaving the row
+    // for its More control behaves like Tab without navigating.
+    await act(async () =>
+      rows[0]!.dispatchEvent(
+        new window.MouseEvent("pointerover", { bubbles: true }),
+      ),
+    );
+    await act(async () => {
+      rows[0]!.dispatchEvent(
+        new window.MouseEvent("pointerout", {
+          bubbles: true,
+          relatedTarget: rows[1]!,
+        }),
+      );
+      rows[1]!.dispatchEvent(
+        new window.MouseEvent("pointerover", {
+          bubbles: true,
+          relatedTarget: rows[0]!,
+        }),
+      );
+    });
+    assert.equal(
+      document.querySelectorAll(".room-conversation-name-preview").length,
+      1,
+    );
+    assert.equal(
+      document.querySelector(".room-conversation-name-preview")?.textContent,
+      names[1],
+    );
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 180)));
+    assert.equal(
+      document.querySelector(".room-conversation-name-preview")?.textContent,
+      names[1],
+    );
+    await act(async () => rows[0]!.focus());
+    await act(async () => rows[1]!.focus());
+    assert.equal(
+      document.querySelectorAll(".room-conversation-name-preview").length,
+      1,
+    );
+    assert.equal(
+      document.querySelector(".room-conversation-name-preview")?.textContent,
+      names[1],
+    );
+    await act(async () => button(`Manage ${names[1]}`).focus());
+    assert.equal(
+      document.querySelector(".room-conversation-name-preview"),
+      null,
+    );
+    await act(async () => rows[0]!.focus());
+    await act(async () =>
+      rows[0]!.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "F10",
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    assert.ok(document.querySelector('[role="menu"]'));
+    assert.equal(
+      document.querySelector(".room-conversation-name-preview"),
+      null,
+    );
+    await act(async () =>
+      document.activeElement?.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      ),
+    );
+    assert.equal(document.querySelector('[role="menu"]'), null);
+    assert.deepEqual(opened, []);
+    await act(async () => rows[1]!.click());
+    assert.deepEqual(opened, [roomConversationRoute("room-1")]);
+    assert.equal(
+      document.querySelector(".room-conversation-name-preview"),
+      null,
+    );
+    await act(async () => button(`Manage ${names[0]}`).click());
+    assert.ok(document.querySelector('[role="menu"]'));
+    assert.deepEqual(opened, [roomConversationRoute("room-1")]);
+  });
+});
+
+test("Room name edges never split combining characters or emoji sequences", async () => {
+  await withDom(async (root) => {
+    const name = "Research " + "e\u0301👩‍💻".repeat(20);
+    await act(async () =>
+      root.render(
+        React.createElement(
+          Sidebar,
+          sidebarProps({
+            roomConversations: {
+              rooms: [{ ...room, name }],
+              error: null,
+              loading: false,
+            },
+          }),
+        ),
+      ),
+    );
+    assert.equal(
+      document.querySelector(".room-conversation-name")?.textContent,
+      name,
+    );
+    assert.equal(
+      document.querySelector(".room-conversation-name-end")?.textContent,
+      "e\u0301👩‍💻".repeat(8),
+    );
+  });
+});
+
+test("Project hierarchy stays compact and Room name recovery preserves navigation density", async () => {
+  const [styles, roomStyles, sidebar] = await Promise.all([
+    readFile(
+      new URL("../src/renderer/src/styles.css", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../src/renderer/src/room-conversations.css", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../src/renderer/src/Sidebar.tsx", import.meta.url),
+      "utf8",
+    ),
+  ]);
+  assert.match(styles, /\.project-toggle \{[^}]*gap: 5px;/u);
+  assert.match(styles, /\.project-disclosure-icon \{\s*flex: 0 0 auto;/u);
+  assert.match(
+    styles,
+    /\.project-disclosure > div \{[^}]*margin-left: 10px;[^}]*padding-left: 3px;[^}]*border-left: 1px solid var\(--border-soft\);/u,
+  );
+  assert.match(
+    sidebar,
+    /className="project-disclosure-icon"[\s\S]*?open && !projectReorder\?\.dragging[\s\S]*?"chevron-down"[\s\S]*?"chevron-right"/u,
+  );
+  assert.match(roomStyles, /\.room-conversation-row \{[^}]*min-height: 40px;/u);
+  assert.match(
+    roomStyles,
+    /\.room-conversation-name-end \{[^}]*justify-content: flex-end;[^}]*max-width: 46%;/u,
+  );
+  assert.match(
+    roomStyles,
+    /\.room-conversation-row:focus-visible,[\s\S]*?outline: 2px solid var\(--accent\);/u,
+  );
+});
+
+test("Room management owns dismissal while same-row or sibling name hover is suppressed", async () => {
+  await withDom(async (root) => {
+    await act(async () =>
+      root.render(
+        React.createElement(
+          Sidebar,
+          sidebarProps({
+            roomConversations: {
+              rooms: [room, { ...room, id: "sibling", name: "Sibling room" }],
+              error: null,
+              loading: false,
+            },
+          }),
+        ),
+      ),
+    );
+    const more = button(`Manage ${room.name}`);
+    const rows = [
+      ...document.querySelectorAll<HTMLButtonElement>(".room-conversation-row"),
+    ];
+    for (const hovered of rows) {
+      await act(async () => more.click());
+      const rename =
+        document.querySelector<HTMLButtonElement>('[role="menuitem"]')!;
+      assert.ok(document.activeElement === rename, "Rename has keyboard focus");
+      await act(async () =>
+        hovered.dispatchEvent(
+          new window.MouseEvent("pointerover", { bubbles: true }),
+        ),
+      );
+      assert.equal(
+        Boolean(document.querySelector(".room-conversation-name-preview")),
+        false,
+        "hover must not create a competing dismissal layer",
+      );
+      assert.ok(document.activeElement === rename, "Rename has keyboard focus");
+      await act(async () =>
+        rename.dispatchEvent(
+          new window.KeyboardEvent("keydown", {
+            key: "Escape",
+            bubbles: true,
+            cancelable: true,
+          }),
+        ),
+      );
+      assert.equal(
+        Boolean(document.querySelector('[role="menu"]')),
+        false,
+        "one Escape closes the management menu",
+      );
+      assert.ok(document.activeElement === more, "Escape restores More focus");
+      await act(async () =>
+        hovered.dispatchEvent(
+          new window.MouseEvent("pointerout", { bubbles: true }),
+        ),
+      );
+    }
+    await act(async () => rows[0]!.focus());
+    assert.equal(
+      document.querySelector(".room-conversation-name-preview")?.textContent,
+      room.name,
+      "preview resumes after menu closes",
+    );
   });
 });

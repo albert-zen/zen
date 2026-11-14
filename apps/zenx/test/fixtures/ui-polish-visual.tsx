@@ -1,3 +1,4 @@
+import { createChildQuestionData } from "./child-question-data.js";
 import "../../src/renderer/src/shell-thread-panel.css";
 import "../../src/renderer/src/agent-readiness-notice.css";
 import "../../src/renderer/src/trigger-ui.css";
@@ -10,17 +11,104 @@ import { i18n } from "../../src/renderer/src/i18n.js";
 import { workspaceLauncherSnapshot } from "../workspace-launcher-snapshot.js";
 import React from "react";
 import { createRoot } from "react-dom/client";
-import type { NativeThreadSummary } from "../../../../src/thread-summary.js";
+import type { ThreadSummary } from "../../../../src/thread-summary.js";
 import type { Thread } from "../../src/protocol-client/index.js";
 import { App, WindowTitleBar } from "../../src/renderer/src/App.js";
 import { AuxiliaryPanel } from "../../src/renderer/src/auxiliary-panel.js";
 import { nativeRecoveryForThread } from "../native-recovery-fixture.js";
 import { encodeModelKey } from "../../../../src/protocol/model-key.js";
 import { createUiPolishTitleBridge } from "./ui-polish-title-bridge.js";
+import { readNavigationQuestions } from "./ui-polish-visual-navigation.js";
+import {
+  guardReadingBridge,
+  readReadingRequest,
+  createReadingApprovalFixture,
+  readingBrowserCommand,
+} from "./ui-polish-reading.js";
+import { codeWrapMarkdown, codeWrapText } from "./code-wrap-content.js";
+import { supportingRailsData } from "./supporting-rails-data.js";
+import type { NativeInformationApi } from "../../src/native-information.js";
+import { installScrollbarVisibility } from "../../src/renderer/src/scrollbar-visibility.js";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
+// Match the production renderer startup; never hide scrollbars only for captures.
+installScrollbarVisibility(document);
 Object.assign(globalThis, { React });
 const params = new URLSearchParams(location.search);
+const rails = supportingRailsData(params.get("rails"));
+const emptyProjectScene =
+  params.get("scene") === "reading" && params.get("emptyProjects") === "1";
+const emptyProjectKeys = [
+  "/work/zen",
+  "/work/design-system",
+  "/work/field-notes",
+  "/work/research",
+  "/work/delivery",
+];
+if (emptyProjectScene) {
+  for (const key of emptyProjectKeys)
+    localStorage.setItem(
+      `zenx.sidebar.expanded.${encodeURIComponent(`project:${key}`)}`,
+      "true",
+    );
+  localStorage.setItem("zenx.sidebar.expanded.projects", "true");
+}
+const childQuestionScene =
+  params.get("scene") === "reading" && params.get("childQuestions") === "1";
+const childQuestionData = childQuestionScene
+  ? createChildQuestionData(summary)
+  : null;
+const questionListeners = new Set<(method: string, params: unknown) => void>();
+const readingScene = params.get("scene") === "reading";
+const resultScene = readingScene && params.get("results") === "1";
+const inlineTraceScene = resultScene && params.get("inlineTrace") === "1";
+const codeWrapScene = readingScene && params.get("codeWrap") === "1";
+// Independent synthetic keyboard probe; existing scenes retain their exact text.
+const tableKeyboardMode =
+  readingScene && !codeWrapScene && !resultScene
+    ? params.get("tableKeyboard")
+    : null;
+const tableKeyboardMarkdown = ["plain", "links", "fit"].includes(
+  tableKeyboardMode ?? "",
+)
+  ? (() => {
+      const count = tableKeyboardMode === "fit" ? 2 : 16;
+      const headers = Array.from({ length: count }, (_, i) => `Field ${i + 1}`);
+      const cells = headers.map((_, i) =>
+        tableKeyboardMode === "links" && i % 2 === 0
+          ? `[Read ${i + 1}](https://example.com/)`
+          : `Read ${i + 1}`,
+      );
+      return [
+        "# Synthetic table keyboard probe",
+        "",
+        `| ${headers.join(" | ")} |`,
+        `| ${headers.map(() => "---").join(" | ")} |`,
+        `| ${cells.join(" | ")} |`,
+      ].join("\n");
+    })()
+  : undefined;
+// This opt-in synthetic probe records writes only; it never reads or writes the OS clipboard.
+if (codeWrapScene) {
+  const probe = {
+    text: codeWrapText,
+    copied: [] as string[],
+    kind: "synthetic-clipboard-only",
+  };
+  Object.assign(window, { __codeWrapFixture: probe });
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText: async (text: string) => {
+        probe.copied.push(text);
+      },
+    },
+  });
+}
+const readingPending = readingScene && params.get("pending") === "1";
+const readingApprovalFixture = readingScene
+  ? createReadingApprovalFixture(readingPending)
+  : null;
 const projectlessScene = params.get("scene") === "projectless";
 document.documentElement.dataset.appearance = params.get("theme") ?? "light";
 document.documentElement.dataset.platform = params.get("platform") ?? "win32";
@@ -32,9 +120,15 @@ let compactions = 0;
 let previewTabs: import("../../src/main/workspace-browser.js").WorkspaceBrowserTab[] =
   [];
 
-const sideConversations = [
-  { ...summary("design-child", "Design review"), parentThreadId: "thread-1" },
-  { ...summary("test-child", "Test coverage"), parentThreadId: "thread-1" },
+const sideConversations = childQuestionData?.rows ?? [
+  {
+    ...summary("design-child", rails?.children[0] ?? "Design review"),
+    parentThreadId: "thread-1",
+  },
+  {
+    ...summary("test-child", rails?.children[1] ?? "Test coverage"),
+    parentThreadId: "thread-1",
+  },
 ];
 const uiPolishTelemetry = {
   protocolCalls: [] as string[],
@@ -43,6 +137,14 @@ const uiPolishTelemetry = {
   machineCatalogCalls: 0,
   machineThreadCreateCalls: 0,
   sideChatCreateCommandCalls: 0,
+  informationReads: [] as { kind: string; id: string }[],
+  informationUpdates: 0,
+  navigationInputEvents: [] as {
+    type: string;
+    target: string;
+    key?: string;
+    trusted: boolean;
+  }[],
 };
 // Deterministic holds for the Side chat UI acceptance scene only. No Host/model calls.
 const sideChatFixture = {
@@ -55,6 +157,21 @@ const sideChatFixture = {
 const options = {
   request: async (method: string, request?: unknown) => {
     uiPolishTelemetry.protocolCalls.push(method);
+    if (readingScene)
+      return readReadingRequest(
+        method,
+        request,
+        thread(),
+        readingPending,
+        codeWrapScene ? codeWrapMarkdown : tableKeyboardMarkdown,
+        resultScene,
+        inlineTraceScene,
+      );
+    if (
+      params.get("scene") === "navigation" &&
+      method === "zen/thread/questions/list"
+    )
+      return readNavigationQuestions(request);
     if (
       method === "zen/thread/resume" ||
       method === "zen/thread/resume-window"
@@ -155,6 +272,11 @@ const zenx = {
       tabId?: string,
       url?: string,
     ) => {
+      if (readingScene) {
+        if (tabId !== undefined || url !== undefined)
+          throw new Error("Reading browser list accepts no tab or URL");
+        return readingBrowserCommand(threadId, command);
+      }
       if (command === "new")
         previewTabs.push({
           id: crypto.randomUUID(),
@@ -187,16 +309,36 @@ const zenx = {
       type: "ready",
       reconnected: false,
     }),
-    getPendingApprovals: async () => [],
+    getPendingApprovals: async () =>
+      readingApprovalFixture?.getPendingApprovals() ?? [],
     request: async (method: string, params?: unknown) => {
       if (method === "model/list") return { data: [model()], nextCursor: null };
       return await options.request(method, params);
     },
-    respondToApproval: async () => undefined,
-    onApprovalRequest: () => () => undefined,
-    onApprovalResolved: () => () => undefined,
+    respondToApproval: async () => {
+      if (readingScene)
+        throw new Error("Reading preview cannot respond to approvals");
+    },
+    onApprovalRequest: (
+      listener: Parameters<
+        ReturnType<typeof createReadingApprovalFixture>["onApprovalRequest"]
+      >[0],
+    ) =>
+      readingApprovalFixture?.onApprovalRequest(listener) ?? (() => undefined),
+    onApprovalResolved: (
+      listener: Parameters<
+        ReturnType<typeof createReadingApprovalFixture>["onApprovalResolved"]
+      >[0],
+    ) =>
+      readingApprovalFixture?.onApprovalResolved(listener) ?? (() => undefined),
     onStatus: () => () => undefined,
-    onNotification: () => () => undefined,
+    onNotification: (listener: (method: string, params: unknown) => void) => {
+      if (!childQuestionScene) return () => undefined;
+      questionListeners.add(listener);
+      return () => {
+        questionListeners.delete(listener);
+      };
+    },
   },
   threads: {
     list: async ({ archived }: { archived: boolean }) =>
@@ -207,7 +349,20 @@ const zenx = {
             ...(projectlessScene
               ? [summary("projectless-existing", "Trip planning")]
               : []),
-            ...(params.has("conversationTabs") ? sideConversations : []),
+            ...(emptyProjectScene
+              ? [
+                  {
+                    ...summary("thread-delivery", "Synthetic delivery check"),
+                    currentMetadata: {
+                      ...summary().currentMetadata,
+                      cwd: "/work/delivery",
+                    },
+                  },
+                ]
+              : []),
+            ...(params.has("conversationTabs") || childQuestionScene
+              ? sideConversations
+              : []),
           ],
   },
   imageAttachments: {
@@ -236,12 +391,12 @@ const zenx = {
             {
               key: "/work/zen",
               workspace: "/work/zen",
-              name: "Zen",
+              name: rails?.project ?? "Zen",
               configured: true,
               isDefault: true,
               threadIds: [
                 "thread-1",
-                ...(params.has("conversationTabs")
+                ...(params.has("conversationTabs") || childQuestionScene
                   ? sideConversations.map((entry) => entry.threadId)
                   : []),
               ],
@@ -249,7 +404,9 @@ const zenx = {
             {
               key: "/work/design-system",
               workspace: "/work/design-system",
-              name: "Design system",
+              name: emptyProjectScene
+                ? "Design system reference library and desktop component catalogue"
+                : "Design system",
               configured: true,
               isDefault: false,
               threadIds: [],
@@ -257,11 +414,33 @@ const zenx = {
             {
               key: "/work/field-notes",
               workspace: "/work/field-notes",
-              name: "Field notes",
+              name: emptyProjectScene
+                ? "资料整理与跨项目设计审查参考记录"
+                : "Field notes",
               configured: true,
               isDefault: false,
               threadIds: [],
             },
+            ...(emptyProjectScene
+              ? [
+                  {
+                    key: "/work/research",
+                    workspace: "/work/research",
+                    name: "Research",
+                    configured: true,
+                    isDefault: false,
+                    threadIds: [],
+                  },
+                  {
+                    key: "/work/delivery",
+                    workspace: "/work/delivery",
+                    name: "Delivery",
+                    configured: true,
+                    isDefault: false,
+                    threadIds: ["thread-delivery"],
+                  },
+                ]
+              : []),
           ],
       unavailableThreadIds: [],
       ...(projectlessScene
@@ -275,6 +454,16 @@ const zenx = {
       profile: {
         onboardingComplete: true,
         pinnedThreadIds: [],
+        ...(childQuestionData
+          ? {
+              visibleSubagentThreadIds: childQuestionData.rows.map(
+                (row) => row.threadId,
+              ),
+            }
+          : {}),
+        ...(emptyProjectScene
+          ? { sidebarOrder: { pinnedProjectKeys: ["/work/design-system"] } }
+          : {}),
         providerProfiles: [],
         workflowCommands: [
           {
@@ -293,6 +482,16 @@ const zenx = {
         profile: {
           onboardingComplete: true,
           pinnedThreadIds: [],
+          ...(childQuestionData
+            ? {
+                visibleSubagentThreadIds: childQuestionData.rows.map(
+                  (row) => row.threadId,
+                ),
+              }
+            : {}),
+          ...(emptyProjectScene
+            ? { sidebarOrder: { pinnedProjectKeys: ["/work/design-system"] } }
+            : {}),
           providerProfiles: [],
           workflowCommands: [
             {
@@ -486,20 +685,51 @@ Object.assign(zenx, {
   },
 });
 // Launcher mode mounts the real admitted Subagents/Triggers UI on a synthetic bridge.
-if (params.has("launchers") || params.has("conversationTabs")) {
+if (readingScene || params.has("launchers") || params.has("conversationTabs")) {
   Object.assign(zenx.plugins, {
-    get: async () => workspaceLauncherSnapshot,
+    get: async () =>
+      rails
+        ? {
+            ...workspaceLauncherSnapshot,
+            plugins: workspaceLauncherSnapshot.plugins.map((plugin) =>
+              plugin.id === "zenx-triggers"
+                ? { ...plugin, admissionId: "synthetic-rails-triggers" }
+                : plugin,
+            ),
+            commands: [
+              ...workspaceLauncherSnapshot.commands,
+              {
+                key: "zenx-triggers:sidebar-facts",
+                pluginId: "zenx-triggers",
+                id: "sidebar-facts",
+                title: "Synthetic trigger facts",
+                tool: "zenx_triggers_sidebar_facts",
+              },
+            ],
+          }
+        : workspaceLauncherSnapshot,
     executeCommand: async (pluginId: string, command: string) => {
+      if (
+        readingScene &&
+        !(pluginId === "zenx-subagents" && command === "list") &&
+        !(rails && pluginId === "zenx-triggers" && command === "sidebar-facts")
+      )
+        throw new Error("Reading preview only admits subagent list");
       if (pluginId === "zenx-subagents") {
         if (command === "list")
           return {
-            threads: params.has("conversationTabs") ? sideConversations : [],
+            threads:
+              readingScene || params.has("conversationTabs")
+                ? sideConversations
+                : [],
           };
         if (command === "create") {
           uiPolishTelemetry.sideChatCreateCommandCalls += 1;
           return { threadId: "synthetic-side-chat" };
         }
       }
+      if (rails && pluginId === "zenx-triggers" && command === "sidebar-facts")
+        return { triggers: structuredClone(rails.triggers) };
       if (pluginId === "zenx-triggers") {
         if (command === "threads")
           return {
@@ -522,11 +752,104 @@ if (params.has("launchers") || params.has("conversationTabs")) {
     readHandle: async () => null,
   });
 }
-Object.defineProperty(window, "zenx", { value: zenx });
+if (params.get("scene") === "navigation" || readingScene) {
+  // Observe native input only on navigation controls, never collect editor text.
+  for (const type of ["keydown", "keypress", "keyup", "click"]) {
+    document.addEventListener(type, (event) => {
+      const element =
+        event.target instanceof Element ? event.target.closest("button") : null;
+      const target = element?.matches(".information-toolbar button")
+        ? "entry"
+        : element?.matches(".information-dismiss-toolbar button")
+          ? "close"
+          : element?.matches(".projects-section-toggle")
+            ? "projects"
+            : element?.matches(".recent-thread-group .thread-row")
+              ? "recent"
+              : null;
+      if (!target) return;
+      uiPolishTelemetry.navigationInputEvents.push({
+        type,
+        target,
+        ...(event instanceof KeyboardEvent ? { key: event.key } : {}),
+        trusted: event.isTrusted,
+      });
+      if (uiPolishTelemetry.navigationInputEvents.length > 80)
+        uiPolishTelemetry.navigationInputEvents.shift();
+    });
+  }
+  // Read-only synthetic Host data. Opening/closing/focus remain production App UI.
+  const information: NativeInformationApi = {
+    read: async (owner) => {
+      if (
+        typeof owner === "string" ||
+        owner.kind !== "thread" ||
+        owner.id !== "thread-1"
+      )
+        throw new Error("Unexpected synthetic information owner");
+      uiPolishTelemetry.informationReads.push({ ...owner });
+      return {
+        owner,
+        revision: 0,
+        basis: "synthetic-navigation",
+        members: [],
+        resourceThreadId: owner.id,
+        layout: rails?.layout ?? {
+          version: 1,
+          widgets: [
+            {
+              id: "synthetic-lineage",
+              type: "lineage",
+              binding: { kind: "owner" },
+              visible: true,
+              collapsed: false,
+              config: {},
+            },
+          ],
+        },
+      };
+    },
+    update: async () => {
+      uiPolishTelemetry.informationUpdates += 1;
+      throw new Error("Navigation preview does not admit information edits");
+    },
+  };
+  Object.assign(zenx, { information });
+}
+Object.defineProperty(window, "zenx", {
+  value: readingScene ? guardReadingBridge(zenx) : zenx,
+});
 Object.assign(window, {
   __uiPolishTelemetry: uiPolishTelemetry,
   __sideChatFixture: sideChatFixture,
 });
+if (childQuestionData) {
+  let watermark = 0;
+  Object.assign(window, {
+    __childQuestionFixture: {
+      clear() {
+        const receipt = childQuestionData.clear();
+        for (const threadId of receipt.threadIds) {
+          const event = {
+            processEpoch: "synthetic-child-question-host",
+            threadId,
+            watermark: ++watermark,
+            event: { type: "user_question_attention_invalidated", threadId },
+          } satisfies import("../../src/protocol-client/index.js").ServerNotificationParams["zen/thread/event"];
+          for (const listener of questionListeners)
+            listener("zen/thread/event", event);
+        }
+        return { ...receipt, listenerCount: questionListeners.size, watermark };
+      },
+    },
+  });
+}
+if (readingApprovalFixture)
+  Object.assign(window, {
+    __readingApprovalFixture: {
+      replaceRequest: readingApprovalFixture.replaceRequest,
+    },
+  });
 localStorage.setItem("zenx-sidebar-mode", "projects");
 const scene = params.get("scene") ?? "welcome";
 
@@ -583,22 +906,67 @@ function SideChatFixture() {
 }
 
 function AuxiliaryFixture() {
-  const discovery = params.has("tabDiscovery");
+  // Test-only synthetic entries use the genuine side-conversation tab path.
+  const lookalike = params.get("tabLookalike");
+  const pairTitles =
+    lookalike === "en"
+      ? [
+          "Cross-project implementation consistency and detailed interaction validation - Alpha",
+          "Cross-project implementation consistency and detailed interaction validation - Beta",
+        ]
+      : lookalike === "zh"
+        ? [
+            "跨项目实施一致性与详细交互验证甲组",
+            "跨项目实施一致性与详细交互验证乙组",
+          ]
+        : null;
+  // Opt-in desktop overflow scene; the original two-conversation cases are unchanged.
+  const lookalikeTitles =
+    params.has("tabCrowded") && pairTitles
+      ? lookalike === "zh"
+        ? ["甲组周报", "乙组复盘", "丙组方案", "丁组记录", "戊组清单"].map(
+            (suffix) => `跨项目实施一致性与详细交互验证 · ${suffix}`,
+          )
+        : [
+            ...pairTitles,
+            ...["Gamma", "Delta", "Epsilon"].map(
+              (suffix) => `${pairTitles[0]} · ${suffix}`,
+            ),
+          ]
+      : pairTitles;
+  const conversations = (lookalikeTitles ?? []).map((title, index) => ({
+    threadId: `synthetic-lookalike-${index}`,
+    title,
+    render: (threadId: string) => (
+      <div style={{ padding: 24 }} data-synthetic-thread-id={threadId}>
+        <p>
+          Synthetic read-only conversation. No account, approval or rename
+          action.
+        </p>
+      </div>
+    ),
+  }));
+  const discovery = params.has("tabDiscovery") || lookalikeTitles !== null;
   const [collapsed, setCollapsed] = React.useState(window.innerWidth <= 720);
   const [width, setWidth] = React.useState(520);
-  const [selected, setSelected] = React.useState("custom:browser");
+  const [selected, setSelected] = React.useState(
+    lookalikeTitles ? "thread:synthetic-lookalike-1" : "custom:browser",
+  );
   const [order, setOrder] = React.useState(
-    discovery
-      ? ["custom:files", "custom:browser"]
-      : [
-          "custom:files",
-          "custom:browser",
-          "custom:computer",
-          "custom:subagents",
-          "custom:triggers",
-        ],
+    lookalikeTitles
+      ? conversations.map(({ threadId }) => `thread:${threadId}`)
+      : discovery
+        ? ["custom:files", "custom:browser"]
+        : [
+            "custom:files",
+            "custom:browser",
+            "custom:computer",
+            "custom:subagents",
+            "custom:triggers",
+          ],
   );
   const writes = React.useRef<string[][]>([]);
+  const openChangeRequests = React.useRef<boolean[]>([]);
   const customTabs = [
     ["files", discovery ? "项目反馈汇总与下一阶段计划" : "PLAN.md", "file"],
     [
@@ -613,7 +981,16 @@ function AuxiliaryFixture() {
   React.useEffect(() => {
     Object.assign(window, {
       __uiPolishAuxiliary: {
-        getState: () => ({ order, selected, writes: writes.current }),
+        getState: () => ({
+          order,
+          selected,
+          writes: writes.current,
+          openChangeRequests: openChangeRequests.current,
+          sourceConversations: conversations.map(({ threadId, title }) => ({
+            threadId,
+            title,
+          })),
+        }),
       },
     });
   }, [order, selected]);
@@ -652,7 +1029,9 @@ function AuxiliaryFixture() {
           threadId="synthetic-ui-polish-thread"
           title="Synthetic workspace"
           open
-          onOpenChange={() => {}}
+          onOpenChange={(next) => {
+            if (lookalikeTitles) openChangeRequests.current.push(next);
+          }}
           onWidthChange={setWidth}
           snapshot={null}
           selectedTab={selected}
@@ -662,17 +1041,22 @@ function AuxiliaryFixture() {
             writes.current.push(next);
             setOrder(next);
           }}
-          customTabs={customTabs.map(([id, title, icon]) => ({
-            id,
-            title,
-            icon,
-            render: () => (
-              <div style={{ padding: 24 }}>
-                <h2>{title}</h2>
-                <p>Synthetic preview data only. No Host, model, or network.</p>
-              </div>
-            ),
-          }))}
+          conversations={conversations}
+          customTabs={(lookalikeTitles ? [] : customTabs).map(
+            ([id, title, icon]) => ({
+              id,
+              title,
+              icon,
+              render: () => (
+                <div style={{ padding: 24 }}>
+                  <h2>{title}</h2>
+                  <p>
+                    Synthetic preview data only. No Host, model, or network.
+                  </p>
+                </div>
+              ),
+            }),
+          )}
         />
         {discovery ? (
           <div className="information-toolbar">
@@ -695,8 +1079,8 @@ function AuxiliaryFixture() {
 
 function summary(
   threadId = "thread-1",
-  name = "Thread one",
-): NativeThreadSummary {
+  name = rails?.thread ?? "Thread one",
+): ThreadSummary {
   return {
     threadId,
     currentMetadata: {
@@ -740,7 +1124,8 @@ function thread(threadId = "thread-1"): Thread {
     agentNickname: null,
     agentRole: null,
     gitInfo: null,
-    name: threadId === "thread-1" ? "Thread one" : "Thread two",
+    name:
+      threadId === "thread-1" ? (rails?.thread ?? "Thread one") : "Thread two",
     turns: [],
   };
 }

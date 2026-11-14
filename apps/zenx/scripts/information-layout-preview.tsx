@@ -12,6 +12,7 @@ import {
 } from "../src/information-layout.js";
 import type { NativeInformationApi } from "../src/native-information.js";
 import type { SidebarOwner } from "../src/thread-sidebar-state.js";
+import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 import type { BoardSnapshot } from "../../../packages/zenx-board-plugin/src/board.js";
 import { workspaceLauncherSnapshot } from "../test/workspace-launcher-snapshot.js";
 import { i18n } from "../src/renderer/src/i18n.js";
@@ -24,11 +25,40 @@ const query = new URLSearchParams(location.search);
 document.documentElement.dataset.appearance = query.get("theme") ?? "light";
 document.documentElement.dataset.themePreset = "graphite";
 document.documentElement.dataset.platform = "linux";
-void i18n.changeLanguage("en");
+void i18n.changeLanguage(query.get("lang") === "zh" ? "zh-CN" : "en");
 const registry = createPluginUiRegistry();
 registerBoardUi(registry);
 registerSubagentsUi(registry);
 let scene = query.get("scene") ?? "populated";
+const lineageThreads: NativeThreadSummary[] = [
+  {
+    threadId: "synthetic-long-active",
+    name: "Review the main conversation, pending messages and source navigation without losing the current draft",
+    status: "active",
+    archived: false,
+  },
+  {
+    threadId: "synthetic-long-archived",
+    name: "已完成的资料卡检查：核对长中文会话名称、来源入口与键盘导航，保留原始验收记录",
+    status: "idle",
+    archived: true,
+  },
+].map((entry) => ({
+  ...entry,
+  status: entry.status as "active" | "idle",
+  parentThreadId: "synthetic-thread",
+  createdAt: "2026-11-11T00:00:00.000Z",
+  updatedAt: "2026-11-11T00:00:00.000Z",
+  preview: "",
+  currentMetadata: {
+    cwd: "/synthetic/workspace",
+    provider: "synthetic",
+    model: "synthetic",
+    sandbox: "workspace-write",
+    approvalPolicy: "always",
+  },
+}));
+const navigation: string[] = [];
 const triggerFacts = [
   {
     id: "synthetic-timer",
@@ -220,10 +250,12 @@ const information: NativeInformationApi = {
     readHandle: async () => null,
     executeCommand: async (pluginId: string, command: string, input?: any) => {
       if (pluginId === "zenx-subagents" && command === "list")
-        return { threads: [] };
+        return { threads: scene === "lineage" ? lineageThreads : [] };
       if (pluginId === "zenx-triggers" && command === "sidebar-facts")
         return {
-          triggers: scene === "empty" ? [] : structuredClone(triggerFacts),
+          triggers: ["empty", "lineage"].includes(scene)
+            ? []
+            : structuredClone(triggerFacts),
         };
       if (
         pluginId === "zenx-triggers" &&
@@ -279,6 +311,7 @@ const information: NativeInformationApi = {
 (window as any).__informationFixture = {
   navigationToken: query.get("capture"),
   triggerUpdates: () => structuredClone(triggerUpdates),
+  navigation: () => [...navigation],
   read,
   bodies: () => [...bodies],
   updates: () => updates,
@@ -382,7 +415,7 @@ function Fixture() {
           registry={registry}
           owner={conversation}
           theme={query.get("theme") === "dark" ? "dark" : "light"}
-          navigate={() => {}}
+          navigate={(route) => navigation.push(route)}
           executeCommand={(window as any).zenx.plugins.executeCommand}
           readHandle={async () => null}
           contextContent={
@@ -392,7 +425,7 @@ function Fixture() {
               snapshot={snapshot}
               registry={registry}
               theme={query.get("theme") === "dark" ? "dark" : "light"}
-              navigate={() => {}}
+              navigate={(route) => navigation.push(route)}
               attention={
                 question ? (
                   <section

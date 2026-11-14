@@ -16,6 +16,7 @@ import {
   installPackage,
   officialArchive,
   resolvePackage,
+  sourceArchives,
 } from "../scripts/prepare-cjk-fonts.mjs";
 
 const bytes = Buffer.from("synthetic public font archive; never installed");
@@ -332,4 +333,121 @@ test("workflow prepares fonts before every capture and never caches apt state", 
         code.includes("evidence.cjkFonts.length > 0"),
     );
   }
+});
+
+test("rejected mirror records its physical line and bounded identity without secrets", () => {
+  const messages = [];
+  const list =
+    "# public comment\n\nhttps://archive.ubuntu.com/ubuntu/\nhttps://USER_SECRET:PASS_SECRET@unknown.test:8443/PRIVATE_PATH?QUERY_SECRET#FRAGMENT_SECRET priority:1\n";
+  assert.throws(
+    () =>
+      sourceArchives(
+        {
+          "repo-uri": "mirror+file:/etc/apt/apt-mirrors.txt/",
+          sourcesentry: "/etc/apt/sources.list.d/ubuntu.sources:1",
+        },
+        (file) => (file.endsWith("apt-mirrors.txt") ? list : source),
+        (message) => messages.push(message),
+      ),
+    /Unconfigured or nonofficial Ubuntu host/,
+  );
+  assert.equal(messages.length, 1);
+  const diagnostic = JSON.parse(
+    messages[0].slice("CJK archive rejected: ".length),
+  );
+  assert.deepEqual(diagnostic, {
+    phase: "mirror-list",
+    line: 4,
+    parsed: true,
+    protocol: "https:",
+    hostname: "unknown.test",
+    port: "8443",
+    credentialsPresent: true,
+    queryPresent: true,
+    fragmentPresent: true,
+  });
+  assert.doesNotMatch(messages[0], /SECRET|PRIVATE_PATH|priority/);
+  assert.ok(messages[0].length < 600);
+});
+
+test("direct source rejection preserves its source line and original assertion", () => {
+  const messages = [];
+  assert.throws(
+    () =>
+      sourceArchives(
+        {
+          "repo-uri": "https://archive.ubuntu.com/PRIVATE_PATH",
+          sourcesentry: "/etc/apt/sources.list:7",
+        },
+        () => source,
+        (message) => messages.push(message),
+      ),
+    /Unexpected Ubuntu archive path/,
+  );
+  const diagnostic = JSON.parse(
+    messages[0].slice("CJK archive rejected: ".length),
+  );
+  assert.equal(diagnostic.phase, "repo-uri");
+  assert.equal(diagnostic.line, 7);
+  assert.equal(diagnostic.hostname, "archive.ubuntu.com");
+  assert.doesNotMatch(messages[0], /PRIVATE_PATH/);
+});
+
+test("malformed or oversized URL diagnostics are bounded and a broken sink cannot accept", () => {
+  for (const value of [
+    "SECRET_NOT_A_URL",
+    `https://${"a".repeat(3000)}.test/SECRET_PATH`,
+  ]) {
+    const messages = [];
+    assert.throws(() =>
+      sourceArchives(
+        { "repo-uri": value, sourcesentry: "/etc/apt/sources.list:1" },
+        () => source,
+        (message) => messages.push(message),
+      ),
+    );
+    assert.equal(messages.length, 1);
+    assert.ok(messages[0].length < 600);
+    assert.doesNotMatch(messages[0], /SECRET/);
+  }
+  assert.throws(
+    () =>
+      sourceArchives(
+        {
+          "repo-uri": "https://unknown.test/ubuntu/",
+          sourcesentry: "/etc/apt/sources.list:1",
+        },
+        () => source,
+        () => {
+          throw new Error("synthetic diagnostic sink failure");
+        },
+      ),
+    /Unconfigured or nonofficial Ubuntu host/,
+  );
+});
+
+test("allowed mirrors preserve source identity and emit no rejection diagnostic", () => {
+  const messages = [];
+  const target = {
+    "repo-uri": "mirror+file:/etc/apt/apt-mirrors.txt/",
+    sourcesentry: "/etc/apt/sources.list.d/ubuntu.sources:1",
+  };
+  const result = sourceArchives(target, input.readSource, (message) =>
+    messages.push(message),
+  );
+  assert.equal(
+    result.sourceHash,
+    createHash("sha256")
+      .update(
+        JSON.stringify([
+          "/etc/apt/sources.list.d/ubuntu.sources",
+          source,
+          target["repo-uri"],
+          mirrors,
+        ]),
+      )
+      .digest("hex"),
+  );
+  assert.deepEqual(result.archives, metadata().archives);
+  assert.deepEqual(messages, []);
 });

@@ -12,7 +12,11 @@ export function installScrollbarVisibility(document: Document): () => void {
       element,
       setTimeout(() => {
         timers.delete(element);
-        if (element !== edge && element !== dragging) {
+        if (
+          element !== edge &&
+          element !== dragging &&
+          !element.contains(document.activeElement)
+        ) {
           element.removeAttribute("data-scrollbar-active");
         }
       }, 1000),
@@ -126,6 +130,9 @@ export function installScrollbarVisibility(document: Document): () => void {
   document.documentElement.setAttribute("data-scrollbar-autohide", "");
   document.addEventListener("scroll", onScroll, true);
   document.addEventListener("focusin", onFocus);
+  // Re-arm fading on exit: a focus-held region's original timer may already
+  // have expired. Internal moves remain held by activeElement at expiry.
+  document.addEventListener("focusout", onFocus);
   document.addEventListener("keydown", onKey);
   document.addEventListener("pointermove", onMove, { passive: true });
   document.addEventListener("pointerdown", onDown, { passive: true });
@@ -137,6 +144,7 @@ export function installScrollbarVisibility(document: Document): () => void {
     document.documentElement.removeAttribute("data-scrollbar-autohide");
     document.removeEventListener("scroll", onScroll, true);
     document.removeEventListener("focusin", onFocus);
+    document.removeEventListener("focusout", onFocus);
     document.removeEventListener("keydown", onKey);
     document.removeEventListener("pointermove", onMove);
     document.removeEventListener("pointerdown", onDown);

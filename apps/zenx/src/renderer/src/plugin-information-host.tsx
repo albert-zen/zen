@@ -13,6 +13,7 @@ import {
 } from "./plugin-ui-host.js";
 import { conversationKey, type BoardConversation } from "./board-ui-state.js";
 import { Icon } from "./icons.js";
+import { InformationOverflowCue } from "./InformationOverflowCue.js";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/controls.js";
 import {
   consumeInformationReveal,
@@ -128,14 +129,19 @@ export function PluginInformationHost({
         visibleBottom(titlebar),
         resourceOpen ? visibleBottom(heading) : 0,
       );
+      const triggerBottom = trigger.current?.getBoundingClientRect().bottom;
       const next = {
         headerBottom,
         available:
           !resourceOpen || panel?.dataset.expanded !== "true" || primaryActive,
         // Render must not synchronously flush the transcript's dirty layout,
         // including when Radix keeps the information popover closed.
-        triggerBottom: trigger.current?.getBoundingClientRect().bottom,
-        top: Math.max(0, headerBottom - bounds.top) + 12,
+        triggerBottom,
+        // The measured entry can extend beyond a short/absent title row.
+        // Keep the dock's close control below it, as the popover already does.
+        top:
+          Math.max(0, Math.max(headerBottom, triggerBottom ?? 0) - bounds.top) +
+          12,
         right: resourceWidth + 12,
         // Our responsive allocation, not a value copied from a reference app:
         // a 340px card, 24px gutters and at least 556px for the conversation.
@@ -264,6 +270,12 @@ export function PluginInformationHost({
   )?.admissionId;
   const closeControl = (
     <div className="information-dismiss-toolbar">
+      {/* layout.right is resourceWidth + 12: only an open, non-primary
+          resource split contributes width. This toolbar is overlay-only,
+          so this is not another viewport breakpoint or dock policy. */}
+      {layout.right > 12 && (
+        <InformationOverflowCue label={t("informationMoreBelow")} />
+      )}
       <button
         type="button"
         className="quiet-button"
@@ -383,7 +395,6 @@ export function PluginInformationHost({
             maxHeight: `calc(100% - ${layout.top + 12}px)`,
           }}
         >
-          {closeControl}
           {tabs}
           {surface}
         </aside>

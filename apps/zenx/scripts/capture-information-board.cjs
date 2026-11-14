@@ -1,9 +1,22 @@
 /** Operates only the disposable CI App created by launch-information-board-acceptance. */
 const assert = require("node:assert/strict");
+const {
+  informationOverflowMetrics,
+  verifyInformationOverflowCue,
+  informationCueLabelMetrics,
+  assertChineseInformationCue,
+  classifySingleSiblingCueFit,
+} = require("./information-overflow-acceptance.cjs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
-const { app, BrowserWindow, session, nativeTheme } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  session,
+  nativeTheme,
+  ipcMain,
+} = require("electron");
 assert.equal(process.env.GITHUB_ACTIONS, "true");
 assert.ok(["darwin", "win32"].includes(process.platform));
 assert.ok(
@@ -34,6 +47,321 @@ const result = {
 };
 let window, taskId, ownedSidebarInput;
 let clickSequence = 0;
+// Passive scoped receipt only: call the production listener once and return its
+// original reply unchanged. Armed only for the fresh late-stage owner below.
+let keyboardQuestionOwner = null;
+const keyboardQuestionAttempts = [];
+const registerQuestionHandle = ipcMain.handle.bind(ipcMain);
+ipcMain.handle = (channel, listener) =>
+  registerQuestionHandle(
+    channel,
+    channel !== "zenx:protocol:request"
+      ? listener
+      : async (event, method, params) => {
+          const tracked =
+            keyboardQuestionOwner &&
+            method === "zen/thread/questions/respond" &&
+            params?.threadId === keyboardQuestionOwner;
+          const attempt = tracked ? { params: structuredClone(params) } : null;
+          if (attempt) keyboardQuestionAttempts.push(attempt);
+          try {
+            const reply = await listener(event, method, params);
+            if (attempt) attempt.reply = structuredClone(reply);
+            return reply;
+          } catch (error) {
+            if (attempt) attempt.error = String(error);
+            throw error;
+          }
+        },
+  );
+async function verifyDisposableOverlayKeyboardAnswer() {
+  await resizeWindow(1600, 1000);
+  await evaluate(
+    "(()=>{localStorage.setItem('zenx.language','en');dispatchEvent(new StorageEvent('storage',{key:'zenx.language',newValue:'en',storageArea:localStorage}));return true})()",
+  );
+  const created = await evaluate(
+    `window.zenx.projects.startThread(${JSON.stringify(path.join(temporary, "workspace"))},{model:'fake'})`,
+  );
+  const threadId = created.thread.id;
+  assert.ok(
+    threadId &&
+      !["information-main", "information-child", "information-other"].includes(
+        threadId,
+      ),
+  );
+  keyboardQuestionOwner = threadId;
+  const receipt = {
+    name: "disposable-desktop-overlay-keyboard-answer",
+    threadId,
+    attempts: keyboardQuestionAttempts,
+    input: "Electron native Tab/Space/Enter; not OS assistive input",
+    published: [],
+  };
+  result.cases.push(receipt);
+  const prompts = [
+    "Disposable sibling: leave this request pending.",
+    "Disposable target: answer only this second request.",
+  ];
+  for (let index = 0; index < 2; index++) {
+    await until(
+      () =>
+        evaluate(
+          `window.zenx.threads.list().then(rows=>rows.find(r=>r.threadId===${JSON.stringify(threadId)})?.status==='idle')`,
+        ),
+      "fresh question owner idle before one publication",
+    );
+    await evaluate(
+      `window.zenx.protocol.request('turn/start',${JSON.stringify({ threadId, clientUserMessageId: `native-overlay-disposable-${index}`, input: [{ type: "text", text: "!tool ask_user_question " + JSON.stringify({ questions: [{ id: "choice", prompt: prompts[index], options: [{ id: "yes", label: "Use this isolated answer" }] }] }) }] })})`,
+    );
+    await until(async () => {
+      const page = await evaluate(
+        `window.zenx.protocol.request('zen/thread/questions/list',{threadId:${JSON.stringify(threadId)}})`,
+      );
+      const question = page.questions.find((q) =>
+        q.specification.questions.some((s) => s.prompt === prompts[index]),
+      );
+      if (!question) return false;
+      receipt.published[index] = question;
+      return question.state === "open";
+    }, "real Host publishes exact fresh question once");
+  }
+  const sibling = receipt.published[0],
+    target = receipt.published[1];
+  assert.notEqual(sibling.request.callItemId, target.request.callItemId);
+  const cards =
+    ".information-popover .information-content article.user-question-card";
+  const card = `${cards}[data-question-call-id=${JSON.stringify(target.request.callItemId)}]`;
+  const siblingCard = `${cards}[data-question-call-id=${JSON.stringify(sibling.request.callItemId)}]`;
+  await click(
+    `.thread-row-shell[data-thread-id=${JSON.stringify(threadId)}] > button.thread-row`,
+    "Open fresh isolated question owner",
+  );
+  if (
+    !(await evaluate(
+      "document.querySelector('.auxiliary-panel')?.dataset.open==='true'",
+    ))
+  )
+    await click("#thread-browser-toggle", "Open disposable split workspace");
+  if (
+    await evaluate(
+      "document.querySelector('.auxiliary-panel')?.dataset.expanded==='true'",
+    )
+  )
+    await click(
+      '.auxiliary-heading button[aria-label="Restore side panel"]',
+      "Restore disposable desktop split",
+    );
+  if (await evaluate("document.querySelector('.information-popover')!==null"))
+    await click(
+      ".information-toolbar button",
+      "Close disposable overlay before keyboard entry",
+    );
+  await click(
+    ".information-toolbar button",
+    "Open disposable overlay from its real toggle",
+  );
+  await until(
+    () =>
+      evaluate(
+        "!!document.querySelector('.information-popover') && document.querySelector('.auxiliary-panel')?.dataset.open==='true' && document.querySelector('.auxiliary-panel')?.dataset.expanded==='false'",
+      ),
+    "desktop split overlay present",
+  );
+  await until(
+    () =>
+      evaluate(
+        `window.zenx.threads.list().then(rows=>rows.find(r=>r.threadId===${JSON.stringify(threadId)})?.status==='idle')`,
+      ),
+    "fresh publication Turn completed before keyboard answer",
+  );
+  receipt.displayedQuestionIds = await evaluate(
+    `Array.from(document.querySelectorAll(${JSON.stringify(cards)}),e=>e.dataset.questionCallId)`,
+  );
+  assert.deepEqual(
+    receipt.displayedQuestionIds,
+    [sibling.request.callItemId, target.request.callItemId],
+    "exact fresh questions appear in intended first/second order",
+  );
+  const option = card + " .user-question-options input";
+  await focusWithNativeTab(
+    option,
+    "Natural Tab to isolated second question option",
+  );
+  assert.equal(
+    await evaluate(`${query(option)}.checked`),
+    false,
+    "fresh second option starts unselected",
+  );
+  await pressKey("Space", "Select second question option without answering");
+  await until(
+    () => evaluate(`${query(option)}?.checked===true`),
+    "native selected option acknowledged",
+  );
+  const send = card + " .user-question-actions > button.primary-button";
+  await focusWithNativeTab(send, "Natural Tab to isolated second Send");
+  const readFocus = () =>
+    evaluate(
+      `(()=>{const b=${query(send)},p=b?.closest('.information-content');if(!b||!p)return null;const r=b.getBoundingClientRect(),c=p.getBoundingClientRect();return {focused:document.activeElement===b,focusVisible:b.matches(':focus-visible'),disabled:b.disabled,hit:b.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2)),rect:{left:r.left,right:r.right,top:r.top,bottom:r.bottom},inside:r.left>=c.left&&r.right<=c.right&&r.top>=Math.max(0,c.top)&&r.bottom<=Math.min(innerHeight,c.bottom)}})()`,
+    );
+  receipt.focus = await readFocus();
+  await pause(100);
+  receipt.stableFocus = await readFocus();
+  assert.deepEqual(receipt.focus, receipt.stableFocus);
+  assert.ok(
+    receipt.focus?.focused &&
+      receipt.focus.focusVisible &&
+      !receipt.focus.disabled &&
+      receipt.focus.hit &&
+      receipt.focus.inside,
+  );
+  assert.equal(
+    keyboardQuestionAttempts.length,
+    0,
+    "selecting and tabbing did not submit",
+  );
+  await evaluate(
+    `(() => {
+      const b = ${query(send)};
+      const proof = window.__disposableAnswerInputProof = [];
+      const observe = e => {
+        if (e.target !== b || proof.length >= 12) return;
+        const entry = {type:e.type, trusted:e.isTrusted, key:e.key ?? null,
+          charCode:e.charCode ?? null, focused:document.activeElement === b,
+          callItemId:b.closest('article.user-question-card')?.dataset.questionCallId,
+          defaultPreventedAtCapture:e.defaultPrevented, defaultPreventedAfterDispatch:null};
+        proof.push(entry);
+        setTimeout(() => {entry.defaultPreventedAfterDispatch=e.defaultPrevented}, 0);
+      };
+      const types = ['keydown','keypress','keyup','click'];
+      types.forEach(type => b.addEventListener(type, observe, true));
+      window.__disposeDisposableAnswerInputProof = () => types.forEach(type => b.removeEventListener(type, observe, true));
+      return true;
+    })()`,
+  );
+  await screenshot("18-disposable-overlay-second-send-focus.png");
+  assert.deepEqual(
+    await readFocus(),
+    receipt.focus,
+    "screenshot did not move the intended target",
+  );
+  try {
+    // Electron forwards raw keyDown; native button Enter activation also needs
+    // its character event. This is one sequence, never a retry or DOM click.
+    await pressDisposableAnswerEnter();
+    await until(
+      () =>
+        Promise.resolve(
+          keyboardQuestionAttempts.length === 1 &&
+            !!keyboardQuestionAttempts[0].reply,
+        ),
+      "single real Host response receipt",
+    );
+  } finally {
+    // Persist bounded passive evidence even when zero Host responses time out.
+    // Never mask the original Host/input failure if renderer collection fails.
+    try {
+      receipt.inputAcknowledgement = await evaluate(
+        "(async()=>{await new Promise(resolve=>setTimeout(resolve,0)); window.__disposeDisposableAnswerInputProof?.(); return window.__disposableAnswerInputProof})()",
+      );
+    } catch (error) {
+      receipt.inputAcknowledgementError = String(error);
+    }
+  }
+  receipt.clickAcknowledgement = receipt.inputAcknowledgement.filter(
+    (e) => e.type === "click",
+  );
+  receipt.keyAcknowledgement = receipt.inputAcknowledgement.filter(
+    (e) => e.type === "keydown",
+  );
+  const characterAcknowledgement = receipt.inputAcknowledgement.filter(
+    (e) => e.type === "keypress",
+  );
+  assert.equal(receipt.clickAcknowledgement.length, 1, "one native click only");
+  assert.equal(
+    receipt.keyAcknowledgement.length,
+    1,
+    "one native Enter keydown only",
+  );
+  assert.equal(
+    characterAcknowledgement.length,
+    1,
+    "one native character event only",
+  );
+  assert.equal(receipt.keyAcknowledgement[0].key, "Enter");
+  assert.equal(characterAcknowledgement[0].charCode, 13);
+  for (const entry of [
+    ...receipt.clickAcknowledgement,
+    ...receipt.keyAcknowledgement,
+    ...characterAcknowledgement,
+  ]) {
+    assert.equal(entry.trusted, true);
+    assert.equal(entry.focused, true);
+    assert.equal(entry.callItemId, target.request.callItemId);
+    assert.equal(typeof entry.defaultPreventedAfterDispatch, "boolean");
+  }
+  const attempt = keyboardQuestionAttempts[0];
+  assert.equal(attempt.params.threadId, threadId);
+  assert.equal(attempt.params.questionCallItemId, target.request.callItemId);
+  assert.equal(attempt.params.outcome, "answer");
+  assert.deepEqual(attempt.params.answers, [
+    { questionId: "choice", optionIds: ["yes"] },
+  ]);
+  assert.equal(
+    attempt.reply.question.response.clientId,
+    attempt.params.clientUserMessageId,
+  );
+  await until(async () => {
+    receipt.readback = await evaluate(
+      `window.zenx.protocol.request('zen/thread/questions/read',${JSON.stringify({ threadId, questionCallItemId: target.request.callItemId, clientUserMessageId: attempt.params.clientUserMessageId })})`,
+    );
+    return (
+      receipt.readback.response.status === "claimed" &&
+      receipt.readback.question?.state === "answered"
+    );
+  }, "exact answer is claimed by the real Host");
+  assert.equal(
+    receipt.readback.question.request.callItemId,
+    target.request.callItemId,
+  );
+  assert.equal(
+    receipt.readback.question.response.clientId,
+    attempt.params.clientUserMessageId,
+  );
+  assert.deepEqual(
+    receipt.readback.question.response.reply.answers,
+    attempt.params.answers,
+  );
+  receipt.remaining = await evaluate(
+    `window.zenx.protocol.request('zen/thread/questions/list',{threadId:${JSON.stringify(threadId)}})`,
+  );
+  assert.equal(receipt.remaining.totalPending, 1);
+  assert.equal(receipt.remaining.questions.length, 1);
+  assert.equal(
+    receipt.remaining.questions[0].request.callItemId,
+    sibling.request.callItemId,
+  );
+  assert.equal(receipt.remaining.questions[0].state, "open");
+  await until(
+    () => evaluate(`!${query(card)} && !!${query(siblingCard)}`),
+    "only answered second card leaves attention",
+  );
+  await screenshot("18a-disposable-overlay-sibling-still-pending.png");
+  await pause(250);
+  assert.equal(
+    keyboardQuestionAttempts.length,
+    1,
+    "no duplicate respond after native activation settles",
+  );
+  await observeSingleSiblingCueFit(threadId, sibling.request.callItemId);
+  assert.equal(
+    keyboardQuestionAttempts.length,
+    1,
+    "read-only fitting observation sends no extra response",
+  );
+  receipt.status = "passed";
+  keyboardQuestionOwner = null;
+}
+
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function evaluate(expression) {
   const reply = await window.webContents.executeJavaScript(
@@ -125,6 +453,14 @@ async function pressKey(keyCode, label) {
   window.webContents.sendInputEvent({ type: "keyUp", keyCode });
   result.steps.push(label);
 }
+async function pressDisposableAnswerEnter() {
+  window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Enter" });
+  window.webContents.sendInputEvent({ type: "char", keyCode: "\r" });
+  window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Enter" });
+  result.steps.push(
+    "Native Enter answers only focused disposable second question",
+  );
+}
 async function verifyInformationOsInput() {
   result.informationOsInput = { status: "running", permissionChanges: false };
   await resizeWindow(1600, 1000);
@@ -186,6 +522,487 @@ async function focusWithNativeTab(selector, label) {
   }
   throw Error("Native Tab could not reach: " + label);
 }
+// Measurement-only: the pending questions are reused by later native cases.
+// Do not answer them here or use helpers that scroll/focus before the wheel.
+function informationReachabilityMetrics() {
+  const panel = document.querySelector(
+    ".information-popover .information-content",
+  );
+  const rect = (element) => {
+    if (!element) return null;
+    const r = element.getBoundingClientRect();
+    return {
+      left: r.left,
+      top: r.top,
+      right: r.right,
+      bottom: r.bottom,
+      width: r.width,
+      height: r.height,
+    };
+  };
+  const bounds = rect(panel);
+  // Sample a bounded grid of non-control points. A wheel over a textarea or
+  // nested scrolling child would test that child, not the Information owner.
+  let point = null;
+  let hit = null;
+  if (bounds) {
+    for (const fy of [0.25, 0.5, 0.75]) {
+      for (const inset of [6, bounds.width - 6, bounds.width / 2]) {
+        const candidate = {
+          x: Math.round(bounds.left + inset),
+          y: Math.round(bounds.top + bounds.height * fy),
+        };
+        const target = document.elementFromPoint(candidate.x, candidate.y);
+        if (
+          !target ||
+          !panel.contains(target) ||
+          target.closest(
+            "input, textarea, select, button, [contenteditable=true]",
+          )
+        )
+          continue;
+        let nested = false;
+        for (
+          let node = target;
+          node && node !== panel;
+          node = node.parentElement
+        ) {
+          const style = getComputedStyle(node);
+          if (
+            /auto|scroll/.test(style.overflowY) &&
+            node.scrollHeight > node.clientHeight
+          )
+            nested = true;
+        }
+        if (nested) continue;
+        point = candidate;
+        hit = target;
+        break;
+      }
+      if (point) break;
+    }
+  }
+  return {
+    panel: bounds,
+    point,
+    owned: !!panel && !!hit && panel.contains(hit),
+    panelScroll: panel?.scrollTop,
+    panelMax: panel ? panel.scrollHeight - panel.clientHeight : null,
+    transcriptScroll: document.querySelector(".agent-surface .messages")
+      ?.scrollTop,
+    composer: rect(document.querySelector("#thread-composer")),
+    toggle: rect(document.querySelector(".information-toolbar button")),
+    dismiss: rect(
+      document.querySelector(
+        ".information-popover .information-dismiss-toolbar button",
+      ),
+    ),
+    questions: [...(panel?.querySelectorAll(".user-question-card") ?? [])].map(
+      (card) => ({
+        id: card.dataset.questionCallId,
+        prompts: [...card.querySelectorAll("legend")].map((e) => e.textContent),
+        actions: [
+          ...card.querySelectorAll(".user-question-actions button"),
+        ].map((button) => {
+          const r = rect(button);
+          const h =
+            r &&
+            document.elementFromPoint(
+              r.left + r.width / 2,
+              r.top + r.height / 2,
+            );
+          return {
+            text: button.textContent,
+            type: button.type,
+            answerAction: button.matches(".primary-button"),
+            disabled: button.disabled,
+            rect: r,
+            hit: !!h && button.contains(h),
+            fullyInPanel:
+              !!r &&
+              !!bounds &&
+              r.left >= bounds.left &&
+              r.right <= bounds.right &&
+              r.top >= Math.max(0, bounds.top) &&
+              r.bottom <= Math.min(innerHeight, bounds.bottom),
+            focused: document.activeElement === button,
+            focusVisible: button.matches(":focus-visible"),
+          };
+        }),
+      }),
+    ),
+  };
+}
+// Read-only renderer probe: no focus, scrolling, styles or bridge mutations.
+function informationSendFocusPaint(callItemId) {
+  const card = [
+    ...document.querySelectorAll(
+      ".information-popover .information-content article.user-question-card[data-question-call-id]",
+    ),
+  ].find((element) => element.dataset.questionCallId === callItemId);
+  const button = card?.querySelector(
+    ".user-question-actions > button.primary-button",
+  );
+  if (!button) return null;
+  const style = getComputedStyle(button);
+  const r = button.getBoundingClientRect();
+  return {
+    callItemId: card.dataset.questionCallId,
+    appearance: document.documentElement.dataset.appearance,
+    forcedColors: matchMedia("(forced-colors: active)").matches,
+    forcedColorAdjust: style.forcedColorAdjust,
+    focusVisible: button.matches(":focus-visible"),
+    outlineStyle: style.outlineStyle,
+    outlineWidth: style.outlineWidth,
+    outlineOffset: style.outlineOffset,
+    outlineColor: style.outlineColor,
+    textColor: style.color,
+    backgroundColor: style.backgroundColor,
+    onAccentToken: style.getPropertyValue("--color-text-on-accent").trim(),
+    accentToken: style.getPropertyValue("--color-accent").trim(),
+    rect: {
+      left: r.left,
+      top: r.top,
+      right: r.right,
+      bottom: r.bottom,
+      width: r.width,
+      height: r.height,
+    },
+  };
+}
+async function measureInformationOverlayReachability(expectedSecondPrompt) {
+  const read = () =>
+    evaluate(`(${informationReachabilityMetrics.toString()})()`);
+  const before = await read();
+  const receipt = {
+    name: "desktop-split-overlay-native-wheel",
+    before,
+    activation: "not-attempted-shared-pending-scenario",
+  };
+  result.cases.push(receipt);
+  assert.ok(
+    before.panel && before.panel.height > 0,
+    "desktop overlay body exists",
+  );
+  assert.equal(
+    before.questions.length,
+    2,
+    "preserve the two stacked pending question baseline",
+  );
+  assert.ok(
+    before.questions[1].id &&
+      before.questions[1].prompts.includes(expectedSecondPrompt),
+    "second card is the known foreground synthetic question",
+  );
+  receipt.secondQuestionId = before.questions[1].id;
+  receipt.wheel =
+    before.panelMax > 0
+      ? "overflow-owner-tested"
+      : "not-needed-no-inner-overflow";
+  if (before.panelMax > 0) {
+    assert.ok(
+      before.owned,
+      "non-control inner Information scroll point is hit-testable",
+    );
+    const deltaY = before.panelScroll < before.panelMax ? -360 : 360;
+    window.webContents.sendInputEvent({ type: "mouseMove", ...before.point });
+    window.webContents.sendInputEvent({
+      type: "mouseWheel",
+      ...before.point,
+      deltaY,
+      deltaX: 0,
+      canScroll: true,
+    });
+    await until(async () => {
+      receipt.after = await read();
+      return deltaY < 0
+        ? receipt.after.panelScroll > before.panelScroll
+        : receipt.after.panelScroll < before.panelScroll;
+    }, "native wheel moves inner Information panel without a scroll helper");
+    await pause(250);
+  }
+  receipt.after = await read();
+  assert.equal(
+    receipt.after.transcriptScroll,
+    before.transcriptScroll,
+    "Information wheel does not scroll main transcript",
+  );
+  assert.deepEqual(
+    receipt.after.composer,
+    before.composer,
+    "Information wheel leaves Composer geometry unchanged",
+  );
+  assert.deepEqual(
+    receipt.after.toggle,
+    before.toggle,
+    "dismiss toggle stays outside the scrolling body",
+  );
+  assert.deepEqual(
+    receipt.after.questions.map((q) => q.id),
+    before.questions.map((q) => q.id),
+    "wheel cannot answer or replace either scoped question",
+  );
+  if (before.panelMax > 0) await screenshot("03a-overlay-native-wheel.png");
+  assert.deepEqual(
+    receipt.after.dismiss,
+    before.dismiss,
+    "in-popover dismiss remains outside scrolling body",
+  );
+  const target = receipt.after.questions[1]?.actions.findIndex(
+    (action) => action.answerAction,
+  );
+  assert.ok(
+    target >= 0,
+    "known second question has its production answer action",
+  );
+  receipt.keyboard = {
+    attempted: false,
+    tabs: 0,
+    reason: "second-send-disabled",
+  };
+  if (!receipt.after.questions[1].actions[target].disabled) {
+    receipt.keyboard.attempted = true;
+    receipt.keyboard.reason = "natural-tab-only-no-activation";
+    for (let index = 0; index < 80; index++) {
+      const state = await read();
+      if (state.questions[1]?.actions[target]?.focused) {
+        receipt.keyboard.focus = state.questions[1].actions[target];
+        break;
+      }
+      window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Tab" });
+      window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Tab" });
+      receipt.keyboard.tabs++;
+      await pause(35);
+    }
+    // Final read includes arrival on the last bounded Tab, after frame settling.
+    await pause(100);
+    receipt.afterTab = await read();
+    receipt.keyboard.focus = receipt.afterTab.questions[1]?.actions[target];
+    await pause(80);
+    receipt.stableTab = await read();
+    assert.deepEqual(
+      receipt.stableTab.questions[1]?.actions[target],
+      receipt.keyboard.focus,
+      "post-Tab target state and geometry settle before screenshot",
+    );
+    assert.ok(
+      receipt.keyboard.focus?.focused &&
+        receipt.keyboard.focus.focusVisible &&
+        receipt.keyboard.focus.hit &&
+        receipt.keyboard.focus.fullyInPanel,
+      "natural Tab reaches visible, unobscured second Submit",
+    );
+    assert.equal(receipt.afterTab.transcriptScroll, before.transcriptScroll);
+    assert.deepEqual(receipt.afterTab.composer, before.composer);
+    receipt.keyboard.focusPaint = await evaluate(
+      `(${informationSendFocusPaint.toString()})(${JSON.stringify(receipt.afterTab.questions[1].id)})`,
+    );
+    const paint = receipt.keyboard.focusPaint;
+    assert.ok(paint, "exact private second Send still exists");
+    assert.deepEqual(paint.rect, receipt.keyboard.focus.rect);
+    assert.equal(paint.callItemId, receipt.afterTab.questions[1].id);
+    assert.equal(paint.focusVisible, true);
+    assert.equal(paint.outlineStyle, "solid");
+    assert.equal(paint.outlineWidth, "2px");
+    assert.equal(paint.outlineOffset, "-4px");
+    // This existing light fixture is not a forced-colors visual assessment.
+    // Fail explicitly rather than compare authored tokens to forced system paint.
+    assert.equal(
+      paint.forcedColors,
+      false,
+      "regular light-palette evidence only",
+    );
+    assert.equal(paint.appearance, "light");
+    const tokenRgb = (token) => {
+      assert.match(
+        token,
+        /^#[0-9a-f]{6}$/i,
+        "expected exact supported theme token",
+      );
+      return `rgb(${token
+        .slice(1)
+        .match(/../g)
+        .map((v) => parseInt(v, 16))
+        .join(", ")})`;
+    };
+    assert.equal(paint.outlineColor, tokenRgb(paint.onAccentToken));
+    assert.equal(paint.textColor, tokenRgb(paint.onAccentToken));
+    assert.equal(paint.backgroundColor, tokenRgb(paint.accentToken));
+    await screenshot("03b-overlay-second-send-keyboard-focus.png");
+  }
+  // Restore this pre-existing screenshot scene with real wheel input only.
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const current = await read();
+    if (Math.abs(current.panelScroll - before.panelScroll) <= 1) break;
+    assert.ok(
+      current.owned,
+      "restoration still uses an owned non-control point",
+    );
+    window.webContents.sendInputEvent({
+      type: "mouseWheel",
+      ...current.point,
+      deltaY: current.panelScroll - before.panelScroll,
+      deltaX: 0,
+      canScroll: true,
+    });
+    await pause(80);
+  }
+  receipt.restored = await read();
+  assert.ok(
+    Math.abs(receipt.restored.panelScroll - before.panelScroll) <= 1,
+    "native wheel restored original overlay scroll before existing cases",
+  );
+  assert.equal(receipt.restored.transcriptScroll, before.transcriptScroll);
+}
+
+// Same desktop split and pending controls, in this disposable App only.
+// Do not persist appearance preferences, repeat answers or alter forced colors.
+async function verifyInformationDarkSplitCue(expectedSecondPrompt) {
+  const transition = {
+    status: "running",
+    appearanceSource: "disposable Electron nativeTheme; no preference writes",
+    scene: "same 1600 desktop overlay after existing Stage1; not a fresh open",
+    forcedColorsScope: "observed media only; no settings changes or test claim",
+  };
+  result.informationDarkCueTransition = transition;
+  const read = () =>
+    evaluate(`(()=>{
+    const sample=(${informationOverflowMetrics.toString()})(${informationReachabilityMetrics.toString()});
+    const appearance=document.documentElement.dataset.appearance;
+    const color=(selector,property)=>{const element=document.querySelector(selector);return element?getComputedStyle(element)[property]:null;};
+    return {...sample,appearance,
+      prefersDark:matchMedia('(prefers-color-scheme: dark)').matches,
+      forcedColorsActive:matchMedia('(forced-colors: active)').matches,
+      ...(appearance==='dark'?{computedCueColors:{
+        text:color('.information-popover .information-overflow-cue','color'),
+        toolbarBackground:color('.information-popover .information-dismiss-toolbar','backgroundColor'),
+        popoverBackground:color('.information-popover','backgroundColor')
+      }}:{})};
+  })()`);
+  const stableRead = async (label) => {
+    let previous = await read();
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await pause(50);
+      const current = await read();
+      if (JSON.stringify(current) === JSON.stringify(previous)) return current;
+      previous = current;
+    }
+    transition.unsettled = { label, sample: previous };
+    assert.fail(`${label}: appearance observations did not settle`);
+  };
+  try {
+    transition.before = await stableRead("before-dark");
+    assert.equal(
+      transition.before.viewport.width,
+      1600,
+      "reuse exact desktop split width",
+    );
+    assert.equal(
+      transition.before.appearance,
+      "light",
+      "existing light verification completed first",
+    );
+    assert.equal(
+      nativeTheme.themeSource,
+      "light",
+      "original disposable appearance source",
+    );
+    nativeTheme.themeSource = "dark";
+    await until(
+      () => evaluate("document.documentElement.dataset.appearance==='dark'"),
+      "actual app dark appearance for the same desktop split",
+    );
+    assert.equal(nativeTheme.shouldUseDarkColors, true);
+    await verifyInformationOverflowCue({
+      read,
+      sendInput: (event) => window.webContents.sendInputEvent(event),
+      pause,
+      screenshot: async (name) => {
+        const names = {
+          "03c-overflow-cue-initial.png": "03g-overflow-cue-dark-initial.png",
+          "03d-overflow-cue-partial.png": "03h-overflow-cue-dark-partial.png",
+        };
+        assert.ok(names[name], "only the two intended dark frames");
+        await screenshot(names[name]);
+      },
+      result,
+      expectedSecondPrompt,
+      darkPartial: true,
+    });
+    const dark = result.cases.at(-1);
+    assert.equal(
+      dark.name,
+      "desktop-split-information-overflow-cue-dark-partial",
+    );
+    transition.darkStartFocus = dark.before.active;
+    transition.darkRestoredFocus = dark.restored.active;
+    assert.equal(
+      dark.before.ownerKey,
+      transition.before.ownerKey,
+      "same scoped owner across appearance transition",
+    );
+    assert.deepEqual(
+      dark.before.questions.map((q) => ({ id: q.id, prompts: q.prompts })),
+      transition.before.questions.map((q) => ({
+        id: q.id,
+        prompts: q.prompts,
+      })),
+      "same pending questions across appearance transition",
+    );
+    // Theme-to-theme text metrics are observations, not an equality premise.
+    // The shared probe independently checks fixed geometry within dark.
+    nativeTheme.themeSource = "light";
+    await until(
+      () => evaluate("document.documentElement.dataset.appearance==='light'"),
+      "original light appearance restored before existing cases",
+    );
+    transition.restored = await stableRead("restored-light");
+    assert.deepEqual(
+      transition.restored.active,
+      transition.before.active,
+      "native appearance transition restores focus descriptor; no corrective focus is allowed",
+    );
+    const scrollDelta =
+      transition.restored.panelScroll - transition.before.panelScroll;
+    assert.ok(
+      Math.abs(scrollDelta) <= 1,
+      "restored inner scroll stays within existing Stage1 cleanup tolerance",
+    );
+    // Retain raw observations. Only normal-flow descendant Y coordinates move
+    // with the allowed fractional inner scroll; all other fields stay exact.
+    const normalized = structuredClone(transition.restored);
+    if (scrollDelta !== 0) {
+      normalized.panelScroll = transition.before.panelScroll;
+      normalized.remaining += scrollDelta;
+      for (const question of normalized.questions)
+        for (const action of question.actions ?? [])
+          if (action.rect) {
+            action.rect.top += scrollDelta;
+            action.rect.bottom += scrollDelta;
+          }
+      if (normalized.lastVisibleContent?.rect) {
+        normalized.lastVisibleContent.rect.top += scrollDelta;
+        normalized.lastVisibleContent.rect.bottom += scrollDelta;
+      }
+    }
+    transition.scrollNormalization = {
+      delta: scrollDelta,
+      scope:
+        "panelScroll, remaining, question action / last visible content rect top and bottom only; raw restored retained",
+    };
+    assert.deepEqual(
+      normalized,
+      transition.before,
+      "original light split observations restored; only <=1px inner-scroll-derived Y coordinates normalized",
+    );
+    transition.status = "passed";
+  } catch (error) {
+    transition.status = "failed";
+    transition.error = String(error);
+    throw error;
+  }
+}
+
 async function settledLayout() {
   await until(
     () =>
@@ -195,6 +1012,176 @@ async function settledLayout() {
     "native layout write settled",
   );
 }
+const readCueLabel = () =>
+  evaluate(
+    `(${informationCueLabelMetrics.toString()})(()=>(${informationOverflowMetrics.toString()})(${informationReachabilityMetrics.toString()}))`,
+  );
+async function stableCueLabel(label) {
+  let previous = await readCueLabel();
+  for (let attempt = 0; attempt < 20; attempt++) {
+    await pause(50);
+    const current = await readCueLabel();
+    if (JSON.stringify(current) === JSON.stringify(previous)) return current;
+    previous = current;
+  }
+  throw Error(`${label}: cue observation did not settle`);
+}
+
+async function verifyChineseSplitCueLabel() {
+  const receipt = {
+    name: "desktop-split-chinese-cue-label",
+    status: "running",
+    languageInput:
+      "existing disposable same-origin language preference receiver; original key/value restored",
+    scope:
+      "Chinese inner-span fitting only; no dark, forced-colors or new response claim",
+  };
+  result.cases.push(receipt);
+  let before,
+    switched = false,
+    failure;
+  try {
+    before = await stableCueLabel("before-Chinese");
+    receipt.before = before;
+    switched = true;
+    await evaluate(
+      "(()=>{const oldValue=localStorage.getItem('zenx.language');localStorage.setItem('zenx.language','zh-CN');dispatchEvent(new StorageEvent('storage',{key:'zenx.language',oldValue,newValue:'zh-CN',storageArea:localStorage}));return true})()",
+    );
+    await until(
+      () =>
+        evaluate(
+          "document.documentElement.lang==='zh-CN' && document.querySelector('.information-overflow-cue > span')?.textContent==='下方还有内容'",
+        ),
+      "real Chinese document locale and cue label",
+    );
+    receipt.chinese = await stableCueLabel("Chinese-label");
+    assertChineseInformationCue(receipt.chinese, before);
+    await screenshot("03i-overflow-cue-Chinese-label.png");
+  } catch (error) {
+    failure = error;
+    receipt.error = String(error);
+    try {
+      receipt.failureSample = await readCueLabel();
+      await screenshot("03i-overflow-cue-Chinese-label-failed.png");
+    } catch {}
+  }
+  if (switched) {
+    try {
+      const value = JSON.stringify(before.storedLanguage);
+      await evaluate(
+        `(()=>{const oldValue=localStorage.getItem('zenx.language'),value=${value};if(value===null)localStorage.removeItem('zenx.language');else localStorage.setItem('zenx.language',value);dispatchEvent(new StorageEvent('storage',{key:'zenx.language',oldValue,newValue:value,storageArea:localStorage}));return true})()`,
+      );
+      await until(
+        () =>
+          evaluate(
+            `document.documentElement.lang===${JSON.stringify(before.language)} && localStorage.getItem('zenx.language')===${value}`,
+          ),
+        "original exact locale key/value and document lang restored",
+      );
+      receipt.restored = await stableCueLabel("restored-locale");
+      for (const key of [
+        "language",
+        "storedLanguage",
+        "viewport",
+        "resource",
+        "ownerKey",
+        "popover",
+        "toolbar",
+        "panel",
+        "clientHeight",
+        "scrollHeight",
+        "composer",
+        "composerDraft",
+        "toggle",
+        "dismiss",
+        "transcript",
+        "transcriptScroll",
+        "active",
+      ])
+        assert.deepEqual(
+          receipt.restored[key],
+          before[key],
+          `locale restoration preserves ${key}`,
+        );
+      assert.deepEqual(
+        receipt.restored.questions.map((q) => q.id),
+        before.questions.map((q) => q.id),
+      );
+      assert.ok(
+        Math.abs(receipt.restored.panelScroll - before.panelScroll) <= 1,
+        "only existing fractional inner-scroll cleanup tolerance",
+      );
+    } catch (error) {
+      receipt.restorationError = String(error);
+      failure ??= error;
+    }
+  }
+  receipt.status = failure ? "failed" : "passed";
+  if (failure) throw failure;
+}
+
+async function observeSingleSiblingCueFit(threadId, siblingId) {
+  const receipt = {
+    name: "desktop-single-sibling-cue-fit",
+    status: "running",
+    scope:
+      "passive observation after the existing sole verified submission; no scene or theme changes",
+  };
+  result.cases.push(receipt);
+  try {
+    // Only this already scoped panel must settle; new transcript work is not
+    // manipulated or used to manufacture a fitting state.
+    const scoped = async () => {
+      const s = await readCueLabel();
+      return {
+        viewport: s.viewport,
+        resource: s.resource,
+        overlayCount: s.overlayCount,
+        dockCount: s.dockCount,
+        ownerKey: s.ownerKey,
+        panel: s.panel,
+        owned: s.owned,
+        clientHeight: s.clientHeight,
+        scrollHeight: s.scrollHeight,
+        panelScroll: s.panelScroll,
+        remaining: s.remaining,
+        cue: s.cue,
+        questions: s.questions.map((q) => ({ id: q.id })),
+      };
+    };
+    let previous = await scoped(),
+      stable = false;
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await pause(50);
+      const next = await scoped();
+      receipt.observation = next;
+      if (JSON.stringify(next) === JSON.stringify(previous)) {
+        stable = true;
+        break;
+      }
+      previous = next;
+    }
+    if (!stable) {
+      receipt.status = "not-exercised";
+      receipt.reason =
+        "single-sibling observation did not settle; no retry or mutation";
+      return;
+    }
+    Object.assign(
+      receipt,
+      classifySingleSiblingCueFit(
+        receipt.observation,
+        `thread:${threadId}`,
+        siblingId,
+      ),
+    );
+  } catch (error) {
+    receipt.status = "failed";
+    receipt.error = String(error);
+    throw error;
+  }
+}
+
 async function selectValue(selector, value, label) {
   // macOS's native select popup is outside webContents key dispatch. Exercise
   // the real controlled DOM select/change handler, not an OS menu, and record
@@ -271,6 +1258,85 @@ async function screenshot(name) {
     path.join(directory, name),
     (await window.webContents.capturePage()).toPNG(),
   );
+}
+// Serialize only DOM geometry and computed layout properties from the owned App.
+function informationBoundaryMetrics() {
+  const viewport = document.documentElement;
+  const cssLengths = [
+    "width",
+    "max-width",
+    "min-width",
+    "box-sizing",
+    "padding-inline-start",
+    "padding-inline-end",
+    "border-inline-start-width",
+    "border-inline-end-width",
+    "margin-inline-start",
+    "margin-inline-end",
+    "overflow-x",
+    "overflow-y",
+    "scrollbar-width",
+    "scrollbar-gutter",
+    "--conversation-gutter",
+    "--conversation-width",
+  ];
+  const selectors = {
+    workspace: ".workspace",
+    chat: ".agent-surface",
+    thread: ".thread-view",
+    bottomZone: ".bottom-zone",
+    composer: ".bottom-zone .composer",
+    editor: "#thread-composer",
+    transcript: ".messages",
+    transcriptColumn: ".messages-inner",
+    informationDock: ".information-dock",
+    informationPopover: ".information-popover",
+  };
+  return {
+    viewport: {
+      innerWidth,
+      innerHeight,
+      devicePixelRatio,
+      visualViewportScale: window.visualViewport?.scale ?? null,
+      clientWidth: viewport.clientWidth,
+      clientHeight: viewport.clientHeight,
+    },
+    elements: Object.fromEntries(
+      Object.entries(selectors).map(([name, selector]) => {
+        const node = document.querySelector(selector);
+        if (!node) return [name, null];
+        const { left, right, width, height } = node.getBoundingClientRect();
+        const {
+          offsetWidth,
+          clientWidth,
+          clientHeight,
+          scrollWidth,
+          scrollHeight,
+        } = node;
+        const style = getComputedStyle(node);
+        return [
+          name,
+          {
+            left,
+            right,
+            width,
+            height,
+            offsetWidth,
+            clientWidth,
+            clientHeight,
+            scrollWidth,
+            scrollHeight,
+            css: Object.fromEntries(
+              cssLengths.map((property) => [
+                property,
+                style.getPropertyValue(property).trim(),
+              ]),
+            ),
+          },
+        ];
+      }),
+    ),
+  };
 }
 async function capture(name, mode) {
   await until(
@@ -395,6 +1461,23 @@ async function capture(name, mode) {
     );
   }
   await screenshot(name + ".png");
+  if (
+    name === "08c-920px-allocation-dock" ||
+    name === "08d-919px-allocation-overlay"
+  ) {
+    try {
+      geometry.boundaryMetrics = {
+        ...(await evaluate(`(${informationBoundaryMetrics.toString()})()`)),
+        electron: process.versions.electron,
+        chromium: process.versions.chrome,
+        arch: process.arch,
+        zoomFactor: window.webContents.getZoomFactor(),
+      };
+    } catch {
+      // Diagnostic failure must not replace the existing acceptance result.
+      geometry.boundaryMetrics = { status: "unavailable" };
+    }
+  }
   result.cases.push({ name, mode, geometry });
 }
 const networkReady = app.whenReady().then(() =>
@@ -923,6 +2006,20 @@ async function run() {
     "Manually reopen information beside workspace",
   );
   await capture("03-workspace-reopen-overlay", "overlay");
+  await verifyInformationOverflowCue({
+    read: () =>
+      evaluate(
+        `(${informationOverflowMetrics.toString()})(${informationReachabilityMetrics.toString()})`,
+      ),
+    sendInput: (event) => window.webContents.sendInputEvent(event),
+    pause,
+    screenshot,
+    result,
+    expectedSecondPrompt: revealPrompt,
+  });
+  await measureInformationOverlayReachability(revealPrompt);
+  await verifyInformationDarkSplitCue(revealPrompt);
+  await verifyChineseSplitCueLabel();
   window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Escape" });
   window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
   await until(
@@ -1776,6 +2873,7 @@ async function run() {
       throw error;
     }
   }
+  await verifyDisposableOverlayKeyboardAnswer();
   result.ok = true;
 }
 void import(pathToFileURL(path.join(__dirname, "../out/main/index.js")).href)

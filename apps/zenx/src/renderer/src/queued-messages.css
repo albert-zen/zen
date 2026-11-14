@@ -40,6 +40,7 @@
 }
 
 .queue-shelf:where(:not(.steer-shelf)) button,
+.queue-reading-return button,
 .steer-shelf button:where(:not(.image-thumbnail)) {
   border: 0;
   background: transparent;
@@ -54,6 +55,7 @@
 }
 
 .queue-shelf button:focus-visible,
+.queue-reading-return button:focus-visible,
 .queue-preview:focus-visible,
 .queue-row-error:focus-visible,
 .queue-shelf-details:focus-visible {
@@ -277,7 +279,9 @@
   color: var(--color-text-muted) !important;
 }
 
-.queue-row-edit:disabled {
+.queue-row-edit:disabled,
+.queue-row-cancel:disabled,
+.queue-row-move:disabled {
   color: var(--color-text-disabled) !important;
 }
 
@@ -378,18 +382,6 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .queue-row-edit:not(:focus-visible):not(.is-pending),
-  .queue-row-cancel:not(:focus-visible):not(.is-pending) {
-    opacity: 0.55;
-  }
-
-  .queue-row:hover .queue-row-edit,
-  .queue-row:focus-within .queue-row-edit,
-  .queue-row:hover .queue-row-cancel,
-  .queue-row:focus-within .queue-row-cancel {
-    opacity: 1;
-  }
-
   .queue-shelf button:not(:disabled):hover,
   .queue-preview.is-expandable:hover {
     background: var(--color-surface-hover);
@@ -427,6 +419,7 @@
 }
 
 .queue-row-steer {
+  white-space: nowrap;
   color: var(--color-text-primary) !important;
 }
 .queue-row-steer:disabled {
@@ -597,6 +590,19 @@
 .pending-tray:empty {
   display: none;
 }
+/* A bounded pending list must advertise its hidden rows before interaction.
+   Native auto overflow supplies the thumb only when content actually overflows;
+   keep the shared thin, trackless geometry and the global auto-hide elsewhere. */
+.pending-tray,
+:root[data-scrollbar-autohide] .pending-tray {
+  scrollbar-color: var(--color-text-muted) transparent;
+}
+@media (forced-colors: active) {
+  .pending-tray,
+  :root[data-scrollbar-autohide] .pending-tray {
+    scrollbar-color: auto;
+  }
+}
 .pending-tray > .queue-shelf {
   width: 100%;
   max-width: none;
@@ -623,6 +629,11 @@
   padding: 0 0 6px;
 }
 .pending-tray .queue-shelf-header {
+  /* Keep delivery timing attached to the group while keyboard focus scrolls. */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--color-surface-inset);
   min-height: 32px;
   flex-wrap: wrap;
 }
@@ -637,6 +648,16 @@
 .pending-tray .pending-send-status,
 .pending-tray .pending-send-recovery p {
   margin: 4px 0;
+}
+.pending-tray .pending-send-check-feedback {
+  margin-top: var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-label);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.pending-tray .pending-send-check-feedback[data-check-state="failed"] {
+  color: var(--color-status-danger);
 }
 .pending-tray .pending-send-recovery,
 .pending-tray .pending-send-recovery pre,
@@ -676,8 +697,24 @@
   justify-content: flex-end;
 }
 @media (max-width: 480px) {
+  .pending-tray .queue-row-main {
+    flex-direction: column;
+  }
+  .pending-tray .queue-row-content,
   .pending-tray .queue-row-actions {
-    max-width: 88px;
+    width: 100%;
+  }
+  .pending-tray .queue-row-actions {
+    max-width: none;
+    padding-top: 0;
+    gap: 4px;
+  }
+}
+/* Use available height in tall narrow windows, not when a keyboard or short
+   viewport needs that space for the Composer and approval decisions. */
+@media (max-width: 480px) and (min-height: 700px) {
+  .pending-tray {
+    max-height: min(360px, 40dvh);
   }
 }
 .queue-move-up {
@@ -701,5 +738,74 @@
     min-width: 28px;
     min-height: 28px;
     padding: 4px;
+  }
+}
+
+/* Focus scrolling must leave room for the sticky group heading. */
+.pending-tray {
+  scroll-padding-block-start: 64px;
+}
+
+/* A visible Send now label must not strand Cancel on a second desktop row.
+   Keep wrapping available for long localized pending-status labels. */
+@media (pointer: fine) and (min-width: 481px) {
+  .pending-tray .queue-row-actions {
+    max-width: 192px;
+  }
+}
+
+/* Desktop-only, explicit reading space; never resize the Composer or split the
+   existing pending groups into independent scrolling regions. */
+.queue-shelf .queue-reading-toggle {
+  display: none;
+}
+@media (min-width: 961px) {
+  .queue-shelf .queue-reading-toggle {
+    display: inline-flex;
+  }
+  .pending-tray:has(> .queue-shelf[data-reading-expanded="true"]) {
+    max-height: min(480px, 55dvh);
+    /* The bottom zone reserves a conversation lane. Its Composer and return
+       are fixed-size siblings; only the message viewport yields when their
+       combined height reaches that existing cap. */
+    flex-shrink: 1;
+  }
+}
+
+/* End-of-reading return lives outside the tray scroller, without overlay.
+   Empty hosts have no box, so the collapsed layout is unchanged.
+   End-of-reading return: ordinary reverse Tab from the Composer reaches this
+   before individual message actions. No actions are removed from tab order. */
+.queue-reading-return {
+  display: none;
+}
+@media (min-width: 961px) {
+  .queue-reading-return {
+    display: flex;
+    justify-content: flex-end;
+    padding: 0 10px;
+    min-height: 32px;
+  }
+}
+
+.queue-reading-return-host:empty {
+  display: none;
+}
+
+.queue-reading-return-host {
+  display: none;
+  flex: 0 0 auto;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+  line-height: 1.5;
+}
+@media (min-width: 961px) {
+  .queue-reading-return-host:not(:empty) {
+    display: block;
+  }
+}
+@media (min-width: 961px) and (pointer: fine) {
+  .queue-reading-return .queue-header-action {
+    min-height: 32px;
   }
 }

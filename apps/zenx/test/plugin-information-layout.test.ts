@@ -263,7 +263,11 @@ test("Board uses one toggle and explicit close, measures Browser coexistence and
       document.querySelector(".information-dock"),
       "wide chat reserves a docked card",
     );
-    await click(".information-dock .information-dismiss-toolbar button");
+    assert.equal(
+      document.querySelector(".information-dock .information-dismiss-toolbar"),
+      null,
+    );
+    await click(".information-toolbar button");
     assert.equal(document.querySelector(".information-dock"), null);
     assert.equal(document.activeElement, trigger);
     await click(".information-toolbar button");
@@ -278,6 +282,38 @@ test("Board uses one toggle and explicit close, measures Browser coexistence and
       document.querySelector<HTMLElement>(".information-dock")!.style.top,
       "56px",
       "ordinary dock clears the visible Windows/Linux conversation title row",
+    );
+    // The synthetic information preview has no title-row geometry. The same
+    // production host must still clear its real trigger, rather than letting
+    // the fixed entry overlap the dock's explicit Close information control.
+    titlebar.style.display = "none";
+    triggerBottom = 84;
+    await act(async () => {
+      for (const callback of callbacks) callback([]);
+    });
+    assert.equal(
+      document.querySelector<HTMLElement>(".information-dock")!.style.top,
+      "52px",
+    );
+    assert.equal(44 + 52, triggerBottom + 12);
+    titlebar.style.display = "";
+    triggerBottom = 180;
+    await act(async () => {
+      for (const callback of callbacks) callback([]);
+    });
+    assert.equal(
+      document.querySelector<HTMLElement>(".information-dock")!.style.top,
+      "148px",
+      "a taller trigger also stays clear when a title row exists",
+    );
+    triggerBottom = 40;
+    await act(async () => {
+      for (const callback of callbacks) callback([]);
+    });
+    assert.equal(
+      document.querySelector<HTMLElement>(".information-dock")!.style.top,
+      "56px",
+      "ordinary App layout is unchanged when the title row already clears the entry",
     );
     assert.ok(observed.has(titlebar), "title row resizing is observed");
     titlebarBottom = 132;

@@ -147,6 +147,10 @@ test("Computer enablement first explains requested access and keeps OS setup exp
   assert.deepEqual(opened, ["accessibility"]);
   assert.deepEqual(enabled, []);
   await act(async () => {
+    assert.equal(
+      button("Continue enabling Computer").className,
+      "primary-button",
+    );
     button("Continue enabling Computer").click();
     await Promise.resolve();
   });
@@ -221,6 +225,7 @@ test("first Computer installation shows the selected manifest scopes before inst
     [...dom.window.document.querySelectorAll("button")].find(
       (candidate) => candidate.textContent === label,
     ) as HTMLButtonElement;
+  assert.equal(button("Install").className, "secondary-button");
   await act(async () => button("Install").click());
   assert.deepEqual(installed, []);
   assert.deepEqual(
@@ -729,6 +734,11 @@ test("Plugin Settings exposes typed package sources and reports post-commit upda
       (candidate) => candidate.textContent === label,
     ) as HTMLButtonElement;
   await act(async () => button("Install from source…").click());
+  assert.ok(
+    dom.window.document.querySelector(
+      ".plugin-source-actions > button.primary-button",
+    ),
+  );
   const select = dom.window.document.querySelector<HTMLButtonElement>(
     'button[aria-label="Plugin source"]',
   )!;
@@ -915,6 +925,7 @@ test("Marketplace exposes loading, search, detail, version install, and canonica
   assert.ok(version);
   await chooseValue(version, "1.0.0");
   await act(async () => {
+    assert.equal(button("Install v1.0.0").className, "secondary-button");
     button("Install v1.0.0").click();
     await Promise.resolve();
   });
@@ -928,6 +939,7 @@ test("Marketplace exposes loading, search, detail, version install, and canonica
   assert.match(dom.window.document.body.textContent ?? "", /Update available/u);
   await chooseValue(version, "2.0.0");
   await act(async () => {
+    assert.equal(button("Update to v2.0.0").className, "secondary-button");
     button("Update to v2.0.0").click();
     await Promise.resolve();
   });

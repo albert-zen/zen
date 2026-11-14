@@ -5,6 +5,7 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ZenXProviderProfile } from "../src/main/host-profile.js";
 import type { ModelSummary } from "../src/protocol-client/index.js";
@@ -18,6 +19,41 @@ const rendererStyles = await readFile(
   new URL("../src/renderer/src/styles.css", import.meta.url),
   "utf8",
 );
+
+test("long model selection retains its complete accessible name and tooltip", () => {
+  const displayName =
+    "Local deterministic QA with a deliberately long model name";
+  const selected = key("alpha", "long-model");
+  const markup = renderToStaticMarkup(
+    createElement(ComposerModelMenu, {
+      disabled: false,
+      modelError: null,
+      models: [model(selected, displayName, ["high"])],
+      onModelChange: () => {},
+      onReasoningChange: () => {},
+      providerProfiles: [provider("alpha", "Local", ["long-model"])],
+      selectedModel: selected,
+      selectedReasoningEffort: "high",
+      switching: false,
+    }),
+  );
+  const dom = new JSDOM(markup);
+  try {
+    const trigger = dom.window.document.querySelector(
+      ".composer-model-trigger",
+    );
+    assert.ok(trigger);
+    assert.equal(trigger.textContent, `${displayName} High`);
+    assert.equal(trigger.getAttribute("title"), `${displayName} High`);
+    assert.ok(
+      trigger.getAttribute("aria-label")?.includes(`${displayName} High`),
+    );
+    assert.equal(trigger.getAttribute("aria-haspopup"), "menu");
+    assert.equal(trigger.querySelectorAll("svg").length, 1);
+  } finally {
+    dom.window.close();
+  }
+});
 
 test("Composer model menu groups Providers and manages keyboard focus", async () => {
   const dom = new JSDOM(

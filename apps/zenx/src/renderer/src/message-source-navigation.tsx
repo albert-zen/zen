@@ -16,6 +16,8 @@ export type MessageSourceTarget =
       id: string;
       deviceId?: string;
       itemId?: string;
+      /** Local canonical sending call, distinct from a delivered-message receipt. */
+      sourceTool?: { itemId: string; callId: string };
       excerpt?: string;
       returnBound?: boolean;
     }

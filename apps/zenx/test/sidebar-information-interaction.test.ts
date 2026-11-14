@@ -187,6 +187,24 @@ test("details retain focus, title directly renames, and late save cannot close a
       "leaving both surfaces dismisses details",
     );
     await act(async () => row.focus());
+    await act(async () => row.dispatchEvent(event("ArrowRight")));
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 40)));
+    const firstDetails = document.querySelector<HTMLElement>(
+      ".thread-information",
+    )!;
+    await act(async () =>
+      firstDetails.querySelector<HTMLButtonElement>("button")!.focus(),
+    );
+    await act(async () => firstDetails.dispatchEvent(event("Escape")));
+    assert.equal(
+      document.activeElement,
+      row,
+      "First keyboard details visit returns to the row, not the unused more trigger",
+    );
+    await act(async () => {
+      row.blur();
+      row.focus();
+    });
     assert.ok(
       document.activeElement === row,
       "opening information does not steal focus",

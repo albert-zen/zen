@@ -71,6 +71,7 @@ const sources = [
   "src/renderer/src/thread-list.ts",
   "src/renderer/src/i18n/shell.ts",
   "src/renderer/src/auxiliary-panel.tsx",
+  "src/renderer/src/workspace-resting-labels.ts",
   "src/renderer/src/FleetComposerSurface.tsx",
   "src/renderer/src/ThreadView.tsx",
   "src/renderer/src/side-chat-drafts.ts",

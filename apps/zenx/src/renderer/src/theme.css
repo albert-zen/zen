@@ -48,20 +48,22 @@
   --color-shadow-find: rgb(0 0 0 / 12%);
 
   /* Canonical semantic colors for the migrated v0 slice. */
-  --color-canvas: #090a0c;
-  --color-surface-sidebar: #111216;
-  --color-surface-main: #0d0e11;
+  --color-scrollbar-thumb: rgb(255 255 255 / 8%);
+  --color-scrollbar-thumb-hover: rgb(255 255 255 / 32%);
+  --color-canvas: #000000;
+  --color-surface-sidebar: #000000;
+  --color-surface-main: #151515;
   --color-surface-browser-blank: #000000;
-  --color-surface: #15171c;
-  --color-surface-elevated: #1a1c22;
-  --color-surface-emphasis: #20232a;
-  --color-surface-hover: #202228;
-  --color-surface-active: #272a32;
-  --color-surface-control: #181a20;
-  --color-surface-control-hover: #222630;
-  --color-surface-inset: #101217;
-  --color-surface-code: #0e1014;
-  --color-surface-overlay: #17191e;
+  --color-surface: #1a1a1a;
+  --color-surface-elevated: #202020;
+  --color-surface-emphasis: #252525;
+  --color-surface-hover: #242424;
+  --color-surface-active: #2b2b2b;
+  --color-surface-control: #1c1c1c;
+  --color-surface-control-hover: #292929;
+  --color-surface-inset: #121212;
+  --color-surface-code: #171717;
+  --color-surface-overlay: #202020;
   --color-surface-danger: #211619;
   --color-surface-warning: #1a1815;
   --color-surface-wash: rgb(255 255 255 / 2.5%);
@@ -70,8 +72,8 @@
   --color-surface-highlight: rgb(255 255 255 / 4%);
   --color-surface-highlight-strong: rgb(255 255 255 / 32%);
   --color-surface-glass: rgb(13 14 17 / 92%);
-  --color-border: #292c34;
-  --color-border-subtle: #202229;
+  --color-border: #303030;
+  --color-border-subtle: #292929;
   --color-border-control: #5b6170;
   --color-border-strong: #656b79;
   --color-border-focus: #4a5265;
@@ -93,6 +95,7 @@
   --color-status-success: #73d2ad;
   --color-status-warning: #e0b266;
   --color-status-danger: #ef877f;
+  --color-text-on-danger-soft: var(--color-status-danger);
   --color-status-success-soft: rgb(115 210 173 / 10%);
   --color-status-warning-soft: rgb(224 178 102 / 10%);
   --color-status-danger-soft: rgb(239 135 127 / 10%);
@@ -163,19 +166,21 @@
 :root[data-appearance="light"] {
   --color-surface-browser-blank: #ffffff;
   color-scheme: light;
-  --color-canvas: #e8eaf1;
-  --color-surface-sidebar: #eff1f6;
-  --color-surface-main: #f5f6fa;
-  --color-surface: #fbfcff;
-  --color-surface-elevated: #f0f2f8;
-  --color-surface-emphasis: #e4e7f0;
-  --color-surface-hover: #e5e8f1;
-  --color-surface-active: #dce1ec;
-  --color-surface-control: #f6f7fb;
-  --color-surface-control-hover: #eceff6;
-  --color-surface-inset: #eef0f5;
-  --color-surface-code: #e9ecf3;
-  --color-surface-overlay: #fbfcff;
+  --color-scrollbar-thumb: #d9d9d9;
+  --color-scrollbar-thumb-hover: #bfbfbf;
+  --color-canvas: #e4e4e4;
+  --color-surface-sidebar: #e4e4e4;
+  --color-surface-main: #f5f5f5;
+  --color-surface: #f9f9f9;
+  --color-surface-elevated: #eeeeee;
+  --color-surface-emphasis: #e7e7e7;
+  --color-surface-hover: #e9e9e9;
+  --color-surface-active: #dfdfdf;
+  --color-surface-control: #f7f7f7;
+  --color-surface-control-hover: #eeeeee;
+  --color-surface-inset: #eeeeee;
+  --color-surface-code: #eeeeee;
+  --color-surface-overlay: #f9f9f9;
   --color-surface-danger: #fff2f1;
   --color-surface-warning: #fff8e9;
   --color-surface-wash: rgb(30 40 70 / 2.5%);
@@ -184,8 +189,8 @@
   --color-surface-highlight: rgb(255 255 255 / 55%);
   --color-surface-highlight-strong: rgb(255 255 255 / 72%);
   --color-surface-glass: rgb(245 246 250 / 92%);
-  --color-border: #cbd0dc;
-  --color-border-subtle: #d9dde7;
+  --color-border: #d4d4d4;
+  --color-border-subtle: #e1e1e1;
   --color-border-control: #7f899f;
   --color-border-strong: #737e95;
   --color-border-focus: #657bb0;
@@ -207,6 +212,7 @@
   --color-status-success: #287a60;
   --color-status-warning: #96651d;
   --color-status-danger: #b74742;
+  --color-text-on-danger-soft: #a93f3a;
   --color-status-success-soft: rgb(40 122 96 / 11%);
   --color-status-warning-soft: rgb(150 101 29 / 11%);
   --color-status-danger-soft: rgb(183 71 66 / 10%);
@@ -223,11 +229,11 @@
 
 /* Presets remap semantic roles; components never select a palette directly. */
 :root[data-appearance="dark"][data-theme-preset="graphite"] {
-  --color-surface-sidebar: #111216;
+  --color-surface-sidebar: #000000;
 }
 
 :root[data-appearance="light"][data-theme-preset="graphite"] {
-  --color-surface-sidebar: #eff1f6;
+  --color-surface-sidebar: #e4e4e4;
 }
 
 :root[data-appearance="dark"][data-theme-preset="cobalt"] {

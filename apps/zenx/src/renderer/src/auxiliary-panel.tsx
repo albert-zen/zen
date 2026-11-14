@@ -1,3 +1,4 @@
+import { roomFileOwnerLabels } from "./room-file-owner-labels.js";
 import { flushSync } from "react-dom";
 import { ShellTargetNavigationContext } from "./shell-target-navigation.js";
 import {
@@ -15,6 +16,7 @@ import React, {
   useEffect,
   useContext,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -37,6 +39,96 @@ import { WorkspaceFilePicker } from "./workspace-file-picker.js";
 import { Icon, type IconName } from "./icons.js";
 import { messageFilePath } from "./message-file-path.js";
 
+import {
+  restingConversationLabelPlans,
+  restingLabelFitMode,
+} from "./workspace-resting-labels.js";
+
+function ConversationRestingLabel({
+  title,
+  candidate,
+  bareCandidate,
+}: {
+  title: string;
+  candidate: string;
+  bareCandidate?: string;
+}) {
+  const wrapper = useRef<HTMLSpanElement>(null);
+  const [mode, setMode] = useState<"canonical" | "marked" | "bare">(
+    "canonical",
+  );
+  useLayoutEffect(() => {
+    const element = wrapper.current;
+    if (!element) return;
+    const probe = element.querySelector<HTMLElement>(
+      ".workspace-tab-title-probe",
+    );
+    const candidateProbe = element.querySelector<HTMLElement>(
+      ".workspace-tab-candidate-probe",
+    );
+    const bareProbe = element.querySelector<HTMLElement>(
+      ".workspace-tab-bare-probe",
+    );
+    const query = window.matchMedia?.("(min-width: 721px)");
+    // Without a real viewport and resize observation, leave the full title in
+    // place. The ordinary title still uses the established ellipsis and reveal.
+    if (!query || typeof ResizeObserver !== "function") return;
+    let disposed = false;
+    const measure = () => {
+      if (disposed) return;
+      setMode(
+        restingLabelFitMode({
+          desktop: query.matches,
+          available: element.clientWidth,
+          full: probe?.getBoundingClientRect().width ?? 0,
+          marked:
+            candidate !== title
+              ? candidateProbe?.getBoundingClientRect().width
+              : undefined,
+          bare: bareCandidate
+            ? bareProbe?.getBoundingClientRect().width
+            : undefined,
+        }),
+      );
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    if (probe) observer.observe(probe);
+    if (candidateProbe) observer.observe(candidateProbe);
+    if (bareProbe) observer.observe(bareProbe);
+    query.addEventListener("change", measure);
+    document.fonts?.ready.then(measure);
+    document.fonts?.addEventListener("loadingdone", measure);
+    return () => {
+      disposed = true;
+      document.fonts?.removeEventListener("loadingdone", measure);
+      observer.disconnect();
+      query.removeEventListener("change", measure);
+    };
+  }, [title, candidate, bareCandidate]);
+  return (
+    <span className="workspace-tab-label-box" ref={wrapper} aria-hidden="true">
+      <span className="workspace-tab-title-probe">{title}</span>
+      <span className="workspace-tab-candidate-probe">{candidate}</span>
+      {bareCandidate && (
+        <span className="workspace-tab-bare-probe">{bareCandidate}</span>
+      )}
+      <span
+        className="workspace-tab-title"
+        data-abbreviated={mode !== "canonical" || undefined}
+        data-label-mode={mode}
+      >
+        {mode === "marked"
+          ? candidate
+          : mode === "bare"
+            ? bareCandidate
+            : title}
+      </span>
+    </span>
+  );
+}
+
 function panelIcon(pluginId: string): IconName {
   if (pluginId === "zenx-subagents") return "users";
   if (pluginId === "zenx-triggers") return "trigger";
@@ -55,6 +147,180 @@ interface ContentTab {
   externalBrowser?: BrowserThreadTarget;
   previewOutcome?: "completed" | "failed";
   render?: () => React.ReactNode;
+}
+
+function useConversationTitleReveal() {
+  const nativeTitleQuery =
+    "(min-width: 721px) and (hover: hover) and (pointer: fine)";
+  const [replacesNativeTitle, setReplacesNativeTitle] = useState(
+    () => window.matchMedia?.(nativeTitleQuery)?.matches ?? false,
+  );
+  useEffect(() => {
+    const media = window.matchMedia?.(nativeTitleQuery);
+    if (!media) return;
+    const update = () => setReplacesNativeTitle(media.matches);
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  const [preview, setPreview] = useState<{
+    anchor: HTMLButtonElement;
+    title: string;
+  } | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dismiss = useCallback(() => {
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = null;
+    setPreview(null);
+  }, []);
+  const keepOpen = () => {
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = null;
+  };
+  const leave = () => {
+    keepOpen();
+    timer.current = setTimeout(() => {
+      timer.current = null;
+      setPreview((current) =>
+        current?.anchor.matches(":focus-visible") ? current : null,
+      );
+    }, 150);
+  };
+  const show = (anchor: HTMLButtonElement, title: string, delayed: boolean) => {
+    // Incidental pointer movement must not replace an open keyboard label.
+    if (
+      delayed &&
+      preview?.anchor !== anchor &&
+      preview?.anchor === document.activeElement &&
+      preview.anchor.matches(":focus-visible")
+    )
+      return;
+    dismiss();
+    if (
+      !(
+        window.matchMedia?.("(min-width: 721px)")?.matches ??
+        window.innerWidth >= 721
+      ) ||
+      (delayed &&
+        !(
+          window.matchMedia?.("(hover: hover) and (pointer: fine)")?.matches ??
+          false
+        ))
+    )
+      return;
+    const reveal = () => {
+      timer.current = null;
+      const label = anchor.querySelector<HTMLElement>(".workspace-tab-title");
+      if (
+        !anchor.isConnected ||
+        !label ||
+        (label.dataset.abbreviated !== "true" &&
+          label.scrollWidth <= label.clientWidth + 1)
+      )
+        return;
+      setPreview({ anchor, title });
+    };
+    if (delayed) timer.current = setTimeout(reveal, 350);
+    else reveal();
+  };
+  useEffect(() => {
+    const onEscape = (event: KeyboardEvent) => {
+      if (
+        event.key === "Escape" &&
+        !event.isComposing &&
+        !event.defaultPrevented
+      )
+        dismiss();
+    };
+    const onScroll = (event: Event) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest(".workspace-conversation-title-reveal")
+      )
+        return;
+      keepOpen();
+      // Keyboard activation can scroll the tab strip after its focus event.
+      // Keep that label attached to its focused tab rather than flashing closed.
+      setPreview((current) => {
+        if (
+          !current?.anchor.isConnected ||
+          !current.anchor.matches(":focus-visible")
+        )
+          return null;
+        const bounds = current.anchor.getBoundingClientRect();
+        const rail = current.anchor
+          .closest('[role="tablist"]')
+          ?.getBoundingClientRect();
+        const visible =
+          rail &&
+          bounds.right > rail.left &&
+          bounds.left < rail.right &&
+          bounds.bottom > 0 &&
+          bounds.top < window.innerHeight;
+        return bounds.width > 0 && visible ? current : null;
+      });
+    };
+    window.addEventListener("resize", dismiss);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("blur", dismiss);
+    document.addEventListener("keydown", onEscape);
+    return () => {
+      if (timer.current !== null) clearTimeout(timer.current);
+      window.removeEventListener("resize", dismiss);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("blur", dismiss);
+      document.removeEventListener("keydown", onEscape);
+    };
+  }, [dismiss]);
+  useLayoutEffect(() => {
+    if (
+      preview &&
+      (!preview.anchor.isConnected ||
+        preview.anchor.getBoundingClientRect().width === 0 ||
+        preview.anchor.dataset.canonicalTitle !== preview.title)
+    )
+      dismiss();
+  });
+  return {
+    replacesNativeTitle,
+    handlers: (title: string) => ({
+      onPointerEnter: (event: React.PointerEvent<HTMLButtonElement>) => {
+        if (event.pointerType !== "touch")
+          show(event.currentTarget, title, true);
+      },
+      onPointerLeave: leave,
+      onPointerDown: dismiss,
+      onFocus: (event: React.FocusEvent<HTMLButtonElement>) => {
+        if (event.currentTarget.matches(":focus-visible"))
+          show(event.currentTarget, title, false);
+      },
+      onBlur: dismiss,
+    }),
+    dismissOnEscape: (event: React.KeyboardEvent<HTMLElement>) => {
+      if (
+        event.key !== "Escape" ||
+        event.nativeEvent.isComposing ||
+        event.nativeEvent.keyCode === 229 ||
+        event.defaultPrevented ||
+        !preview
+      )
+        return false;
+      event.preventDefault();
+      event.stopPropagation();
+      dismiss();
+      return true;
+    },
+    element:
+      preview && preview.anchor.isConnected ? (
+        <div
+          className="workspace-conversation-title-reveal"
+          aria-hidden="true"
+          onPointerEnter={keepOpen}
+          onPointerLeave={leave}
+        >
+          {preview.title}
+        </div>
+      ) : null,
+  };
 }
 
 const PRIMARY_CONVERSATION_TAB = "primary-conversation";
@@ -233,6 +499,7 @@ export function AuxiliaryPanel({
       finishResize();
     };
   }, [finishResize]);
+  const titleReveal = useConversationTitleReveal();
   const panel = useRef<HTMLElement>(null);
   const tabRail = useRef<HTMLDivElement>(null);
   const pointerDrag = useRef<{
@@ -1396,6 +1663,24 @@ export function AuxiliaryPanel({
     restoreToggleFocus.current = true;
     onOpenChange(false);
   };
+  const fileOwnerLabels = roomFileOwnerLabels(
+    displayTabs,
+    roomContext?.resourceThreads,
+  );
+  const fileLabel = (tab: ContentTab) => {
+    const owner = fileOwnerLabels.get(tab.id);
+    return owner
+      ? i18n.t("panels:roomFileSource", { file: tab.path, owner: owner.title })
+      : tab.title;
+  };
+  const restingLabels = useMemo(
+    () =>
+      restingConversationLabelPlans(
+        displayTabs,
+        new Set(displayTabs.map((item) => item.id)),
+      ),
+    [displayTabs],
+  );
   return (
     <aside
       ref={panel}
@@ -1430,6 +1715,7 @@ export function AuxiliaryPanel({
             input?.select();
           });
         }
+        if (titleReveal.dismissOnEscape(event)) return;
         if (event.key === "Escape" && !event.defaultPrevented) {
           event.preventDefault();
           if (choosing) {
@@ -1510,6 +1796,7 @@ export function AuxiliaryPanel({
                 )}
                 key={tab.id}
                 data-tab-id={tab.id}
+                data-file-owner={fileOwnerLabels.has(tab.id) || undefined}
                 data-reorderable={
                   (canReorder &&
                     tab.id !== PRIMARY_CONVERSATION_TAB &&
@@ -1585,17 +1872,28 @@ export function AuxiliaryPanel({
                       ? i18n.t("panels:reorderWorkspaceTabHint")
                       : undefined
                   }
+                  data-canonical-title={tab.title}
                   aria-label={
                     tab.browserActivityLabel
                       ? `${tab.title} — ${tab.browserActivityLabel}`
-                      : undefined
+                      : fileLabel(tab)
                   }
-                  title={[
-                    tab.path ?? tab.browser?.url ?? tab.title,
-                    tab.browserActivityLabel,
-                  ]
-                    .filter(Boolean)
-                    .join("\n")}
+                  {...(tab.id.startsWith("thread:")
+                    ? titleReveal.handlers(tab.title)
+                    : {})}
+                  title={
+                    tab.id.startsWith("thread:") &&
+                    titleReveal.replacesNativeTitle
+                      ? undefined
+                      : [
+                          fileOwnerLabels.has(tab.id)
+                            ? fileLabel(tab)
+                            : (tab.path ?? tab.browser?.url ?? tab.title),
+                          tab.browserActivityLabel,
+                        ]
+                          .filter(Boolean)
+                          .join("\n")
+                  }
                   onClick={() => select(tab.id)}
                   onKeyDown={(event) => {
                     if (
@@ -1644,7 +1942,27 @@ export function AuxiliaryPanel({
                   ) : (
                     <Icon name={tab.icon} />
                   )}
-                  <span className="workspace-tab-title">{tab.title}</span>
+                  {tab.id.startsWith("thread:") ? (
+                    <ConversationRestingLabel
+                      title={tab.title}
+                      candidate={restingLabels.get(tab.id)?.marked ?? tab.title}
+                      bareCandidate={restingLabels.get(tab.id)?.bare}
+                    />
+                  ) : fileOwnerLabels.has(tab.id) ? (
+                    <span
+                      className="workspace-room-file-label"
+                      aria-hidden="true"
+                    >
+                      <span className="workspace-tab-title">{tab.title}</span>
+                      <ConversationRestingLabel
+                        title={fileOwnerLabels.get(tab.id)!.title}
+                        candidate={fileOwnerLabels.get(tab.id)!.marked}
+                        bareCandidate={fileOwnerLabels.get(tab.id)!.bare}
+                      />
+                    </span>
+                  ) : (
+                    <span className="workspace-tab-title">{tab.title}</span>
+                  )}
                   {tab.path &&
                   threadId !== undefined &&
                   entries.has(
@@ -1668,9 +1986,11 @@ export function AuxiliaryPanel({
                     type="button"
                     className="workspace-tab-close"
                     aria-label={i18n.t("panels:closeTabNamed", {
-                      title: tab.title,
+                      title: fileLabel(tab),
                     })}
-                    title={i18n.t("panels:closeTabNamed", { title: tab.title })}
+                    title={i18n.t("panels:closeTabNamed", {
+                      title: fileLabel(tab),
+                    })}
                     disabled={
                       tab.path && threadId !== undefined
                         ? entries.get(
@@ -1737,6 +2057,7 @@ export function AuxiliaryPanel({
           <Icon name="panel-right" />
         </button>
       </header>
+      {titleReveal.element}
       {contextControl ? (
         <div className="auxiliary-context-control">{contextControl}</div>
       ) : null}

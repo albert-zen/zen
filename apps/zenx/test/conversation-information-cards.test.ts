@@ -457,13 +457,14 @@ test("trigger retry is failure-only and switches fence repeated, failed, and ret
           theme: "light",
           navigate: () => {},
           types: ["triggers"],
-          manageMode: true,
+          manageMode: false,
         }),
       ),
     );
   try {
     await render("owner");
-    const retry = document.querySelector<HTMLButtonElement>("header button")!;
+    const retry = document.querySelector<HTMLButtonElement>("header button");
+    assert.ok(retry, "cold read failure stays reachable outside Customize");
     assert.equal(retry.textContent, "Retry");
     readFails = false;
     await act(async () => retry.click());
@@ -517,6 +518,20 @@ test("trigger retry is failure-only and switches fence repeated, failed, and ret
     );
     assert.equal(pause.disabled, false);
     assert.equal(pause.getAttribute("aria-disabled"), "false");
+    readFails = true;
+    await act(async () => {
+      dom.window.dispatchEvent(new dom.window.Event("focus"));
+    });
+    assert.ok(
+      document.querySelector("header button"),
+      "failed refresh exposes Retry",
+    );
+    assert.equal(
+      document.querySelector('[aria-label="Pause trigger · Synthetic active"]'),
+      pause,
+      "failed refresh retains the current owner's published content",
+    );
+    readFails = false;
     await render("other");
     assert.equal(
       document.querySelector('[role="alert"]'),
@@ -688,6 +703,101 @@ test("lineage visibility follows the provider's loaded descendants, not only glo
     });
     assert.equal(visibility.at(-1), true);
     assert.match(document.body.textContent!, /Provider-only child/);
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
+
+test("ordinary Trigger information returns to quiet after empty recovery and fences late owner failures", async () => {
+  await i18n.changeLanguage("en");
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "https://zenx.local/",
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  let mode: "fail" | "empty" | "pending" = "fail";
+  let rejectOld!: (cause: Error) => void;
+  const calls: string[] = [],
+    visibility: boolean[] = [];
+  Object.assign(dom.window, {
+    zenx: {
+      plugins: {
+        executeCommand: async (_plugin: string, command: string) => {
+          calls.push(command);
+          if (mode === "fail") throw new Error("Synthetic cold failure");
+          if (mode === "pending")
+            return new Promise((_resolve, reject) => {
+              rejectOld = reject;
+            });
+          return { triggers: [] };
+        },
+      },
+    },
+  });
+  const snapshot = {
+    ...workspaceLauncherSnapshot,
+    plugins: workspaceLauncherSnapshot.plugins.map((plugin) => ({
+      ...plugin,
+      admissionId: "current",
+    })),
+    commands: [
+      {
+        key: "zenx-triggers:sidebar-facts",
+        pluginId: "zenx-triggers",
+        id: "sidebar-facts",
+        title: "Facts",
+        tool: "zenx_triggers_sidebar_facts",
+      },
+    ],
+  };
+  const root = createRoot(document.getElementById("root")!);
+  const render = (threadId: string) =>
+    act(async () =>
+      root.render(
+        React.createElement(ConversationInformationCards, {
+          threadId,
+          threads: [],
+          snapshot,
+          registry: createPluginUiRegistry(),
+          theme: "light",
+          navigate() {},
+          types: ["triggers"],
+          onVisibilityChange: (value) => visibility.push(value),
+        }),
+      ),
+    );
+  try {
+    await render("failed");
+    assert.equal(visibility.at(-1), true);
+    const retry = document.querySelector<HTMLButtonElement>("header button");
+    assert.ok(retry);
+    mode = "empty";
+    await act(async () => retry.click());
+    assert.equal(visibility.at(-1), false);
+    assert.equal(
+      document.querySelector(".conversation-information-section"),
+      null,
+    );
+    mode = "pending";
+    await render("pending");
+    mode = "empty";
+    await render("current");
+    await act(async () =>
+      rejectOld(new Error("Synthetic retired owner failure")),
+    );
+    assert.equal(visibility.at(-1), false);
+    assert.equal(
+      document.querySelector(".conversation-information-section"),
+      null,
+    );
+    assert.ok(
+      calls.every((command) => command === "sidebar-facts"),
+      "recovery only reads",
+    );
   } finally {
     await act(async () => root.unmount());
     dom.window.close();

@@ -1,3 +1,4 @@
+import { projectForkBoundary } from "./thread-fork-boundary.js";
 import { AppShotButton } from "./AppShotButton.js";
 import {
   ThreadHistoryContext,
@@ -36,6 +37,7 @@ import { checkQueuedSteer } from "./queue-steer-request.js";
 import { checkQueuedReorder } from "./queue-reorder-request.js";
 import { PendingSendRows } from "./PendingSendRows.js";
 import { indexTurnOutcomeItems } from "./turn-outcome-index.js";
+import { informationConversationGutter } from "./information-conversation-gutter.js";
 import { steerPreviewColumn } from "./steer-preview-column.js";
 import { PendingSteerPanel } from "./PendingSteerPanel.js";
 import type { SteerRecallStore } from "./steer-recall-state.js";
@@ -398,6 +400,7 @@ interface ThreadViewProps {
   models?: readonly ModelSummary[];
   permissionLabel?: string | null;
   permissionMode?: FilePermissionMode;
+  permissionDisplayOnly?: boolean;
   permissionError?: string | null;
   switchingPermission?: boolean;
   onPermissionChange?(mode: FilePermissionMode): void;
@@ -415,7 +418,7 @@ interface ThreadViewProps {
   pluginUiRegistry?: PluginUiRegistry | null;
   onRecoverPendingSend?(clientId: string): void;
   onDismissPendingSend?(clientId: string): void;
-  onCheckPendingSends?(): Promise<void>;
+  onCheckPendingSends?(): Promise<"checked" | "unavailable">;
   onDraftChange(draft: string): void;
   onOpenMessageLink?(target: { kind: "file" | "browser"; value: string }): void;
   onImportImages?(files: readonly File[]): Promise<void>;
@@ -669,6 +672,7 @@ function ThreadViewContent({
   models = [],
   permissionLabel = i18n.t("shell:fullAccess"),
   permissionMode = "danger-full-access",
+  permissionDisplayOnly = false,
   permissionError,
   switchingPermission,
   onPermissionChange,
@@ -1041,6 +1045,9 @@ function ThreadViewContent({
   const viewRef = useRef<HTMLDivElement>(null);
   const bottomZoneRef = useRef<HTMLDivElement>(null);
   const pendingTrayRef = useRef<HTMLDivElement>(null);
+  const pendingTrayId = useId();
+  const [queueReadingReturnHost, setQueueReadingReturnHost] =
+    useState<HTMLDivElement | null>(null);
   // Align the shared content box, not its border or native scrollbar, with
   // the real transcript column. Both groups keep one scrolling owner.
   useLayoutEffect(() => {
@@ -1051,15 +1058,47 @@ function ThreadViewContent({
       ?.querySelector<HTMLElement>(
         ".virtual-transcript-header, .messages-inner",
       );
-    if (!tray || !zone || !column) return;
+    if (!zone || !column) return;
+    const view = viewRef.current;
+    const scrollport = column.closest<HTMLElement>(".messages");
+    const desktop = window.matchMedia?.("(min-width: 961px)");
     const measure = () => {
+      const surface = view?.closest(".agent-surface");
+      const workspace = surface?.parentElement;
+      const dock = workspace?.matches(".workspace")
+        ? workspace.querySelector<HTMLElement>(":scope > .information-dock")
+        : null;
+      // Native thin scrollbar widths differ across OSes. Keep history, preview
+      // and Composer on one rail while recovering only the missing gutter space.
+      const gutter = informationConversationGutter(
+        scrollport?.clientWidth ?? 0,
+        desktop?.matches === true &&
+          !!dock &&
+          dock.getBoundingClientRect().width > 0,
+      );
+      if (view) {
+        if (gutter === null) view.style.removeProperty("--conversation-gutter");
+        else if (
+          view.style.getPropertyValue("--conversation-gutter") !== `${gutter}px`
+        )
+          view.style.setProperty("--conversation-gutter", `${gutter}px`);
+      }
       const rect = column.getBoundingClientRect();
-      if (rect.width <= 0 || tray.offsetWidth <= 0) return;
-      const origin =
+      if (rect.width <= 0) return;
+      const contentOrigin =
         zone.getBoundingClientRect().left +
         zone.clientLeft +
-        parseFloat(getComputedStyle(zone).paddingLeft) +
-        tray.clientLeft;
+        parseFloat(getComputedStyle(zone).paddingLeft);
+      // The transcript centers inside its native scrollbar-reduced viewport.
+      // Align the Composer to that measured column, not the wider bottom zone.
+      const composerGeometry = steerPreviewColumn(rect, contentOrigin, 0);
+      for (const [name, value] of Object.entries(composerGeometry)) {
+        const pixel = `${value}px`;
+        if (zone.style.getPropertyValue(`--composer-column-${name}`) !== pixel)
+          zone.style.setProperty(`--composer-column-${name}`, pixel);
+      }
+      if (!tray || tray.offsetWidth <= 0) return;
+      const origin = contentOrigin + tray.clientLeft;
       const geometry = steerPreviewColumn(
         rect,
         origin,
@@ -1075,17 +1114,33 @@ function ThreadViewContent({
       }
     };
     measure();
-    if (typeof ResizeObserver === "undefined") return;
+    if (typeof ResizeObserver === "undefined")
+      return () => view?.style.removeProperty("--conversation-gutter");
     const observer = new ResizeObserver(measure);
     observer.observe(column);
     // A fixed-width column can move when its scrollport gains a native gutter.
-    const scrollport = column.closest(".messages");
     if (scrollport) observer.observe(scrollport);
     observer.observe(zone);
-    observer.observe(tray);
-    return () => observer.disconnect();
+    if (tray) observer.observe(tray);
+    desktop?.addEventListener?.("change", measure);
+    return () => {
+      observer.disconnect();
+      desktop?.removeEventListener?.("change", measure);
+      view?.style.removeProperty("--conversation-gutter");
+    };
   });
   const composerTextareaRef = useRef<ComposerInput>(null);
+  const returnToLive = () => {
+    const scroll = scrollRef.current;
+    if (scroll === null) return;
+    shouldFollowRef.current = true;
+    document.getSelection()?.removeAllRanges();
+    scroll.scrollTo({ top: scroll.scrollHeight, behavior: "auto" });
+    observedScrollTop.current = scroll.scrollTop;
+    setAtLive(true);
+    saveReadingPosition();
+  };
+
   const pastedSelection = useRef<{ scope: string; caret: number } | null>(null);
   useLayoutEffect(() => {
     const pending = pastedSelection.current;
@@ -1205,9 +1260,19 @@ function ThreadViewContent({
     () => indexTranscriptOrder(displayedThread?.canonicalItems),
     [displayedThread?.canonicalItems],
   );
+  const forkBoundary = useMemo(
+    () => projectForkBoundary(displayedThread),
+    [displayedThread],
+  );
   const transcriptRows = useMemo(
-    () => buildTranscriptRows(turns, transcriptOrder, contextCompactions),
-    [contextCompactions, transcriptOrder, turns],
+    () =>
+      buildTranscriptRows(
+        turns,
+        transcriptOrder,
+        contextCompactions,
+        forkBoundary,
+      ),
+    [contextCompactions, transcriptOrder, turns, forkBoundary],
   );
   const pendingApprovals = useMemo(
     () =>
@@ -1228,6 +1293,13 @@ function ThreadViewContent({
   const submitting =
     composer.submission?.status === "pending" ||
     (compactRequested && composer.compaction?.status === "pending");
+  // A promoted first draft keeps its existing submission until admission.
+  // Do not reuse this cue for local creation or ordinary immediate Send rows.
+  const firstMessageSending =
+    thread !== null &&
+    composer.submission?.status === "pending" &&
+    composer.submission.intent === "start" &&
+    composer.submission.immediateFeedback !== true;
   const hasDraft = composerDraftHasContent(composer.draft);
   const blockedByImageCapability =
     !compactRequested &&
@@ -2047,14 +2119,23 @@ function ThreadViewContent({
         composer.focus({ preventScroll: true });
     });
   };
-  const composerError =
+  const composerBlockingError =
     interruptError ??
     attachmentError ??
-    (blockedByImageCapability ? imageCapabilityError : null) ??
-    (composer.submission?.draftRevision === composer.draftRevision
+    (blockedByImageCapability ? imageCapabilityError : null);
+  const submissionError =
+    composer.submission?.draftRevision === composer.draftRevision
       ? composer.submission.error
-      : null) ??
-    modelError;
+      : null;
+  const showSubmissionError =
+    composerBlockingError === null && submissionError != null;
+  const composerError = composerBlockingError ?? submissionError ?? modelError;
+  const firstMessageNeedsAttention =
+    thread !== null &&
+    showSubmissionError &&
+    composer.submission?.status === "failed" &&
+    composer.submission.intent === "start" &&
+    composer.submission.immediateFeedback !== true;
 
   // Composer updates reuse the actual transcript elements, not just TurnBlock bodies.
   const renderedTranscriptRows = useMemo(
@@ -2094,6 +2175,10 @@ function ThreadViewContent({
             pluginSnapshot={pluginSnapshot}
             pluginUiRegistry={pluginUiRegistry}
           />
+        ) : row.type === "fork" ? (
+          <ForkHistoryBoundary
+            key={JSON.stringify([displayedThread?.id, row.itemId])}
+          />
         ) : (
           <ContextCompactionEvent
             key={row.compaction.item.id}
@@ -2131,7 +2216,11 @@ function ThreadViewContent({
             key: JSON.stringify([
               displayedThread?.id,
               row.type,
-              row.type === "turn" ? row.turn.id : row.compaction.item.id,
+              row.type === "turn"
+                ? row.turn.id
+                : row.type === "fork"
+                  ? row.itemId
+                  : row.compaction.item.id,
             ]),
             content: renderedTranscriptRows[index],
           }))
@@ -2308,9 +2397,28 @@ function ThreadViewContent({
                 />
                 {transcriptRows.length === 0 ? (
                   (emptyContent ?? (
-                    <div className="thread-empty">
-                      <h2>{i18n.t("shell:startANewThread")}</h2>
-                      <p>{i18n.t("shell:describeOutcome")}</p>
+                    <div
+                      className="thread-empty"
+                      role={firstMessageSending ? "status" : undefined}
+                    >
+                      <h2>
+                        {i18n.t(
+                          firstMessageSending
+                            ? "shell:pendingSendSending"
+                            : firstMessageNeedsAttention
+                              ? "shell:firstSendNeedsAttention"
+                              : "shell:startANewThread",
+                        )}
+                      </h2>
+                      <p>
+                        {i18n.t(
+                          firstMessageSending
+                            ? "shell:firstSendAwaitingConfirmation"
+                            : firstMessageNeedsAttention
+                              ? "shell:firstSendReviewError"
+                              : "shell:describeOutcome",
+                        )}
+                      </p>
                     </div>
                   ))
                 ) : (
@@ -2359,21 +2467,8 @@ function ThreadViewContent({
           });
         }}
       />
-      {atLive ? null : (
-        <button
-          className="back-live"
-          type="button"
-          onClick={() => {
-            const scroll = scrollRef.current;
-            if (scroll === null) return;
-            shouldFollowRef.current = true;
-            document.getSelection()?.removeAllRanges();
-            scroll.scrollTo({ top: scroll.scrollHeight, behavior: "auto" });
-            observedScrollTop.current = scroll.scrollTop;
-            setAtLive(true);
-            saveReadingPosition();
-          }}
-        >
+      {atLive || transcriptRows.length === 0 ? null : (
+        <button className="back-live" type="button" onClick={returnToLive}>
           <Icon name="arrow-down" size={14} />
           {i18n.t("shell:backToLive")}
         </button>
@@ -2400,6 +2495,7 @@ function ThreadViewContent({
           <MessageQuoteSourceContext.Provider value={navigateQuoteSource}>
             <div
               className="pending-tray"
+              id={pendingTrayId}
               ref={pendingTrayRef}
               role="region"
               aria-label={i18n.t("shell:pendingTray")}
@@ -2468,6 +2564,8 @@ function ThreadViewContent({
               {thread ? (
                 <QueuedMessages
                   integrated
+                  viewportId={pendingTrayId}
+                  readingReturnHost={queueReadingReturnHost}
                   threadId={thread.id}
                   messages={(thread.queuedMessages ?? []).map((message) => ({
                     ...message,
@@ -2642,6 +2740,10 @@ function ThreadViewContent({
                 />
               ) : null}
             </div>
+            <div
+              className="queue-reading-return-host"
+              ref={setQueueReadingReturnHost}
+            />
           </MessageQuoteSourceContext.Provider>
         </MessageLinkContext.Provider>
         {composer.compaction?.status === "failed" ||
@@ -2995,6 +3097,7 @@ function ThreadViewContent({
                     permissionLabel === i18n.t("shell:approvalRequired")
                   }
                   value={permissionMode}
+                  displayOnly={permissionDisplayOnly}
                   disabled={
                     runningTurn !== null ||
                     composerDisabled ||
@@ -3007,6 +3110,27 @@ function ThreadViewContent({
               )}
             </div>
             <div className="composer-actions">
+              {atLive || transcriptRows.length === 0 ? null : (
+                <div
+                  className="composer-reading-position"
+                  role="group"
+                  aria-label={i18n.t("shell:readingEarlierMessages")}
+                >
+                  <button
+                    type="button"
+                    className="quiet-button"
+                    onClick={() => {
+                      returnToLive();
+                      composerTextareaRef.current?.focus({
+                        preventScroll: true,
+                      });
+                    }}
+                  >
+                    <Icon name="arrow-down" size={14} />
+                    {i18n.t("shell:backToLive")}
+                  </button>
+                </div>
+              )}
               <ComposerSendControl
                 mode={composerSendMode}
                 running={runningTurn !== null}
@@ -3032,7 +3156,18 @@ function ThreadViewContent({
               />
             </div>
           </div>
-          {composerError !== null ? (
+          {showSubmissionError ? (
+            <div
+              className="composer-error composer-submission-error"
+              id={modelError === null ? undefined : `${composerId}-model-error`}
+            >
+              <p role="alert">{i18n.t("shell:composerSendError")}</p>
+              <details className="composer-error-details">
+                <summary>{i18n.t("shell:technicalDetails")}</summary>
+                <pre tabIndex={0}>{submissionError}</pre>
+              </details>
+            </div>
+          ) : composerError !== null ? (
             <p
               className="composer-error"
               id={modelError === null ? undefined : `${composerId}-model-error`}
@@ -3284,7 +3419,21 @@ function ThreadViewContent({
   );
 }
 
+function ForkHistoryBoundary() {
+  const { t } = useTranslation("shell");
+  return (
+    <div
+      className="fork-history-boundary"
+      role="separator"
+      aria-label={t("copiedHistoryEndsHere")}
+    >
+      <span aria-hidden="true">{t("copiedHistoryEndsHere")}</span>
+    </div>
+  );
+}
+
 type TranscriptRow =
+  | { type: "fork"; itemId: string; order: number }
   | { type: "turn"; turn: Turn; index: number; order: number }
   | {
       type: "compaction";
@@ -3307,6 +3456,7 @@ function buildTranscriptRows(
   turns: readonly Turn[],
   { fallbackStart, turnEnds }: ReturnType<typeof indexTranscriptOrder>,
   compactions: readonly ContextCompactionProjection[],
+  forkBoundary: ReturnType<typeof projectForkBoundary>,
 ): TranscriptRow[] {
   const rows: TranscriptRow[] = turns.map((turn, index) => ({
     type: "turn",
@@ -3328,7 +3478,31 @@ function buildTranscriptRows(
           : Math.max(compaction.canonicalIndex, turnEnd) + 0.25,
     });
   }
-  return rows.sort((left, right) => left.order - right.order);
+  rows.sort((left, right) => left.order - right.order);
+  if (forkBoundary) {
+    // Snapshot closures can move ANY copied Turn after the final inherited
+    // start, so place the boundary after all inherited rendered rows.
+    const inherited = (row: TranscriptRow) =>
+      row.type === "turn"
+        ? forkBoundary.inheritedTurnIds.has(row.turn.id)
+        : row.type === "compaction" &&
+          (row.compaction.canonicalIndex < forkBoundary.canonicalIndex ||
+            (row.compaction.item.provenance === "agentic" &&
+              forkBoundary.inheritedTurnIds.has(row.compaction.item.turnId)));
+    const boundaryIndex = rows.findLastIndex(inherited);
+    // Never label mixed/unknown history as a clean branch boundary.
+    if (
+      boundaryIndex >= 0 &&
+      rows.slice(0, boundaryIndex + 1).every(inherited)
+    ) {
+      rows.splice(boundaryIndex + 1, 0, {
+        type: "fork",
+        itemId: forkBoundary.item.id,
+        order: rows[boundaryIndex]!.order,
+      });
+    }
+  }
+  return rows;
 }
 
 function ContextCompactionProgress({
@@ -4834,7 +5008,12 @@ function InputMessage({
             kind: "thread",
             id: item.sender.threadId,
             ...(item.sender.deviceId === undefined
-              ? {}
+              ? {
+                  sourceTool: {
+                    itemId: item.sender.toolCallId,
+                    callId: item.sender.callId,
+                  },
+                }
               : {
                   deviceId: item.sender.deviceId,
                   itemId: item.id,
@@ -5112,7 +5291,12 @@ function MessageForkButton({ target }: { target: MessageForkTarget }) {
         onClick={() => void run()}
       >
         {pending ? (
-          <span className="mini-spinner" aria-hidden="true" />
+          <>
+            <span className="mini-spinner" aria-hidden="true" />
+            <span className="message-fork-label">
+              {i18n.t("shell:forking")}
+            </span>
+          </>
         ) : (
           <Icon name="fork" size={14} />
         )}

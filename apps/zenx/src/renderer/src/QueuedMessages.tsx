@@ -1,3 +1,4 @@
+import { revealQueueFocusContext } from "./queue-focus-context.js";
 import type { QueueMutationPhase } from "./queue-mutation-state.js";
 import { UserMessageContent } from "./UserMessageContent.js";
 import { parseSentReferenceContent } from "./reference-draft.js";
@@ -5,6 +6,7 @@ import type { AnsweredQuestionPresentation } from "./answered-question-presentat
 import { MessageSourceLink } from "./message-source-navigation.js";
 import { HostMessageContent } from "./HostMessageContent.js";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { QueuedCancellationTarget } from "../../../../../src/app-server.js";
 import type { AttachmentRef } from "../../../../../src/attachment.js";
@@ -65,6 +67,8 @@ export interface QueuedMessagesProps {
   compact?: boolean;
   /** Share the Composer tray's one scrolling surface. */
   integrated?: boolean;
+  viewportId?: string;
+  readingReturnHost?: HTMLElement | null;
   editableIds?: ReadonlySet<string>;
   /** Saving rows may reopen their existing read-only edit session. */
   editingIds?: ReadonlySet<string>;
@@ -113,6 +117,8 @@ function QueueShelf({
   resumeError = null,
   compact = false,
   integrated = false,
+  viewportId,
+  readingReturnHost,
   editableIds,
   editingIds,
   onEdit,
@@ -130,6 +136,8 @@ function QueueShelf({
   const revealFailure = useRef<string | null>(null);
   const [open, setOpen] = useState<boolean | null>(null);
   const [showAll, setShowAll] = useState(false);
+  const [readingExpanded, setReadingExpanded] = useState(false);
+  const [viewportOverflow, setViewportOverflow] = useState(false);
   const [reading, setReading] = useState<ReadonlySet<string>>(new Set());
   const hasMessages = messages.length > 0;
   const root = rootRef.current;
@@ -142,6 +150,33 @@ function QueueShelf({
   );
   const detailsOpen =
     open ?? (!compact || showAll || readingCurrentMessage || interacting);
+  useLayoutEffect(() => {
+    const shelf = rootRef.current;
+    const tray = integrated
+      ? shelf?.closest<HTMLElement>(".pending-tray")
+      : null;
+    if (!tray || !shelf) return;
+    const measure = () =>
+      // Once offered, keep the control stable even if expansion or delivery
+      // makes the contents fit. Removing a focused control would lose focus.
+      setViewportOverflow(
+        (previous) =>
+          previous ||
+          (tray.clientHeight > 0 && tray.scrollHeight > tray.clientHeight + 1),
+      );
+    measure();
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? undefined
+        : new ResizeObserver(measure);
+    observer?.observe(tray);
+    observer?.observe(shelf);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [integrated, hasMessages, detailsOpen, messages]);
   const visibleMessages =
     integrated || showAll ? messages : messages.slice(0, 2);
   const failureHidden =
@@ -236,9 +271,11 @@ function QueueShelf({
       ref={rootRef}
       className={`queue-shelf${detailsOpen ? " is-open" : " is-collapsed"}${compact ? " is-compact" : ""}`}
       aria-label={t("messageQueue")}
+      data-reading-expanded={readingExpanded ? "true" : undefined}
       onFocusCapture={(event) => {
         const target = event.target;
         if (!(target instanceof HTMLElement)) return;
+        revealQueueFocusContext(target);
         focusedControl.current = target;
         const index =
           target.closest<HTMLElement>("[data-queue-index]")?.dataset.queueIndex;
@@ -283,6 +320,23 @@ function QueueShelf({
           <Icon name="chevron-down" size={12} className="queue-shelf-chevron" />
         </button>
         <div className="queue-shelf-actions">
+          {integrated && (viewportOverflow || readingExpanded) ? (
+            <button
+              type="button"
+              className="queue-header-action queue-reading-toggle"
+              data-queue-control="reading-space"
+              aria-expanded={readingExpanded}
+              aria-controls={viewportId}
+              aria-label={t(
+                readingExpanded
+                  ? "queueReduceReadingArea"
+                  : "queueExpandReadingArea",
+              )}
+              onClick={() => setReadingExpanded((current) => !current)}
+            >
+              {t(readingExpanded ? "queueLessSpace" : "queueMoreSpace")}
+            </button>
+          ) : null}
           {onCancelAll !== undefined && messages.length > 1 ? (
             <button
               type="button"
@@ -346,6 +400,7 @@ function QueueShelf({
         tabIndex={0}
         role="group"
         aria-label={t("messageQueue")}
+        data-reading-expanded={readingExpanded ? "true" : undefined}
         onPointerDown={() => {
           if (open === null) setOpen(true);
         }}
@@ -415,6 +470,35 @@ function QueueShelf({
           </button>
         ) : null}
       </div>
+      {integrated && readingExpanded && readingReturnHost
+        ? createPortal(
+            <div className="queue-reading-return">
+              <button
+                type="button"
+                className="queue-header-action"
+                data-queue-control="reading-return"
+                aria-controls={viewportId}
+                aria-expanded={true}
+                aria-label={t("queueReduceReadingArea")}
+                onClick={() => {
+                  setReadingExpanded(false);
+                  // This footer disappears on collapse; return to writing rather
+                  // than losing focus or traversing every message action again.
+                  if (focusComposer) focusComposer();
+                  else
+                    rootRef.current
+                      ?.querySelector<HTMLElement>(
+                        '[data-queue-control="reading-space"]',
+                      )
+                      ?.focus();
+                }}
+              >
+                {t("queueLessSpace")}
+              </button>
+            </div>,
+            readingReturnHost,
+          )
+        : null}
     </section>
   );
 }
@@ -774,7 +858,7 @@ function QueuedMessageRow({
               {steering ? (
                 <span role="status">{t(steeringStatus)}</span>
               ) : (
-                <Icon name="send" size={15} />
+                <span>{t("queueSendNow")}</span>
               )}
             </button>
           )}

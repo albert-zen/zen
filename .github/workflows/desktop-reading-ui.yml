@@ -1,0 +1,111 @@
+name: Desktop conversation reading preview
+on:
+  pull_request:
+    paths:
+      - .github/workflows/desktop-reading-ui.yml
+      - apps/zenx/src/renderer/src/subagents-ui.tsx
+      - apps/zenx/src/renderer/src/subagents.css
+      - apps/zenx/test/subagents-ui.test.ts
+      - apps/zenx/scripts/child-question-main-ui-preview.mjs
+      - apps/zenx/scripts/child-question-main-ui-preview.d.mts
+      - apps/zenx/test/fixtures/child-question-data.ts
+      - apps/zenx/test/child-question-main-ui-preview.test.ts
+      - apps/zenx/src/renderer/src/Markdown.tsx
+      - apps/zenx/src/renderer/src/App.tsx
+      - apps/zenx/src/renderer/src/ApprovalRequestCard.tsx
+      - apps/zenx/src/renderer/src/approval-request.css
+      - apps/zenx/src/renderer/src/i18n/shell.ts
+      - apps/zenx/src/renderer/src/theme.css
+      - apps/zenx/src/renderer/src/queued-messages.css
+      - apps/zenx/src/renderer/src/ThreadView.tsx
+      - apps/zenx/src/renderer/src/styles.css
+      - apps/zenx/src/renderer/src/scrollbar-visibility.ts
+      - apps/zenx/test/fixtures/ui-polish-visual.tsx
+      - apps/zenx/test/fixtures/ui-polish-reading.ts
+      - apps/zenx/test/reading-fixture.test.ts
+      - apps/zenx/scripts/build-main-ui-preview.mjs
+      - apps/zenx/scripts/capture-main-ui-preview.mjs
+      - apps/zenx/scripts/prepare-preview-fonts.mjs
+      - apps/zenx/scripts/preview-font-probe.mjs
+      - apps/zenx/scripts/preview-fonts-OFL.txt
+      - apps/zenx/test/preview-fonts.test.mjs
+      - apps/zenx/scripts/scrollbar-main-ui-preview.mjs
+      - apps/zenx/test/scrollbar-main-ui-preview.test.mjs
+      - apps/zenx/scripts/reading-main-ui-preview.mjs
+      - apps/zenx/test/reading-main-ui-preview.test.mjs
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: desktop-reading-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  preview:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Select this commit only
+        id: selection
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { appendFileSync } from 'node:fs';
+          import { readingPathsChanged } from './apps/zenx/scripts/reading-main-ui-preview.mjs';
+          const changed = execFileSync('git', ['diff', '--name-only', 'HEAD^', 'HEAD'], {encoding:'utf8'}).trim().split('\n');
+          const needed = process.env.GITHUB_EVENT_NAME === 'workflow_dispatch' || readingPathsChanged(changed);
+          appendFileSync(process.env.GITHUB_OUTPUT, `needsCapture=${needed}\n`);
+          NODE
+      - uses: actions/setup-node@v4
+        if: steps.selection.outputs.needsCapture == 'true'
+        with:
+          node-version: 22
+          cache: npm
+      - if: steps.selection.outputs.needsCapture == 'true'
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        timeout-minutes: 3
+      - if: steps.selection.outputs.needsCapture == 'true'
+        run: node apps/zenx/scripts/prepare-legend-list.mjs
+      - name: Restore pinned official CJK font data
+        if: steps.selection.outputs.needsCapture == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/preview-fonts/*.ttc
+            ${{ runner.temp }}/preview-fonts/OFL.txt
+          key: zenx-noto-cjk-523d033d6cb47f4a80c58a35753646f5c3608a78-v1
+      - name: Verify or fetch pinned CJK fonts
+        if: steps.selection.outputs.needsCapture == 'true'
+        run: |
+          mkdir -p "${{ runner.temp }}/desktop-reading"
+          trap 'cp "${{ runner.temp }}/preview-fonts/fonts.json" "${{ runner.temp }}/desktop-reading/font-environment.json"' EXIT
+          node apps/zenx/scripts/prepare-preview-fonts.mjs "${{ runner.temp }}/preview-fonts" --allow-download
+        timeout-minutes: 2
+      - name: Build existing SDK dependency for component tests
+        if: steps.selection.outputs.needsCapture == 'true'
+        run: npm run build --workspace @zenx/plugin-sdk
+      - if: steps.selection.outputs.needsCapture == 'true'
+        run: node --import tsx --test apps/zenx/test/preview-fonts.test.mjs apps/zenx/test/reading-main-ui-preview.test.mjs apps/zenx/test/reading-fixture.test.ts apps/zenx/test/scrollbar-main-ui-preview.test.mjs apps/zenx/test/child-question-main-ui-preview.test.ts
+      - if: steps.selection.outputs.needsCapture == 'true'
+        run: node apps/zenx/scripts/build-main-ui-preview.mjs "${{ runner.temp }}/desktop-reading" reading
+        timeout-minutes: 2
+      - if: steps.selection.outputs.needsCapture == 'true'
+        env:
+          FONTCONFIG_FILE: ${{ runner.temp }}/preview-fonts/fonts.conf
+          ZENX_PREVIEW_FONT_RECEIPT: ${{ runner.temp }}/preview-fonts/fonts.json
+        run: node apps/zenx/scripts/capture-main-ui-preview.mjs "${{ runner.temp }}/desktop-reading" desktop-reading
+        timeout-minutes: 2
+      - name: Targeted question-attention DOM checks (baseline without matching tests is not acceptance)
+        if: steps.selection.outputs.needsCapture == 'true'
+        run: timeout 30s node --import tsx --test --test-timeout=10000 --test-name-pattern='^subagent question attention follows Host summaries independently of activity' apps/zenx/test/subagents-ui.test.ts
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.selection.outputs.needsCapture == 'true'
+        with:
+          name: desktop-reading-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/desktop-reading/*
+          if-no-files-found: warn
+          retention-days: 7

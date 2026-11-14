@@ -15,6 +15,7 @@ import {
   createPluginUiRegistry,
 } from "../src/renderer/src/plugin-ui-host.js";
 import {
+  ChildThreadApprovalContext,
   ChildThreadSidebarContext,
   SubagentsInformationVisibilityContext,
   SubagentCreationModelsContext,
@@ -26,6 +27,7 @@ import {
 
 import type { ModelSummary } from "../src/protocol-client/index.js";
 import { encodeModelKey } from "../../../src/protocol/model-key.js";
+import { i18n } from "../src/renderer/src/i18n.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -77,6 +79,7 @@ async function fixture(
   information: React.ContextType<
     typeof SubagentsInformationVisibilityContext
   > = null,
+  approvals: { threadIds: string[] } = { threadIds: [] },
 ) {
   const dom = new JSDOM('<div id="root"></div>', {
     url: "https://zenx.local/",
@@ -133,57 +136,61 @@ async function fixture(
     await act(async () => {
       root.render(
         React.createElement(
-          SubagentsInformationVisibilityContext.Provider,
-          { value: information },
+          ChildThreadApprovalContext.Provider,
+          { value: new Set(approvals.threadIds) },
           React.createElement(
-            SideChatDraftContext.Provider,
-            {
-              value: async (input) => {
-                const call = {
-                  pluginId: "zenx-app",
-                  commandId: "open-draft",
-                  input,
-                };
-                calls.push(call);
-                await execute(call);
-              },
-            },
+            SubagentsInformationVisibilityContext.Provider,
+            { value: information },
             React.createElement(
-              ChildThreadSidebarContext.Provider,
-              { value: sidebar ?? null },
+              SideChatDraftContext.Provider,
+              {
+                value: async (input) => {
+                  const call = {
+                    pluginId: "zenx-app",
+                    commandId: "open-draft",
+                    input,
+                  };
+                  calls.push(call);
+                  await execute(call);
+                },
+              },
               React.createElement(
-                SubagentCreationModelsContext.Provider,
-                { value: { ...modelCatalog } },
-                surface === "header"
-                  ? React.createElement(PluginThreadHeaders, {
-                      snapshot,
-                      threadId: parent,
-                      threads,
-                      navigate,
-                      registry,
-                    })
-                  : surface === "breadcrumb"
-                    ? React.createElement(ThreadBreadcrumbAncestors, {
+                ChildThreadSidebarContext.Provider,
+                { value: sidebar ?? null },
+                React.createElement(
+                  SubagentCreationModelsContext.Provider,
+                  { value: { ...modelCatalog } },
+                  surface === "header"
+                    ? React.createElement(PluginThreadHeaders, {
+                        snapshot,
                         threadId: parent,
                         threads,
                         navigate,
-                      })
-                    : React.createElement(GenericPluginUiHost, {
                         registry,
-                        snapshot,
-                        pluginId: "zenx-subagents",
-                        surfaceId: "subagents-panel",
-                        context: {
+                      })
+                    : surface === "breadcrumb"
+                      ? React.createElement(ThreadBreadcrumbAncestors, {
                           threadId: parent,
-                          quickCreate: surface === "quick-create",
                           threads,
-                          ...(active === undefined ? {} : { active }),
-                        },
-                        theme: "light",
-                        navigate,
-                        executeCommand,
-                        readHandle,
-                      }),
+                          navigate,
+                        })
+                      : React.createElement(GenericPluginUiHost, {
+                          registry,
+                          snapshot,
+                          pluginId: "zenx-subagents",
+                          surfaceId: "subagents-panel",
+                          context: {
+                            threadId: parent,
+                            quickCreate: surface === "quick-create",
+                            threads,
+                            ...(active === undefined ? {} : { active }),
+                          },
+                          theme: "light",
+                          navigate,
+                          executeCommand,
+                          readHandle,
+                        }),
+                ),
               ),
             ),
           ),
@@ -427,6 +434,138 @@ test("the panel renders direct and nested descendants and explicitly reveals arc
     await f.close();
   }
 });
+
+for (const language of ["en", "zh-CN"]) {
+  test(`long English and Chinese subagent names preserve status, routes and independent visibility (${language})`, async () => {
+    const activeId = "child/English name?branch=one#detail";
+    const nestedId = "child/中文名称?branch=two#详情";
+    const archivedId = "archived/中文 English?view=other#history";
+    const englishName = `Interface review ${"UnbrokenProjectIdentifier".repeat(8)} final recommendations`;
+    const chineseName = "主对话资料卡与侧边栏的长名称检查".repeat(8);
+    const archivedName = `归档研究 ${englishName} ${chineseName}`;
+    const children = [
+      summary(activeId, "parent", { name: englishName, status: "active" }),
+      summary(nestedId, activeId, { name: chineseName }),
+      summary(archivedId, "parent", {
+        name: archivedName,
+        archived: true,
+        status: "active",
+      }),
+    ];
+    const changes: Array<[string, boolean]> = [];
+    const sidebar = {
+      visibleSubagentThreadIds: [] as string[],
+      setVisible: async (id: string, visible: boolean) => {
+        changes.push([id, visible]);
+        sidebar.visibleSubagentThreadIds = visible ? [id] : [];
+      },
+    };
+    const f = await fixture(undefined, sidebar);
+    const document = f.dom.window.document;
+    const rows = () => [
+      ...document.querySelectorAll<HTMLButtonElement>(".subagent-tree-row"),
+    ];
+    const route = (id: string) =>
+      `/threads/${encodeURIComponent(id)}?view=panel`;
+    try {
+      await act(async () => i18n.changeLanguage(language));
+      await f.render("parent", "panel", children);
+      assert.deepEqual(
+        rows().map(
+          (row) => row.querySelector(".subagent-tree-title")?.textContent,
+        ),
+        [englishName, chineseName],
+      );
+      assert.equal(
+        rows()[0]!.querySelector(".subagent-tree-status")?.textContent,
+        i18n.t("shell:working"),
+      );
+      assert.equal(
+        rows()[1]!.querySelector(".subagent-tree-status")?.textContent,
+        i18n.t("panels:idleStatus"),
+      );
+      for (const row of rows()) await f.click(row);
+      assert.deepEqual(f.routes, [route(activeId), route(nestedId)]);
+
+      const archivedToggle = document.querySelector<HTMLInputElement>(
+        ".subagent-archived-toggle input[type='checkbox']",
+      );
+      assert.ok(archivedToggle);
+      assert.equal(archivedToggle.checked, false);
+      assert.equal(
+        archivedToggle.labels?.[0]?.textContent,
+        i18n.t("panels:showArchived"),
+      );
+      await f.click(archivedToggle);
+      assert.equal(archivedToggle.checked, true);
+      const archivedRow = rows()[2]!;
+      assert.equal(archivedRow.type, "button");
+      assert.equal(
+        archivedRow.querySelector(".subagent-tree-title")?.textContent,
+        archivedName,
+      );
+      const status = archivedRow.querySelector(".subagent-tree-status");
+      assert.equal(status?.textContent, i18n.t("panels:archivedStatus"));
+      assert.equal(status?.parentElement?.className, "subagent-tree-identity");
+      assert.equal(
+        status?.closest(".subagent-tree-row") === archivedRow,
+        true,
+        "Archived status remains inside its own navigation row",
+      );
+      assert.equal(status?.closest(".subagent-tree-title"), null);
+
+      const sidebarLabel = i18n.t("shell:showSubagentInSidebar", {
+        title: archivedName,
+      });
+      const sidebarToggle = f.button(sidebarLabel);
+      assert.equal(sidebarToggle.getAttribute("role"), "switch");
+      assert.equal(sidebarToggle.getAttribute("aria-checked"), "false");
+      assert.equal(sidebarToggle.closest(".subagent-tree-row"), null);
+      assert.equal(
+        sidebarToggle.closest(".subagent-tree-entry"),
+        archivedRow.parentElement,
+      );
+      sidebarToggle.focus();
+      await f.click(sidebarToggle);
+      await f.render("parent", "panel", children);
+      assert.equal(document.activeElement, sidebarToggle);
+      assert.equal(sidebarToggle.getAttribute("aria-checked"), "true");
+      assert.deepEqual(changes, [[archivedId, true]]);
+      assert.deepEqual(f.routes, [route(activeId), route(nestedId)]);
+      assert.equal(
+        document.querySelectorAll('[role="switch"][aria-checked="true"]')
+          .length,
+        1,
+      );
+      await f.click(rows()[2]!);
+      assert.deepEqual(f.routes, [
+        route(activeId),
+        route(nestedId),
+        route(archivedId),
+      ]);
+
+      await f.click(archivedToggle);
+      assert.equal(rows().length, 2);
+      await f.click(archivedToggle);
+      assert.equal(
+        rows()[2]!.querySelector(".subagent-tree-title")?.textContent,
+        archivedName,
+      );
+      assert.equal(f.button(sidebarLabel).getAttribute("aria-checked"), "true");
+      assert.deepEqual(
+        changes,
+        [[archivedId, true]],
+        "Show archived does not change sidebar preference",
+      );
+      assert.ok(f.calls.every((call) => call.commandId === "list"));
+      // JSDOM verifies full text and action boundaries, not actual wrapping,
+      // status visibility, hit-target geometry or the panel's scroll height.
+    } finally {
+      await f.close();
+      await i18n.changeLanguage("en");
+    }
+  });
+}
 
 test("the plugin provides only the Subagents panel, with no under-title directory strip", async () => {
   const f = await fixture();
@@ -770,6 +909,127 @@ test("clear an effort-only override after its model loses selectable efforts", a
   }
 });
 
+test("embedded sidebar caption remains accessible without a separate visible row in English and Chinese", async () => {
+  const children = [summary("child", "parent"), summary("nested", "child")];
+  const f = await fixture(
+    async () => ({ threads: children }),
+    { visibleSubagentThreadIds: ["nested"], setVisible: async () => {} },
+    { report() {}, manageMode: false, embedded: true },
+  );
+  try {
+    await f.render("parent");
+    for (const [language, caption] of [
+      ["en", "Sidebar"],
+      ["zh-CN", "侧栏"],
+    ]) {
+      await act(async () => i18n.changeLanguage(language));
+      const document = f.dom.window.document;
+      const headings = document.querySelectorAll(".subagent-sidebar-heading");
+      assert.equal(headings.length, 1);
+      assert.ok(headings[0]!.classList.contains("sr-only"));
+      assert.equal(headings[0]!.textContent, caption);
+      assert.equal(headings[0]!.closest("button"), null);
+      assert.equal(
+        headings[0]!.previousElementSibling,
+        document.querySelector(".subagents-panel > header"),
+      );
+      assert.equal(
+        headings[0]!.nextElementSibling,
+        document.querySelector(".subagents-panel > .subagent-tree"),
+      );
+      assert.equal(document.querySelectorAll(".subagent-tree-row").length, 2);
+      assert.equal(document.querySelector(".subagent-empty"), null);
+      const switches = [...document.querySelectorAll('[role="switch"]')];
+      assert.equal(switches.length, 2);
+      for (const [index, toggle] of switches.entries()) {
+        assert.equal(
+          toggle.getAttribute("aria-label"),
+          i18n.t("shell:showSubagentInSidebar", {
+            title: children[index]!.threadId,
+          }),
+        );
+        assert.equal(
+          toggle.getAttribute("title"),
+          i18n.t(index ? "shell:hideFromSidebar" : "shell:showInSidebar"),
+        );
+        assert.equal(toggle.getAttribute("aria-checked"), String(index === 1));
+        assert.equal(
+          toggle.textContent,
+          i18n.t(index ? "shell:sidebarShown" : "shell:sidebarHidden"),
+        );
+      }
+    }
+    assert.deepEqual(f.routes, []);
+    assert.equal(
+      f.calls.every((call) => call.commandId === "list"),
+      true,
+    );
+  } finally {
+    await f.close();
+    await i18n.changeLanguage("en");
+  }
+});
+
+test("the sidebar caption follows actual displayed child rows, not unrelated or archived summaries", async () => {
+  const f = await fixture(undefined, {
+    visibleSubagentThreadIds: [],
+    setVisible: async () => {},
+  });
+  try {
+    const document = f.dom.window.document;
+    const assertEmpty = () => {
+      assert.equal(document.querySelector(".subagent-sidebar-heading"), null);
+      assert.equal(document.querySelector(".subagent-tree-row"), null);
+      assert.equal(document.querySelector('[role="switch"]'), null);
+      assert.equal(
+        document.querySelector(".subagent-empty")?.textContent,
+        "No subagents yet.",
+      );
+    };
+    await f.render("parent");
+    assertEmpty();
+    await f.render("parent", "panel", [
+      summary("parent"),
+      summary("unrelated", "elsewhere"),
+      summary("nested", "unrelated"),
+      summary("archived", "parent", { archived: true }),
+    ]);
+    assertEmpty();
+    const archived = document.querySelector<HTMLInputElement>(
+      "input[type='checkbox']",
+    )!;
+    await f.click(archived);
+    assert.equal(
+      document.querySelector(".subagent-sidebar-heading")?.textContent,
+      "Sidebar",
+    );
+    assert.equal(document.querySelectorAll(".subagent-tree-row").length, 1);
+    assert.equal(
+      document.querySelector(".subagent-tree-title")?.textContent,
+      "archived",
+    );
+    assert.equal(document.querySelector(".subagent-empty"), null);
+    await f.click(archived);
+    assertEmpty();
+  } finally {
+    await f.close();
+  }
+});
+
+test("child rows without the trusted sidebar context do not advertise unavailable switches", async () => {
+  const f = await fixture();
+  try {
+    await f.render("parent", "panel", [summary("child", "parent")]);
+    const document = f.dom.window.document;
+    assert.equal(document.querySelectorAll(".subagent-tree-row").length, 1);
+    assert.equal(document.querySelector(".subagent-empty"), null);
+    assert.equal(document.querySelector(".subagent-sidebar-heading"), null);
+    assert.equal(document.querySelector('[role="switch"]'), null);
+  } finally {
+    await f.close();
+  }
+});
+
 test("each child has its own accessible Sidebar switch without changing navigation or siblings", async () => {
   const changes: Array<[string, boolean]> = [];
   const sidebar = {
@@ -1004,12 +1264,28 @@ test("embedded lineage keeps its creation action but leaves the heading to the o
     { report() {}, manageMode: false, embedded: true },
   );
   try {
+    const host = f.dom.window.document.getElementById("root")!;
+    const widget = f.dom.window.document.createElement("section");
+    widget.className = "information-widget";
+    host.before(widget);
+    widget.innerHTML =
+      '<header><span class="information-widget-inline-actions"></span></header>';
+    widget.append(host);
     await f.render("parent");
     assert.equal(
       f.dom.window.document.querySelector(
         ".subagents-panel > header > strong",
       ) === null,
       true,
+    );
+    assert.equal(
+      f.dom.window.document.querySelector(".subagents-panel > header"),
+      null,
+    );
+    assert.ok(
+      f.dom.window.document.querySelector(
+        ".information-widget > header .subagent-create-button",
+      ),
     );
     assert.ok(f.button("New side chat"));
     assert.match(
@@ -1023,6 +1299,255 @@ test("embedded lineage keeps its creation action but leaves the heading to the o
       "Subagent conversations",
     );
   } finally {
+    await f.close();
+  }
+});
+
+test("ordinary Information distinguishes empty lineage from failed reads and Retry recovers", async () => {
+  await i18n.changeLanguage("en");
+  let fail = true;
+  const visible: boolean[] = [];
+  const f = await fixture(
+    async () => {
+      if (fail) throw new Error("Synthetic unavailable lineage");
+      return { threads: [] };
+    },
+    undefined,
+    {
+      report: (value) => visible.push(value),
+      manageMode: false,
+      embedded: true,
+    },
+  );
+  try {
+    await f.render("parent");
+    assert.equal(visible.at(-1), true);
+    assert.match(
+      f.dom.window.document.querySelector('[role="alert"]')!.textContent!,
+      /Synthetic unavailable lineage/,
+    );
+    fail = false;
+    await f.click(f.button("Retry"));
+    assert.equal(visible.at(-1), false);
+    assert.equal(f.dom.window.document.querySelector(".subagents-panel"), null);
+    assert.deepEqual(
+      f.calls.map((call) => call.commandId),
+      ["list", "list"],
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("ordinary Information retires old-owner lineage failures and ignores late rejected reads", async () => {
+  await i18n.changeLanguage("en");
+  let rejectOld!: (cause: Error) => void;
+  const visible: boolean[] = [];
+  const f = await fixture(
+    async ({ input }) => {
+      const parent = (input as { parentThreadId: string }).parentThreadId;
+      if (parent === "failed") throw new Error("Synthetic old-owner failure");
+      if (parent === "pending")
+        return new Promise((_resolve, reject) => {
+          rejectOld = reject;
+        });
+      return { threads: [] };
+    },
+    undefined,
+    {
+      report: (value) => visible.push(value),
+      manageMode: false,
+      embedded: true,
+    },
+  );
+  try {
+    await f.render("failed");
+    assert.ok(f.dom.window.document.querySelector('[role="alert"]'));
+    await f.render("pending");
+    assert.equal(f.dom.window.document.querySelector('[role="alert"]'), null);
+    await f.render("current");
+    await act(async () => rejectOld(new Error("Synthetic late failure")));
+    assert.equal(visible.at(-1), false);
+    assert.equal(f.dom.window.document.querySelector(".subagents-panel"), null);
+    assert.deepEqual(f.routes, []);
+  } finally {
+    await f.close();
+  }
+});
+
+for (const language of ["en", "zh-CN"] as const) {
+  test(`subagent question attention follows Host summaries independently of activity (${language})`, async () => {
+    const withQuestions = (
+      id: string,
+      count?: number,
+      active = false,
+    ): NativeThreadSummary => ({
+      ...summary(id, "parent", { status: active ? "active" : "idle" }),
+      ...(count === undefined
+        ? {}
+        : { userQuestionSummary: { openCount: count } }),
+    });
+    // A stale field on an unavailable payload must never produce attention.
+    const unavailable = {
+      threadId: "unavailable",
+      parentThreadId: "parent",
+      name: "unavailable",
+      archived: false,
+      status: "systemError",
+      error: "Synthetic unavailable",
+      createdAt: null,
+      updatedAt: null,
+      preview: "",
+      userQuestionSummary: { openCount: 9 },
+    } as NativeThreadSummary;
+    const children = [
+      withQuestions("idle-one", 1),
+      withQuestions("active-two", 2, true),
+      withQuestions("zero", 0),
+      withQuestions("legacy"),
+      unavailable,
+    ];
+    const visibilityChanges: unknown[] = [];
+    const f = await fixture(async () => ({ threads: children }), {
+      visibleSubagentThreadIds: [],
+      setVisible: async (...args) => {
+        visibilityChanges.push(args);
+      },
+    });
+    const row = (id: string) =>
+      [
+        ...f.dom.window.document.querySelectorAll<HTMLButtonElement>(
+          ".subagent-tree-row",
+        ),
+      ].find((node) => node.textContent?.startsWith(id))!;
+    try {
+      await act(async () => i18n.changeLanguage(language));
+      await f.render("parent", "panel", children);
+      const idle = language === "en" ? "Idle" : "空闲";
+      const working = language === "en" ? "Working" : "正在工作";
+      const badgeText = language === "en" ? "Asking" : "待回答";
+      assert.ok(row("idle-one").textContent?.includes(idle));
+      assert.ok(row("active-two").textContent?.includes(working));
+      for (const [id, count] of [
+        ["idle-one", 1],
+        ["active-two", 2],
+      ] as const) {
+        const badge = row(id).querySelector<HTMLElement>(
+          ".thread-asking-badge",
+        )!;
+        assert.equal(badge.textContent, badgeText);
+        assert.equal(badge.getAttribute("role"), "img");
+        assert.equal(
+          badge.getAttribute("aria-label"),
+          i18n.t("shell:threadAskingCount", { count }),
+        );
+        assert.equal(badge.title, badge.getAttribute("aria-label"));
+        assert.equal(badge.getAttribute("tabindex"), null);
+      }
+      for (const id of ["zero", "legacy", "unavailable"])
+        assert.equal(row(id).querySelector(".thread-asking-badge"), null);
+      const focused = row("idle-one");
+      focused.focus();
+      const beforeCalls = f.calls.length;
+      await f.render("parent", "panel", [
+        withQuestions("idle-one", 0),
+        ...children.slice(1),
+      ]);
+      assert.ok(
+        row("idle-one") === focused,
+        "Host update preserves the navigation node",
+      );
+      assert.ok(
+        f.dom.window.document.activeElement === focused,
+        "Host update preserves keyboard focus",
+      );
+      assert.equal(focused.querySelector(".thread-asking-badge"), null);
+      assert.ok(focused.textContent?.includes(idle));
+      assert.equal(
+        f.calls.length,
+        beforeCalls,
+        "summary updates must not query or mutate",
+      );
+      assert.equal(
+        f.dom.window.document.querySelectorAll(
+          '[role="switch"][aria-checked="true"]',
+        ).length,
+        0,
+      );
+      assert.deepEqual(visibilityChanges, []);
+      assert.deepEqual(f.routes, []);
+      await f.click(focused);
+      assert.deepEqual(f.routes, ["/threads/idle-one?view=panel"]);
+      const archived = {
+        ...withQuestions("archived-question", 1),
+        archived: true,
+      };
+      await f.render("parent", "panel", [archived]);
+      assert.equal(row("archived-question"), undefined);
+      await f.click(
+        f.dom.window.document.querySelector<HTMLInputElement>(
+          "input[type='checkbox']",
+        )!,
+      );
+      const archivedRow = row("archived-question");
+      assert.ok(
+        archivedRow.textContent?.includes(
+          language === "en" ? "Archived" : "已归档",
+        ),
+      );
+      assert.equal(
+        archivedRow.querySelector(".thread-asking-badge")?.textContent,
+        badgeText,
+      );
+    } finally {
+      await f.close();
+      await act(async () => i18n.changeLanguage("en"));
+    }
+  });
+}
+
+test("approval-only attention preserves activity, focus, navigation and clearing without Asking", async () => {
+  const rows = [
+    summary("active-only", "parent", { status: "active" }),
+    summary("idle-only", "parent"),
+    summary("plain", "parent"),
+  ];
+  const approvals = { threadIds: ["active-only", "idle-only"] };
+  const f = await fixture(
+    async () => ({ threads: rows }),
+    undefined,
+    null,
+    approvals,
+  );
+  try {
+    await f.render("parent", "panel", rows);
+    const doc = f.dom.window.document;
+    const buttons = () => [
+      ...doc.querySelectorAll<HTMLButtonElement>(".subagent-tree-row"),
+    ];
+    assert.equal(doc.querySelectorAll(".thread-asking-badge").length, 0);
+    assert.equal(
+      doc.querySelectorAll(".subagent-approval-attention").length,
+      2,
+    );
+    assert.match(buttons()[0]!.textContent!, /Working/);
+    assert.match(buttons()[1]!.textContent!, /Idle/);
+    const focused = buttons()[0]!;
+    focused.focus();
+    const calls = f.calls.length;
+    approvals.threadIds = [];
+    await f.render("parent", "panel", rows);
+    assert.equal(
+      doc.querySelectorAll(".subagent-approval-attention").length,
+      0,
+    );
+    assert.equal(doc.activeElement, focused);
+    assert.equal(f.calls.length, calls);
+    assert.deepEqual(f.routes, []);
+    await f.click(focused);
+    assert.deepEqual(f.routes, ["/threads/active-only?view=panel"]);
+  } finally {
+    approvals.threadIds = [];
     await f.close();
   }
 });

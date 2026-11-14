@@ -61,6 +61,8 @@ export const rendererNativeBridgePaths = Object.freeze(
 );
 const domainTests = {
   "renderer-native": [
+    "apps/zenx/test/room-file-owner-labels.test.ts",
+    "apps/zenx/test/room-file-owner-tabs.test.ts",
     "apps/zenx/test/native-view-overlays.test.ts",
     "apps/zenx/test/workspace-browser-control-ui.test.ts",
     "apps/zenx/test/shell-panel-renderer.test.ts",
@@ -68,6 +70,8 @@ const domainTests = {
     "apps/zenx/test/unified-reference-serialization.test.ts",
   ],
   renderer: [
+    "apps/zenx/test/room-file-owner-labels.test.ts",
+    "apps/zenx/test/room-file-owner-tabs.test.ts",
     "apps/zenx/test/inline-reference-codec.test.ts",
     "apps/zenx/test/unified-reference-serialization.test.ts",
   ],

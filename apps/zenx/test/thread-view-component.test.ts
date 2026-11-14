@@ -15,9 +15,12 @@ import { projectCompletedItem } from "../../../src/protocol/codex/mapper.js";
 import type { ApprovalCardState } from "../src/renderer/src/approval-state.js";
 import {
   addComposerImages,
+  beginComposerSubmission,
   beginImmediateComposerSubmission,
+  failComposerSubmission,
   failImmediateComposerSubmission,
   acceptComposerSubmission,
+  reconcileCanonicalAdmission,
   editComposer,
   emptyComposerState,
   type ComposerState,
@@ -152,6 +155,393 @@ test("new-thread execution context can sit beneath input while existing conversa
         : contextIndex > formIndex,
     );
     dom.window.close();
+  }
+});
+
+test("promoted first Send pending feedback is localized and follows existing admission or failure", async () => {
+  const { i18n } = await import("../src/renderer/src/i18n.js");
+  const previousLanguage = i18n.language;
+  const rawError =
+    "Error invoking remote method 'zenx:protocol:request': ZenXProtocolError: Admission rejected";
+  const pending = beginComposerSubmission(
+    editComposer(emptyComposerState(), "Keep the first draft"),
+    "start",
+    null,
+    () => "first-send-client",
+  );
+  try {
+    for (const [language, title, detail] of [
+      ["en", "Sending…", "Waiting for confirmation. Your draft is preserved."],
+      ["zh-CN", "正在发送…", "正在等待接纳确认，草稿仍保留在输入框中。"],
+    ] as const) {
+      await i18n.changeLanguage(language);
+      await withDom(async (root) => {
+        const show = (composer: ComposerState) =>
+          root.render(
+            createElement(ThreadView, {
+              thread: thread([]),
+              approvals: [],
+              composer,
+              onDraftChange: () => undefined,
+              onInterrupt: noop,
+              onRespondToApproval: noop,
+              onSubmit: noop,
+            }),
+          );
+        await act(async () => show(pending));
+        const status = requiredElement('.thread-empty[role="status"]');
+        assert.equal(status.querySelector("h2")?.textContent, title);
+        assert.equal(status.querySelector("p")?.textContent, detail);
+        assert.equal(
+          requiredElement<HTMLTextAreaElement>("textarea").value,
+          "Keep the first draft",
+        );
+        assert.equal(document.querySelector("[data-sent-message-id]"), null);
+        assert.equal(document.querySelector(".turn"), null);
+
+        await act(async () =>
+          show(failComposerSubmission(pending, "first-send-client", rawError)),
+        );
+        assert.equal(
+          document.querySelector('.thread-empty[role="status"]'),
+          null,
+        );
+        assert.match(
+          requiredElement(".composer-error").textContent ?? "",
+          /Admission rejected/,
+        );
+        assert.equal(
+          requiredElement(".thread-empty h2").textContent,
+          language === "en" ? "Send needs attention" : "请检查发送问题",
+        );
+        assert.equal(
+          requiredElement(".thread-empty p").textContent,
+          language === "en"
+            ? "Review the error details below before continuing."
+            : "继续操作前，请查看下方的错误详情。",
+        );
+        assert.equal(
+          document.querySelector(".thread-empty")?.getAttribute("role"),
+          null,
+        );
+        assert.equal(document.querySelectorAll('[role="alert"]').length, 1);
+        const error = requiredElement(".composer-error");
+        assert.equal(
+          error.querySelector('[role="alert"]')?.textContent,
+          language === "en" ? "Send encountered an error." : "发送时发生错误。",
+        );
+        const details = error.querySelector("details")!;
+        assert.equal(details.open, false);
+        assert.equal(details.querySelector("pre")?.textContent, rawError);
+        assert.equal(details.querySelector("pre")?.tabIndex, 0);
+        assert.equal(
+          details.querySelector("summary")?.textContent,
+          language === "en" ? "Technical details" : "技术详情",
+        );
+        assert.equal(
+          requiredElement<HTMLTextAreaElement>("textarea").value,
+          "Keep the first draft",
+        );
+        await act(async () =>
+          show(
+            editComposer(
+              failComposerSubmission(pending, "first-send-client", rawError),
+              "Newer draft",
+            ),
+          ),
+        );
+        assert.equal(document.querySelector(".composer-error"), null);
+        assert.equal(
+          requiredElement<HTMLTextAreaElement>("textarea").value,
+          "Newer draft",
+        );
+
+        await act(async () =>
+          show(acceptComposerSubmission(pending, "first-send-client")),
+        );
+        assert.equal(
+          document.querySelector('.thread-empty[role="status"]'),
+          null,
+        );
+        assert.equal(
+          requiredElement<HTMLTextAreaElement>("textarea").value,
+          "",
+        );
+
+        const canonical = reconcileCanonicalAdmission(pending, [
+          {
+            id: "admitted-first-input",
+            clientId: "first-send-client",
+            type: "user_message",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            createdAt: "2026-11-09T00:00:00.000Z",
+            content: [{ type: "text", text: "Keep the first draft" }],
+          },
+        ]);
+        await act(async () => show(canonical));
+        assert.equal(
+          document.querySelector('.thread-empty[role="status"]'),
+          null,
+        );
+        assert.equal(
+          requiredElement<HTMLTextAreaElement>("textarea").value,
+          "",
+        );
+      });
+    }
+  } finally {
+    await i18n.changeLanguage(previousLanguage);
+  }
+});
+
+test("submission disclosure preserves model errors and ordinary unknown delivery", async () => {
+  await withDom(async (root) => {
+    const pending = beginComposerSubmission(
+      editComposer(emptyComposerState(), "Original draft"),
+      "start",
+      null,
+      () => "failed-client",
+    );
+    const failed = failComposerSubmission(
+      pending,
+      "failed-client",
+      "Raw submission failure",
+    );
+    const show = (composer: ComposerState) =>
+      root.render(
+        createElement(ThreadView, {
+          thread: thread([]),
+          approvals: [],
+          composer,
+          modelError: "Model unavailable",
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      );
+    await act(async () => show(failed));
+    assert.equal(
+      requiredElement(".composer-error pre").textContent,
+      "Raw submission failure",
+    );
+    assert.equal(document.querySelectorAll(".composer-error").length, 1);
+    await act(async () => show(editComposer(failed, "Newer draft")));
+    assert.equal(
+      requiredElement('.composer-error[role="alert"]').textContent,
+      "Model unavailable",
+    );
+    assert.equal(document.querySelector(".composer-error details"), null);
+    const immediate = beginImmediateComposerSubmission(
+      editComposer(emptyComposerState(), "Uncertain message"),
+      "start",
+      null,
+      () => "unknown-client",
+    );
+    await act(async () =>
+      show(
+        failImmediateComposerSubmission(
+          immediate,
+          "unknown-client",
+          "Response lost",
+          true,
+        ),
+      ),
+    );
+    const recovery = requiredElement('[data-send-state="unconfirmed"]');
+    assert.match(recovery.textContent ?? "", /Delivery not confirmed/);
+    assert.match(recovery.textContent ?? "", /may already have been accepted/);
+    assert.equal(recovery.querySelector("pre")?.textContent, "Response lost");
+    assert.doesNotMatch(
+      recovery.textContent ?? "",
+      /Not sent|Send encountered an error/,
+    );
+    assert.equal(document.querySelector(".composer-submission-error"), null);
+  });
+});
+
+test("first Send attention only replaces the eligible default empty state", () => {
+  const pending = beginComposerSubmission(
+    editComposer(emptyComposerState(), "First message"),
+    "start",
+    null,
+    () => "attention-client",
+  );
+  const failed = failComposerSubmission(
+    pending,
+    "attention-client",
+    "Raw failure",
+  );
+  const imageBlocked = {
+    ...failed,
+    draft: {
+      ...failed.draft,
+      images: [
+        {
+          id: "image",
+          name: "image.png",
+          attachment: {
+            mediaType: "image/png",
+            sha256: "a".repeat(64),
+            byteLength: 4,
+            width: 1,
+            height: 1,
+          } as AttachmentRef,
+        },
+      ],
+    },
+  };
+  for (const [props, attention] of [
+    [{ thread: thread([]), composer: failed }, true],
+    [
+      { thread: thread([]), composer: failed, modelError: "Lower priority" },
+      true,
+    ],
+    [{ thread: thread([]), composer: pending }, false],
+    [
+      {
+        thread: thread([]),
+        composer: acceptComposerSubmission(pending, "attention-client"),
+      },
+      false,
+    ],
+    [
+      { thread: thread([]), composer: editComposer(failed, "Newer message") },
+      false,
+    ],
+    [
+      {
+        thread: thread([]),
+        composer: imageBlocked,
+        imageCapabilityError: "Raw failure",
+      },
+      false,
+    ],
+    [
+      {
+        thread: thread([]),
+        composer: {
+          ...failed,
+          submission: { ...failed.submission!, error: null },
+        },
+      },
+      false,
+    ],
+    [
+      {
+        thread: thread([]),
+        composer: {
+          ...failed,
+          submission: { ...failed.submission!, intent: "steer" as const },
+        },
+      },
+      false,
+    ],
+    [
+      {
+        thread: thread([]),
+        composer: {
+          ...failed,
+          submission: { ...failed.submission!, immediateFeedback: true },
+        },
+      },
+      false,
+    ],
+    [{ thread: null, composer: failed }, false],
+    [{ thread: thread([turn()]), composer: failed }, false],
+    [
+      {
+        thread: thread([]),
+        composer: failed,
+        emptyContent: createElement("p", null, "Custom side chat"),
+      },
+      false,
+    ],
+  ] as const) {
+    const dom = new JSDOM(
+      renderToStaticMarkup(
+        createElement(ThreadView, {
+          ...props,
+          approvals: [],
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      ),
+    );
+    try {
+      assert.equal(
+        dom.window.document.querySelector(".thread-empty h2")?.textContent ===
+          "Send needs attention",
+        attention,
+      );
+      if ("emptyContent" in props)
+        assert.match(
+          dom.window.document.body.textContent ?? "",
+          /Custom side chat/,
+        );
+    } finally {
+      dom.window.close();
+    }
+  }
+});
+
+test("first Send pending feedback does not replace local creation, side-chat context or ordinary Sending rows", () => {
+  const pending = beginComposerSubmission(
+    editComposer(emptyComposerState(), "First draft"),
+    "start",
+    null,
+    () => "first-send-client",
+  );
+  const immediate = beginImmediateComposerSubmission(
+    editComposer(emptyComposerState(), "Ordinary Send"),
+    "start",
+    null,
+    () => "ordinary-client",
+  );
+  for (const props of [
+    { thread: null, composer: pending },
+    {
+      thread: thread([]),
+      composer: pending,
+      emptyContent: createElement("p", null, "Creating side chat"),
+    },
+    { thread: thread([]), composer: immediate },
+    { thread: thread([turn()]), composer: pending },
+    { thread: thread([]), composer: emptyComposerState() },
+  ]) {
+    const dom = new JSDOM(
+      renderToStaticMarkup(
+        createElement(ThreadView, {
+          ...props,
+          approvals: [],
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      ),
+    );
+    try {
+      const document = dom.window.document;
+      assert.equal(
+        document.querySelector('.thread-empty[role="status"]'),
+        null,
+      );
+      if (props.emptyContent)
+        assert.match(document.body.textContent ?? "", /Creating side chat/);
+      if (props.composer === immediate)
+        assert.equal(
+          document
+            .querySelector('[data-pending-send-client-id="ordinary-client"]')
+            ?.getAttribute("data-send-state"),
+          "sending",
+        );
+    } finally {
+      dom.window.close();
+    }
   }
 });
 
@@ -4325,6 +4715,201 @@ test("turn transition restores nested preference focus without stealing outside 
   });
 });
 
+for (const disabled of [false, true]) {
+  for (const preference of [false, true]) {
+    for (const backwards of [false, true]) {
+      test(`send panel Tab exits without cycling (disabled=${disabled}, preference=${preference}, backwards=${backwards})`, async () => {
+        await withDom(async (root) => {
+          const { ComposerSendControl } =
+            await import("../src/renderer/src/ComposerSendControl.js");
+          await act(async () =>
+            root.render(
+              createElement(
+                "div",
+                null,
+                createElement(
+                  "button",
+                  { "aria-label": "Before send" },
+                  "Before",
+                ),
+                createElement(ComposerSendControl, {
+                  mode: "soft",
+                  running: true,
+                  hasDraft: true,
+                  disabled,
+                  sendDisabled: disabled,
+                  primaryMode: "steer",
+                  primaryLabel: "Steer now",
+                  compact: false,
+                  onPrimary: () => assert.fail("Tab must not submit"),
+                  onSend: () => assert.fail("Tab must not submit"),
+                  onStop: () => assert.fail("Tab must not stop"),
+                  onModeChange:
+                    preference || disabled
+                      ? async () => assert.fail("Tab must not save")
+                      : undefined,
+                }),
+                createElement("button", { hidden: true }, "Hidden"),
+                createElement("button", { disabled: true }, "Disabled"),
+                createElement(
+                  "button",
+                  { "aria-label": "After send" },
+                  "After",
+                ),
+              ),
+            ),
+          );
+          await act(async () => openSendOptions());
+          const panel = requiredElement(".composer-send-popover");
+          const buttons = [
+            ...panel.querySelectorAll<HTMLButtonElement>(
+              "button:not(:disabled)",
+            ),
+          ].filter((button) => button.tabIndex >= 0);
+          assert.ok(buttons.length > 0);
+          if (buttons.length > 2) {
+            const interior = buttons[1]!;
+            const interiorTab = new window.KeyboardEvent("keydown", {
+              key: "Tab",
+              shiftKey: backwards,
+              bubbles: true,
+              cancelable: true,
+            });
+            await act(async () => {
+              interior.focus();
+              interior.dispatchEvent(interiorTab);
+            });
+            assert.equal(
+              interiorTab.defaultPrevented,
+              false,
+              "interior Tab keeps native traversal",
+            );
+            assert.ok(document.querySelector(".composer-send-popover"));
+          }
+          const edge = backwards ? buttons[0]! : buttons.at(-1)!;
+          const event = new window.KeyboardEvent("keydown", {
+            key: "Tab",
+            shiftKey: backwards,
+            bubbles: true,
+            cancelable: true,
+          });
+          await act(async () => {
+            edge.focus();
+            edge.dispatchEvent(event);
+          });
+          assert.equal(event.defaultPrevented, true);
+          const destination = backwards
+            ? requiredElement(
+                disabled ? ".composer-send-control" : ".action-orb",
+              )
+            : requiredElement('[aria-label="After send"]');
+          assert.equal(document.activeElement, destination);
+          await act(
+            async () => new Promise((resolve) => setTimeout(resolve, 20)),
+          );
+          assert.equal(
+            document.activeElement,
+            destination,
+            "closing auto-focus must not steal the exit destination",
+          );
+          assert.equal(document.querySelector(".composer-send-popover"), null);
+        });
+      });
+    }
+  }
+}
+
+test("closed send animation is inert immediately and cannot restore focus late", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    const original = globalThis.getComputedStyle;
+    const originalCss = globalThis.CSS;
+    Object.assign(globalThis, { CSS: { escape: (value: string) => value } });
+    // Retain the real Radix Presence/FocusScope until an explicit animationend.
+    // JSDOM has no CSS animation engine; this models the live computed name only.
+    globalThis.getComputedStyle = ((element: Element) => {
+      const style = original(element);
+      if (!element.classList.contains("composer-send-popover")) return style;
+      return new Proxy(style, {
+        get(target, key) {
+          if (key === "animationName")
+            return element.getAttribute("data-state") === "closed"
+              ? "ui-exit"
+              : "ui-enter";
+          return Reflect.get(target, key);
+        },
+      });
+    }) as typeof getComputedStyle;
+    try {
+      await act(async () =>
+        root.render(
+          createElement(
+            "div",
+            null,
+            createElement(ComposerSendControl, {
+              mode: "soft",
+              running: true,
+              hasDraft: true,
+              disabled: false,
+              sendDisabled: false,
+              primaryMode: "steer",
+              primaryLabel: "Steer now",
+              compact: false,
+              onPrimary: () => assert.fail("Escape must not send"),
+              onSend: () => assert.fail("Escape must not send"),
+              onStop: () => assert.fail("Escape must not stop"),
+            }),
+            createElement("button", { id: "after-send" }, "After send"),
+          ),
+        ),
+      );
+      await act(async () => openSendOptions());
+      const panel = requiredElement(".composer-send-popover");
+      assert.equal(panel.hasAttribute("inert"), false);
+      await act(async () => {
+        panel.querySelector<HTMLButtonElement>("button")!.focus();
+        document.activeElement!.dispatchEvent(
+          new window.KeyboardEvent("keydown", {
+            key: "Escape",
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      });
+      assert.equal(panel.isConnected, true, "exit animation remains mounted");
+      assert.equal(panel.dataset.state, "closed");
+      assert.equal(
+        panel.hasAttribute("inert"),
+        true,
+        "closed DOM is not interactive",
+      );
+      assert.equal(
+        document.activeElement,
+        requiredElement(".action-orb"),
+        "Escape restores focus without waiting for animationend",
+      );
+      const next = requiredElement("#after-send");
+      await act(async () => next.focus());
+      await act(async () => {
+        const end = new window.Event("animationend", { bubbles: true });
+        Object.defineProperty(end, "animationName", { value: "ui-exit" });
+        panel.dispatchEvent(end);
+      });
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+      assert.equal(
+        document.activeElement,
+        next,
+        "unmount cannot steal later focus",
+      );
+      assert.equal(document.querySelector(".composer-send-popover"), null);
+    } finally {
+      globalThis.getComputedStyle = original;
+      Object.assign(globalThis, { CSS: originalCss });
+    }
+  });
+});
+
 // Radix restores focus after its closing FocusScope has unmounted.
 async function waitForSendFocus(label: string): Promise<void> {
   const deadline = Date.now() + 1000;
@@ -5239,7 +5824,7 @@ test("ordinary send shows an honest local row and clears input before admission 
 test("checking an old thread cannot disable or report a delivery error in the new thread", async () => {
   await withDom(async (root) => {
     let rejectOld!: (error: Error) => void;
-    const oldRead = new Promise<void>((_resolve, reject) => {
+    const oldRead = new Promise<"checked">((_resolve, reject) => {
       rejectOld = reject;
     });
     const pending = (id: string) =>
@@ -5265,7 +5850,7 @@ test("checking an old thread cannot disable or report a delivery error in the ne
           onRespondToApproval: noop,
           onSubmit: noop,
           onCheckPendingSends: () =>
-            id === "thread-a" ? oldRead : Promise.resolve(),
+            id === "thread-a" ? oldRead : Promise.resolve("checked" as const),
         }),
       );
     await act(async () => renderView("thread-a"));
@@ -5364,4 +5949,68 @@ test("local sending presentation hides draft framing but keeps readable skill an
   assert.match(html, /example.ts/);
   assert.doesNotMatch(html, /\[skill:11111111/);
   assert.doesNotMatch(html, /data-sent-message-id/);
+});
+
+test("desktop reading return preserves live scrolling and returns keyboard focus to the draft", async () => {
+  const { recoveryScenario } =
+    await import("./fixtures/loop-recovery-scenario.js");
+  await withDom(async (root) => {
+    await act(async () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer: editComposer(emptyComposerState(), "Keep this draft"),
+          thread: recoveryScenario("completed"),
+          onDraftChange: () => assert.fail("return must not edit"),
+          onInterrupt: () => assert.fail("return must not interrupt"),
+          onRespondToApproval: noop,
+          onSubmit: () => assert.fail("return must not send"),
+        }),
+      ),
+    );
+    const scroll = requiredElement(".messages");
+    Object.defineProperties(scroll, {
+      scrollHeight: { configurable: true, value: 1600 },
+      clientHeight: { configurable: true, value: 700 },
+      scrollTop: { configurable: true, writable: true, value: 200 },
+    });
+    let destination: ScrollToOptions | undefined;
+    scroll.scrollTo = ((options: ScrollToOptions) => {
+      destination = options;
+      scroll.scrollTop = 900;
+    }) as typeof scroll.scrollTo;
+    await act(async () =>
+      scroll.dispatchEvent(
+        new window.WheelEvent("wheel", {
+          deltaY: -40,
+          bubbles: true,
+        }),
+      ),
+    );
+    const button = requiredButton(".composer-reading-position button");
+    assert.equal(button.textContent?.includes("Back to live"), true);
+    assert.equal(button.closest(".composer") !== null, true);
+    assert.ok(
+      button.closest(".composer-actions"),
+      "history return reuses the existing rail instead of adding a header row",
+    );
+    assert.equal(
+      button.closest(".composer-reading-position")?.getAttribute("aria-label"),
+      "Reading earlier messages",
+    );
+    await act(async () => {
+      button.focus();
+      button.click();
+    });
+    assert.deepEqual(destination, { top: 1600, behavior: "auto" });
+    assert.equal(document.querySelector(".composer-reading-position"), null);
+    assert.equal(
+      document.activeElement,
+      document.querySelector(".composer textarea"),
+    );
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>(".composer textarea")?.value,
+      "Keep this draft",
+    );
+  });
 });

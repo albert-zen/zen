@@ -21,6 +21,9 @@ export function ApprovalRequestCard({
   useTranslation(["shell", "panels"]);
   const titleId = useId();
   const scopeId = useId();
+  const summaryId = useId();
+  const readingContentId = useId();
+  const [readingIdentity, setReadingIdentity] = useState<string | null>(null);
   const identity = `${threadId}\u0000${approval.requestId}`;
   const owner = useRef({ identity, mounted: true, locked: false });
   // Invalidate older promises synchronously, before effects run on a new request.
@@ -72,6 +75,7 @@ export function ApprovalRequestCard({
       : i18n.t("shell:approvalCapabilityScope");
   const pending = submission === identity || approval.status === "responding";
   const errorMessage = error?.identity === identity ? error.message : null;
+  const reading = readingIdentity === identity && !pending && !errorMessage;
   const current = () =>
     currentOwner.mounted &&
     owner.current === currentOwner &&
@@ -177,7 +181,8 @@ export function ApprovalRequestCard({
         data-approval-thread={threadId}
         data-thread-id={threadId}
         aria-labelledby={titleId}
-        aria-describedby={scopeId}
+        aria-describedby={reading ? summaryId : scopeId}
+        data-reading={reading ? "true" : undefined}
         aria-busy={pending}
         aria-controls={composerId}
       >
@@ -186,6 +191,18 @@ export function ApprovalRequestCard({
             <Icon name="lock" size={16} />
           </span>
           <h3 id={titleId}>{question}</h3>
+          <button
+            type="button"
+            className="approval-reading-toggle"
+            aria-expanded={!reading}
+            aria-controls={readingContentId}
+            disabled={pending || !!errorMessage}
+            onClick={() => setReadingIdentity(reading ? null : identity)}
+          >
+            {i18n.t(
+              reading ? "shell:reviewApproval" : "shell:readConversation",
+            )}
+          </button>
           <button
             type="button"
             className="approval-request-details"
@@ -200,26 +217,49 @@ export function ApprovalRequestCard({
             <span>{i18n.t("shell:approvalRequestDetails")}</span>
           </button>
         </header>
-        <div className="approval-request-body" tabIndex={0}>
-          <div className="approval-request-preview">
-            <div className="approval-request-preview-label">
-              <Icon name="terminal" size={13} />
-              <span>{toolName}</span>
-              <span>{previewLabel}</span>
-            </div>
-            <pre tabIndex={0} aria-label={previewLabel}>
-              <code>{code}</code>
-            </pre>
-          </div>
-          {cwd()}
-          {scope(scopeId, true)}
-          {errorMessage ? (
-            <p className="approval-request-error" role="alert">
-              {errorMessage}
+        <div id={readingContentId} className="approval-reading-content">
+          {reading ? (
+            <p id={summaryId} className="approval-reading-summary">
+              <strong>{toolName}</strong>
+              {" · "}
+              {i18n.t(
+                once
+                  ? "shell:approvalOnceShortScope"
+                  : "shell:approvalRememberedShortScope",
+              )}
+              {target ? (
+                <>
+                  {" · "}
+                  {target}
+                </>
+              ) : null}
+              <span>{i18n.t("shell:approvalWaitingForReview")}</span>
             </p>
-          ) : null}
+          ) : (
+            <>
+              <div className="approval-request-body" tabIndex={0}>
+                <div className="approval-request-preview">
+                  <div className="approval-request-preview-label">
+                    <Icon name="terminal" size={13} />
+                    <span>{toolName}</span>
+                    <span>{previewLabel}</span>
+                  </div>
+                  <pre tabIndex={0} aria-label={previewLabel}>
+                    <code>{code}</code>
+                  </pre>
+                </div>
+                {cwd()}
+                {scope(scopeId, true)}
+                {errorMessage ? (
+                  <p className="approval-request-error" role="alert">
+                    {errorMessage}
+                  </p>
+                ) : null}
+              </div>
+              {decisions("card")}
+            </>
+          )}
         </div>
-        {decisions("card")}
       </section>
       <Dialog
         open={detailsIdentity === identity}

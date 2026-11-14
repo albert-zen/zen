@@ -25,6 +25,11 @@ test("steer now targets the same queued identity once, leaves draft intact and a
         });
       },
     });
+    const sendNow =
+      document.querySelector<HTMLButtonElement>(".queue-row-steer")!;
+    assert.equal(sendNow.textContent, "Send now");
+    assert.match(sendNow.getAttribute("aria-label")!, /1/);
+    assert.equal(sendNow.querySelector("svg"), null);
     const button = await h.click(".queue-row-steer");
     await act(async () => button.click());
     assert.equal(calls.length, 1);
@@ -434,4 +439,126 @@ test("staged promotion replies require a revision and receipt identity, and lost
   } finally {
     window.zenx = old;
   }
+});
+
+test("focusing a queue action reveals its owning row inside only the pending tray", async () => {
+  await withRuntimeDom(async (h) => {
+    await h.render(queueScenario(2), {
+      onSteerQueued: async () => assert.fail("Focus must not send a message"),
+    });
+    const target = document.querySelector<HTMLButtonElement>(
+      ".queue-row-steer:not(:disabled)",
+    )!;
+    const row = target.closest<HTMLElement>(".queue-row")!;
+    const tray = row.closest<HTMLElement>(".pending-tray")!;
+    const rect = (top: number, height: number) =>
+      ({ top, bottom: top + height, height }) as DOMRect;
+    tray.style.scrollPaddingBlockStart = "64px";
+    Object.defineProperties(tray, {
+      clientHeight: { value: 240 },
+      scrollHeight: { value: 1000 },
+    });
+    tray.getBoundingClientRect = () => rect(100, 240);
+    row.getBoundingClientRect = () => rect(150, 60);
+    target.getBoundingClientRect = () => rect(180, 28);
+    tray.scrollTop = 100;
+    await act(async () => target.focus());
+    assert.equal(tray.scrollTop, 84);
+    assert.equal(document.activeElement, target);
+    assert.equal(document.querySelector(".thread-view")!.scrollTop, 0);
+  });
+});
+
+test("desktop reading expansion is explicit, non-mutating, focus-stable and Thread-owned", async () => {
+  await withRuntimeDom(async (h) => {
+    const thread = queueScenario(2);
+    await h.render(thread, {
+      onSteerQueued: async () => assert.fail("reading must not send"),
+    });
+    assert.equal(document.querySelector(".queue-reading-toggle"), null);
+    const tray = document.querySelector<HTMLElement>(".pending-tray")!;
+    Object.defineProperties(tray, {
+      clientHeight: { configurable: true, value: 240 },
+      scrollHeight: { configurable: true, value: 640 },
+    });
+    await act(async () => window.dispatchEvent(new window.Event("resize")));
+    const toggle = document.querySelector<HTMLButtonElement>(
+      ".queue-reading-toggle",
+    )!;
+    assert.ok(toggle);
+    assert.equal(toggle.getAttribute("aria-controls"), tray.id);
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+    const originalRows = [
+      ...document.querySelectorAll<HTMLElement>(".queue-row"),
+    ].map((row) => row.dataset.queueId);
+    await act(async () => {
+      toggle.focus();
+      toggle.click();
+    });
+    assert.equal(toggle.getAttribute("aria-expanded"), "true");
+    assert.ok(
+      document.querySelector('.queue-shelf[data-reading-expanded="true"]'),
+    );
+    Object.defineProperty(tray, "clientHeight", {
+      configurable: true,
+      value: 640,
+    });
+    await act(async () => window.dispatchEvent(new window.Event("resize")));
+    await act(async () => toggle.click());
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+    assert.equal(document.activeElement, toggle);
+    assert.deepEqual(
+      [...document.querySelectorAll<HTMLElement>(".queue-row")].map(
+        (row) => row.dataset.queueId,
+      ),
+      originalRows,
+    );
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>(".composer textarea")!.value,
+      "Keep this unsent draft.",
+    );
+    await act(async () => toggle.click());
+    const returnControl = document.querySelector<HTMLButtonElement>(
+      '[data-queue-control="reading-return"]',
+    )!;
+    assert.ok(returnControl);
+    assert.equal(
+      tray.contains(returnControl),
+      false,
+      "return control is outside the scrolling viewport",
+    );
+    const returnHost = document.querySelector(".queue-reading-return-host")!;
+    assert.equal(returnHost.contains(returnControl), true);
+    assert.equal(
+      tray.nextElementSibling,
+      returnHost,
+      "ordinary reverse navigation reaches the return before queue rows",
+    );
+    assert.equal(returnControl.getAttribute("aria-controls"), tray.id);
+    await act(async () => {
+      returnControl.focus();
+      returnControl.click();
+    });
+    assert.equal(
+      document.querySelector('[data-queue-control="reading-return"]'),
+      null,
+    );
+    assert.equal(
+      document.activeElement,
+      document.querySelector(".composer textarea"),
+      "removed return control hands focus back to writing",
+    );
+    assert.deepEqual(
+      [...document.querySelectorAll<HTMLElement>(".queue-row")].map(
+        (row) => row.dataset.queueId,
+      ),
+      originalRows,
+    );
+    await act(async () => toggle.click());
+    await h.render({ ...thread, id: "different-reading-owner" });
+    assert.equal(
+      document.querySelector('[data-reading-expanded="true"]'),
+      null,
+    );
+  });
 });

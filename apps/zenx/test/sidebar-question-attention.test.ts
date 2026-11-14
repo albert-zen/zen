@@ -180,6 +180,26 @@ for (const density of ["compact", "detailed"] as const) {
       composer.focus();
       assert.equal(document.querySelectorAll(".thread-asking-badge").length, 0);
       await render(true);
+      const recentCurrent = document.querySelector<HTMLElement>(
+        ".recent-thread-group .thread-row.selected",
+      )!;
+      const secondary =
+        ".sidebar:has(.project-group .thread-row.selected, .pinned-thread-group .thread-row.selected) .recent-thread-group .thread-row.selected";
+      assert.ok(recentCurrent.matches(secondary));
+      assert.equal(recentCurrent.getAttribute("aria-current"), "page");
+      const pinnedToggle = document.querySelector<HTMLButtonElement>(
+        ".pinned-section-toggle",
+      )!;
+      await act(async () => pinnedToggle.click());
+      assert.equal(
+        recentCurrent.matches(secondary),
+        false,
+        "collapsed primary location restores Recent's primary fill",
+      );
+      assert.equal(recentCurrent.getAttribute("aria-current"), "page");
+      await act(async () => pinnedToggle.click());
+      assert.ok(recentCurrent.matches(secondary));
+      composer.focus();
       assert.equal(
         document.querySelector(".sidebar")!.getAttribute("data-thread-density"),
         density,

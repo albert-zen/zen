@@ -193,12 +193,29 @@ await withPreviewBrowser(
     cases.push(
       "Explicit Hide persists across content changes; Manage/Show restores the chosen card",
     );
-    await click('[aria-label="Close information"]');
-    await wait("!document.querySelector('.editable-information-panel')");
-    assert.equal(
-      await evaluate("document.activeElement?.getAttribute('aria-label')"),
-      "Information board",
+    // The desktop dock uses its toolbar toggle, not the popover close button.
+    const informationToggle = '[aria-label="Information board"]';
+    const dock = "!!document.querySelector('.information-dock')";
+    const desktopToggleState = (open) =>
+      `(() => {const t = document.querySelector(${JSON.stringify(informationToggle)}); return t?.getAttribute('aria-pressed') === '${open}' && t?.getAttribute('aria-expanded') === '${open}';})()`;
+    const closeDock = async () => {
+      await wait(`${dock} && ${desktopToggleState(true)}`);
+      await click(informationToggle);
+      await wait(
+        `!(${dock}) && !document.querySelector('.editable-information-panel') && ${desktopToggleState(false)}`,
+      );
+      assert.equal(
+        await evaluate("document.activeElement?.getAttribute('aria-label')"),
+        "Information board",
+      );
+    };
+    await closeDock();
+    await click(informationToggle);
+    await wait(
+      `${dock} && ${desktopToggleState(true)} && ${count}===1 && !!document.querySelector('[data-widget-id="default:triggers"]')`,
     );
+    await closeDock();
+    cases.push("Desktop toolbar toggle closes and reopens the same dock card");
     await send("Emulation.setDeviceMetricsOverride", {
       width: 760,
       height: 960,

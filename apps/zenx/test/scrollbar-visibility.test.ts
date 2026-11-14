@@ -107,3 +107,77 @@ test("native scrollbar reveals on activity, stays draggable, and hides at rest",
     dom.window.close();
   }
 });
+
+test("focused descendants keep scrollbars visible until focus leaves, including internal and nested moves", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const dom = new JSDOM(
+    '<div id="outer"><div id="inner"><button id="one">One</button><button id="two">Two</button></div><button id="sibling">Sibling</button></div><button id="outside">Outside</button>',
+  );
+  const { document } = dom.window;
+  const outer = document.getElementById("outer")!;
+  const inner = document.getElementById("inner")!;
+  for (const area of [outer, inner]) {
+    area.style.overflowY = "auto";
+    Object.defineProperties(area, {
+      scrollHeight: { value: 500 },
+      clientHeight: { value: 100 },
+    });
+  }
+  const focus = (id: string) => document.getElementById(id)!.focus();
+  const active = (area: Element) => area.hasAttribute("data-scrollbar-active");
+  const dispose = installScrollbarVisibility(document);
+  try {
+    focus("one");
+    t.mock.timers.tick(1001);
+    assert.ok(
+      active(inner),
+      "focused child retains its scrollbar past idle delay",
+    );
+    assert.ok(
+      active(outer),
+      "nested focused child retains ancestor scrollbars",
+    );
+    focus("two");
+    t.mock.timers.tick(1001);
+    assert.ok(
+      active(inner),
+      "moving between children does not fade their common scrollbar",
+    );
+    focus("sibling");
+    assert.ok(
+      active(inner),
+      "exiting keeps the ordinary one-second fade delay",
+    );
+    t.mock.timers.tick(1001);
+    assert.equal(
+      active(inner),
+      false,
+      "leaving inner region schedules fade even after its old timer expired",
+    );
+    assert.ok(active(outer), "outer region still contains focus");
+    focus("outside");
+    t.mock.timers.tick(1001);
+    assert.equal(
+      active(outer),
+      false,
+      "leaving all scroll regions releases the last focus hold",
+    );
+    focus("one");
+    t.mock.timers.tick(1001);
+    dispose();
+    assert.equal(active(inner), false, "cleanup clears a focus-held scrollbar");
+    assert.equal(active(outer), false);
+    focus("two");
+    focus("outside");
+    t.mock.timers.tick(1001);
+    assert.equal(
+      active(inner),
+      false,
+      "cleanup removes focus listeners as well as timers",
+    );
+    assert.equal(active(outer), false);
+  } finally {
+    dispose();
+    dom.window.close();
+  }
+});

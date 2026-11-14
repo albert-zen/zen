@@ -8,11 +8,15 @@ import { SubscriptionUsageCard } from "./SubscriptionUsageCard.js";
 import { RtkSettingsCard } from "./RtkSettingsCard.js";
 import {
   Activity,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useId,
+  useMemo,
   useRef,
   useState,
+  type Dispatch,
+  type SetStateAction,
 } from "react";
 import { normalizeContextCompactionConfig } from "../../../../../src/context-compaction.js";
 import { ContextCompactionPanel } from "./ContextCompactionPanel.js";
@@ -124,9 +128,53 @@ export function SettingsView({
   browserSettingsFocusRequest?: number;
 }) {
   const { t } = useTranslation("settings");
-  const [settings, setSettings] = useState<PublicHostSettings | null>(null);
+  const [{ settings, draft }, setSettingsState] = useState<{
+    settings: PublicHostSettings | null;
+    draft: ZenXHostProfile | null;
+    editedDuringSave: ReadonlySet<keyof ZenXHostProfile> | null;
+  }>({ settings: null, draft: null, editedDuringSave: null });
+  const setDraft: Dispatch<SetStateAction<ZenXHostProfile | null>> =
+    useCallback(
+      (value) =>
+        setSettingsState((current) => {
+          const next =
+            typeof value === "function" ? value(current.draft) : value;
+          const editedDuringSave =
+            current.editedDuringSave === null
+              ? null
+              : new Set(current.editedDuringSave);
+          if (editedDuringSave !== null && next !== null)
+            for (const key of Object.keys(next) as Array<keyof ZenXHostProfile>)
+              if (
+                JSON.stringify(next[key]) !==
+                JSON.stringify(current.draft?.[key])
+              )
+                editedDuringSave.add(key);
+          return { ...current, draft: next, editedDuringSave };
+        }),
+      [],
+    );
+  const acceptHostSettings = useCallback((value: PublicHostSettings) => {
+    setSettingsState((current) => {
+      if (
+        (value.profile.revision ?? 0) <
+        (current.settings?.profile.revision ?? 0)
+      )
+        return current;
+      return {
+        ...current,
+        settings: value,
+        draft: rebaseSettingsDraft(
+          current.draft,
+          current.settings?.profile ?? null,
+          value.profile,
+          current.editedDuringSave,
+        ),
+      };
+    });
+  }, []);
   const [loadAttempt, setLoadAttempt] = useState(0);
-  const [draft, setDraft] = useState<ZenXHostProfile | null>(null);
+  const [maximumInvalid, setMaximumInvalid] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatusState] = useState<{ message: string } | null>(null);
@@ -147,6 +195,75 @@ export function SettingsView({
     setStatusState(message === null ? null : { message });
   };
   const [manualCode, setManualCode] = useState(false);
+  const [accountError, setAccountError] = useState<string | null>(null);
+  const accountApi = window.zenx.settings;
+  const accountProvider = settings?.subscriptionProviderProfileId;
+  const accountId = settings?.subscription.accountId;
+  const accountAuthenticated = settings?.subscription.authenticated;
+  // Owned above Account's Activity: tab navigation must not cancel an accepted
+  // Host operation. Only a different account/API or unmount retires its reply.
+  const accountIdentity = useMemo(
+    () => ({}),
+    [accountApi, accountProvider, accountId, accountAuthenticated],
+  );
+  const accountOwner = useRef<object | null>(null);
+  const accountAction = useRef<object | null>(null);
+  useLayoutEffect(() => {
+    accountOwner.current = accountIdentity;
+    accountAction.current = null;
+    setAccountError(null);
+    setManualCode(false);
+    setBusy((current) =>
+      current === "login" || current === "logout" ? null : current,
+    );
+    return () => {
+      accountOwner.current = null;
+      accountAction.current = null;
+    };
+  }, [accountIdentity]);
+  const accountView = useRef({ active, tab, busy });
+  useLayoutEffect(() => {
+    accountView.current = { active, tab, busy };
+  });
+  const runAccountAction = async (action: "login" | "logout") => {
+    const owner = accountOwner.current;
+    if (
+      owner === null ||
+      // A retained handler must not act for a replacement owner.
+      owner !== accountIdentity ||
+      accountApi !== window.zenx.settings ||
+      !accountView.current.active ||
+      accountView.current.tab !== "account" ||
+      accountView.current.busy !== null ||
+      accountAction.current !== null ||
+      !accountProvider
+    )
+      return;
+    const operation = {};
+    accountAction.current = operation;
+    setBusy(action);
+    setAccountError(null);
+    const isCurrent = () =>
+      accountOwner.current === owner &&
+      accountAction.current === operation &&
+      window.zenx.settings === accountApi;
+    try {
+      const value = await (action === "login"
+        ? accountApi.loginSubscription()
+        : accountApi.logoutSubscription());
+      if (!isCurrent()) return;
+      acceptHostSettings(value);
+      setManualCode(false);
+    } catch (reason: unknown) {
+      if (isCurrent()) setAccountError(describeError(reason));
+    } finally {
+      if (isCurrent()) {
+        accountAction.current = null;
+        setBusy(null);
+      }
+    }
+  };
+
   const [localBrowserFocusRequest, setLocalBrowserFocusRequest] = useState(0);
   const handledBrowserFocusRequest = useRef("0:0");
   const [pluginsVisited, setPluginsVisited] = useState(
@@ -181,10 +298,7 @@ export function SettingsView({
       .get()
       .then((value) => {
         if (!subscribed) return;
-        setSettings(value);
-        setDraft((latest) =>
-          latest === current.draft ? value.profile : latest,
-        );
+        acceptHostSettings(value);
       })
       .catch(
         (reason: unknown) => subscribed && setError(describeError(reason)),
@@ -193,7 +307,7 @@ export function SettingsView({
       subscribed = false;
       dispose();
     };
-  }, [active, loadAttempt]);
+  }, [active, loadAttempt, acceptHostSettings]);
 
   useEffect(() => {
     if (status === null) return;
@@ -223,10 +337,14 @@ export function SettingsView({
   ]);
 
   const save = async () => {
-    if (draft === null) return;
+    if (draft === null || maximumInvalid) return;
     setBusy("save");
     setError(null);
     setStatus(null);
+    setSettingsState((current) => ({
+      ...current,
+      editedDuringSave: new Set(),
+    }));
     try {
       normalizeContextCompactionConfig(draft.contextCompaction);
       normalizeWorkflowCommands(draft.workflowCommands);
@@ -254,14 +372,26 @@ export function SettingsView({
         titlePrompt: draft.titlePrompt,
         resetTitlePrompt: draft.titlePrompt === undefined,
       });
-      setSettings(value);
-      setDraft((latest) =>
-        latest === draft
-          ? value.profile
-          : latest === null
-            ? value.profile
-            : { ...latest, revision: value.profile.revision },
-      );
+      setSettingsState((current) => {
+        const authoritative =
+          (current.settings?.profile.revision ?? 0) >
+          (value.profile.revision ?? 0)
+            ? current.settings!
+            : value;
+        return {
+          ...current,
+          settings: authoritative,
+          // This submission is now saved. Preserve only edits made after it,
+          // without rolling back a newer Host read observed while it ran.
+          draft: rebaseSettingsDraft(
+            current.draft,
+            draft,
+            authoritative.profile,
+            current.editedDuringSave,
+          ),
+          editedDuringSave: null,
+        };
+      });
       setStatus(
         draft.experimentalRtkEnabled !==
           settings?.profile.experimentalRtkEnabled
@@ -271,6 +401,11 @@ export function SettingsView({
     } catch (reason) {
       setError(describeError(reason));
     } finally {
+      setSettingsState((current) =>
+        current.editedDuringSave === null
+          ? current
+          : { ...current, editedDuringSave: null },
+      );
       setBusy(null);
     }
   };
@@ -480,16 +615,22 @@ export function SettingsView({
             <Activity mode={active && tab === "account" ? "visible" : "hidden"}>
               <AccountPanel
                 settings={settings}
+                onOpenModels={() => {
+                  onTabChange("models");
+                  navRef.current
+                    ?.querySelector<HTMLButtonElement>('[data-tab="models"]')
+                    ?.focus();
+                }}
                 busy={busy}
                 manualCode={manualCode}
-                setBusy={setBusy}
-                setError={setError}
-                setManualCode={setManualCode}
-                setSettings={setSettings}
+                error={accountError}
+                onLogin={() => void runAccountAction("login")}
+                onLogout={() => void runAccountAction("logout")}
               />
             </Activity>
             <Activity mode={active && tab === "models" ? "visible" : "hidden"}>
               <ModelsPanel
+                acceptHostSettings={acceptHostSettings}
                 busy={busy}
                 draft={draft}
                 error={error}
@@ -497,7 +638,6 @@ export function SettingsView({
                 setBusy={setBusy}
                 setDraft={setDraft}
                 setError={setError}
-                setSettings={setSettings}
                 setStatus={setStatus}
               />
             </Activity>
@@ -542,6 +682,7 @@ export function SettingsView({
                 <GeneralPanel
                   draft={draft}
                   setDraft={setDraft}
+                  onMaximumValidityChange={setMaximumInvalid}
                   onImportSession={onImportSession}
                 />
                 <ChromeConnectionSettings draft={draft} setDraft={setDraft} />
@@ -598,6 +739,12 @@ export function SettingsView({
                 {compactionError}
               </div>
             ) : null}
+            {maximumInvalid && tab !== "general" ? (
+              <div className="settings-error" role="alert">
+                {t("settingsView.maximumToolRounds")}:{" "}
+                {t("settingsView.enterAWholeNumberOf1OrMore")}
+              </div>
+            ) : null}
             {workflowError !== null && tab === "workflows" ? (
               <div className="settings-error" role="alert">
                 {workflowError}
@@ -635,7 +782,7 @@ export function SettingsView({
                     void window.zenx.settings
                       .reconcile(false)
                       .then((value) => {
-                        setSettings(value);
+                        acceptHostSettings(value);
                         setStatus(configurationSaveToast(value));
                       })
                       .catch((reason) => setError(describeError(reason)))
@@ -655,7 +802,7 @@ export function SettingsView({
                     void window.zenx.settings
                       .reconcile(true)
                       .then((value) => {
-                        setSettings(value);
+                        acceptHostSettings(value);
                         setStatus(configurationSaveToast(value));
                       })
                       .catch((reason) => setError(describeError(reason)))
@@ -690,8 +837,7 @@ export function SettingsView({
                     void window.zenx.settings
                       .safeRestart()
                       .then((value) => {
-                        setSettings(value);
-                        setDraft(value.profile);
+                        acceptHostSettings(value);
                         setStatus(
                           settings.configuration?.pendingRestart.includes(
                             "experimentalRtk",
@@ -726,6 +872,7 @@ export function SettingsView({
           busy={busy === "save"}
           disabled={
             busy !== null ||
+            maximumInvalid ||
             compactionError !== null ||
             workflowError !== null ||
             settings.configuration?.status === "unconfirmed"
@@ -1093,36 +1240,24 @@ export function ArchivedThreadsPanel({
 
 function AccountPanel({
   settings,
+  onOpenModels,
   busy,
   manualCode,
-  setBusy,
-  setError,
-  setManualCode,
-  setSettings,
+  error,
+  onLogin,
+  onLogout,
 }: {
   settings: PublicHostSettings;
+  onOpenModels(): void;
   busy: string | null;
   manualCode: boolean;
-  setBusy(value: string | null): void;
-  setError(value: string | null): void;
-  setManualCode(value: boolean): void;
-  setSettings(value: PublicHostSettings): void;
+  error: string | null;
+  onLogin(): void;
+  onLogout(): void;
 }) {
   const { t } = useTranslation("settings");
   const subscriptionConfigured =
     settings.subscriptionProviderProfileId !== null;
-  const login = () => {
-    setBusy("login");
-    setError(null);
-    void window.zenx.settings
-      .loginSubscription()
-      .then((value) => {
-        setSettings(value);
-        setManualCode(false);
-      })
-      .catch((reason: unknown) => setError(describeError(reason)))
-      .finally(() => setBusy(null));
-  };
   return (
     <>
       <header>
@@ -1167,26 +1302,32 @@ function AccountPanel({
                   : t("settingsView.signInToConnectYourSubscription")}
             </span>
           </div>
-          {!subscriptionConfigured ? null : settings.subscription
-              .authenticated ? (
+          {!subscriptionConfigured ? (
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={onOpenModels}
+            >
+              {t("settingsView.openModelSettings")}
+            </button>
+          ) : settings.subscription.authenticated ? (
             <button
               className="danger-button"
               type="button"
-              onClick={() =>
-                void window.zenx.settings
-                  .logoutSubscription()
-                  .then(setSettings)
-                  .catch((reason: unknown) => setError(describeError(reason)))
-              }
+              disabled={busy !== null}
+              aria-busy={busy === "logout"}
+              onClick={onLogout}
             >
-              {t("settingsView.signOut")}
+              {busy === "logout"
+                ? t("settingsView.signingOut")
+                : t("settingsView.signOut")}
             </button>
           ) : (
             <button
               className="primary-button"
               type="button"
               disabled={busy !== null}
-              onClick={login}
+              onClick={onLogin}
             >
               {busy === "login"
                 ? t("settingsView.waitingForBrowser")
@@ -1194,6 +1335,11 @@ function AccountPanel({
             </button>
           )}
         </div>
+        {error ? (
+          <div className="settings-error" role="alert">
+            {error}
+          </div>
+        ) : null}
         {manualCode ? <ManualCode /> : null}
       </div>
       <SubscriptionUsageCard
@@ -1206,6 +1352,7 @@ function AccountPanel({
 }
 
 function ModelsPanel({
+  acceptHostSettings,
   busy,
   draft,
   error,
@@ -1213,17 +1360,16 @@ function ModelsPanel({
   setBusy,
   setDraft,
   setError,
-  setSettings,
   setStatus,
 }: {
+  acceptHostSettings(value: PublicHostSettings): void;
   busy: string | null;
   draft: ZenXHostProfile;
   error: string | null;
   settings: PublicHostSettings;
   setBusy(value: string | null): void;
-  setDraft(value: ZenXHostProfile): void;
+  setDraft: Dispatch<SetStateAction<ZenXHostProfile | null>>;
   setError(value: string | null): void;
-  setSettings(value: PublicHostSettings): void;
   setStatus(value: string | null): void;
 }) {
   const { t } = useTranslation("settings");
@@ -1284,6 +1430,8 @@ function ModelsPanel({
     [],
   );
   const editorNoticeId = useId();
+  const observedSettings = useRef(settings);
+  observedSettings.current = settings;
   useLayoutEffect(() => {
     if (editor !== null || !restoreEditorFocus.current) return;
     restoreEditorFocus.current = false;
@@ -1300,25 +1448,12 @@ function ModelsPanel({
   };
 
   const acceptSettings = (value: PublicHostSettings, message: string) => {
-    setSettings(value);
-    setDraft({
-      ...value.profile,
-      approvalPolicy: draft.approvalPolicy,
-      defaultModel: modelReferenceExists(
-        draft.defaultModel,
-        value.profile.providerProfiles,
-      )
-        ? draft.defaultModel
-        : value.profile.defaultModel,
-      titleModel: modelReferenceExists(
-        draft.titleModel,
-        value.profile.providerProfiles,
-      )
-        ? draft.titleModel
-        : value.profile.titleModel,
-    });
+    const baseline = observedSettings.current.profile;
+    if ((value.profile.revision ?? 0) < (baseline.revision ?? 0)) return;
+    observedSettings.current = value;
+    acceptHostSettings(value);
     setError(null);
-    setStatus(configurationSaveToast(value));
+    setStatus(configurationSaveToast(value, message));
   };
 
   const runMutation = async (
@@ -1343,9 +1478,7 @@ function ModelsPanel({
             (settings.profile.revision ?? 0) &&
           committed(authoritative)
         ) {
-          setSettings(authoritative);
-          setDraft(authoritative.profile);
-          setStatus(configurationSaveToast(authoritative));
+          acceptSettings(authoritative, message);
           setError(
             i18n.t("settings:settingsView.settingsFinalizationFailed", {
               error: originalError,
@@ -1394,9 +1527,7 @@ function ModelsPanel({
       if (reply.outcome === "committed-error") {
         try {
           const authoritative = await window.zenx.settings.get();
-          setSettings(authoritative);
-          setDraft(authoritative.profile);
-          setStatus(configurationSaveToast(authoritative));
+          acceptSettings(authoritative, message);
         } catch (reason) {
           setProviderDiagnostic(
             [reply.detail, localErrorDetail(reason)]
@@ -1550,7 +1681,7 @@ function ModelsPanel({
         <div className="settings-card-head">
           <div>
             <h3>{t("settingsView.defaultModels")}</h3>
-            <p>
+            <p className="settings-guidance">
               {t("settingsView.chooseAModelForNewConversationsAndAnotherFor")}
             </p>
           </div>
@@ -1570,7 +1701,7 @@ function ModelsPanel({
             onChange={(titleModel) => setDraft({ ...draft, titleModel })}
           />
         </div>
-        <p className="settings-note">
+        <p className="settings-note settings-guidance">
           {t("settingsView.existingConversationsKeepTheirModelYouCanChangeIt")}
         </p>
       </div>
@@ -1584,7 +1715,9 @@ function ModelsPanel({
             <h3 id="provider-list-title">
               {t("settingsView.providerProfiles")}
             </h3>
-            <p>{t("settingsView.manageEachConnectionAndItsAvailableModels")}</p>
+            <p className="settings-guidance">
+              {t("settingsView.manageEachConnectionAndItsAvailableModels")}
+            </p>
           </div>
           {editor === null ? (
             <div className="provider-section-actions">
@@ -1932,14 +2065,6 @@ function ProviderProfileCard({
         </div>
       </div>
       <div
-        className="provider-model-summary"
-        aria-label={`${provider.displayName} models`}
-      >
-        {provider.models.map((model) => (
-          <span key={model.id}>{model.id}</span>
-        ))}
-      </div>
-      <div
         className="provider-profile-roles"
         aria-label={t("settingsView.providerGlobalRoles", {
           name: provider.displayName,
@@ -1974,6 +2099,51 @@ function ProviderProfileCard({
           {t("settingsView.delete")}
         </button>
       </div>
+      <details className="provider-model-summary">
+        <summary
+          aria-label={t("settingsView.modelCountForProvider", {
+            count: provider.models.length,
+            name: provider.displayName,
+          })}
+        >
+          <span className="provider-model-count">
+            {t("settingsView.modelCount", { count: provider.models.length })}
+          </span>
+          <span className="provider-model-preview" aria-hidden="true">
+            {provider.models.slice(0, 2).map((model) => (
+              <span className="provider-model-preview-id" key={model.id}>
+                {model.id}
+              </span>
+            ))}
+            {provider.models.length > 2 ? (
+              <span className="provider-model-more">
+                {t("settingsView.moreModelCount", {
+                  count: provider.models.length - 2,
+                })}
+              </span>
+            ) : null}
+          </span>
+        </summary>
+        <div
+          className="provider-model-list"
+          role="region"
+          aria-label={t("settingsView.modelCountForProvider", {
+            count: provider.models.length,
+            name: provider.displayName,
+          })}
+          tabIndex={0}
+        >
+          {provider.models.length === 0 ? (
+            <p>{t("settingsView.noConfiguredModels")}</p>
+          ) : (
+            <ul>
+              {provider.models.map((model) => (
+                <li key={model.id}>{model.id}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </details>
     </article>
   );
 }
@@ -3712,6 +3882,42 @@ function modelReferenceFromValue(
     .find((reference) => modelReferenceValue(reference) === value);
 }
 
+// Keep the saved baseline and draft paired during an independent Host read or
+// provider mutation. Only local differences survive; provider identity and
+// revision remain Host-owned, and removed model references cannot be restored.
+function rebaseSettingsDraft(
+  latest: ZenXHostProfile | null,
+  baseline: ZenXHostProfile | null,
+  saved: ZenXHostProfile,
+  editedDuringSave: ReadonlySet<keyof ZenXHostProfile> | null = null,
+): ZenXHostProfile {
+  if (latest === null || baseline === null) return saved;
+  const edits = Object.fromEntries(
+    (Object.keys(latest) as Array<keyof ZenXHostProfile>)
+      .filter(
+        (key) =>
+          editedDuringSave?.has(key) ||
+          JSON.stringify(latest[key]) !== JSON.stringify(baseline[key]),
+      )
+      .map((key) => [key, latest[key]]),
+  );
+  const next = { ...saved, ...edits };
+  return {
+    ...next,
+    revision: saved.revision,
+    providerProfiles: saved.providerProfiles,
+    defaultModel: modelReferenceExists(
+      next.defaultModel,
+      saved.providerProfiles,
+    )
+      ? next.defaultModel
+      : saved.defaultModel,
+    titleModel: modelReferenceExists(next.titleModel, saved.providerProfiles)
+      ? next.titleModel
+      : saved.titleModel,
+  };
+}
+
 function modelReferenceExists(
   reference: ZenXModelReference,
   profiles: readonly ZenXProviderProfile[],
@@ -3735,6 +3941,16 @@ function isRunnableModel(model: ZenXModelCatalogEntry): boolean {
     model.inputModalities.includes("text")
   );
 }
+
+const appearanceModeLabels = {
+  system: "settingsView.appearanceModeSystem",
+  light: "settingsView.appearanceModeLight",
+  dark: "settingsView.appearanceModeDark",
+} as const;
+const appearanceContrastLabels = {
+  standard: "settingsView.appearanceContrastStandard",
+  high: "settingsView.appearanceContrastHigh",
+} as const;
 
 function AppearancePanel() {
   const { t } = useTranslation("settings");
@@ -3779,7 +3995,18 @@ function AppearancePanel() {
                 checked={appearance.mode === option}
                 onChange={() => updateAppearance({ mode: option })}
               />
-              <span>{option[0]?.toUpperCase() + option.slice(1)}</span>
+              <span>
+                {t(appearanceModeLabels[option])}
+                <span className="appearance-choice-marker" aria-hidden="true">
+                  {appearance.mode === option ? (
+                    <Icon
+                      name="check"
+                      size={14}
+                      className="appearance-choice-check"
+                    />
+                  ) : null}
+                </span>
+              </span>
             </label>
           ))}
         </fieldset>
@@ -3834,6 +4061,13 @@ function AppearancePanel() {
                     <strong>{appearanceLabel(option)}</strong>
                     <small>{t(appearanceAccentIntent[option])}</small>
                   </span>
+                  {appearance.accent === option ? (
+                    <Icon
+                      name="check"
+                      size={14}
+                      className="appearance-choice-check"
+                    />
+                  ) : null}
                 </span>
               </label>
             ))}
@@ -3852,7 +4086,21 @@ function AppearancePanel() {
                     checked={appearance.contrast === option}
                     onChange={() => updateAppearance({ contrast: option })}
                   />
-                  <span>{appearanceLabel(option)}</span>
+                  <span>
+                    {t(appearanceContrastLabels[option])}
+                    <span
+                      className="appearance-choice-marker"
+                      aria-hidden="true"
+                    >
+                      {appearance.contrast === option ? (
+                        <Icon
+                          name="check"
+                          size={14}
+                          className="appearance-choice-check"
+                        />
+                      ) : null}
+                    </span>
+                  </span>
                 </label>
               ))}
             </div>
@@ -3884,10 +4132,12 @@ function AppearancePanel() {
 function GeneralPanel({
   draft,
   setDraft,
+  onMaximumValidityChange,
   onImportSession,
 }: {
   draft: ZenXHostProfile;
   setDraft(value: ZenXHostProfile): void;
+  onMaximumValidityChange(invalid: boolean): void;
   onImportSession?(): void;
 }) {
   const { t } = useTranslation("settings");
@@ -3895,13 +4145,22 @@ function GeneralPanel({
     draft.maxToolRounds?.toString() ?? "",
   );
   const [maximumError, setMaximumError] = useState<string | null>(null);
+  const maximumBaseline = useRef(draft.maxToolRounds);
+  const maximumInputInvalid = useRef(false);
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
   const [diagnosticsDetail, setDiagnosticsDetail] = useState<
     string | undefined
   >();
   useEffect(() => {
+    // Activity reconnects effects when a section reopens. That is not a new
+    // saved value and must not erase invalid input still awaiting correction.
+    if (maximumBaseline.current === draft.maxToolRounds) return;
+    maximumBaseline.current = draft.maxToolRounds;
+    if (maximumInputInvalid.current) return;
     setMaximumInput(draft.maxToolRounds?.toString() ?? "");
-  }, [draft.maxToolRounds]);
+    setMaximumError(null);
+    onMaximumValidityChange(false);
+  }, [draft.maxToolRounds, onMaximumValidityChange]);
   return (
     <>
       <header>
@@ -3962,53 +4221,79 @@ function GeneralPanel({
             </option>
             <option value="hard">{t("settingsView.interruptAndSend")}</option>
           </Select>
-          <small id="composer-send-help" className="settings-note">
-            {t("settingsView.enterAndTheSendButtonUseThisChoiceCmd")}
+          <small id="composer-send-help" className="settings-guidance">
+            {t("settingsView.sendModeGuidance")}
           </small>
         </label>
+        <details className="settings-explanation settings-guidance settings-send-shortcuts">
+          <summary>{t("settingsView.keyboardShortcuts")}</summary>
+          <dl>
+            <div>
+              <dt>Cmd/Ctrl+Enter</dt>
+              <dd>
+                {draft.composerSendMode === "batch" ||
+                draft.composerSendMode === "queue"
+                  ? t("settingsView.shortcutGuideCurrentReply")
+                  : t("settingsView.shortcutQueueTogether")}
+              </dd>
+            </div>
+            <div>
+              <dt>Shift+Enter</dt>
+              <dd>{t("settingsView.shortcutNewLine")}</dd>
+            </div>
+          </dl>
+        </details>
       </section>
-      <div className="page-card settings-card">
+      <section
+        className="page-card settings-card settings-foreground-control"
+        aria-labelledby="foreground-control-title"
+      >
         <div className="settings-card-head">
           <div>
-            <h3>{t("settingsView.foregroundComputerControl")}</h3>
-            <p>
+            <h3 id="foreground-control-title">
+              {t("settingsView.foregroundComputerControl")}
+            </h3>
+            <p className="settings-guidance">
               {t("settingsView.highImpactAccessToTheDesktopYouAreActively")}
             </p>
           </div>
           <span className="status-muted">
             {draft.computerForegroundControlEnabled === true
-              ? t("settingsView.optedIn")
-              : t("settingsView.blocked")}
+              ? t("settingsView.foregroundControlOn")
+              : t("settingsView.foregroundControlOff")}
           </span>
         </div>
-        <div className="settings-row">
-          <div>
-            <strong>{t("settingsView.allowForegroundTakeover")}</strong>
-            <span>
-              {t("settingsView.thisLetsZenxAgentsMoveThePointerTypeKeys")}
-            </span>
+        <div className="settings-foreground-control-body">
+          <div className="settings-row">
+            <div>
+              <strong>{t("settingsView.allowForegroundTakeover")}</strong>
+            </div>
+            <button
+              className="plugin-switch"
+              type="button"
+              role="switch"
+              aria-label={t("settingsView.allowForegroundComputerControl")}
+              aria-describedby="foreground-control-risk foreground-control-help"
+              aria-checked={draft.computerForegroundControlEnabled === true}
+              onClick={() =>
+                setDraft({
+                  ...draft,
+                  computerForegroundControlEnabled:
+                    draft.computerForegroundControlEnabled !== true,
+                })
+              }
+            />
           </div>
-          <button
-            className="plugin-switch"
-            type="button"
-            role="switch"
-            aria-label={t("settingsView.allowForegroundComputerControl")}
-            aria-checked={draft.computerForegroundControlEnabled === true}
-            onClick={() =>
-              setDraft({
-                ...draft,
-                computerForegroundControlEnabled:
-                  draft.computerForegroundControlEnabled !== true,
-              })
-            }
-          />
+          <p id="foreground-control-risk" className="settings-guidance">
+            {t("settingsView.thisLetsZenxAgentsMoveThePointerTypeKeys")}
+          </p>
+          <p id="foreground-control-help" className="settings-guidance">
+            {t(
+              "settingsView.offByDefaultBrowserAutomationAndBackgroundSafeComputer",
+            )}
+          </p>
         </div>
-        <p className="settings-note">
-          {t(
-            "settingsView.offByDefaultBrowserAutomationAndBackgroundSafeComputer",
-          )}
-        </p>
-      </div>
+      </section>
       <div className="page-card settings-card">
         <h3>{t("settingsView.executionAndPermissions")}</h3>
         <div className="form-grid">
@@ -4082,27 +4367,31 @@ function GeneralPanel({
                   : "max-tool-rounds-help max-tool-rounds-error"
               }
               aria-invalid={maximumError === null ? undefined : true}
-              onChange={(event) => {
+              // Native bad input and a cleared number can both have value ''.
+              // Observe every input event, including validity-only changes.
+              onInput={(event) => {
                 const value = event.currentTarget.value;
                 setMaximumInput(value);
+                const invalid =
+                  event.currentTarget.validity.badInput ||
+                  (value !== "" &&
+                    (!/^\d+$/u.test(value) ||
+                      !Number.isSafeInteger(Number(value)) ||
+                      Number(value) < 1));
+                maximumInputInvalid.current = invalid;
+                onMaximumValidityChange(invalid);
+                if (invalid) return;
                 if (value === "") {
                   setMaximumError(null);
                   setDraft({ ...draft, maxToolRounds: undefined });
                   return;
                 }
-                if (!/^\d+$/u.test(value)) return;
                 const maximum = Number(value);
-                if (!Number.isSafeInteger(maximum) || maximum < 1) return;
                 setMaximumError(null);
                 setDraft({ ...draft, maxToolRounds: maximum });
               }}
               onBlur={() => {
-                if (
-                  maximumInput !== "" &&
-                  (!/^\d+$/u.test(maximumInput) ||
-                    !Number.isSafeInteger(Number(maximumInput)) ||
-                    Number(maximumInput) < 1)
-                ) {
+                if (maximumInputInvalid.current) {
                   setMaximumError(t("settingsView.enterAWholeNumberOf1OrMore"));
                 }
               }}
@@ -4201,7 +4490,16 @@ function PresetFieldset({
               onChange={() => onChange(option)}
             />
             <span>
-              <strong>{appearanceLabel(option)}</strong>
+              <span className="appearance-choice-title">
+                <strong>{appearanceLabel(option)}</strong>
+                {value === option ? (
+                  <Icon
+                    name="check"
+                    size={14}
+                    className="appearance-choice-check"
+                  />
+                ) : null}
+              </span>
               <small>{t(appearancePresetIntent[option])}</small>
             </span>
           </label>
@@ -4412,10 +4710,13 @@ export function configurationSaveMessage(value: PublicHostSettings): string {
 }
 
 // Actionable configuration states already have persistent notices and controls.
-function configurationSaveToast(value: PublicHostSettings): string | null {
+function configurationSaveToast(
+  value: PublicHostSettings,
+  message = i18n.t("settings:settingsView.settingsSaved"),
+): string | null {
   if (value.configuration && value.configuration.status !== "applied")
     return null;
-  return i18n.t("settings:settingsView.settingsSaved");
+  return message;
 }
 
 function LocalSettingsDiagnostic({ detail }: { detail?: string }) {

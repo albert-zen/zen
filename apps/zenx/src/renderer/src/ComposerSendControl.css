@@ -14,8 +14,14 @@
   filter: brightness(0.96);
 }
 .ui-popover.composer-send-popover {
-  width: 324px;
+  width: 380px;
   max-width: calc(100vw - 24px);
+  max-height: min(
+    var(--radix-popover-content-available-height, calc(100dvh - 24px)),
+    calc(100dvh - 24px)
+  );
+  display: flex;
+  flex-direction: column;
   padding: 0;
   overflow: visible;
   border-radius: var(--radius-popover);
@@ -34,14 +40,16 @@
   bottom: 100%;
 }
 .composer-send-summary {
-  padding: 13px 14px 11px;
+  flex: 0 0 auto;
+  padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--color-border-subtle);
 }
 .composer-send-heading {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-1) var(--space-3);
 }
 .composer-send-heading strong {
   color: var(--color-text-primary);
@@ -51,7 +59,7 @@
 .composer-send-heading > span {
   flex: 0 0 auto;
   color: var(--color-text-muted);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 .composer-send-description {
   display: block;
@@ -61,17 +69,16 @@
   line-height: 1.5;
 }
 .composer-send-body {
-  max-height: max(
-    100px,
-    calc(var(--radix-popover-content-available-height, 500px) - 96px)
-  );
+  min-height: 0;
+  flex: 0 1 auto;
   overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
-  padding: 5px;
+  padding: var(--space-1);
 }
 .composer-send-options {
   display: grid;
-  gap: 2px;
+  gap: var(--space-1);
 }
 .composer-send-options button {
   width: 100%;
@@ -79,7 +86,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 9px;
+  padding: var(--space-3);
   border: 0;
   border-radius: 7px;
   background: transparent;
@@ -98,13 +105,13 @@
   gap: 3px;
 }
 .composer-send-options strong {
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-label);
   font-weight: 550;
 }
 .composer-send-options small {
-  color: var(--color-text-muted);
-  font-size: 11px;
-  line-height: 1.4;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+  line-height: 1.5;
 }
 .composer-send-options button[data-primary="true"] {
   background: var(--color-accent-soft);
@@ -126,7 +133,7 @@
   border-radius: 4px;
   color: var(--color-text-secondary);
   font: inherit;
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   white-space: nowrap;
 }
 .composer-send-options .composer-send-stop {
@@ -141,17 +148,17 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 6px 10px;
-  margin-top: 5px;
-  padding: 11px 9px 7px;
+  gap: var(--space-2) var(--space-3);
+  margin-top: var(--space-1);
+  padding: var(--space-3);
   border-top: 1px solid var(--color-border-subtle);
   color: var(--color-text-secondary);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 .composer-send-default .ui-select {
-  min-height: 30px;
+  min-height: 44px;
   max-width: 168px;
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 .composer-send-default > p {
   grid-column: 1 / -1;
@@ -172,6 +179,17 @@
   .composer-send-default .ui-select {
     min-height: 44px;
     max-width: none;
+  }
+}
+@media (max-width: 480px) {
+  .composer-send-options button {
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr);
+    gap: var(--space-2) var(--space-3);
+  }
+  .composer-send-options kbd {
+    grid-column: 2;
+    justify-self: start;
   }
 }
 .composer-send-summary {
@@ -201,7 +219,7 @@
   border: 1px solid var(--color-border-subtle);
   border-radius: 4px;
   font: inherit;
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .composer-send-summary[data-action="stop"] {

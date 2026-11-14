@@ -19,6 +19,34 @@ await withPreviewBrowser(
         if (await evaluate(expression)) return;
         await delay(25);
       }
+      const failure = {
+        expression,
+        cases: evidence.cases,
+        observed: null,
+        diagnosticErrors: [],
+      };
+      try {
+        failure.observed = await evaluate(`(() => {
+          const panel = document.querySelector('.auxiliary-panel');
+          const tab = document.querySelector('[data-tab-id="primary-conversation"] [role="tab"]');
+          const toolbar = document.querySelector('.information-toolbar');
+          return { platform: new URL(location.href).searchParams.get('platform'),
+            panel: panel ? { open: panel.dataset.open, expanded: panel.dataset.expanded, primaryActive: panel.dataset.primaryActive } : null,
+            primaryTab: tab ? { selected: tab.getAttribute('aria-selected'), focused: tab === document.activeElement } : null,
+            toolbar: toolbar ? { hidden: toolbar.hidden } : null };
+        })()`);
+      } catch (error) {
+        failure.diagnosticErrors.push(String(error));
+      }
+      try {
+        await screenshot("information-entry-failure.png");
+      } catch (error) {
+        failure.diagnosticErrors.push(String(error));
+      }
+      await writeFile(
+        path.join(directory, "information-entry-failure.json"),
+        JSON.stringify(failure, null, 2) + "\n",
+      );
       throw Error(`Timed out: ${expression}`);
     };
     const click = async (selector) => {

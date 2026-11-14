@@ -19,6 +19,16 @@ import {
   parseInformationWidget,
 } from "../src/information-layout.js";
 
+async function waitFor(condition: () => unknown, description: string) {
+  const deadline = Date.now() + 2000;
+  while (!condition() && Date.now() < deadline) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+  }
+  assert.ok(condition(), `Timed out waiting for ${description}`);
+}
+
 async function fixture(kind: "thread" | "room" = "thread") {
   await i18n.changeLanguage("en");
   const dom = new JSDOM('<div id="root"></div>', {
@@ -143,6 +153,7 @@ async function fixture(kind: "thread" | "room" = "thread") {
     { id: "asking-attention" },
     "Unanswered question remains available",
   );
+  let threadId = "member";
   const render = async (extra = 0) =>
     act(async () => {
       root.render(
@@ -152,9 +163,7 @@ async function fixture(kind: "thread" | "room" = "thread") {
           React.createElement("p", null, `Synthetic transcript delta ${extra}`),
           React.createElement(EditableInformationPanel, {
             owner:
-              kind === "thread"
-                ? { kind, threadId: "member" }
-                : { kind, roomId: "room" },
+              kind === "thread" ? { kind, threadId } : { kind, roomId: "room" },
             threads,
             snapshot,
             registry,
@@ -166,9 +175,23 @@ async function fixture(kind: "thread" | "room" = "thread") {
       );
     });
   await render();
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 30));
-  });
+  // The native layout reads the filesystem; a fixed sleep can finish before
+  // its receipt mounts any widgets when other test files are running.
+  await waitFor(
+    () =>
+      document.querySelector(
+        `.editable-information-panel[data-owner="${kind}:${scope.id}"] .information-widget`,
+      ),
+    "initial native information layout",
+  );
+  const waitForIdle = () =>
+    waitFor(
+      () =>
+        !document.querySelector(
+          '.editable-information-panel[data-busy="true"]',
+        ),
+      "native information edit to settle",
+    );
   const click = async (text: string, container: ParentNode = document) => {
     const button = [
       ...container.querySelectorAll<HTMLButtonElement>("button"),
@@ -229,6 +252,10 @@ async function fixture(kind: "thread" | "room" = "thread") {
         await new Promise((resolve) => setTimeout(resolve, 30));
       }),
     render,
+    switchThread: async (id: string) => {
+      threadId = id;
+      await render();
+    },
     hide: () =>
       act(async () =>
         root.render(React.createElement("div", null, "Panel closed")),
@@ -254,6 +281,7 @@ async function fixture(kind: "thread" | "room" = "thread") {
       };
     },
     click,
+    waitForIdle,
     row,
     change,
     fail: (value: typeof fail) => {
@@ -375,6 +403,13 @@ test("conflicts retain exact edit and require explicit reapply; unknown writes a
     f.fail("unknown");
     await f.click("Hide", f.row("shell"));
     assert.match(document.body.textContent!, /write outcome is unknown/);
+    await f.click("Done");
+    assert.equal(
+      emptyExplanation(),
+      null,
+      "an unknown edit is not an empty state",
+    );
+    assert.match(document.body.textContent!, /write outcome is unknown/);
     const reapply = [
       ...document.querySelectorAll<HTMLButtonElement>("button"),
     ].find((button) => button.textContent === "Reapply edit")!;
@@ -464,8 +499,8 @@ test("retained conflict and in-flight edits survive closing/reopening without an
     assert.equal(reapply.disabled, true);
     await act(async () => {
       release();
-      await new Promise((resolve) => setTimeout(resolve, 50));
     });
+    await f.waitForIdle();
     assert.doesNotMatch(document.body.textContent!, /Retained edit/);
     assert.equal(
       f.updates.length,
@@ -675,6 +710,92 @@ test("saved placeholder-only layouts are quiet without migration and remain remo
     );
     await f.click("Done");
     assert.doesNotMatch(document.body.textContent!, /no admitted/);
+  } finally {
+    await f.close();
+  }
+});
+
+const emptyExplanation = () => document.querySelector(".information-empty");
+const informationHeading = () =>
+  document.querySelector('[role="heading"][aria-level="2"]');
+
+test("information stays free of a redundant heading and retains accessible customization and empty guidance", async () => {
+  const f = await fixture();
+  try {
+    assert.equal(informationHeading(), null);
+    assert.ok(document.querySelector(".information-customize[aria-label]"));
+    assert.equal(emptyExplanation(), null);
+    f.setHasTriggers(false);
+    await f.focus();
+    assert.match(emptyExplanation()?.textContent ?? "", /Use Customize/);
+    assert.ok(document.querySelector("#asking-attention"));
+    assert.ok(f.row("triggers"), "empty providers remain mounted");
+    await f.click("Customize information");
+    assert.equal(emptyExplanation(), null, "editing keeps its own diagnostics");
+    assert.equal(informationHeading(), null);
+    assert.ok(document.querySelector(".information-customize[aria-label]"));
+    await f.click("Done");
+    assert.ok(emptyExplanation());
+    f.setHasTriggers(true);
+    await f.focus();
+    assert.equal(emptyExplanation(), null, "content arrival removes guidance");
+    await f.click("Hide · Thread triggers");
+    assert.ok(emptyExplanation(), "explicitly hidden content offers Customize");
+    assert.equal(f.updates.length, 1);
+    await act(async () => {
+      await i18n.changeLanguage("zh");
+    });
+    assert.equal(informationHeading(), null);
+    assert.match(
+      emptyExplanation()?.textContent ?? "",
+      /通过管理显示或添加组件/,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("empty guidance waits for the current owner's layout and never replaces read errors", async () => {
+  const f = await fixture();
+  try {
+    f.setHasTriggers(false);
+    await f.focus();
+    assert.ok(emptyExplanation());
+    const release = f.holdRead();
+    await f.switchThread("next-owner");
+    assert.equal(informationHeading(), null);
+    assert.ok(document.querySelector(".information-customize[aria-label]"));
+    assert.equal(
+      emptyExplanation(),
+      null,
+      "old owner's layout is not empty-state evidence",
+    );
+    await act(async () => {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+    assert.ok(emptyExplanation());
+    const originalRead = f.api.read;
+    f.api.read = async () => {
+      throw Error("Synthetic layout read failed");
+    };
+    await f.focus();
+    assert.equal(emptyExplanation(), null);
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /Synthetic layout read failed/,
+    );
+    await f.hide();
+    const releaseInitial = f.holdRead();
+    f.api.read = originalRead;
+    await f.render();
+    assert.equal(emptyExplanation(), null);
+    assert.equal(informationHeading(), null);
+    assert.ok(document.querySelector(".information-customize[aria-label]"));
+    await act(async () => {
+      releaseInitial();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
   } finally {
     await f.close();
   }

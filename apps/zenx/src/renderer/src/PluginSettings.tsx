@@ -598,7 +598,7 @@ function MarketplaceInventoryCard({
           "available" ? (
           <button
             ref={firstPartyAccess === null ? undefined : activationButtonRef}
-            className="primary-button"
+            className="secondary-button"
             type="button"
             disabled={busy !== null}
             aria-expanded={
@@ -631,7 +631,7 @@ function MarketplaceInventoryCard({
         ) : entry.lifecycle === "uninstalled" && pluginId !== undefined ? (
           <button
             ref={firstPartyAccess === null ? undefined : activationButtonRef}
-            className="primary-button"
+            className="secondary-button"
             type="button"
             disabled={busy !== null || !available}
             aria-expanded={
@@ -712,7 +712,7 @@ function MarketplaceInventoryCard({
             {entry.source === "catalog" &&
             plugin?.version !== selectedVersion ? (
               <button
-                className="primary-button"
+                className="secondary-button"
                 type="button"
                 disabled={busy !== null}
                 onClick={() => void installCatalogVersion()}
