@@ -36,7 +36,12 @@ const directory = path.resolve(process.argv[2] ?? ".main-ui-preview");
 const captureProfile = process.argv[3] ?? "fine";
 const desktopQueue = captureProfile === "desktop-queue";
 const desktopReading = captureProfile === "desktop-reading";
-const desktopOnly = desktopQueue || desktopReading;
+const desktopRoom = captureProfile === "desktop-room";
+// Older profiles must not load this separately scoped receipt/capture helper.
+const roomCapture = desktopRoom
+  ? await import("./room-file-owner-main-ui-preview.mjs")
+  : null;
+const desktopOnly = desktopQueue || desktopReading || desktopRoom;
 const pointer = desktopOnly ? "fine" : captureProfile;
 assert(["fine", "coarse"].includes(pointer), "Pointer must be fine or coarse");
 const coarse = pointer === "coarse";
@@ -57,6 +62,13 @@ assert.equal(
   source.commit,
   "Rebuild after source commit changes",
 );
+if (desktopRoom || source.scenes?.room) {
+  assert(
+    desktopRoom,
+    "A Room bundle requires the desktop-room profile before loading",
+  );
+  roomCapture.assertRoomReceipt(source, process.env.ZENX_ROOM_EXPECTED_HEAD);
+}
 for (const [file, expected] of Object.entries(source.sources))
   assert.equal(
     hash(await readFile(path.join(root, file))),
@@ -65,6 +77,30 @@ for (const [file, expected] of Object.entries(source.sources))
   );
 if (coarse)
   assert(source.scenes.pending, "Coarse capture requires the pending bundle");
+if (desktopRoom) {
+  assert.equal(
+    source.commit,
+    process.env.ZENX_ROOM_EXPECTED_HEAD,
+    "Room capture is bound to the fixed PR head",
+  );
+  assert.equal(
+    execFileSync("git", ["rev-parse", "HEAD^{tree}"], {
+      cwd: root,
+      encoding: "utf8",
+    }).trim(),
+    source.tree,
+  );
+  assert.equal(
+    execFileSync("git", ["status", "--porcelain"], {
+      cwd: root,
+      encoding: "utf8",
+    }).trim(),
+    "",
+    "Room capture requires a clean checkout",
+  );
+  assert.equal(source.clean, true);
+  assert.deepEqual(Object.keys(source.scenes), ["room"]);
+}
 const files = new Map();
 for (const scene of Object.values(source.scenes)) {
   const bytes = await readFile(path.join(directory, scene.html));
@@ -83,7 +119,8 @@ if (source.scenes.information) {
   );
   files.set("/plugin-frame.html", bytes);
 }
-if (desktopReading) files.set("/font-probe.html", Buffer.from(fontProbeHTML));
+if (desktopReading || desktopRoom)
+  files.set("/font-probe.html", Buffer.from(fontProbeHTML));
 const evidence = {
   schemaVersion: 1,
   source,
@@ -133,7 +170,7 @@ try {
     evidence.cjkFonts.length,
     "CJK fonts must be available; do not publish tofu screenshots",
   );
-  if (desktopReading) {
+  if (desktopReading || desktopRoom) {
     assert(
       process.env.ZENX_PREVIEW_FONT_RECEIPT,
       "Reading preview requires a pinned font receipt",
@@ -289,7 +326,7 @@ try {
     return false;
   };
   lifecycle.captureStarted();
-  if (desktopReading) {
+  if (desktopReading || desktopRoom) {
     await send("Emulation.setDeviceMetricsOverride", {
       width: 1280,
       height: 900,
@@ -485,9 +522,13 @@ try {
         },
       ]
     : fineCases;
-  for (const options of desktopOnly
-    ? cases.filter((c) => c.width === 1280 && c.height === 900)
-    : cases) {
+  for (const options of desktopRoom
+    ? fineCases
+        .filter((c) => c.width === 1280 && c.height === 900)
+        .map((c) => ({ ...c, width: 1440, lang: "zh-CN" }))
+    : desktopOnly
+      ? cases.filter((c) => c.width === 1280 && c.height === 900)
+      : cases) {
     await send("Emulation.setDeviceMetricsOverride", {
       width: options.width,
       height: options.height,
@@ -534,6 +575,37 @@ try {
         true,
         `Actual ${pointer} pointer and hover media capabilities`,
       );
+      if (scene === "room") {
+        assert(
+          desktopRoom,
+          "Room evidence requires its distinct desktop-only profile",
+        );
+        await roomCapture.captureRoomFileOwners({
+          send,
+          evaluate,
+          wait,
+          click,
+          capture,
+          evidence,
+          options,
+          url,
+          diagnostic: async (name) => {
+            const result = await send("Page.captureScreenshot", {
+              format: "png",
+              captureBeyondViewport: false,
+            });
+            const bytes = Buffer.from(result.data, "base64");
+            const filename = `${name}.png`;
+            await writeFile(path.join(directory, filename), bytes);
+            evidence.diagnostics ??= {};
+            evidence.diagnostics[filename] = {
+              sha256: hash(bytes),
+              acceptance: false,
+            };
+          },
+        });
+        continue;
+      }
       if (scene === "reading") {
         assert(
           desktopReading,
