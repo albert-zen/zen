@@ -58,7 +58,10 @@ function ConversationRestingLabel({
     const candidateProbe = element.querySelector<HTMLElement>(
       ".workspace-tab-candidate-probe",
     );
-    const query = window.matchMedia("(min-width: 721px)");
+    const query = window.matchMedia?.("(min-width: 721px)");
+    // Without a real viewport and resize observation, leave the full title in
+    // place. The ordinary title still uses the established ellipsis and reveal.
+    if (!query || typeof ResizeObserver !== "function") return;
     let disposed = false;
     const measure = () => {
       if (disposed) return;

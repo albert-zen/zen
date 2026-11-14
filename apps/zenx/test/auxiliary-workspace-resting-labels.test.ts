@@ -57,8 +57,9 @@ test("duplicates, short/unrelated names and narrow UI retain originals", () => {
   assert.deepEqual(run(values, false), values);
 });
 test("non-conversations and nonoverflowing conversations stay unchanged", () => {
+  const file = { id: "file:0", title: prefix + "Alpha" };
   const input = [
-    { id: "file:0", title: prefix + "Alpha" },
+    file,
     { id: "thread:0", title: prefix + "Alpha" },
     { id: "thread:1", title: prefix + "Beta" },
   ];
@@ -67,8 +68,8 @@ test("non-conversations and nonoverflowing conversations stay unchanged", () => 
     input.map((x) => x.title),
   );
   assert.equal(
-    labels(input, new Set(input.map((x) => x.id))).get("file:0"),
-    input[0].title,
+    labels(input, new Set(input.map((x) => x.id))).get(file.id),
+    file.title,
   );
 });
 test("rename recomputes without retaining stale labels", () => {
