@@ -15,6 +15,7 @@ import React, {
   useEffect,
   useContext,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -36,6 +37,70 @@ import { WorkspaceFilesPanel } from "./workspace-files-panel.js";
 import { WorkspaceFilePicker } from "./workspace-file-picker.js";
 import { Icon, type IconName } from "./icons.js";
 import { messageFilePath } from "./message-file-path.js";
+
+import { restingConversationLabels } from "./workspace-resting-labels.js";
+
+function ConversationRestingLabel({
+  title,
+  candidate,
+}: {
+  title: string;
+  candidate: string;
+}) {
+  const wrapper = useRef<HTMLSpanElement>(null);
+  const [abbreviated, setAbbreviated] = useState(false);
+  useLayoutEffect(() => {
+    const element = wrapper.current;
+    if (!element) return;
+    const probe = element.querySelector<HTMLElement>(
+      ".workspace-tab-title-probe",
+    );
+    const candidateProbe = element.querySelector<HTMLElement>(
+      ".workspace-tab-candidate-probe",
+    );
+    const query = window.matchMedia("(min-width: 721px)");
+    let disposed = false;
+    const measure = () => {
+      if (disposed) return;
+      setAbbreviated(
+        Boolean(
+          query.matches &&
+          candidate !== title &&
+          probe &&
+          candidateProbe &&
+          probe.getBoundingClientRect().width > element.clientWidth + 1 &&
+          candidateProbe.getBoundingClientRect().width <= element.clientWidth,
+        ),
+      );
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    if (probe) observer.observe(probe);
+    if (candidateProbe) observer.observe(candidateProbe);
+    query.addEventListener("change", measure);
+    document.fonts?.ready.then(measure);
+    document.fonts?.addEventListener("loadingdone", measure);
+    return () => {
+      disposed = true;
+      document.fonts?.removeEventListener("loadingdone", measure);
+      observer.disconnect();
+      query.removeEventListener("change", measure);
+    };
+  }, [title, candidate]);
+  return (
+    <span className="workspace-tab-label-box" ref={wrapper} aria-hidden="true">
+      <span className="workspace-tab-title-probe">{title}</span>
+      <span className="workspace-tab-candidate-probe">{candidate}</span>
+      <span
+        className="workspace-tab-title"
+        data-abbreviated={abbreviated || undefined}
+      >
+        {abbreviated ? candidate : title}
+      </span>
+    </span>
+  );
+}
 
 function panelIcon(pluginId: string): IconName {
   if (pluginId === "zenx-subagents") return "users";
@@ -121,7 +186,8 @@ function useConversationTitleReveal() {
       if (
         !anchor.isConnected ||
         !label ||
-        label.scrollWidth <= label.clientWidth + 1
+        (label.dataset.abbreviated !== "true" &&
+          label.scrollWidth <= label.clientWidth + 1)
       )
         return;
       setPreview({ anchor, title });
@@ -183,8 +249,7 @@ function useConversationTitleReveal() {
       preview &&
       (!preview.anchor.isConnected ||
         preview.anchor.getBoundingClientRect().width === 0 ||
-        preview.anchor.querySelector(".workspace-tab-title")?.textContent !==
-          preview.title)
+        preview.anchor.dataset.canonicalTitle !== preview.title)
     )
       dismiss();
   });
@@ -1571,6 +1636,14 @@ export function AuxiliaryPanel({
     restoreToggleFocus.current = true;
     onOpenChange(false);
   };
+  const restingLabels = useMemo(
+    () =>
+      restingConversationLabels(
+        displayTabs,
+        new Set(displayTabs.map((item) => item.id)),
+      ),
+    [displayTabs],
+  );
   return (
     <aside
       ref={panel}
@@ -1759,10 +1832,11 @@ export function AuxiliaryPanel({
                       ? i18n.t("panels:reorderWorkspaceTabHint")
                       : undefined
                   }
+                  data-canonical-title={tab.title}
                   aria-label={
                     tab.browserActivityLabel
                       ? `${tab.title} — ${tab.browserActivityLabel}`
-                      : undefined
+                      : tab.title
                   }
                   {...(tab.id.startsWith("thread:")
                     ? titleReveal.handlers(tab.title)
@@ -1826,7 +1900,14 @@ export function AuxiliaryPanel({
                   ) : (
                     <Icon name={tab.icon} />
                   )}
-                  <span className="workspace-tab-title">{tab.title}</span>
+                  {tab.id.startsWith("thread:") ? (
+                    <ConversationRestingLabel
+                      title={tab.title}
+                      candidate={restingLabels.get(tab.id) ?? tab.title}
+                    />
+                  ) : (
+                    <span className="workspace-tab-title">{tab.title}</span>
+                  )}
                   {tab.path &&
                   threadId !== undefined &&
                   entries.has(

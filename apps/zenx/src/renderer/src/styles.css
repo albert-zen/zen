@@ -13582,3 +13582,29 @@ button:disabled {
     color: var(--color-text-secondary);
   }
 }
+
+.workspace-content-tab .workspace-tab-label-box {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  max-width: 150px;
+}
+.workspace-tab-title-probe {
+  display: inline-block;
+  visibility: hidden;
+  pointer-events: none;
+}
+.workspace-content-tab .workspace-tab-label-box > .workspace-tab-title {
+  position: absolute;
+  inset: 0;
+  max-width: none;
+}
+
+.workspace-tab-candidate-probe {
+  position: absolute;
+  display: inline-block;
+  width: max-content;
+  visibility: hidden;
+  pointer-events: none;
+}

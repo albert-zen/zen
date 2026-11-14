@@ -87,8 +87,44 @@ await withPreviewBrowser(
       );
     const waitNoReveal = () =>
       wait(`!document.querySelector('${revealSelector}')`);
-    // Evidence baseline, not a claim that clipped titles are visually distinguishable.
-    // Keep this separate so the existing distinct-title and many-tab checks stay intact.
+    // Assert fit of the actual resting labels, while checking canonical identity separately.
+    const restingLabels = () =>
+      evaluate(`[...document.querySelectorAll('[role=tablist] [role=tab]')].map(tab => {
+      const label = tab.querySelector('.workspace-tab-title');
+      const rect = label.getBoundingClientRect();
+      return { id: tab.id, canonical: tab.getAttribute('aria-label'),
+        compact: label.dataset.abbreviated === 'true', label: label.textContent,
+        visible: rect.width > 0 && rect.height > 0 && getComputedStyle(label).visibility === 'visible',
+        fits: label.scrollWidth <= label.clientWidth };
+    })`);
+    const waitForRestingLabels = (count) =>
+      wait(
+        `document.querySelectorAll('[role=tablist] [role=tab] .workspace-tab-title[data-abbreviated=true]').length === ${count}`,
+      );
+    const assertRestingLabels = (labels, names, endings) => {
+      assert.deepEqual(
+        labels.map((tab) => tab.canonical),
+        names,
+        "ARIA keeps each canonical title",
+      );
+      assert.equal(
+        new Set(labels.map((tab) => tab.label.normalize("NFC"))).size,
+        names.length,
+        "resting labels distinguish every conversation in the scenario",
+      );
+      labels.forEach((tab, index) => {
+        assert.ok(
+          tab.compact && tab.visible && tab.fits,
+          "compact label must render untruncated: " + tab.id,
+        );
+        assert.ok(
+          tab.label.startsWith("…") &&
+            tab.label.endsWith(endings[index]) &&
+            names[index].endsWith(tab.label.slice(1).trimStart()),
+          "compact label shows a truthful distinguishing suffix: " + tab.id,
+        );
+      });
+    };
     for (const language of ["en", "zh"]) {
       const names =
         language === "en"
@@ -137,18 +173,18 @@ await withPreviewBrowser(
               })
             };
           })()`);
+          await waitForRestingLabels(names.length);
           const before = await readNames();
+          const compactLabels = await restingLabels();
+          const endings =
+            language === "en" ? ["Alpha", "Beta"] : ["甲组", "乙组"];
+          assertRestingLabels(compactLabels, names, endings);
           assert.deepEqual(
             before.sourceConversations.map((entry) => entry.title),
             names,
           );
           assert.equal(before.renderedThreadId, "synthetic-lookalike-1");
           assert.equal(before.conversationHeading, names[1]);
-          assert.deepEqual(
-            before.tabs.map((tab) => tab.text),
-            names,
-            "DOM labels preserve full synthetic source names",
-          );
           assert.ok(
             before.tabs.every((tab) => tab.title === ""),
             "conversation reveal replaces duplicate native title tooltip",
@@ -312,10 +348,13 @@ await withPreviewBrowser(
             names[0],
             "keyboard selection opens Alpha/甲组 content",
           );
+          await waitForRestingLabels(names.length);
+          const compactAfterSelection = await restingLabels();
+          assertRestingLabels(compactAfterSelection, names, endings);
           assert.deepEqual(
-            after.tabs.map((tab) => tab.text),
-            names,
-            "selection does not rewrite source names",
+            compactAfterSelection.map((tab) => tab.label),
+            compactLabels.map((tab) => tab.label),
+            "selection does not rewrite resting labels",
           );
           assert.ok(
             after.tabs[0].focused,
@@ -371,6 +410,8 @@ await withPreviewBrowser(
             names,
             before,
             after,
+            compactLabels,
+            compactAfterSelection,
             pointerReveal,
             pointerBetaReveal,
             mouseFocusedEscape,
@@ -481,6 +522,17 @@ await withPreviewBrowser(
       const restingContent = await contentGeometry();
       const before = await state();
       assert.equal(before.sourceConversations.length, 5);
+      const names = before.sourceConversations.map((tab) => tab.title);
+      await waitForRestingLabels(names.length);
+      const compactLabels = await restingLabels();
+      assertRestingLabels(compactLabels, names, [
+        "Alpha",
+        "Beta",
+        "Gamma",
+        "Delta",
+        "Epsilon",
+      ]);
+      await screenshot(`tabs-crowded-conversations-${theme}-resting.png`);
       assert.ok(
         before.scrollWidth > before.clientWidth,
         "genuine conversation strip overflows",
@@ -628,6 +680,20 @@ await withPreviewBrowser(
       assert.equal(escaped.focus, end.focus);
       assert.equal(escaped.selected, end.selected);
       assert.deepEqual(await layoutGeometry(), keyboardGeometry);
+      const endRestingLabels = await restingLabels();
+      assertRestingLabels(endRestingLabels, names, [
+        "Alpha",
+        "Beta",
+        "Gamma",
+        "Delta",
+        "Epsilon",
+      ]);
+      assert.deepEqual(
+        endRestingLabels.map((tab) => tab.label),
+        compactLabels.map((tab) => tab.label),
+        "keyboard scrolling and selection preserve resting identifiers",
+      );
+      await screenshot(`tabs-crowded-conversations-${theme}-end-resting.png`);
       const keyboardRestored = inflowAcceptance
         ? await checkRestored(restingContent)
         : null;
@@ -652,6 +718,8 @@ await withPreviewBrowser(
         inflowAcceptance,
         trajectory,
         restingContent,
+        compactLabels,
+        endRestingLabels,
         pointerRestored,
         keyboardContent,
         keyboardRestored,
@@ -791,7 +859,7 @@ await writeFile(
         "Production AuxiliaryPanel/styles; synthetic tab data and information control; Chromium renderer, not a native OS window.",
       results,
       lookalikeScope:
-        "Production side-conversation tab and heading path populated through conversations with synthetic thread IDs and read-only body. No live child Thread, pending approval, rename editor or persistence coverage. Full DOM text, visual reveal contents and geometry are measured separately. aria-hidden duplication guard is not an AX-tree validation. Native tooltip suppression is intentional for these conversation tabs. Geometry is not visual suffix-recognition proof; inspect screenshots. No requirement that clipping remain in a later candidate.",
+        "Production side-conversation tab and heading path populated through conversations with synthetic thread IDs and read-only body. No live child Thread, pending approval, rename editor or persistence coverage. Canonical ARIA titles, fitted and distinct resting suffixes, visual reveal contents and geometry are measured separately. aria-hidden duplication guard is not an AX-tree validation. Native tooltip suppression is intentional for these conversation tabs. Geometry is not visual suffix-recognition proof; inspect screenshots. No requirement that clipping remain in a later candidate.",
       lookalikeResults,
       crowdedConversationScope:
         "Desktop 1280x720, five synthetic conversations through production conversation tabs. Records bounding-box overlap and elementFromPoint hit stacks with current heading, heading text, fullscreen target and tabs; overlap is observational only when ZENX_EXPECT_INFLOW_REVEAL=0. By default this gates no overlap, fullscreen center hit, bounded/restored content displacement, and eight-step pointer crossing with midpoint samples. Center hit testing does not activate fullscreen. Not native desktop, live Host, mobile, rename, approval or AX-tree coverage.",
