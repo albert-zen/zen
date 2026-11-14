@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 
-export function observeInlineTrace(continuation = false, stream = null) {
+export function observeInlineTrace(
+  continuation = false,
+  stream = null,
+  nested = false,
+) {
   const exposed = (element, rect, initial) => {
     const limit = { ...initial };
     const clips = [];
@@ -238,7 +242,76 @@ export function observeInlineTrace(continuation = false, stream = null) {
       telemetry: structuredClone(window.__uiPolishTelemetry),
     };
   }
+  let nestedOutput;
+  if (nested) {
+    const outputs = turns[1]?.querySelectorAll(".trace-output") ?? [];
+    const output = outputs[0];
+    const r = output?.getBoundingClientRect();
+    let wheel = null;
+    if (r) {
+      const top = Math.max(0, transcript.top, r.top + output.clientTop);
+      const bottom = Math.min(
+        innerHeight,
+        transcript.bottom,
+        composer?.top ?? innerHeight,
+        r.top + output.clientTop + output.clientHeight,
+      );
+      for (const fraction of [0.25, 0.5, 0.75]) {
+        const point = {
+          x: r.left + output.clientLeft + Math.min(24, output.clientWidth / 2),
+          y: top + (bottom - top) * fraction,
+        };
+        const hit = document.elementFromPoint(point.x, point.y);
+        if (
+          bottom <= top ||
+          !hit ||
+          !output.contains(hit) ||
+          hit.closest(
+            'button,a,input,textarea,select,[contenteditable="true"],[role="button"]',
+          )
+        )
+          continue;
+        let owner = hit;
+        while (
+          owner !== output &&
+          !/(auto|scroll)/.test(getComputedStyle(owner).overflowY)
+        )
+          owner = owner.parentElement;
+        if (
+          owner === output &&
+          /(auto|scroll)/.test(getComputedStyle(output).overflowY)
+        ) {
+          wheel = point;
+          break;
+        }
+      }
+    }
+    nestedOutput = output
+      ? {
+          count: outputs.length,
+          top: output.scrollTop,
+          left: output.scrollLeft,
+          maxTop: Math.max(0, output.scrollHeight - output.clientHeight),
+          clientHeight: output.clientHeight,
+          clientWidth: output.clientWidth,
+          scrollWidth: output.scrollWidth,
+          focused: document.activeElement === output,
+          role: output.getAttribute("role"),
+          tabIndex: output.tabIndex,
+          wheel,
+          head: measure(
+            output,
+            "Expected reader_name, received reader_label",
+            true,
+          ),
+          end: measure(output, "Synthetic nested output ends here.", true),
+          pageHorizontalOverflow:
+            document.documentElement.scrollWidth > innerWidth,
+        }
+      : null;
+  }
   return {
+    ...(nested ? { nestedOutput } : {}),
     ...(continuation ? { continuation: continuationState } : {}),
     turns: turns.map((e) => ({
       label: e.getAttribute("aria-label"),
@@ -677,6 +750,222 @@ export async function captureInlineContinuation({
   }
 }
 
+export function verifyNestedOutput(state, baseline, phase = "wheel") {
+  const output = state.nestedOutput;
+  assert(
+    output?.count === 1 && output.role === "region" && output.tabIndex === 0,
+    "One real keyboard-accessible output region",
+  );
+  assert(
+    output.clientHeight > 0 && output.maxTop > 240,
+    "Opt-in output genuinely overflows",
+  );
+  assert(
+    output.clientWidth > 0 &&
+      output.scrollWidth <= output.clientWidth &&
+      output.left === 0 &&
+      !output.pageHorizontalOverflow,
+    "Long inert output wraps without horizontal escape",
+  );
+  assert(state.dockOpen && state.dockVisible && state.continuation.composer);
+  assert.deepEqual(
+    state.turns.map((t) => [t.answerItemId, t.expanded]),
+    [
+      ["result-answer-0", "false"],
+      ["result-answer-1", "true"],
+    ],
+  );
+  assert(
+    state.turns[1].traces.some(
+      (t) => t.expanded === "true" && t.detailText.includes("Exit code 1"),
+    ),
+    "Original failed result stays expanded",
+  );
+  for (const key of [
+    "informationUpdates",
+    "machineThreadCreateCalls",
+    "sideChatCreateCommandCalls",
+  ])
+    assert.equal(state.telemetry[key], 0);
+  assert(
+    !state.telemetry.protocolCalls.some((m) =>
+      /zen\/(turn|thread)\/(send|create|interrupt)/.test(m),
+    ),
+  );
+  if (baseline) {
+    const identity = (s) => ({
+      turns: s.turns.map((t) => [
+        t.answerItemId,
+        t.endItemId,
+        t.text,
+        t.answer,
+        t.expanded,
+      ]),
+      offsets: [
+        phase === "tab" ? null : s.continuation.top,
+        s.continuation.left,
+        s.continuation.page,
+      ],
+      composer: [s.continuation.composer, s.continuation.draft],
+      calls: s.telemetry.protocolCalls.filter(
+        (m) =>
+          ![
+            "zen/thread/read",
+            "zen/thread/resume",
+            "zen/thread/resume-window",
+            "zen/thread/questions/list",
+          ].includes(m),
+      ),
+    });
+    assert.deepEqual(
+      identity(state),
+      identity(baseline),
+      "Inner wheel preserves outer/page offsets, conversation, Composer and read-only state",
+    );
+    if (phase !== "head")
+      assert(
+        output.focused,
+        "Native Tab focus stays on output during inner scrolling",
+      );
+  }
+  if (phase === "end")
+    assert(
+      output.maxTop - output.top <= 1 && output.end.visible && output.end.hit,
+      "Unique original output end fully paints at the inner bottom",
+    );
+}
+
+export async function captureNestedOutput({
+  send,
+  observe,
+  settle,
+  capture,
+  evidence,
+  options,
+}) {
+  const started = Date.now();
+  const trip = { status: "running", wheels: [], tabs: 0 };
+  (evidence.nestedOutputTrips ??= []).push(trip);
+  const frame = (s) => [s.nestedOutput, s.continuation];
+  const stable = async () => {
+    for (let attempt = 0; attempt < 12; attempt++) {
+      await settle();
+      const first = await observe();
+      await settle();
+      const second = await observe();
+      if (JSON.stringify(frame(first)) === JSON.stringify(frame(second)))
+        return second;
+    }
+    assert.fail("Nested output geometry did not settle");
+  };
+  const snapshot = async (name, state) => {
+    await capture(
+      `reading-${options.name}-nested-output-${name}`,
+      options,
+      "reading",
+    );
+    const after = await observe();
+    assert.deepEqual(
+      frame(after),
+      frame(state),
+      "Screenshot-time output/outer geometry unchanged",
+    );
+    verifyNestedOutput(after, state, name === "head" ? "head" : "end");
+    return after;
+  };
+  try {
+    const head = await stable();
+    verifyNestedOutput(head);
+    assert(
+      head.nestedOutput.top === 0 &&
+        head.nestedOutput.head.visible &&
+        head.nestedOutput.head.hit,
+      "Original output head is painted before keyboard entry",
+    );
+    trip.head = await snapshot("head", head);
+    // Start from the actual disclosure click; never assign focus in script.
+    let focused = head;
+    while (!focused.nestedOutput.focused && trip.tabs < 24) {
+      await send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "Tab",
+        code: "Tab",
+        windowsVirtualKeyCode: 9,
+      });
+      await send("Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: "Tab",
+        code: "Tab",
+        windowsVirtualKeyCode: 9,
+      });
+      trip.tabs++;
+      await settle();
+      focused = await observe();
+    }
+    assert(
+      trip.tabs > 0 && focused.nestedOutput.focused,
+      "Real Tab reaches the output region",
+    );
+    const baseline = await stable();
+    verifyNestedOutput(baseline, head, "tab");
+    assert(baseline.nestedOutput.focused && baseline.nestedOutput.top === 0);
+    trip.focused = baseline;
+    let state = baseline;
+    for (
+      let attempt = 0;
+      attempt < 8 && state.nestedOutput.maxTop - state.nestedOutput.top > 1;
+      attempt++
+    ) {
+      const { top, maxTop, wheel } = state.nestedOutput;
+      assert(wheel, "No safe exact output-owned wheel point");
+      const input = {
+        ...wheel,
+        deltaX: 0,
+        deltaY: Math.min(240, maxTop - top),
+      };
+      await send("Input.dispatchMouseEvent", { type: "mouseWheel", ...input });
+      for (let sample = 0; sample < 8; sample++) {
+        await settle();
+        state = await observe();
+        verifyNestedOutput(state, baseline);
+        if (state.nestedOutput.top > top) break;
+      }
+      assert(
+        state.nestedOutput.top > top,
+        "Native wheel advances only the nested output",
+      );
+      trip.wheels.push({
+        input,
+        beforeTop: top,
+        afterTop: state.nestedOutput.top,
+      });
+      state = await stable();
+      verifyNestedOutput(state, baseline);
+    }
+    assert(trip.wheels.length > 0);
+    verifyNestedOutput(state, baseline, "end");
+    trip.end = await snapshot("end", state);
+    verifyNestedOutput(trip.end, baseline, "end");
+    // Existing outer-owner proof now runs independently with inner end offset fixed.
+    await captureInlineContinuation({
+      send,
+      observe,
+      settle,
+      capture,
+      evidence,
+      options,
+    });
+    trip.transcriptReturn = evidence.inlineContinuationTrips.at(-1).outcome;
+    trip.status = "passed";
+  } catch (error) {
+    trip.status = "failed";
+    trip.error = String(error);
+    throw error;
+  } finally {
+    trip.elapsedMs = Date.now() - started;
+  }
+}
+
 export async function captureInlineTrace({
   send,
   evaluate,
@@ -685,11 +974,13 @@ export async function captureInlineTrace({
   evidence,
   options,
   url,
+  nested = false,
 }) {
   const startedAt = Date.now();
   const target = new URL(url);
   target.searchParams.set("results", "1");
   target.searchParams.set("inlineTrace", "1");
+  if (nested) target.searchParams.set("nestedOutput", "1");
   for (const name of [
     "pending",
     "codeWrap",
@@ -850,6 +1141,22 @@ export async function captureInlineTrace({
     });
     return after;
   };
+  if (nested) {
+    await click(traceSelector, true);
+    await wait(
+      `document.querySelector(${JSON.stringify(traceSelector)})?.getAttribute('aria-expanded')==='true'`,
+    );
+    await captureNestedOutput({
+      send,
+      settle,
+      capture,
+      evidence,
+      options,
+      observe: () =>
+        evaluate(`(${observeInlineTrace.toString()})(true,null,true)`),
+    });
+    return;
+  }
   const baseline = await stableCapture("failed-collapsed", null, false);
   if (
     await evaluate(

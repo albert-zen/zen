@@ -71,7 +71,19 @@ This closing section deliberately extends the document beyond the first viewport
 `;
 
 /** Display-only execution records. No command is dispatched or retried. */
-function inlineReadingCommand(index: number): ThreadItem {
+export const nestedTraceOutput = [
+  "Expected reader_name, received reader_label",
+  ...Array.from(
+    { length: 40 },
+    (_, index) =>
+      `Synthetic display line ${String(index + 1).padStart(2, "0")}: inert output, not a command or action.`,
+  ),
+  "只读合成输出：没有执行或重试命令。",
+  `safe_identifier_${"abcdef0123456789".repeat(24)}`,
+  "Synthetic nested output ends here.",
+].join("\n");
+
+function inlineReadingCommand(index: number, nestedOutput = false): ThreadItem {
   return {
     type: "commandExecution",
     id: `inline-reading-command-${index}`,
@@ -91,7 +103,9 @@ function inlineReadingCommand(index: number): ThreadItem {
     aggregatedOutput:
       index === 0
         ? "Synthetic display record: summary matched. No command was executed."
-        : "Synthetic display record: label mismatch. Expected reader_name, received reader_label. No command was executed.",
+        : nestedOutput
+          ? nestedTraceOutput
+          : "Synthetic display record: label mismatch. Expected reader_name, received reader_label. No command was executed.",
     exitCode: index === 0 ? 0 : 1,
     durationMs: null,
   };
@@ -103,6 +117,7 @@ export function readingRecovery(
   markdown = readingMarkdown,
   resultScene = false,
   inlineTrace = false,
+  nestedOutput = false,
 ) {
   if (base.id !== "thread-1") throw new Error("Unexpected reading owner");
   const recovery = nativeRecoveryForThread(
@@ -144,7 +159,9 @@ export function readingRecovery(
                   },
                 ],
               },
-              ...(inlineTrace ? [inlineReadingCommand(index)] : []),
+              ...(inlineTrace
+                ? [inlineReadingCommand(index, nestedOutput)]
+                : []),
               {
                 id: `result-answer-${index}`,
                 type: "agentMessage",
@@ -236,6 +253,7 @@ export function readReadingRequest(
   markdown = readingMarkdown,
   resultScene = false,
   inlineTrace = false,
+  nestedOutput = false,
 ) {
   if (method === "zen/initialize") {
     if (
@@ -252,11 +270,24 @@ export function readReadingRequest(
   if (method === "zen/thread/questions/list")
     return readNavigationQuestions(request);
   if (method === "zen/thread/resume" || method === "zen/thread/resume-window")
-    return readingRecovery(base, pending, markdown, resultScene, inlineTrace);
+    return readingRecovery(
+      base,
+      pending,
+      markdown,
+      resultScene,
+      inlineTrace,
+      nestedOutput,
+    );
   if (method === "zen/thread/read")
     return {
-      thread: readingRecovery(base, pending, markdown, resultScene, inlineTrace)
-        .thread,
+      thread: readingRecovery(
+        base,
+        pending,
+        markdown,
+        resultScene,
+        inlineTrace,
+        nestedOutput,
+      ).thread,
     };
   throw new Error(`Unsupported read-only reading protocol: ${method}`);
 }

@@ -5,6 +5,7 @@ import {
   captureReadingReentry,
 } from "./reading-main-ui-preview.mjs";
 import { captureQueueReading } from "./queue-reading-main-ui-preview.mjs";
+import { captureInlineTrace } from "./inline-trace-main-ui-preview.mjs";
 /** One sandboxed Chrome, bounded scenes; no aggregate CI dependency or browser download. */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -41,12 +42,14 @@ const desktopQueue = captureProfile === "desktop-queue";
 const desktopReading = captureProfile === "desktop-reading";
 const desktopRoom = captureProfile === "desktop-room";
 const desktopReentry = captureProfile === "desktop-reading-reentry";
+const desktopNested = captureProfile === "desktop-reading-nested-output";
 // Older profiles must not load this separately scoped receipt/capture helper.
 const roomCapture = desktopRoom
   ? await import("./room-file-owner-main-ui-preview.mjs")
   : null;
 const desktopOnly = desktopQueue || desktopReading;
-const otherPointer = desktopRoom || desktopReentry ? "fine" : captureProfile;
+const otherPointer =
+  desktopRoom || desktopReentry || desktopNested ? "fine" : captureProfile;
 const pointer = desktopOnly ? "fine" : otherPointer;
 assert(["fine", "coarse"].includes(pointer), "Pointer must be fine or coarse");
 const coarse = pointer === "coarse";
@@ -106,10 +109,12 @@ if (desktopRoom) {
   assert.equal(source.clean, true);
   assert.deepEqual(Object.keys(source.scenes), ["room"]);
 }
-if (desktopReentry) {
+if (desktopReentry || desktopNested) {
   assert.equal(
     source.commit,
-    process.env.ZENX_REENTRY_EXPECTED_HEAD,
+    desktopNested
+      ? process.env.ZENX_NESTED_EXPECTED_HEAD
+      : process.env.ZENX_REENTRY_EXPECTED_HEAD,
     "Re-entry uses the exact event head",
   );
   assert.deepEqual(Object.keys(source.scenes), ["reading"]);
@@ -152,7 +157,7 @@ if (source.scenes.information) {
   );
   files.set("/plugin-frame.html", bytes);
 }
-if (desktopReading || desktopRoom || desktopReentry)
+if (desktopReading || desktopRoom || desktopReentry || desktopNested)
   files.set("/font-probe.html", Buffer.from(fontProbeHTML));
 const evidence = {
   schemaVersion: 1,
@@ -203,7 +208,7 @@ try {
     evidence.cjkFonts.length,
     "CJK fonts must be available; do not publish tofu screenshots",
   );
-  if (desktopReading || desktopRoom || desktopReentry) {
+  if (desktopReading || desktopRoom || desktopReentry || desktopNested) {
     assert(
       process.env.ZENX_PREVIEW_FONT_RECEIPT,
       "Reading preview requires a pinned font receipt",
@@ -359,7 +364,7 @@ try {
     return false;
   };
   lifecycle.captureStarted();
-  if (desktopReading || desktopRoom || desktopReentry) {
+  if (desktopReading || desktopRoom || desktopReentry || desktopNested) {
     await send("Emulation.setDeviceMetricsOverride", {
       width: 1280,
       height: 900,
@@ -561,7 +566,7 @@ try {
       ? cases
           .filter((c) => c.width === 1280 && c.height === 900)
           .map((c) => ({ ...c, width: 1440, lang: "zh-CN" }))
-      : desktopReentry
+      : desktopReentry || desktopNested
         ? cases.filter(
             (c) => c.width === 1280 && c.height === 900 && c.theme === "light",
           )
@@ -641,6 +646,19 @@ try {
               acceptance: false,
             };
           },
+        });
+        continue;
+      }
+      if (desktopNested) {
+        await captureInlineTrace({
+          send,
+          evaluate,
+          wait,
+          capture,
+          evidence,
+          options,
+          url,
+          nested: true,
         });
         continue;
       }

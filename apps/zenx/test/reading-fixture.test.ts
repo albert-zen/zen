@@ -10,6 +10,7 @@ import {
   readingApprovals,
   readingBrowserCommand,
   readReadingRequest,
+  nestedTraceOutput,
 } from "./fixtures/ui-polish-reading.js";
 const base: Thread = {
   id: "thread-1",
@@ -538,5 +539,63 @@ test("stream keeps the exact read whitelist and rejects premature or excess life
   assert(
     (fixture.read("zen/thread/read", { threadId: "thread-1" }) as typeof read)
       .thread.items.length > 0,
+  );
+});
+
+test("nested Trace opt-in changes only the inert failed output, never commands or ordinary fixture", () => {
+  const ordinary = readingRecovery(base, false, undefined, true, true);
+  const explicitDefault = readingRecovery(
+    base,
+    false,
+    undefined,
+    true,
+    true,
+    false,
+  );
+  const nested = readingRecovery(base, false, undefined, true, true, true);
+  assert.deepEqual(ordinary, explicitDefault);
+  const failed = projectNativeThread(nested.thread).turns[1]!.items.find(
+    (item) => item.id === "inline-reading-command-1",
+  );
+  assert(failed?.type === "commandExecution");
+  assert.equal(failed.aggregatedOutput, nestedTraceOutput);
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.exitCode, 1);
+  assert.deepEqual(failed.commandActions, []);
+  assert.equal(
+    nestedTraceOutput.split("Synthetic nested output ends here.").length,
+    2,
+  );
+  assert.equal(nestedTraceOutput.split("\n").length, 44);
+  const original = projectNativeThread(ordinary.thread).turns[1]!.items.find(
+    (item) => item.id === failed.id,
+  );
+  assert(original?.type === "commandExecution");
+  const replaceOutput = (value: unknown): unknown => {
+    if (value === nestedTraceOutput) return original.aggregatedOutput;
+    if (Array.isArray(value)) return value.map(replaceOutput);
+    if (value && typeof value === "object")
+      return Object.fromEntries(
+        Object.entries(value).map(([key, entry]) => [
+          key,
+          replaceOutput(entry),
+        ]),
+      );
+    return value;
+  };
+  assert.deepEqual(replaceOutput(nested), ordinary);
+  assert.throws(
+    () =>
+      readReadingRequest(
+        "zen/turn/send",
+        { threadId: "thread-1" },
+        base,
+        false,
+        undefined,
+        true,
+        true,
+        true,
+      ),
+    /Unsupported read-only/,
   );
 });

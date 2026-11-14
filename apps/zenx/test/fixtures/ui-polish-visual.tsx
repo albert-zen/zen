@@ -172,6 +172,7 @@ const options = {
         codeWrapScene ? codeWrapMarkdown : tableKeyboardMarkdown,
         resultScene,
         inlineTraceScene,
+        inlineTraceScene && params.get("nestedOutput") === "1",
       );
     if (
       params.get("scene") === "navigation" &&

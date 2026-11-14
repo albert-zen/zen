@@ -912,6 +912,54 @@ test("continuation Range and wheel ownership use actual DOM ancestry, not mere c
     assert.equal(observeInlineTrace(true).turns[1].answerEnd.visible, false);
     for (hit of ["nested", "other", "cover"])
       assert.equal(observeInlineTrace(true).continuation.wheel, null, hit);
+    const output = doc.querySelector(".trace-output"),
+      text = doc.getElementById("nested");
+    output.style.overflowY = "auto";
+    output.setAttribute("role", "region");
+    output.tabIndex = 0;
+    Object.defineProperty(output, "scrollHeight", { value: 860 });
+    text.textContent =
+      "Expected reader_name, received reader_label. Synthetic nested output ends here.";
+    doc.elementFromPoint = () => text;
+    endY = 300;
+    const nested = () => observeInlineTrace(true, null, true).nestedOutput;
+    assert(
+      nested().wheel,
+      "Output child resolves to exact output scroll owner",
+    );
+    assert(nested().end.visible && nested().end.hit);
+    assert(nested().maxTop > 240);
+    text.style.overflowY = "auto";
+    assert.equal(
+      nested().wheel,
+      null,
+      "A deeper nested scroll owner is not the output",
+    );
+    text.style.overflowY = "";
+    const button = doc.createElement("button");
+    output.append(button);
+    for (const target of [button, outer, doc.getElementById("cover")]) {
+      doc.elementFromPoint = () => target;
+      assert.equal(
+        nested().wheel,
+        null,
+        "Controls, outer and unrelated cover rejected",
+      );
+    }
+    doc.elementFromPoint = () => text;
+    endY = 321;
+    assert.equal(
+      nested().end.visible,
+      false,
+      "Full Range must fit inner output clip",
+    );
+    endY = 300;
+    output.hidden = true;
+    assert.equal(
+      nested().end.visible,
+      false,
+      "Hidden ancestor cannot certify a tail",
+    );
   } finally {
     Object.assign(globalThis, saved);
     dom.window.close();
@@ -1103,5 +1151,192 @@ test("single light profile shares the exact artifact without extending the estab
   assert.doesNotMatch(
     captureReadingReentry.toString(),
     /\.scrollTop\s*=|\.scrollTo\(|\.back-live|parked.*advance/,
+  );
+});
+
+function nestedState() {
+  const s = continuationState();
+  s.nestedOutput = {
+    count: 1,
+    role: "region",
+    tabIndex: 0,
+    clientHeight: 260,
+    clientWidth: 540,
+    scrollWidth: 540,
+    top: 0,
+    left: 0,
+    maxTop: 600,
+    focused: false,
+    wheel: { x: 330, y: 400 },
+    pageHorizontalOverflow: false,
+    head: { visible: true, hit: true },
+    end: { visible: false, hit: false },
+  };
+  return s;
+}
+test("nested output uses real Tab then owned inner wheels, preserving original outer continuation", async () => {
+  const { captureNestedOutput } =
+    await import("../scripts/inline-trace-main-ui-preview.mjs");
+  const s = nestedState(),
+    evidence = {},
+    shots = [],
+    inputs = [];
+  await captureNestedOutput({
+    options: { theme: "light", name: "desktop-light" },
+    evidence,
+    observe: async () => structuredClone(s),
+    settle: async () => {},
+    capture: async (name) => shots.push(name),
+    send: async (method, p) => {
+      inputs.push([method, p]);
+      if (p.type === "keyUp") s.nestedOutput.focused = true;
+      if (p.type !== "mouseWheel") return;
+      if (p.x === s.nestedOutput.wheel.x) {
+        s.nestedOutput.top += p.deltaY;
+        s.continuation.output[0][0] = s.nestedOutput.top;
+        s.nestedOutput.end = {
+          visible: s.nestedOutput.top === 600,
+          hit: s.nestedOutput.top === 600,
+        };
+      } else {
+        s.continuation.top += p.deltaY;
+        s.turns[1].answerEnd.visible = true;
+      }
+    },
+  });
+  assert.equal(evidence.nestedOutputTrips[0].status, "passed");
+  assert.equal(evidence.nestedOutputTrips[0].tabs, 1);
+  assert.equal(evidence.nestedOutputTrips[0].wheels.length, 3);
+  assert.equal(evidence.inlineContinuationTrips[0].status, "passed");
+  assert.deepEqual(shots, [
+    "reading-desktop-light-nested-output-head",
+    "reading-desktop-light-nested-output-end",
+    "reading-desktop-light-inline-trace-answer-end",
+  ]);
+  assert.deepEqual(
+    inputs.slice(0, 2).map(([, p]) => [p.type, p.key]),
+    [
+      ["keyDown", "Tab"],
+      ["keyUp", "Tab"],
+    ],
+  );
+});
+test("nested output fails closed on owner, focus, outer/page movement, clipping and missing end", async () => {
+  const { captureNestedOutput } =
+    await import("../scripts/inline-trace-main-ui-preview.mjs");
+  for (const fault of [
+    "owner",
+    "focus",
+    "outer",
+    "page",
+    "draft",
+    "answer",
+    "tab-answer",
+    "no-progress",
+    "covered-end",
+    "clipped-end",
+    "horizontal",
+    "screenshot-moved",
+    "screenshot-answer",
+  ]) {
+    const s = nestedState(),
+      evidence = {},
+      shots = [];
+    if (fault === "owner") s.nestedOutput.wheel = null;
+    if (fault === "horizontal") s.nestedOutput.scrollWidth++;
+    await assert.rejects(
+      captureNestedOutput({
+        options: { theme: "light", name: "desktop-light" },
+        evidence,
+        observe: async () => structuredClone(s),
+        settle: async () => {},
+        capture: async (name) => {
+          shots.push(name);
+          if (fault === "screenshot-moved") s.nestedOutput.top++;
+          if (fault === "screenshot-answer") s.turns[1].answer = "changed";
+        },
+        send: async (_method, p) => {
+          if (p.type === "keyUp" && fault !== "focus")
+            s.nestedOutput.focused = true;
+          if (p.type === "keyUp" && fault === "tab-answer")
+            s.turns[1].answer = "changed";
+          if (p.type !== "mouseWheel") return;
+          if (fault !== "no-progress") s.nestedOutput.top += p.deltaY;
+          s.continuation.output[0][0] = s.nestedOutput.top;
+          if (fault === "outer") s.continuation.top++;
+          if (fault === "page") s.continuation.page[1]++;
+          if (fault === "draft") s.continuation.draft = "changed";
+          if (fault === "answer") s.turns[1].answer = "changed";
+          s.nestedOutput.end = {
+            visible: fault !== "clipped-end",
+            hit: fault !== "covered-end",
+          };
+        },
+      }),
+      fault,
+    );
+    assert.equal(evidence.nestedOutputTrips[0].status, "failed", fault);
+    assert(shots.length <= 1, fault);
+    assert.equal(evidence.inlineContinuationTrips, undefined, fault);
+  }
+});
+test("nested profile remains isolated from ordinary capture and reuses receipt/font/guard", async () => {
+  const capture = await read("../scripts/capture-main-ui-preview.mjs");
+  const workflow = await read(
+    "../../../.github/workflows/desktop-reading-ui.yml",
+  );
+  const helper = await read("../scripts/inline-trace-main-ui-preview.mjs");
+  assert.match(capture, /desktop-reading-nested-output/);
+  assert.match(capture, /ZENX_NESTED_EXPECTED_HEAD/);
+  const { runInNewContext } = await import("node:vm");
+  const fontProfiles = [
+    "desktopReading",
+    "desktopRoom",
+    "desktopReentry",
+    "desktopNested",
+  ];
+  for (const marker of [
+    'files.set("/font-probe.html"',
+    "evidence.fontEnvironment = JSON.parse",
+    "evidence.fontProbe = await probePreviewFonts",
+  ]) {
+    const end = capture.indexOf(marker);
+    assert(end > 0, marker);
+    const gate = capture
+      .slice(capture.lastIndexOf("if (", end), end)
+      .match(/^if \(([^)]+)\)/)?.[1];
+    assert(gate, `Existing font gate: ${marker}`);
+    const context = Object.fromEntries(
+      fontProfiles.map((name) => [name, false]),
+    );
+    assert.equal(runInNewContext(gate, context), false, marker);
+    for (const name of fontProfiles)
+      assert.equal(
+        runInNewContext(gate, { ...context, [name]: true }),
+        true,
+        `${marker}: ${name}`,
+      );
+  }
+  assert.match(capture, /const desktopOnly = desktopQueue \|\| desktopReading/);
+  assert.match(
+    workflow,
+    /desktop-reading" desktop-reading\n        timeout-minutes: 2/,
+  );
+  assert.match(
+    workflow,
+    /desktop-reading-nested-output" desktop-reading-nested-output/,
+  );
+  assert.match(workflow, /name: desktop-reading-nested-output-/);
+  assert.match(workflow, /permissions:\n  contents: read/);
+  assert.match(
+    workflow,
+    /!cancelled\(\).*readingFonts.outcome == 'success'.*readingBuild.outcome == 'success'/,
+  );
+  assert(
+    readingPathsChanged(["apps/zenx/scripts/inline-trace-main-ui-preview.mjs"]),
+  );
+  assert.doesNotMatch(
+    helper,
+    /\.scrollTop\s*=|\.scrollTo\(|\.scrollIntoView\(|\.focus\(/,
   );
 });
