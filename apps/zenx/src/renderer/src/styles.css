@@ -13649,3 +13649,21 @@ button:disabled {
   visibility: hidden;
   pointer-events: none;
 }
+
+/* Same-path Room files only: source identity shares the existing 30px tab budget. */
+.auxiliary-heading .workspace-content-tab[data-file-owner] [role="tab"] {
+  padding-block: 2px;
+}
+.workspace-room-file-label {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-width: 150px;
+  line-height: 12px;
+}
+.workspace-room-file-label > .workspace-tab-label-box {
+  width: 100%;
+  font-size: 11px;
+  line-height: 12px;
+  color: var(--color-text-secondary);
+}

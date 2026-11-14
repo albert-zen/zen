@@ -1,4 +1,5 @@
 export const en = {
+  roomFileSource: "{{file}} — Source: {{owner}}",
   informationReceivedAgents: "Received from agents",
   informationReceivedLoaded: "Up to 3 recent messages in loaded history",
   informationReceivedSource: "From {{name}} · View source",
@@ -1162,6 +1163,7 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  roomFileSource: "{{file}} — 来源：{{owner}}",
   informationReceivedAgents: "来自 Agent 的消息",
   informationReceivedLoaded: "已加载历史中最近的至多 3 条消息",
   informationReceivedSource: "来自 {{name}} · 查看来源",

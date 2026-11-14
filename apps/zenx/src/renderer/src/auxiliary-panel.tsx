@@ -1,3 +1,4 @@
+import { roomFileOwnerLabels } from "./room-file-owner-labels.js";
 import { flushSync } from "react-dom";
 import { ShellTargetNavigationContext } from "./shell-target-navigation.js";
 import {
@@ -1662,6 +1663,16 @@ export function AuxiliaryPanel({
     restoreToggleFocus.current = true;
     onOpenChange(false);
   };
+  const fileOwnerLabels = roomFileOwnerLabels(
+    displayTabs,
+    roomContext?.resourceThreads,
+  );
+  const fileLabel = (tab: ContentTab) => {
+    const owner = fileOwnerLabels.get(tab.id);
+    return owner
+      ? i18n.t("panels:roomFileSource", { file: tab.path, owner: owner.title })
+      : tab.title;
+  };
   const restingLabels = useMemo(
     () =>
       restingConversationLabelPlans(
@@ -1783,6 +1794,7 @@ export function AuxiliaryPanel({
                 )}
                 key={tab.id}
                 data-tab-id={tab.id}
+                data-file-owner={fileOwnerLabels.has(tab.id) || undefined}
                 data-reorderable={
                   (canReorder &&
                     tab.id !== PRIMARY_CONVERSATION_TAB &&
@@ -1862,7 +1874,7 @@ export function AuxiliaryPanel({
                   aria-label={
                     tab.browserActivityLabel
                       ? `${tab.title} — ${tab.browserActivityLabel}`
-                      : tab.title
+                      : fileLabel(tab)
                   }
                   {...(tab.id.startsWith("thread:")
                     ? titleReveal.handlers(tab.title)
@@ -1872,7 +1884,9 @@ export function AuxiliaryPanel({
                     titleReveal.replacesNativeTitle
                       ? undefined
                       : [
-                          tab.path ?? tab.browser?.url ?? tab.title,
+                          fileOwnerLabels.has(tab.id)
+                            ? fileLabel(tab)
+                            : (tab.path ?? tab.browser?.url ?? tab.title),
                           tab.browserActivityLabel,
                         ]
                           .filter(Boolean)
@@ -1932,6 +1946,18 @@ export function AuxiliaryPanel({
                       candidate={restingLabels.get(tab.id)?.marked ?? tab.title}
                       bareCandidate={restingLabels.get(tab.id)?.bare}
                     />
+                  ) : fileOwnerLabels.has(tab.id) ? (
+                    <span
+                      className="workspace-room-file-label"
+                      aria-hidden="true"
+                    >
+                      <span className="workspace-tab-title">{tab.title}</span>
+                      <ConversationRestingLabel
+                        title={fileOwnerLabels.get(tab.id)!.title}
+                        candidate={fileOwnerLabels.get(tab.id)!.marked}
+                        bareCandidate={fileOwnerLabels.get(tab.id)!.bare}
+                      />
+                    </span>
                   ) : (
                     <span className="workspace-tab-title">{tab.title}</span>
                   )}
@@ -1958,9 +1984,11 @@ export function AuxiliaryPanel({
                     type="button"
                     className="workspace-tab-close"
                     aria-label={i18n.t("panels:closeTabNamed", {
-                      title: tab.title,
+                      title: fileLabel(tab),
                     })}
-                    title={i18n.t("panels:closeTabNamed", { title: tab.title })}
+                    title={i18n.t("panels:closeTabNamed", {
+                      title: fileLabel(tab),
+                    })}
                     disabled={
                       tab.path && threadId !== undefined
                         ? entries.get(
