@@ -502,33 +502,33 @@ try {
       ["reading"],
       "Desktop reading requires only the production App reading bundle",
     );
-  const cases = desktopRoom
-    ? fineCases
-        .filter((c) => c.width === 1280 && c.height === 900)
-        .map((c) => ({ ...c, width: 1440, lang: "zh-CN" }))
-    : coarse
-      ? [
-          {
-            name: "compact-short-coarse-light",
-            width: 390,
-            height: 600,
-            theme: "light",
-            lang: "en",
-            onlyScene: "pending",
-          },
-          {
-            name: "compact-short-coarse-dark",
-            width: 390,
-            height: 600,
-            theme: "dark",
-            lang: "en",
-            onlyScene: "pending",
-          },
-        ]
-      : fineCases;
+  const cases = coarse
+    ? [
+        {
+          name: "compact-short-coarse-light",
+          width: 390,
+          height: 600,
+          theme: "light",
+          lang: "en",
+          onlyScene: "pending",
+        },
+        {
+          name: "compact-short-coarse-dark",
+          width: 390,
+          height: 600,
+          theme: "dark",
+          lang: "en",
+          onlyScene: "pending",
+        },
+      ]
+    : fineCases;
   for (const options of desktopOnly
     ? cases.filter((c) => c.width === 1280 && c.height === 900)
-    : cases) {
+    : desktopRoom
+      ? cases
+          .filter((c) => c.width === 1280 && c.height === 900)
+          .map((c) => ({ ...c, width: 1440, lang: "zh-CN" }))
+      : cases) {
     await send("Emulation.setDeviceMetricsOverride", {
       width: options.width,
       height: options.height,
