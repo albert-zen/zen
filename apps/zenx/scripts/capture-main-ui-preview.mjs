@@ -41,8 +41,8 @@ const desktopRoom = captureProfile === "desktop-room";
 const roomCapture = desktopRoom
   ? await import("./room-file-owner-main-ui-preview.mjs")
   : null;
-const desktopOnly = desktopQueue || desktopReading || desktopRoom;
-const pointer = desktopOnly ? "fine" : captureProfile;
+const desktopOnly = desktopQueue || desktopReading;
+const pointer = desktopOnly ? "fine" : desktopRoom ? "fine" : captureProfile;
 assert(["fine", "coarse"].includes(pointer), "Pointer must be fine or coarse");
 const coarse = pointer === "coarse";
 const evidenceFile = coarse ? "evidence-coarse.json" : "evidence.json";
@@ -502,33 +502,33 @@ try {
       ["reading"],
       "Desktop reading requires only the production App reading bundle",
     );
-  const cases = coarse
-    ? [
-        {
-          name: "compact-short-coarse-light",
-          width: 390,
-          height: 600,
-          theme: "light",
-          lang: "en",
-          onlyScene: "pending",
-        },
-        {
-          name: "compact-short-coarse-dark",
-          width: 390,
-          height: 600,
-          theme: "dark",
-          lang: "en",
-          onlyScene: "pending",
-        },
-      ]
-    : fineCases;
-  for (const options of desktopRoom
+  const cases = desktopRoom
     ? fineCases
         .filter((c) => c.width === 1280 && c.height === 900)
         .map((c) => ({ ...c, width: 1440, lang: "zh-CN" }))
-    : desktopOnly
-      ? cases.filter((c) => c.width === 1280 && c.height === 900)
-      : cases) {
+    : coarse
+      ? [
+          {
+            name: "compact-short-coarse-light",
+            width: 390,
+            height: 600,
+            theme: "light",
+            lang: "en",
+            onlyScene: "pending",
+          },
+          {
+            name: "compact-short-coarse-dark",
+            width: 390,
+            height: 600,
+            theme: "dark",
+            lang: "en",
+            onlyScene: "pending",
+          },
+        ]
+      : fineCases;
+  for (const options of desktopOnly
+    ? cases.filter((c) => c.width === 1280 && c.height === 900)
+    : cases) {
     await send("Emulation.setDeviceMetricsOverride", {
       width: options.width,
       height: options.height,
