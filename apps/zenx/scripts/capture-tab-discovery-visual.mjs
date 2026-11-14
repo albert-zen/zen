@@ -19,6 +19,15 @@ const inflowAcceptance = process.env.ZENX_EXPECT_INFLOW_REVEAL !== "0";
 const results = [];
 const lookalikeResults = [];
 const crowdedConversationResults = [];
+const crowdedRestingErrors = [];
+const recordCrowdedRestingCheck = async (theme, stage, check) => {
+  try {
+    await check();
+  } catch (error) {
+    if (error?.code !== "ERR_ASSERTION") throw error;
+    crowdedRestingErrors.push({ theme, stage, message: error.message });
+  }
+};
 await withPreviewBrowser(
   directory,
   async ({ send, evaluate, url, screenshot }) => {
@@ -58,6 +67,57 @@ await withPreviewBrowser(
           full,
         })),
       };
+    };
+    const saveCrowdedWidths = async (theme, stage) => {
+      const widths = await evaluate(`(() => {
+  const width = element => element?.getBoundingClientRect().width ?? null;
+  return {
+    viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio },
+    desktop: matchMedia('(min-width: 721px)').matches,
+    fontsStatus: document.fonts?.status,
+    userAgent: navigator.userAgent,
+    tabs: [...document.querySelectorAll('[role=tablist] [role=tab]')].map(tab => {
+      const slot = tab.querySelector('.workspace-tab-label-box');
+      const label = tab.querySelector('.workspace-tab-title');
+      const full = tab.querySelector('.workspace-tab-title-probe');
+      const candidate = tab.querySelector('.workspace-tab-candidate-probe');
+      const font = getComputedStyle(label);
+      let bareSuffixWidth = null;
+      if (slot && candidate?.textContent.startsWith('… ')) {
+        const probe = candidate.cloneNode(false);
+        probe.textContent = candidate.textContent.slice(2);
+        slot.append(probe);
+        bareSuffixWidth = width(probe);
+        probe.remove();
+      }
+      return {
+        id: tab.id, canonical: tab.getAttribute('aria-label'),
+        selected: tab.getAttribute('aria-selected'),
+        display: label.textContent, abbreviated: label.dataset.abbreviated === 'true',
+        slotWidth: width(slot), slotClientWidth: slot?.clientWidth ?? null,
+        fullWidth: width(full), candidateWidth: width(candidate),
+        candidate: candidate?.textContent ?? null, bareSuffixWidth,
+        labelClientWidth: label.clientWidth, labelScrollWidth: label.scrollWidth,
+        font: font.font, letterSpacing: font.letterSpacing,
+      };
+    }),
+  };
+})()`);
+      await writeFile(
+        path.join(directory, `tabs-crowded-${theme}-${stage}-widths.json`),
+        JSON.stringify(
+          {
+            commit: manifest.commit,
+            htmlSha256: manifest.artifact.htmlSha256,
+            theme,
+            stage,
+            host: { platform: process.platform, arch: process.arch },
+            ...widths,
+          },
+          null,
+          2,
+        ) + "\n",
+      );
     };
     const key = async (key, windowsVirtualKeyCode) => {
       for (const type of ["keyDown", "keyUp"]) {
@@ -523,16 +583,23 @@ await withPreviewBrowser(
       const before = await state();
       assert.equal(before.sourceConversations.length, 5);
       const names = before.sourceConversations.map((tab) => tab.title);
-      await waitForRestingLabels(names.length);
+      const endings = ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"];
+      try {
+        await waitForRestingLabels(names.length);
+      } catch (error) {
+        if (!error?.message?.startsWith("Timed out: ")) throw error;
+        crowdedRestingErrors.push({
+          theme,
+          stage: "initial-wait",
+          message: error.message,
+        });
+      }
       const compactLabels = await restingLabels();
-      assertRestingLabels(compactLabels, names, [
-        "Alpha",
-        "Beta",
-        "Gamma",
-        "Delta",
-        "Epsilon",
-      ]);
+      await saveCrowdedWidths(theme, "initial");
       await screenshot(`tabs-crowded-conversations-${theme}-resting.png`);
+      await recordCrowdedRestingCheck(theme, "initial", () =>
+        assertRestingLabels(compactLabels, names, endings),
+      );
       assert.ok(
         before.scrollWidth > before.clientWidth,
         "genuine conversation strip overflows",
@@ -681,19 +748,16 @@ await withPreviewBrowser(
       assert.equal(escaped.selected, end.selected);
       assert.deepEqual(await layoutGeometry(), keyboardGeometry);
       const endRestingLabels = await restingLabels();
-      assertRestingLabels(endRestingLabels, names, [
-        "Alpha",
-        "Beta",
-        "Gamma",
-        "Delta",
-        "Epsilon",
-      ]);
-      assert.deepEqual(
-        endRestingLabels.map((tab) => tab.label),
-        compactLabels.map((tab) => tab.label),
-        "keyboard scrolling and selection preserve resting identifiers",
-      );
+      await saveCrowdedWidths(theme, "after-keyboard");
       await screenshot(`tabs-crowded-conversations-${theme}-end-resting.png`);
+      await recordCrowdedRestingCheck(theme, "after-keyboard", () => {
+        assertRestingLabels(endRestingLabels, names, endings);
+        assert.deepEqual(
+          endRestingLabels.map((tab) => tab.label),
+          compactLabels.map((tab) => tab.label),
+          "keyboard scrolling and selection preserve resting identifiers",
+        );
+      });
       const keyboardRestored = inflowAcceptance
         ? await checkRestored(restingContent)
         : null;
@@ -864,9 +928,15 @@ await writeFile(
       crowdedConversationScope:
         "Desktop 1280x720, five synthetic conversations through production conversation tabs. Records bounding-box overlap and elementFromPoint hit stacks with current heading, heading text, fullscreen target and tabs; overlap is observational only when ZENX_EXPECT_INFLOW_REVEAL=0. By default this gates no overlap, fullscreen center hit, bounded/restored content displacement, and eight-step pointer crossing with midpoint samples. Center hit testing does not activate fullscreen. Not native desktop, live Host, mobile, rename, approval or AX-tree coverage.",
       crowdedConversationResults,
+      crowdedRestingErrors,
     },
     null,
     2,
   ) + "\n",
+);
+assert.deepEqual(
+  crowdedRestingErrors,
+  [],
+  "All five crowded resting labels must pass in both themes; widths and screenshots are retained",
 );
 console.log("Tab discoverability visual and interaction checks passed.");
