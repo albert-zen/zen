@@ -107,3 +107,22 @@ jobs:
       - name: Child visibility verification boundary
         if: always()
         run: echo 'Child visibility probe uses synthetic in-memory preference only. No real Host/account settings, external calls or native Electron acceptance. Inspect its separate receipt for success/failure; ordinary navigation evidence remains separate.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Isolated synthetic child open and return
+        if: ${{ !cancelled() && steps.fonts.outcome == 'success' && steps.navigationBuild.outcome == 'success' }}
+        timeout-minutes: 1
+        env:
+          ZENX_CHILD_NAVIGATION_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mkdir -p "${{ runner.temp }}/desktop-child-navigation"
+          cp "${{ runner.temp }}/desktop-navigation-preview/navigation.html" "${{ runner.temp }}/desktop-navigation-preview/source.json" "${{ runner.temp }}/desktop-child-navigation/"
+          node apps/zenx/scripts/capture-main-ui-preview.mjs "${{ runner.temp }}/desktop-child-navigation" desktop-child-navigation
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-child-navigation-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/desktop-child-navigation/*
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Child navigation verification boundary
+        if: always()
+        run: echo 'Child open/return uses synthetic read-only conversations and one in-memory visibility preference, with unsent per-thread drafts. No real Host/account settings, sends or native Electron acceptance. Separate artifact and receipt; ordinary navigation and preference-only evidence remain untouched.' >> "$GITHUB_STEP_SUMMARY"

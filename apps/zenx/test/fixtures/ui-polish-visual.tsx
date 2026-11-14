@@ -41,6 +41,8 @@ const childSidebar =
   params.get("scene") === "navigation" && params.get("childSidebar") === "1"
     ? createChildSidebarPreference()
     : null;
+const childNavigation =
+  childSidebar !== null && params.get("childNavigation") === "1";
 let childSidebarInputSequence = 0;
 const rails = supportingRailsData(params.get("rails"));
 const emptyProjectScene =
@@ -143,6 +145,9 @@ const sideConversations = childQuestionData?.rows ?? [
 ];
 const uiPolishTelemetry = {
   protocolCalls: [] as string[],
+  ...(childNavigation
+    ? { navigationReads: [] as { method: string; threadId: string }[] }
+    : {}),
   workspaceUsedCalls: 0,
   machineStatusCalls: 0,
   machineCatalogCalls: 0,
@@ -156,6 +161,7 @@ const uiPolishTelemetry = {
     key?: string;
     trusted: boolean;
     sequence?: number;
+    threadId?: string;
   }[],
 };
 // Deterministic holds for the Side chat UI acceptance scene only. No Host/model calls.
@@ -169,6 +175,19 @@ const sideChatFixture = {
 const options = {
   request: async (method: string, request?: unknown) => {
     uiPolishTelemetry.protocolCalls.push(method);
+    if (
+      childNavigation &&
+      [
+        "zen/thread/resume",
+        "zen/thread/resume-window",
+        "zen/thread/read",
+      ].includes(method)
+    ) {
+      const threadId = (request as { threadId?: string } | undefined)?.threadId;
+      if (threadId !== "thread-1" && threadId !== "design-child")
+        throw new Error("Unexpected synthetic child navigation owner");
+      uiPolishTelemetry.navigationReads!.push({ method, threadId });
+    }
     if (readingStream) return readingStream.read(method, request);
     if (readingScene)
       return readReadingRequest(
@@ -185,7 +204,7 @@ const options = {
       params.get("scene") === "navigation" &&
       method === "zen/thread/questions/list"
     )
-      return readNavigationQuestions(request);
+      return readNavigationQuestions(request, childNavigation);
     if (
       method === "zen/thread/resume" ||
       method === "zen/thread/resume-window"
@@ -226,7 +245,11 @@ const options = {
       return {
         thread: resumed(
           threadWithMessage(
-            "Synthetic parent read for local side chat draft.",
+            childNavigation
+              ? threadId === "thread-1"
+                ? "已检查工作区。你可以在右侧阅读和编辑计划，同时保留当前对话。\n\n### 下一步\n\n- 统一浏览器和文件工作区\n- 在同一页面与 Agent 协作\n- 查看上下文压缩结果"
+                : `Synthetic ${sideConversations.find((entry) => entry.threadId === threadId)?.name ?? "side chat"}. This conversation has its own draft and reading state.`
+              : "Synthetic parent read for local side chat draft.",
             threadId,
           ),
         ).thread,
@@ -799,15 +822,26 @@ if (params.get("scene") === "navigation" || readingScene) {
             ? "projects"
             : element?.matches(".recent-thread-group .thread-row")
               ? "recent"
-              : childSidebar && element?.matches(".subagent-sidebar-visibility")
-                ? "child-sidebar"
-                : null;
+              : childNavigation &&
+                  element?.matches(".project-group .thread-row")
+                ? "project"
+                : childSidebar &&
+                    element?.matches(".subagent-sidebar-visibility")
+                  ? "child-sidebar"
+                  : null;
       if (!target) return;
       uiPolishTelemetry.navigationInputEvents.push({
         type,
         target,
         ...(event instanceof KeyboardEvent ? { key: event.key } : {}),
         trusted: event.isTrusted,
+        ...(childNavigation && element?.closest(".sidebar [data-thread-id]")
+          ? {
+              threadId: element
+                .closest("[data-thread-id]")!
+                .getAttribute("data-thread-id")!,
+            }
+          : {}),
         ...(childSidebar ? { sequence: ++childSidebarInputSequence } : {}),
       });
       if (uiPolishTelemetry.navigationInputEvents.length > 80)
@@ -820,7 +854,8 @@ if (params.get("scene") === "navigation" || readingScene) {
       if (
         typeof owner === "string" ||
         owner.kind !== "thread" ||
-        owner.id !== "thread-1"
+        (owner.id !== "thread-1" &&
+          !(childNavigation && owner.id === "design-child"))
       )
         throw new Error("Unexpected synthetic information owner");
       uiPolishTelemetry.informationReads.push({ ...owner });
@@ -1169,7 +1204,11 @@ function thread(threadId = "thread-1"): Thread {
     agentRole: null,
     gitInfo: null,
     name:
-      threadId === "thread-1" ? (rails?.thread ?? "Thread one") : "Thread two",
+      threadId === "thread-1"
+        ? (rails?.thread ?? "Thread one")
+        : childNavigation && threadId === "design-child"
+          ? "Design review"
+          : "Thread two",
     turns: [],
   };
 }

@@ -575,3 +575,284 @@ test("isolated child profile reuses exact navigation build, sandbox and syntheti
     /localStorage|fetch\(|writeFile|window\.zenx|child_process/,
   );
 });
+
+import {
+  assertChildNavigationState,
+  assertChildNavigationTransition,
+  captureChildNavigation,
+  childNavigationDraft,
+  childNavigationAnswer,
+} from "../scripts/navigation-main-ui-preview.mjs";
+function journeyState(owner = "design-child", draft = childNavigationDraft) {
+  const s = childState(true, [{ threadId: "design-child", visible: true }]);
+  s.draft = draft;
+  s.childSidebar.owner = `thread:${owner}`;
+  s.childSidebar.answers =
+    owner === "design-child"
+      ? [childNavigationAnswer]
+      : ["Synthetic parent conversation"];
+  s.childSidebar.left.current = s.childSidebar.recent.current =
+    owner === "design-child" ? "page" : null;
+  s.project.current = s.recent.current = owner === "thread-1" ? "page" : null;
+  s.telemetry.navigationReads = [
+    { method: "zen/thread/resume-window", threadId: "thread-1" },
+    { method: "zen/thread/resume-window", threadId: "design-child" },
+  ];
+  s.telemetry.informationReads = [
+    { kind: "thread", id: "thread-1" },
+    { kind: "thread", id: "design-child" },
+  ];
+  return s;
+}
+test("child navigation read admission remains opt-in and owner/schema bounded", async () => {
+  const { tsImport } = await import("tsx/esm/api");
+  const { readNavigationQuestions } = await tsImport(
+    "./fixtures/ui-polish-visual-navigation.ts",
+    import.meta.url,
+  );
+  assert.throws(() => readNavigationQuestions({ threadId: "design-child" }));
+  assert.deepEqual(
+    readNavigationQuestions({ threadId: "design-child" }, true),
+    { questions: [], totalPending: 0 },
+  );
+  for (const request of [
+    { threadId: "test-child" },
+    { threadId: "other" },
+    { threadId: "design-child", extra: true },
+    [],
+    null,
+  ])
+    assert.throws(() => readNavigationQuestions(request, true));
+});
+test("whole-App child round trip rejects draft leakage, wrong content/owner and unrelated effects", () => {
+  const baseline = childState();
+  assert.doesNotThrow(() =>
+    assertChildNavigationState(
+      journeyState(),
+      "design-child",
+      childNavigationDraft,
+      baseline,
+    ),
+  );
+  assert.doesNotThrow(() =>
+    assertChildNavigationState(
+      journeyState("thread-1", navigationDraft),
+      "thread-1",
+      navigationDraft,
+      baseline,
+    ),
+  );
+  for (const mutate of [
+    (s) => (s.draft = navigationDraft),
+    (s) => (s.childSidebar.answers = baseline.childSidebar.answers),
+    (s) => (s.childSidebar.owner = "thread:thread-1"),
+    (s) => (s.childSidebar.left.current = null),
+    (s) => (s.childSidebar.recent.centerHit = false),
+    (s) => (s.childSidebar.siblingProject.centerHit = false),
+    (s) =>
+      (s.childSidebar.preference.visibleSubagentThreadIds = ["design-child"]),
+    (s) => (s.telemetry.navigationReads = []),
+    (s) =>
+      s.telemetry.informationReads.push({ kind: "thread", id: "test-child" }),
+    (s) => s.telemetry.protocolCalls.push("zen/turn/send"),
+    (s) => (s.telemetry.informationUpdates = 1),
+    (s) => (s.composer.fullyVisible = false),
+    (s) => (s.questionReadErrors = ["Loading failed"]),
+  ]) {
+    const s = journeyState();
+    mutate(s);
+    assert.throws(() =>
+      assertChildNavigationState(
+        s,
+        "design-child",
+        childNavigationDraft,
+        baseline,
+      ),
+    );
+  }
+});
+test("child open/return uses trusted left-row input, native keyboard return and distinct unsent drafts", async () => {
+  for (const trusted of [true, false]) {
+    let s = childState(),
+      sequence = 0,
+      tab = "",
+      showed = false;
+    s.telemetry.navigationReads = [
+      { method: "zen/thread/resume-window", threadId: "thread-1" },
+    ];
+    const telemetry = s.telemetry,
+      calls = [],
+      shots = [],
+      evidence = {};
+    const drafts = { "thread-1": "", "design-child": "" };
+    let owner = "thread-1";
+    const select = (selector) => {
+      owner = selector.includes("design-child") ? "design-child" : "thread-1";
+      s = journeyState(owner, drafts[owner]);
+      s.telemetry = telemetry;
+      telemetry.navigationReads.push({
+        method: "zen/thread/resume-window",
+        threadId: owner,
+      });
+      telemetry.informationReads.push({ kind: "thread", id: owner });
+      telemetry.navigationInputEvents.push({
+        type: "click",
+        trusted,
+        threadId: owner,
+        target: selector.includes("recent") ? "recent" : "project",
+        sequence: ++sequence,
+      });
+    };
+    const action = captureChildNavigation({
+      options: { name: "desktop-light", theme: "light" },
+      evidence,
+      evaluate: async (exp) =>
+        exp.startsWith("(function observeNavigation")
+          ? structuredClone(s)
+          : true,
+      wait: async () => {},
+      click: async (selector) => {
+        calls.push(["click", selector]);
+        if (selector.includes("thread-row") && showed) select(selector);
+      },
+      tabTo: async (selector) => {
+        tab = selector;
+        calls.push(["tabTo", selector]);
+        if (selector.includes("thread-1")) {
+          s.project.focused = true;
+          s.project.focusVisible = true;
+        }
+        return true;
+      },
+      capture: async (name) => shots.push(name),
+      send: async (method, input) => {
+        calls.push([method, input]);
+        if (method === "Input.insertText") {
+          drafts[owner] = input.text;
+          s.draft = input.text;
+        }
+        if (method === "Input.dispatchKeyEvent") {
+          telemetry.navigationInputEvents.push({
+            type: input.type === "keyUp" ? "keyup" : "keydown",
+            key: input.key,
+            threadId: tab.includes("thread-1") ? "thread-1" : undefined,
+            target: tab.includes("subagent-sidebar-visibility")
+              ? "child-sidebar"
+              : "project",
+            trusted: true,
+            sequence: ++sequence,
+          });
+        }
+        if (method === "Input.dispatchKeyEvent" && input.type === "keyUp") {
+          if (tab.includes("subagent-sidebar-visibility")) {
+            telemetry.navigationInputEvents.push({
+              type: "click",
+              target: "child-sidebar",
+              trusted: true,
+              sequence: ++sequence,
+            });
+            showed = true;
+            s = childState(true, [{ threadId: "design-child", visible: true }]);
+            s.telemetry = telemetry;
+          } else select(tab);
+        }
+      },
+    });
+    if (!trusted) {
+      await assert.rejects(action, /Trusted input/);
+      assert.equal(evidence.childNavigationTrips[0].status, "failed");
+      continue;
+    }
+    await action;
+    assert.equal(evidence.childNavigationTrips[0].status, "passed");
+    assert.deepEqual(shots, [
+      "child-navigation-desktop-light-child-draft",
+      "child-navigation-desktop-light-parent-return",
+      "child-navigation-desktop-light-child-return",
+    ]);
+    assert.equal(calls.filter(([m]) => m === "Input.insertText").length, 2);
+    assert(
+      calls.some(([m, value]) => m === "tabTo" && value.includes("thread-1")),
+    );
+    assert.deepEqual(
+      calls
+        .filter(([m]) => m === "Input.dispatchKeyEvent")
+        .map(([, p]) => [p.type, p.key]),
+      [
+        ["keyDown", "Enter"],
+        ["keyUp", "Enter"],
+        ["keyDown", "Enter"],
+        ["keyUp", "Enter"],
+      ],
+    );
+    assert.equal(drafts["thread-1"], navigationDraft);
+    assert.equal(drafts["design-child"], childNavigationDraft);
+  }
+});
+test("child navigation is isolated, fixed-head, light desktop only, with separate timed artifacts", async () => {
+  const read = (p) => readFile(new URL(p, import.meta.url), "utf8");
+  const [capture, fixture, workflow] = await Promise.all([
+    read("../scripts/capture-main-ui-preview.mjs"),
+    read("./fixtures/ui-polish-visual.tsx"),
+    read("../../../.github/workflows/desktop-navigation-ui.yml"),
+  ]);
+  assert.match(capture, /captureProfile === "desktop-child-navigation"/);
+  assert.match(capture, /ZENX_CHILD_NAVIGATION_EXPECTED_HEAD/);
+  assert.match(
+    capture,
+    /desktopReentry \|\| desktopNested \|\| desktopChildNavigation[\s\S]*?c.theme === "light"/,
+  );
+  assert.match(
+    capture,
+    /if \(desktopChildNavigation\) query.set\("childNavigation", "1"\)/,
+  );
+  assert.match(
+    fixture,
+    /childSidebar !== null && params.get\("childNavigation"\) === "1"/,
+  );
+  assert.match(fixture, /childNavigation && owner.id === "design-child"/);
+  assert.match(fixture, /readNavigationQuestions\(request, childNavigation\)/);
+  assert.match(workflow, /desktop-child-navigation" desktop-child-navigation/);
+  assert.match(
+    workflow,
+    /ZENX_CHILD_NAVIGATION_EXPECTED_HEAD: \$\{\{ github.event.pull_request.head.sha \}\}/,
+  );
+  assert.match(workflow, /unsent per-thread drafts/);
+});
+
+test("fresh transition proof rejects historical owner reads or missing native keyboard events", () => {
+  const before = journeyState("design-child", childNavigationDraft);
+  const after = structuredClone(before);
+  after.telemetry.navigationReads.push({
+    method: "zen/thread/resume-window",
+    threadId: "thread-1",
+  });
+  after.telemetry.navigationInputEvents = ["keydown", "click", "keyup"].map(
+    (type, n) => ({
+      type,
+      key: "Enter",
+      threadId: "thread-1",
+      trusted: true,
+      sequence: n + 1,
+    }),
+  );
+  assert.doesNotThrow(() =>
+    assertChildNavigationTransition(before, after, "thread-1", true),
+  );
+  const stale = structuredClone(after);
+  stale.telemetry.navigationReads = before.telemetry.navigationReads;
+  assert.throws(
+    () => assertChildNavigationTransition(before, stale, "thread-1", true),
+    /fresh/,
+  );
+  for (const type of ["keydown", "keyup", "click"]) {
+    const bad = structuredClone(after);
+    bad.telemetry.navigationInputEvents =
+      bad.telemetry.navigationInputEvents.filter(
+        (event) => event.type !== type,
+      );
+    assert.throws(() =>
+      assertChildNavigationTransition(before, bad, "thread-1", true),
+    );
+  }
+});

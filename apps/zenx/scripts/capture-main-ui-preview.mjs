@@ -28,6 +28,7 @@ import { observePreviewChrome } from "./preview-browser-lifecycle.mjs";
 import {
   captureDesktopNavigation,
   captureChildSidebar,
+  captureChildNavigation,
 } from "./navigation-main-ui-preview.mjs";
 
 // Do not spoof this guard to retry a denied local browser/socket operation.
@@ -47,13 +48,18 @@ const desktopRoom = captureProfile === "desktop-room";
 const desktopReentry = captureProfile === "desktop-reading-reentry";
 const desktopNested = captureProfile === "desktop-reading-nested-output";
 const desktopChildSidebar = captureProfile === "desktop-child-sidebar";
+const desktopChildNavigation = captureProfile === "desktop-child-navigation";
 // Older profiles must not load this separately scoped receipt/capture helper.
 const roomCapture = desktopRoom
   ? await import("./room-file-owner-main-ui-preview.mjs")
   : null;
 const desktopOnly = desktopQueue || desktopReading;
 const otherPointer =
-  desktopRoom || desktopReentry || desktopNested || desktopChildSidebar
+  desktopRoom ||
+  desktopReentry ||
+  desktopNested ||
+  desktopChildSidebar ||
+  desktopChildNavigation
     ? "fine"
     : captureProfile;
 const pointer = desktopOnly ? "fine" : otherPointer;
@@ -115,17 +121,25 @@ if (desktopRoom) {
   assert.equal(source.clean, true);
   assert.deepEqual(Object.keys(source.scenes), ["room"]);
 }
-if (desktopReentry || desktopNested || desktopChildSidebar) {
+if (
+  desktopReentry ||
+  desktopNested ||
+  desktopChildSidebar ||
+  desktopChildNavigation
+) {
   assert.equal(
     source.commit,
-    desktopChildSidebar
-      ? process.env.ZENX_CHILD_SIDEBAR_EXPECTED_HEAD
-      : desktopNested
-        ? process.env.ZENX_NESTED_EXPECTED_HEAD
-        : process.env.ZENX_REENTRY_EXPECTED_HEAD,
+    desktopChildNavigation
+      ? process.env.ZENX_CHILD_NAVIGATION_EXPECTED_HEAD
+      : desktopChildSidebar
+        ? process.env.ZENX_CHILD_SIDEBAR_EXPECTED_HEAD
+        : desktopNested
+          ? process.env.ZENX_NESTED_EXPECTED_HEAD
+          : process.env.ZENX_REENTRY_EXPECTED_HEAD,
     "Re-entry uses the exact event head",
   );
-  const isolatedScene = desktopChildSidebar ? "navigation" : "reading";
+  const originalScene = desktopChildSidebar ? "navigation" : "reading";
+  const isolatedScene = desktopChildNavigation ? "navigation" : originalScene;
   assert.deepEqual(Object.keys(source.scenes), [isolatedScene]);
   assert.equal(source.scenes[isolatedScene].html, `${isolatedScene}.html`);
   assert.deepEqual(
@@ -575,7 +589,7 @@ try {
       ? cases
           .filter((c) => c.width === 1280 && c.height === 900)
           .map((c) => ({ ...c, width: 1440, lang: "zh-CN" }))
-      : desktopReentry || desktopNested
+      : desktopReentry || desktopNested || desktopChildNavigation
         ? cases.filter(
             (c) => c.width === 1280 && c.height === 900 && c.theme === "light",
           )
@@ -606,7 +620,9 @@ try {
       if (scene === "navigation") {
         query.set("scene", "navigation");
         query.set("conversationTabs", "true");
-        if (desktopChildSidebar) query.set("childSidebar", "1");
+        if (desktopChildSidebar || desktopChildNavigation)
+          query.set("childSidebar", "1");
+        if (desktopChildNavigation) query.set("childNavigation", "1");
       }
       if (scene === "pending") {
         query.set("many", "");
@@ -705,7 +721,11 @@ try {
       }
       if (scene === "navigation") {
         await (
-          desktopChildSidebar ? captureChildSidebar : captureDesktopNavigation
+          desktopChildNavigation
+            ? captureChildNavigation
+            : desktopChildSidebar
+              ? captureChildSidebar
+              : captureDesktopNavigation
         )({
           send,
           evaluate,

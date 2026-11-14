@@ -35,7 +35,10 @@ export async function dispatchNavigationKey(
 }
 
 /** Read-only browser observation; tests exercise its shape, not simulated layout. */
-export function observeNavigation(childSidebar = false) {
+export function observeNavigation(
+  childSidebar = false,
+  childNavigation = false,
+) {
   const read = (selector, visibility = false) => {
     const element = document.querySelector(selector);
     if (!element) return null;
@@ -89,6 +92,18 @@ export function observeNavigation(childSidebar = false) {
     '.composer [contenteditable="true"], .composer textarea',
   );
   return {
+    ...(childNavigation
+      ? {
+          navigationTitle:
+            document.querySelector(".thread-heading .thread-title-path")
+              ?.textContent ?? null,
+          activeControl: {
+            tag: document.activeElement?.tagName,
+            role: document.activeElement?.getAttribute("role"),
+            label: document.activeElement?.getAttribute("aria-label"),
+          },
+        }
+      : {}),
     ...(childSidebar
       ? {
           childSidebar: {
@@ -631,6 +646,338 @@ export async function captureChildSidebar({
         ),
       );
     }
+    receipt.status = "passed";
+  } catch (error) {
+    receipt.status = "failed";
+    receipt.error = String(error);
+    throw error;
+  } finally {
+    receipt.elapsedMs = Date.now() - started;
+  }
+}
+
+export const childNavigationDraft =
+  "Unsent design-child draft; keep parent separate.";
+export const childNavigationAnswer =
+  "Synthetic Design review. This conversation has its own draft and reading state.";
+
+export function assertChildNavigationState(state, owner, draft, baseline) {
+  const child = state.childSidebar;
+  assert.equal(
+    state.draft,
+    draft,
+    "Each conversation retains only its own unsent draft",
+  );
+  assert.deepEqual(state.questionReadErrors, []);
+  assert.equal(
+    child.owner,
+    `thread:${owner}`,
+    "Information matches the selected conversation",
+  );
+  assert(
+    state.dock?.fullyVisible &&
+      state.composer?.fullyVisible &&
+      state.composer.centerHit,
+  );
+  assert.equal(state.entry.expanded, "true");
+  assert.equal(state.popover, null);
+  const active = owner === "design-child" ? child.left : state.project;
+  const alias = owner === "design-child" ? child.recent : state.recent;
+  const inactive = owner === "design-child" ? state.project : child.left;
+  assert(
+    active?.fullyVisible &&
+      active.centerHit &&
+      alias?.fullyVisible &&
+      alias.centerHit,
+  );
+  assert.equal(active.current, "page");
+  assert.equal(alias.current, "page");
+  assert.notEqual(inactive?.current, "page");
+  assert(child.siblingProject?.centerHit && child.siblingRecent?.centerHit);
+  assert.equal(child.leftCount, 1);
+  assert.equal(child.leftTotalCount, 2);
+  assert.equal(child.siblingLeftCount, 2);
+  assert.deepEqual(child.preference, {
+    ...baseline.childSidebar.preference,
+    visibleSubagentThreadIds: ["test-child", "design-child"],
+    changes: [{ threadId: "design-child", visible: true }],
+  });
+  if (owner === "design-child") {
+    assert.deepEqual(
+      child.answers,
+      [childNavigationAnswer],
+      "Actual child answer, not a renamed parent",
+    );
+  } else {
+    assert.deepEqual(
+      child.answers,
+      baseline.childSidebar.answers,
+      "Parent transcript returns unchanged",
+    );
+    assert(!child.answers.includes(childNavigationAnswer));
+    assert.equal(child.toggle?.checked, "true");
+    assert.equal(child.sibling?.checked, "true");
+  }
+  for (const key of [
+    "informationUpdates",
+    "machineThreadCreateCalls",
+    "sideChatCreateCommandCalls",
+  ])
+    assert.equal(state.telemetry[key], baseline.telemetry[key], `No ${key}`);
+  assert(
+    state.telemetry.navigationReads.some(
+      (read) =>
+        read.threadId === owner &&
+        /^zen\/thread\/resume(?:-window)?$/.test(read.method),
+    ),
+  );
+  assert(
+    state.telemetry.navigationReads.every((read) =>
+      ["thread-1", "design-child"].includes(read.threadId),
+    ),
+  );
+  assert(
+    state.telemetry.informationReads.some(
+      (read) => read.kind === "thread" && read.id === owner,
+    ),
+  );
+  assert(
+    state.telemetry.informationReads.every(
+      (read) =>
+        read.kind === "thread" &&
+        ["thread-1", "design-child"].includes(read.id),
+    ),
+  );
+  assert(
+    state.telemetry.protocolCalls.every((method) =>
+      [
+        "zen/initialize",
+        "zen/thread/resume",
+        "zen/thread/resume-window",
+        "zen/thread/read",
+        "zen/thread/questions/list",
+      ].includes(method),
+    ),
+    "Read-only navigation does not send, create, archive, stop or respond",
+  );
+}
+
+export function assertChildNavigationTransition(
+  before,
+  after,
+  owner,
+  keyboard,
+) {
+  const reads = after.telemetry.navigationReads.slice(
+    before.telemetry.navigationReads.length,
+  );
+  assert(
+    reads.some(
+      (read) =>
+        read.threadId === owner &&
+        /^zen\/thread\/resume(?:-window)?$/.test(read.method),
+    ),
+    "Each navigation performs a fresh exact-owner resume",
+  );
+  const seq = before.telemetry.navigationInputEvents.at(-1)?.sequence ?? 0;
+  const events = after.telemetry.navigationInputEvents.filter(
+    (event) => event.sequence > seq,
+  );
+  assert(
+    events.some(
+      (event) =>
+        event.threadId === owner && event.type === "click" && event.trusted,
+    ),
+    "Trusted input selects the exact left-sidebar row",
+  );
+  if (keyboard)
+    for (const type of ["keydown", "keyup"])
+      assert(
+        events.some(
+          (event) =>
+            event.threadId === owner &&
+            event.type === type &&
+            event.key === "Enter" &&
+            event.trusted,
+        ),
+        `Trusted Enter ${type} reaches the exact parent row`,
+      );
+}
+
+/** Independent opt-in whole-App round trip, not part of the preference-only route. */
+export async function captureChildNavigation({
+  send,
+  evaluate,
+  wait,
+  click,
+  tabTo,
+  capture,
+  evidence,
+  options,
+}) {
+  const receipt = {
+    scope: "synthetic-child-open-return-no-send",
+    theme: options.theme,
+    status: "running",
+    states: [],
+    transitions: [],
+  };
+  (evidence.childNavigationTrips ??= []).push(receipt);
+  const started = Date.now();
+  const observe = () =>
+    evaluate(`(${observeNavigation.toString()} )(true, true)`);
+  const settle = async () => {
+    let prior;
+    for (let n = 0; n < 12; n++) {
+      await evaluate(
+        "document.fonts.ready.then(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))))",
+      );
+      const sample = await observe();
+      receipt.lastObservation = sample;
+      // Ignore read telemetry timestamps/counts, but not UI identity, geometry or drafts.
+      const stable = JSON.stringify({ ...sample, telemetry: undefined });
+      if (stable === prior) return sample;
+      prior = stable;
+    }
+    throw new Error("Child navigation UI did not settle");
+  };
+  const switchSelector =
+    '.information-dock .subagent-sidebar-visibility[aria-label="Show in sidebar: Design review"]';
+  const projectChild =
+    '.sidebar .project-group [data-thread-id="design-child"] .thread-row';
+  const recentChild =
+    '.sidebar .recent-thread-group [data-thread-id="design-child"] .thread-row';
+  const information = async (owner) => {
+    const before = await observe();
+    receipt.transitions.push({
+      name: "information-after-navigation",
+      owner,
+      expanded: before.entry?.expanded,
+      observedOwner: before.childSidebar.owner,
+    });
+    assert(
+      before.childSidebar.owner == null ||
+        before.childSidebar.owner === `thread:${owner}`,
+      "No stale Information owner remains after the selected row changes",
+    );
+    if (before.entry?.expanded === "false")
+      await click(navigationSelectors.entry);
+    await wait(
+      `document.querySelector('.information-dock .editable-information-panel')?.getAttribute('data-owner')===${JSON.stringify(`thread:${owner}`)}`,
+    );
+  };
+  const record = async (name, owner, draft, baseline) => {
+    const before = await settle();
+    receipt.states.push({ name, before });
+    assertChildNavigationState(before, owner, draft, baseline);
+    await capture(
+      `child-navigation-${options.name}-${name}`,
+      options,
+      "navigation",
+    );
+    const after = await observe();
+    receipt.states.at(-1).after = after;
+    assertChildNavigationState(after, owner, draft, baseline);
+    assert.deepEqual(
+      { ...after, telemetry: undefined },
+      { ...before, telemetry: undefined },
+      "Screenshot-time owner, draft and geometry stay settled",
+    );
+  };
+  const navigate = async (selector, owner, keyboard = false) => {
+    const before = await observe();
+    if (keyboard) {
+      assert(
+        await tabTo(`${selector}:focus-visible`),
+        "Actual Tab reaches the parent row",
+      );
+      const focused = await observe();
+      receipt.transitions.push({
+        name: "parent-keyboard-focus",
+        owner,
+        observed: focused.project,
+      });
+      assert(
+        focused.project?.focused &&
+          focused.project.focusVisible &&
+          focused.project.fullyVisible &&
+          focused.project.centerHit &&
+          focused.project.outline.style !== "none" &&
+          parseFloat(focused.project.outline.width) > 0,
+        "Parent row has visible keyboard focus before Enter",
+      );
+      await dispatchNavigationKey(send, "Enter", "Enter", 13);
+    } else await click(selector);
+    await wait(
+      `document.querySelector(${JSON.stringify(selector)})?.getAttribute('aria-current')==='page'`,
+    );
+    const after = await observe();
+    receipt.transitions.push({
+      name: "row-navigation",
+      owner,
+      keyboard,
+      after,
+    });
+    assertChildNavigationTransition(before, after, owner, keyboard);
+    await information(owner);
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: 700,
+      y: 220,
+    });
+  };
+  try {
+    await wait(
+      `!!document.querySelector(${JSON.stringify(navigationSelectors.project)})`,
+    );
+    await click(navigationSelectors.project);
+    await wait(
+      `!!document.querySelector(${JSON.stringify(navigationSelectors.editor)})`,
+    );
+    await click(navigationSelectors.editor);
+    await send("Input.insertText", { text: navigationDraft });
+    await click(navigationSelectors.entry);
+    await wait(`!!document.querySelector(${JSON.stringify(switchSelector)})`);
+    assert(await tabTo(`${switchSelector}:focus-visible`));
+    const baseline = await settle();
+    receipt.baseline = baseline;
+    assertChildSidebarState(baseline, false, null, []);
+    await dispatchNavigationKey(send, "Enter", "Enter", 13);
+    await wait(
+      `document.querySelector(${JSON.stringify(switchSelector)})?.getAttribute('aria-checked')==='true' && document.querySelector(${JSON.stringify(switchSelector)})?.getAttribute('aria-busy')==='false'`,
+    );
+    const shown = await settle();
+    receipt.shown = shown;
+    assertChildSidebarState(shown, true, baseline, [
+      { threadId: "design-child", visible: true },
+    ]);
+    assert(
+      shown.telemetry.navigationInputEvents.some(
+        (event) =>
+          event.sequence >
+            (baseline.telemetry.navigationInputEvents.at(-1)?.sequence ?? 0) &&
+          event.target === "child-sidebar" &&
+          event.type === "click" &&
+          event.trusted,
+      ),
+      "Trusted switch activation shows the child",
+    );
+    await navigate(projectChild, "design-child");
+    const emptyChild = await settle();
+    receipt.childBeforeEdit = emptyChild;
+    assertChildNavigationState(emptyChild, "design-child", "", baseline);
+    await click(navigationSelectors.editor);
+    await send("Input.insertText", { text: childNavigationDraft });
+    await record("child-draft", "design-child", childNavigationDraft, baseline);
+    await navigate(navigationSelectors.project, "thread-1", true);
+    await record("parent-return", "thread-1", navigationDraft, baseline);
+    await navigate(recentChild, "design-child");
+    await record(
+      "child-return",
+      "design-child",
+      childNavigationDraft,
+      baseline,
+    );
     receipt.status = "passed";
   } catch (error) {
     receipt.status = "failed";
