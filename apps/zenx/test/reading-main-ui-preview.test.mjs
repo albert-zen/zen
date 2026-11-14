@@ -1158,6 +1158,7 @@ function nestedState() {
   const s = continuationState();
   s.nestedOutput = {
     count: 1,
+    rect: { left: 312, top: 584.875, right: 861, bottom: 843.875 },
     role: "region",
     tabIndex: 0,
     clientHeight: 260,
@@ -1339,4 +1340,178 @@ test("nested profile remains isolated from ordinary capture and reuses receipt/f
     helper,
     /\.scrollTop\s*=|\.scrollTo\(|\.scrollIntoView\(|\.focus\(/,
   );
+});
+
+function composerClippedEnd() {
+  return {
+    rect: {
+      x: 324,
+      y: 790.375,
+      width: 245,
+      height: 14,
+      right: 569,
+      bottom: 804.375,
+    },
+    limit: { left: 312, top: 584.875, right: 861, bottom: 774 },
+    clips: [
+      {
+        left: 312,
+        top: 584.875,
+        right: 861,
+        bottom: 843.875,
+        x: true,
+        y: true,
+        paint: false,
+      },
+    ],
+    hiddenBy: null,
+    visible: false,
+    hit: false,
+  };
+}
+test("nested outer clearance is limited to a reached inner end solely below Composer", async () => {
+  const { nestedOuterClearanceDelta } =
+    await import("../scripts/inline-trace-main-ui-preview.mjs");
+  const state = nestedState();
+  state.nestedOutput.top = state.nestedOutput.maxTop = 699;
+  state.nestedOutput.end = composerClippedEnd();
+  assert.equal(nestedOuterClearanceDelta(state), 39);
+  for (const change of [
+    (s) => (s.nestedOutput.top -= 2),
+    (s) => (s.nestedOutput.end.visible = true),
+    (s) => (s.nestedOutput.end.hiddenBy = "hidden"),
+    (s) => (s.nestedOutput.end.limit.bottom = 760),
+    (s) => (s.nestedOutput.end.rect.x = 300),
+    (s) => (s.nestedOutput.end.rect.y = 500),
+    (s) => (s.nestedOutput.end.clips[0].bottom = 800),
+    (s) => (s.nestedOutput.end.clips = []),
+    (s) => (s.continuation.wheel = null),
+    (s) => (s.continuation.wheel = { x: 336, y: 632 }),
+    (s) => (s.continuation.top = s.continuation.maxTop),
+  ]) {
+    const bad = structuredClone(state);
+    change(bad);
+    assert.throws(() => nestedOuterClearanceDelta(bad));
+  }
+  state.nestedOutput.end.visible = state.nestedOutput.end.hit = true;
+  assert.equal(
+    nestedOuterClearanceDelta(state),
+    0,
+    "No induced outer input when already painted",
+  );
+});
+
+test("separate actual outer wheel clears Composer while preserving inner bottom and then reaches answer", async () => {
+  const { captureNestedOutput } =
+    await import("../scripts/inline-trace-main-ui-preview.mjs");
+  const state = nestedState(),
+    evidence = {},
+    shots = [];
+  state.nestedOutput.maxTop = 699;
+  state.nestedOutput.end = composerClippedEnd();
+  await captureNestedOutput({
+    options: { theme: "light", name: "desktop-light" },
+    evidence,
+    observe: async () => structuredClone(state),
+    settle: async () => {},
+    capture: async (name) => shots.push(name),
+    send: async (_method, input) => {
+      if (input.type === "keyUp") state.nestedOutput.focused = true;
+      if (input.type !== "mouseWheel") return;
+      if (input.x === state.nestedOutput.wheel.x) {
+        state.nestedOutput.top += input.deltaY;
+        state.continuation.output[0][0] = state.nestedOutput.top;
+      } else {
+        state.continuation.top += input.deltaY;
+        const end = state.nestedOutput.end;
+        end.rect.y -= input.deltaY;
+        end.rect.bottom -= input.deltaY;
+        end.limit.top -= input.deltaY;
+        end.clips[0].top -= input.deltaY;
+        end.clips[0].bottom -= input.deltaY;
+        end.visible = end.hit = end.rect.bottom <= end.limit.bottom;
+        state.turns[1].answerEnd.rect.bottom -= input.deltaY;
+        state.turns[1].answerEnd.visible =
+          state.turns[1].answerEnd.rect.bottom <= 774;
+      }
+    },
+  });
+  const trip = evidence.nestedOutputTrips[0];
+  assert.equal(trip.status, "passed");
+  assert.equal(trip.innerEnd.nestedOutput.top, 699);
+  assert.equal(trip.innerEnd.nestedOutput.end.visible, false);
+  assert.equal(trip.outerClearance.wheels.length, 1);
+  assert.equal(trip.outerClearance.wheels[0].input.deltaY, 39);
+  assert.equal(trip.outerClearance.wheels[0].delivery, "acknowledged");
+  assert.equal(trip.end.nestedOutput.top, 699);
+  assert(trip.end.nestedOutput.end.visible && trip.end.nestedOutput.end.hit);
+  assert.equal(trip.transcriptReturn, "reached-with-wheel");
+  assert(trip.wheels.every((w) => w.samples.length && w.settled));
+  assert.equal(shots.length, 3);
+});
+
+test("post-wheel failure observations persist before checks; unknown or ineffective outer input is never replayed", async () => {
+  const { captureNestedOutput } =
+    await import("../scripts/inline-trace-main-ui-preview.mjs");
+  for (const fault of [
+    "inner-moves-outer",
+    "outer-moves-inner",
+    "outer-moves-page",
+    "outer-no-progress",
+    "outer-unknown",
+  ]) {
+    const state = nestedState(),
+      evidence = {};
+    state.nestedOutput.maxTop = 699;
+    state.nestedOutput.end = composerClippedEnd();
+    let outerInputs = 0;
+    await assert.rejects(
+      captureNestedOutput({
+        options: { theme: "light", name: "desktop-light" },
+        evidence,
+        observe: async () => structuredClone(state),
+        settle: async () => {},
+        capture: async () => {},
+        send: async (_method, input) => {
+          if (input.type === "keyUp") state.nestedOutput.focused = true;
+          if (input.type !== "mouseWheel") return;
+          if (input.x === state.nestedOutput.wheel.x) {
+            state.nestedOutput.top += input.deltaY;
+            state.continuation.output[0][0] = state.nestedOutput.top;
+            if (fault === "inner-moves-outer") state.continuation.top++;
+          } else {
+            outerInputs++;
+            if (fault === "outer-unknown")
+              throw Error("input acknowledgement unknown");
+            if (fault !== "outer-no-progress")
+              state.continuation.top += input.deltaY;
+            if (fault === "outer-moves-inner") state.nestedOutput.top--;
+            if (fault === "outer-moves-page") state.continuation.page[1]++;
+          }
+        },
+      }),
+      fault,
+    );
+    const trip = evidence.nestedOutputTrips[0];
+    assert.equal(trip.status, "failed");
+    if (fault === "inner-moves-outer") {
+      assert.equal(trip.wheels[0].samples[0].continuation.top, 1);
+      assert.equal(outerInputs, 0);
+    } else {
+      assert.equal(outerInputs, 1);
+      assert.equal(trip.innerEnd.nestedOutput.top, 699);
+      const wheel = trip.outerClearance.wheels[0];
+      if (fault === "outer-unknown") {
+        assert.equal(wheel.delivery, "pending");
+        assert.equal(wheel.samples.length, 0);
+      } else {
+        assert.equal(wheel.delivery, "acknowledged");
+        assert(wheel.samples.length > 0);
+        if (fault === "outer-moves-inner")
+          assert.equal(wheel.samples[0].nestedOutput.top, 698);
+        if (fault === "outer-moves-page")
+          assert.equal(wheel.samples[0].continuation.page[1], 1);
+      }
+    }
+  }
 });

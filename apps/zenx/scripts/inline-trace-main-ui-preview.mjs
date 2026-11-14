@@ -289,6 +289,7 @@ export function observeInlineTrace(
     nestedOutput = output
       ? {
           count: outputs.length,
+          rect: { left: r.left, top: r.top, right: r.right, bottom: r.bottom },
           top: output.scrollTop,
           left: output.scrollLeft,
           maxTop: Math.max(0, output.scrollHeight - output.clientHeight),
@@ -802,7 +803,9 @@ export function verifyNestedOutput(state, baseline, phase = "wheel") {
         t.expanded,
       ]),
       offsets: [
-        phase === "tab" ? null : s.continuation.top,
+        ["tab", "outer-clearance", "outer-end"].includes(phase)
+          ? null
+          : s.continuation.top,
         s.continuation.left,
         s.continuation.page,
       ],
@@ -822,17 +825,74 @@ export function verifyNestedOutput(state, baseline, phase = "wheel") {
       identity(baseline),
       "Inner wheel preserves outer/page offsets, conversation, Composer and read-only state",
     );
+    if (phase === "outer-clearance" || phase === "outer-end")
+      assert.deepEqual(
+        [output.top, output.maxTop, state.continuation.output],
+        [
+          baseline.nestedOutput.top,
+          baseline.nestedOutput.maxTop,
+          baseline.continuation.output,
+        ],
+        "Separate outer wheel preserves the reached inner bottom exactly",
+      );
     if (phase !== "head")
       assert(
         output.focused,
         "Native Tab focus stays on output during inner scrolling",
       );
   }
-  if (phase === "end")
+  if (phase === "end" || phase === "outer-end")
     assert(
       output.maxTop - output.top <= 1 && output.end.visible && output.end.hit,
       "Unique original output end fully paints at the inner bottom",
     );
+}
+
+export function nestedOuterClearanceDelta(state) {
+  const output = state.nestedOutput,
+    end = output.end;
+  assert(
+    output.maxTop - output.top <= 1,
+    "Only a reached inner bottom can request outer clearance",
+  );
+  if (end.visible && end.hit) return 0;
+  const r = end.rect,
+    limit = end.limit;
+  assert(
+    r?.width > 0 &&
+      r.height > 0 &&
+      !end.hiddenBy &&
+      !end.visible &&
+      r.x >= limit.left &&
+      r.right <= limit.right &&
+      r.y >= limit.top &&
+      r.bottom > limit.bottom &&
+      limit.bottom === state.continuation.composer[1] &&
+      Array.isArray(end.clips) &&
+      end.clips.length > 0 &&
+      end.clips.every(
+        (clip) =>
+          (!(clip.x || clip.paint) ||
+            (r.x >= clip.left && r.right <= clip.right)) &&
+          (!(clip.y || clip.paint) ||
+            (r.y >= clip.top && r.bottom <= clip.bottom)),
+      ),
+    "Tail is not solely below Composer; no scroll around unknown clipping or an in-band cover",
+  );
+  const { top, maxTop, wheel } = state.continuation;
+  assert(
+    wheel &&
+      output.rect &&
+      !(
+        wheel.x >= output.rect.left &&
+        wheel.x <= output.rect.right &&
+        wheel.y >= output.rect.top &&
+        wheel.y <= output.rect.bottom
+      ) &&
+      top < maxTop - 1,
+    "No safe transcript-owned clearance point or remaining range",
+  );
+  return Math.min(120, maxTop - top, Math.ceil(r.bottom - limit.bottom + 8));
 }
 
 export async function captureNestedOutput({
@@ -844,7 +904,7 @@ export async function captureNestedOutput({
   options,
 }) {
   const started = Date.now();
-  const trip = { status: "running", wheels: [], tabs: 0 };
+  const trip = { status: "running", phase: "head", wheels: [], tabs: 0 };
   (evidence.nestedOutputTrips ??= []).push(trip);
   const frame = (s) => [s.nestedOutput, s.continuation];
   const stable = async () => {
@@ -853,6 +913,7 @@ export async function captureNestedOutput({
       const first = await observe();
       await settle();
       const second = await observe();
+      trip.lastObservation = second;
       if (JSON.stringify(frame(first)) === JSON.stringify(frame(second)))
         return second;
     }
@@ -910,6 +971,7 @@ export async function captureNestedOutput({
     verifyNestedOutput(baseline, head, "tab");
     assert(baseline.nestedOutput.focused && baseline.nestedOutput.top === 0);
     trip.focused = baseline;
+    trip.phase = "inner-scroll";
     let state = baseline;
     for (
       let attempt = 0;
@@ -923,10 +985,19 @@ export async function captureNestedOutput({
         deltaX: 0,
         deltaY: Math.min(240, maxTop - top),
       };
+      const wheelReceipt = {
+        input,
+        beforeTop: top,
+        delivery: "pending",
+        samples: [],
+      };
+      trip.wheels.push(wheelReceipt);
       await send("Input.dispatchMouseEvent", { type: "mouseWheel", ...input });
+      wheelReceipt.delivery = "acknowledged";
       for (let sample = 0; sample < 8; sample++) {
         await settle();
         state = await observe();
+        wheelReceipt.samples.push(state);
         verifyNestedOutput(state, baseline);
         if (state.nestedOutput.top > top) break;
       }
@@ -934,18 +1005,52 @@ export async function captureNestedOutput({
         state.nestedOutput.top > top,
         "Native wheel advances only the nested output",
       );
-      trip.wheels.push({
-        input,
-        beforeTop: top,
-        afterTop: state.nestedOutput.top,
-      });
+      wheelReceipt.afterTop = state.nestedOutput.top;
       state = await stable();
+      wheelReceipt.settled = state;
       verifyNestedOutput(state, baseline);
     }
     assert(trip.wheels.length > 0);
-    verifyNestedOutput(state, baseline, "end");
+    trip.phase = "fixed-outer-end";
+    const innerEnd = state;
+    trip.innerEnd = innerEnd;
+    trip.outerClearance = { before: state, wheels: [] };
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const deltaY = nestedOuterClearanceDelta(state);
+      if (!deltaY) break;
+      trip.phase = "outer-clearance";
+      const top = state.continuation.top;
+      const input = { ...state.continuation.wheel, deltaX: 0, deltaY };
+      const wheelReceipt = {
+        input,
+        beforeTop: top,
+        delivery: "pending",
+        samples: [],
+      };
+      trip.outerClearance.wheels.push(wheelReceipt);
+      await send("Input.dispatchMouseEvent", { type: "mouseWheel", ...input });
+      wheelReceipt.delivery = "acknowledged";
+      for (let sample = 0; sample < 8; sample++) {
+        await settle();
+        state = await observe();
+        wheelReceipt.samples.push(state);
+        verifyNestedOutput(state, innerEnd, "outer-clearance");
+        if (state.continuation.top > top) break;
+      }
+      assert(
+        state.continuation.top > top,
+        "Acknowledged outer wheel must advance before any further input",
+      );
+      wheelReceipt.afterTop = state.continuation.top;
+      state = await stable();
+      wheelReceipt.settled = state;
+      verifyNestedOutput(state, innerEnd, "outer-clearance");
+    }
+    trip.outerClearance.after = state;
+    trip.phase = "end-paint";
+    verifyNestedOutput(state, innerEnd, "outer-end");
     trip.end = await snapshot("end", state);
-    verifyNestedOutput(trip.end, baseline, "end");
+    verifyNestedOutput(trip.end, innerEnd, "outer-end");
     // Existing outer-owner proof now runs independently with inner end offset fixed.
     await captureInlineContinuation({
       send,
@@ -956,6 +1061,12 @@ export async function captureNestedOutput({
       options,
     });
     trip.transcriptReturn = evidence.inlineContinuationTrips.at(-1).outcome;
+    assert(
+      evidence.inlineContinuationTrips.at(-1).screenshotBefore.nestedOutput
+        .focused &&
+        evidence.inlineContinuationTrips.at(-1).after.nestedOutput.focused,
+      "Output retains native keyboard focus after the separate transcript continuation",
+    );
     trip.status = "passed";
   } catch (error) {
     trip.status = "failed";
