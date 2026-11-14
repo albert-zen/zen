@@ -12786,6 +12786,29 @@ button:disabled {
   justify-content: flex-end;
   padding: 6px 14px 0;
 }
+.information-overflow-cue {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  margin-right: auto;
+  padding-right: 8px;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  pointer-events: none;
+  user-select: none;
+}
+.information-overflow-cue[hidden] {
+  display: none;
+}
+.information-overflow-cue > svg {
+  flex: none;
+}
+.information-overflow-cue > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .information-dismiss-toolbar button,
 .information-customize {
   display: inline-flex;

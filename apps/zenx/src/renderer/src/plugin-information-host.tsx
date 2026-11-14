@@ -13,6 +13,7 @@ import {
 } from "./plugin-ui-host.js";
 import { conversationKey, type BoardConversation } from "./board-ui-state.js";
 import { Icon } from "./icons.js";
+import { InformationOverflowCue } from "./InformationOverflowCue.js";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/controls.js";
 import {
   consumeInformationReveal,
@@ -269,6 +270,12 @@ export function PluginInformationHost({
   )?.admissionId;
   const closeControl = (
     <div className="information-dismiss-toolbar">
+      {/* layout.right is resourceWidth + 12: only an open, non-primary
+          resource split contributes width. This toolbar is overlay-only,
+          so this is not another viewport breakpoint or dock policy. */}
+      {layout.right > 12 && (
+        <InformationOverflowCue label={t("informationMoreBelow")} />
+      )}
       <button
         type="button"
         className="quiet-button"

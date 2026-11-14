@@ -1,5 +1,9 @@
 /** Operates only the disposable CI App created by launch-information-board-acceptance. */
 const assert = require("node:assert/strict");
+const {
+  informationOverflowMetrics,
+  verifyInformationOverflowCue,
+} = require("./information-overflow-acceptance.cjs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
@@ -1604,6 +1608,17 @@ async function run() {
     "Manually reopen information beside workspace",
   );
   await capture("03-workspace-reopen-overlay", "overlay");
+  await verifyInformationOverflowCue({
+    read: () =>
+      evaluate(
+        `(${informationOverflowMetrics.toString()})(${informationReachabilityMetrics.toString()})`,
+      ),
+    sendInput: (event) => window.webContents.sendInputEvent(event),
+    pause,
+    screenshot,
+    result,
+    expectedSecondPrompt: revealPrompt,
+  });
   await measureInformationOverlayReachability(revealPrompt);
   window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Escape" });
   window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
