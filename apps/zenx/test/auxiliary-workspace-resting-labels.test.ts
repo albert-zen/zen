@@ -111,3 +111,86 @@ test("canonical label collisions are rejected globally", () => {
   assert.equal(run(values)[0], values[0]);
   assert.deepEqual(run([...values].reverse()).reverse(), run(values));
 });
+
+import {
+  restingConversationLabelPlans as plans,
+  restingLabelFitMode as fit,
+} from "../src/renderer/src/workspace-resting-labels.js";
+
+test("marked then genuine bare suffix and then canonical width fallback", () => {
+  const input = tabs([prefix + "Alpha", prefix + "Beta"]);
+  assert.deepEqual(
+    plans(input, new Set(input.map((x) => x.id))).get("thread:0"),
+    { marked: "… Alpha", bare: "Alpha" },
+  );
+  const measurements = {
+    desktop: true,
+    available: 43,
+    full: 500,
+    marked: 48,
+    bare: 32,
+  };
+  assert.equal(fit(measurements), "bare");
+  assert.equal(fit({ ...measurements, available: 48 }), "marked");
+  assert.equal(fit({ ...measurements, available: 31 }), "canonical");
+  assert.equal(fit({ ...measurements, desktop: false }), "canonical");
+  assert.equal(fit({ ...measurements, full: 43 }), "canonical");
+  assert.equal(fit({ ...measurements, bare: undefined }), "canonical");
+  for (const invalid of [0, -1, NaN, Infinity])
+    assert.equal(
+      fit({ ...measurements, marked: invalid, bare: invalid }),
+      "canonical",
+    );
+});
+test("canonical literal ellipsis never creates bare abbreviation", () => {
+  const input = tabs(["… Alpha", "… Beta"]);
+  assert.deepEqual(
+    plans(input, new Set(input.map((x) => x.id))).get("thread:0"),
+    { marked: "… Alpha", bare: undefined },
+  );
+});
+test("every allowed presentation is collision-free against every other plan and canonical", () => {
+  const normalize = (s: string) =>
+    s.normalize("NFKC").toLowerCase().replace(/\s+/gu, " ").trim();
+  const cases = [
+    [
+      prefix + "Alpha",
+      prefix + "Beta",
+      prefix + "Alpha · Gamma",
+      prefix + "Alpha · Delta",
+      prefix + "Alpha · Epsilon",
+    ],
+    [prefix + "Alpha", prefix + "Beta", "Alpha"],
+    [prefix + "Alpha", prefix + "Beta", "… Alpha"],
+    [prefix + "Alpha", prefix + "Beta", prefix + "… Alpha"],
+    [prefix + "é", prefix + "e\u0301", prefix + "Beta"],
+    [prefix + "Alpha", prefix + " Alpha", prefix + "Beta"],
+    [prefix + "Ａlpha", prefix + "Alpha", prefix + "Beta"],
+  ];
+  for (const values of cases) {
+    const input = tabs(values);
+    input.push({ id: "file:collision", title: "… Gamma" });
+    const output = plans(input, new Set(input.map((x) => x.id)));
+    const reverse = plans(
+      [...input].reverse(),
+      new Set(input.map((x) => x.id)),
+    );
+    for (const tab of input) {
+      const own = output.get(tab.id)!;
+      assert.deepEqual(own, reverse.get(tab.id));
+      if (own.bare) assert.ok(tab.title.endsWith(own.bare));
+      for (const form of [
+        own.marked === tab.title ? undefined : own.marked,
+        own.bare,
+      ]) {
+        if (form === undefined) continue;
+        for (const peer of input.filter((x) => x.id !== tab.id)) {
+          const other = output.get(peer.id)!;
+          for (const reserved of [peer.title, other.marked, other.bare])
+            if (reserved !== undefined)
+              assert.notEqual(normalize(form), normalize(reserved));
+        }
+      }
+    }
+  }
+});

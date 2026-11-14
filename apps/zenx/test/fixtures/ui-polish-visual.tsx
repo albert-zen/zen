@@ -923,12 +923,16 @@ function AuxiliaryFixture() {
   // Opt-in desktop overflow scene; the original two-conversation cases are unchanged.
   const lookalikeTitles =
     params.has("tabCrowded") && pairTitles
-      ? [
-          ...pairTitles,
-          ...["Gamma", "Delta", "Epsilon"].map(
-            (suffix) => `${pairTitles[0]} · ${suffix}`,
-          ),
-        ]
+      ? lookalike === "zh"
+        ? ["甲组周报", "乙组复盘", "丙组方案", "丁组记录", "戊组清单"].map(
+            (suffix) => `跨项目实施一致性与详细交互验证 · ${suffix}`,
+          )
+        : [
+            ...pairTitles,
+            ...["Gamma", "Delta", "Epsilon"].map(
+              (suffix) => `${pairTitles[0]} · ${suffix}`,
+            ),
+          ]
       : pairTitles;
   const conversations = (lookalikeTitles ?? []).map((title, index) => ({
     threadId: `synthetic-lookalike-${index}`,

@@ -38,17 +38,24 @@ import { WorkspaceFilePicker } from "./workspace-file-picker.js";
 import { Icon, type IconName } from "./icons.js";
 import { messageFilePath } from "./message-file-path.js";
 
-import { restingConversationLabels } from "./workspace-resting-labels.js";
+import {
+  restingConversationLabelPlans,
+  restingLabelFitMode,
+} from "./workspace-resting-labels.js";
 
 function ConversationRestingLabel({
   title,
   candidate,
+  bareCandidate,
 }: {
   title: string;
   candidate: string;
+  bareCandidate?: string;
 }) {
   const wrapper = useRef<HTMLSpanElement>(null);
-  const [abbreviated, setAbbreviated] = useState(false);
+  const [mode, setMode] = useState<"canonical" | "marked" | "bare">(
+    "canonical",
+  );
   useLayoutEffect(() => {
     const element = wrapper.current;
     if (!element) return;
@@ -58,6 +65,9 @@ function ConversationRestingLabel({
     const candidateProbe = element.querySelector<HTMLElement>(
       ".workspace-tab-candidate-probe",
     );
+    const bareProbe = element.querySelector<HTMLElement>(
+      ".workspace-tab-bare-probe",
+    );
     const query = window.matchMedia?.("(min-width: 721px)");
     // Without a real viewport and resize observation, leave the full title in
     // place. The ordinary title still uses the established ellipsis and reveal.
@@ -65,15 +75,19 @@ function ConversationRestingLabel({
     let disposed = false;
     const measure = () => {
       if (disposed) return;
-      setAbbreviated(
-        Boolean(
-          query.matches &&
-          candidate !== title &&
-          probe &&
-          candidateProbe &&
-          probe.getBoundingClientRect().width > element.clientWidth + 1 &&
-          candidateProbe.getBoundingClientRect().width <= element.clientWidth,
-        ),
+      setMode(
+        restingLabelFitMode({
+          desktop: query.matches,
+          available: element.clientWidth,
+          full: probe?.getBoundingClientRect().width ?? 0,
+          marked:
+            candidate !== title
+              ? candidateProbe?.getBoundingClientRect().width
+              : undefined,
+          bare: bareCandidate
+            ? bareProbe?.getBoundingClientRect().width
+            : undefined,
+        }),
       );
     };
     measure();
@@ -81,6 +95,7 @@ function ConversationRestingLabel({
     observer.observe(element);
     if (probe) observer.observe(probe);
     if (candidateProbe) observer.observe(candidateProbe);
+    if (bareProbe) observer.observe(bareProbe);
     query.addEventListener("change", measure);
     document.fonts?.ready.then(measure);
     document.fonts?.addEventListener("loadingdone", measure);
@@ -90,16 +105,24 @@ function ConversationRestingLabel({
       observer.disconnect();
       query.removeEventListener("change", measure);
     };
-  }, [title, candidate]);
+  }, [title, candidate, bareCandidate]);
   return (
     <span className="workspace-tab-label-box" ref={wrapper} aria-hidden="true">
       <span className="workspace-tab-title-probe">{title}</span>
       <span className="workspace-tab-candidate-probe">{candidate}</span>
+      {bareCandidate && (
+        <span className="workspace-tab-bare-probe">{bareCandidate}</span>
+      )}
       <span
         className="workspace-tab-title"
-        data-abbreviated={abbreviated || undefined}
+        data-abbreviated={mode !== "canonical" || undefined}
+        data-label-mode={mode}
       >
-        {abbreviated ? candidate : title}
+        {mode === "marked"
+          ? candidate
+          : mode === "bare"
+            ? bareCandidate
+            : title}
       </span>
     </span>
   );
@@ -1641,7 +1664,7 @@ export function AuxiliaryPanel({
   };
   const restingLabels = useMemo(
     () =>
-      restingConversationLabels(
+      restingConversationLabelPlans(
         displayTabs,
         new Set(displayTabs.map((item) => item.id)),
       ),
@@ -1906,7 +1929,8 @@ export function AuxiliaryPanel({
                   {tab.id.startsWith("thread:") ? (
                     <ConversationRestingLabel
                       title={tab.title}
-                      candidate={restingLabels.get(tab.id) ?? tab.title}
+                      candidate={restingLabels.get(tab.id)?.marked ?? tab.title}
+                      bareCandidate={restingLabels.get(tab.id)?.bare}
                     />
                   ) : (
                     <span className="workspace-tab-title">{tab.title}</span>

@@ -79,3 +79,81 @@ export function restingConversationLabels(
   for (const tab of rejected) result.set(tab.id, tab.title);
   return result;
 }
+
+export interface RestingLabelPlan {
+  marked: string;
+  bare?: string;
+}
+
+/** Reserve every canonical and proposed form so independent fit decisions cannot collide. */
+export function restingConversationLabelPlans(
+  tabs: readonly { id: string; title: string }[],
+  overflowingIds: ReadonlySet<string>,
+  desktop = true,
+): Map<string, RestingLabelPlan> {
+  const marked = restingConversationLabels(tabs, overflowingIds, desktop);
+  const normalize = (value: string) =>
+    value.normalize("NFKC").toLowerCase().replace(/\s+/gu, " ").trim();
+  const proposed = new Map(
+    tabs.map((tab) => {
+      const label = marked.get(tab.id)!;
+      const suffix = label.startsWith("… ") ? label.slice(2) : undefined;
+      // A literal ellipsis in an unchanged canonical name is not a proposal.
+      const bare =
+        label !== tab.title && suffix && tab.title.endsWith(suffix)
+          ? suffix
+          : undefined;
+      return [tab.id, { marked: label, bare }] as const;
+    }),
+  );
+  return new Map(
+    tabs.map((tab) => {
+      const plan = proposed.get(tab.id)!;
+      const collision =
+        plan.bare &&
+        tabs.some((peer) => {
+          if (peer.id === tab.id) return false;
+          const other = proposed.get(peer.id)!;
+          return [peer.title, other.marked, other.bare].some(
+            (value) =>
+              value !== undefined && normalize(value) === normalize(plan.bare!),
+          );
+        });
+      return [
+        tab.id,
+        { marked: plan.marked, bare: collision ? undefined : plan.bare },
+      ];
+    }),
+  );
+}
+
+export function restingLabelFitMode({
+  desktop,
+  available,
+  full,
+  marked,
+  bare,
+}: {
+  desktop: boolean;
+  available: number;
+  full: number;
+  marked?: number;
+  bare?: number;
+}): "canonical" | "marked" | "bare" {
+  if (
+    !desktop ||
+    !Number.isFinite(available) ||
+    available <= 0 ||
+    !Number.isFinite(full) ||
+    full <= available + 1
+  )
+    return "canonical";
+  const fits = (width: number | undefined) =>
+    width !== undefined &&
+    Number.isFinite(width) &&
+    width > 0 &&
+    width <= available;
+  if (fits(marked)) return "marked";
+  if (fits(bare)) return "bare";
+  return "canonical";
+}

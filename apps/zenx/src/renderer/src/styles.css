@@ -13601,7 +13601,8 @@ button:disabled {
   max-width: none;
 }
 
-.workspace-tab-candidate-probe {
+.workspace-tab-candidate-probe,
+.workspace-tab-bare-probe {
   position: absolute;
   display: inline-block;
   width: max-content;

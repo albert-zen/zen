@@ -68,7 +68,7 @@ await withPreviewBrowser(
         })),
       };
     };
-    const saveCrowdedWidths = async (theme, stage) => {
+    const saveCrowdedWidths = async (theme, stage, captureTheme) => {
       const widths = await evaluate(`(() => {
   const width = element => element?.getBoundingClientRect().width ?? null;
   return {
@@ -82,21 +82,15 @@ await withPreviewBrowser(
       const full = tab.querySelector('.workspace-tab-title-probe');
       const candidate = tab.querySelector('.workspace-tab-candidate-probe');
       const font = getComputedStyle(label);
-      let bareSuffixWidth = null;
-      if (slot && candidate?.textContent.startsWith('… ')) {
-        const probe = candidate.cloneNode(false);
-        probe.textContent = candidate.textContent.slice(2);
-        slot.append(probe);
-        bareSuffixWidth = width(probe);
-        probe.remove();
-      }
+      const bare = tab.querySelector('.workspace-tab-bare-probe');
       return {
         id: tab.id, canonical: tab.getAttribute('aria-label'),
         selected: tab.getAttribute('aria-selected'),
         display: label.textContent, abbreviated: label.dataset.abbreviated === 'true',
         slotWidth: width(slot), slotClientWidth: slot?.clientWidth ?? null,
         fullWidth: width(full), candidateWidth: width(candidate),
-        candidate: candidate?.textContent ?? null, bareSuffixWidth,
+        candidate: candidate?.textContent ?? null,
+        bare: bare?.textContent ?? null, bareSuffixWidth: width(bare),
         labelClientWidth: label.clientWidth, labelScrollWidth: label.scrollWidth,
         font: font.font, letterSpacing: font.letterSpacing,
       };
@@ -104,7 +98,10 @@ await withPreviewBrowser(
   };
 })()`);
       await writeFile(
-        path.join(directory, `tabs-crowded-${theme}-${stage}-widths.json`),
+        path.join(
+          directory,
+          `tabs-crowded-${captureTheme}-${stage}-widths.json`,
+        ),
         JSON.stringify(
           {
             commit: manifest.commit,
@@ -118,6 +115,7 @@ await withPreviewBrowser(
           2,
         ) + "\n",
       );
+      return widths;
     };
     const key = async (key, windowsVirtualKeyCode) => {
       for (const type of ["keyDown", "keyUp"]) {
@@ -161,14 +159,22 @@ await withPreviewBrowser(
       wait(
         `document.querySelectorAll('[role=tablist] [role=tab] .workspace-tab-title[data-abbreviated=true]').length === ${count}`,
       );
-    const assertRestingLabels = (labels, names, endings) => {
+    const assertRestingLabels = (labels, names, endings, widths) => {
       assert.deepEqual(
         labels.map((tab) => tab.canonical),
         names,
         "ARIA keeps each canonical title",
       );
       assert.equal(
-        new Set(labels.map((tab) => tab.label.normalize("NFC"))).size,
+        new Set(
+          labels.map((tab) =>
+            tab.label
+              .normalize("NFKC")
+              .toLowerCase()
+              .replace(/\s+/gu, " ")
+              .trim(),
+          ),
+        ).size,
         names.length,
         "resting labels distinguish every conversation in the scenario",
       );
@@ -177,11 +183,36 @@ await withPreviewBrowser(
           tab.compact && tab.visible && tab.fits,
           "compact label must render untruncated: " + tab.id,
         );
+        const marked = tab.label.startsWith("… ");
+        const suffix = marked ? tab.label.slice(2) : tab.label;
         assert.ok(
-          tab.label.startsWith("…") &&
-            tab.label.endsWith(endings[index]) &&
-            names[index].endsWith(tab.label.slice(1).trimStart()),
+          suffix.endsWith(endings[index]) && names[index].endsWith(suffix),
           "compact label shows a truthful distinguishing suffix: " + tab.id,
+        );
+        if (!widths) {
+          assert.ok(marked, "roomy labels keep their ellipsis: " + tab.id);
+          return;
+        }
+        const measured = widths.tabs[index];
+        assert.equal(measured.id, tab.id);
+        assert.ok(
+          measured.slotClientWidth > 0 &&
+            measured.fullWidth > measured.slotClientWidth + 1 &&
+            measured.candidateWidth > 0 &&
+            measured.bareSuffixWidth > 0,
+          "full and compact widths are measured: " + tab.id,
+        );
+        const expected =
+          measured.candidateWidth <= measured.slotClientWidth
+            ? measured.candidate
+            : measured.bareSuffixWidth <= measured.slotClientWidth
+              ? measured.bare
+              : null;
+        assert.ok(expected, "a readable suffix fits: " + tab.id);
+        assert.equal(
+          tab.label,
+          expected,
+          "prefer the ellipsis when it fits: " + tab.id,
         );
       });
     };
@@ -484,15 +515,20 @@ await withPreviewBrowser(
       }
     }
     // Desktop-only genuine conversations, unlike the legacy five custom tabs below.
-    // Overlap is an observed baseline, deliberately NOT a no-overlap assertion.
-    for (const theme of ["light", "dark"]) {
+    for (const [language, theme] of [
+      ["en", "light"],
+      ["en", "dark"],
+      ["zh", "light"],
+      ["zh", "dark"],
+    ]) {
+      const captureTheme = language === "en" ? theme : `zh-${theme}`;
       await send("Emulation.setDeviceMetricsOverride", {
         width: 1280,
         height: 720,
         deviceScaleFactor: 1,
         mobile: false,
       });
-      const destination = `${url}/ui-polish-visual.html?scene=auxiliary&tabLookalike=en&tabCrowded&lang=en&platform=darwin&theme=${theme}`;
+      const destination = `${url}/ui-polish-visual.html?scene=auxiliary&tabLookalike=${language}&tabCrowded&lang=${language === "zh" ? "zh-CN" : "en"}&platform=darwin&theme=${theme}`;
       await send("Page.navigate", { url: destination });
       await wait(
         `location.href === ${JSON.stringify(destination)} && document.body?.dataset.previewReady === 'true' && document.querySelectorAll('[role=tab]').length === 5`,
@@ -583,23 +619,42 @@ await withPreviewBrowser(
       const before = await state();
       assert.equal(before.sourceConversations.length, 5);
       const names = before.sourceConversations.map((tab) => tab.title);
-      const endings = ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"];
+      const endings =
+        language === "en"
+          ? ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"]
+          : ["甲组周报", "乙组复盘", "丙组方案", "丁组记录", "戊组清单"];
       try {
         await waitForRestingLabels(names.length);
       } catch (error) {
         if (!error?.message?.startsWith("Timed out: ")) throw error;
         crowdedRestingErrors.push({
-          theme,
+          theme: captureTheme,
           stage: "initial-wait",
           message: error.message,
         });
       }
       const compactLabels = await restingLabels();
-      await saveCrowdedWidths(theme, "initial");
-      await screenshot(`tabs-crowded-conversations-${theme}-resting.png`);
-      await recordCrowdedRestingCheck(theme, "initial", () =>
-        assertRestingLabels(compactLabels, names, endings),
+      const initialWidths = await saveCrowdedWidths(
+        theme,
+        "initial",
+        captureTheme,
       );
+      await screenshot(
+        `tabs-crowded-conversations-${captureTheme}-resting.png`,
+      );
+      await recordCrowdedRestingCheck(captureTheme, "initial", () => {
+        assertRestingLabels(compactLabels, names, endings, initialWidths);
+        assert.ok(
+          initialWidths.tabs.some(
+            (tab) =>
+              tab.candidateWidth > tab.slotClientWidth &&
+              tab.bareSuffixWidth <= tab.slotClientWidth &&
+              tab.abbreviated &&
+              tab.display === tab.bare,
+          ),
+          "crowded scene actually exercises the bare suffix fallback",
+        );
+      });
       assert.ok(
         before.scrollWidth > before.clientWidth,
         "genuine conversation strip overflows",
@@ -630,7 +685,9 @@ await withPreviewBrowser(
       assert.ok(pointerReveal.visible && pointerReveal.fits);
       const pointerMeasurement = await measure();
       assert.deepEqual(await layoutGeometry(), restingGeometry);
-      await screenshot(`tabs-crowded-conversations-${theme}-pointer.png`);
+      await screenshot(
+        `tabs-crowded-conversations-${captureTheme}-pointer.png`,
+      );
       const trajectory = [];
       if (inflowAcceptance) {
         const exposedContent = await checkInflow(
@@ -738,7 +795,9 @@ await withPreviewBrowser(
         ? await checkInflow(restingContent, "keyboard End")
         : null;
       const keyboardGeometry = await layoutGeometry();
-      await screenshot(`tabs-crowded-conversations-${theme}-keyboard.png`);
+      await screenshot(
+        `tabs-crowded-conversations-${captureTheme}-keyboard.png`,
+      );
       await key("Escape", 27);
       await waitNoReveal();
       await delay(450);
@@ -748,19 +807,66 @@ await withPreviewBrowser(
       assert.equal(escaped.selected, end.selected);
       assert.deepEqual(await layoutGeometry(), keyboardGeometry);
       const endRestingLabels = await restingLabels();
-      await saveCrowdedWidths(theme, "after-keyboard");
-      await screenshot(`tabs-crowded-conversations-${theme}-end-resting.png`);
-      await recordCrowdedRestingCheck(theme, "after-keyboard", () => {
-        assertRestingLabels(endRestingLabels, names, endings);
-        assert.deepEqual(
-          endRestingLabels.map((tab) => tab.label),
-          compactLabels.map((tab) => tab.label),
-          "keyboard scrolling and selection preserve resting identifiers",
-        );
+      const endWidths = await saveCrowdedWidths(
+        theme,
+        "after-keyboard",
+        captureTheme,
+      );
+      await screenshot(
+        `tabs-crowded-conversations-${captureTheme}-end-resting.png`,
+      );
+      await recordCrowdedRestingCheck(captureTheme, "after-keyboard", () => {
+        assertRestingLabels(endRestingLabels, names, endings, endWidths);
       });
       const keyboardRestored = inflowAcceptance
         ? await checkRestored(restingContent)
         : null;
+      // Also exercise a fallback label at the selected tab's stronger weight.
+      await key("ArrowLeft", 37);
+      await wait(
+        `document.activeElement?.id === 'aux-tab-thread:synthetic-lookalike-3' && window.__uiPolishAuxiliary.getState().selected === 'thread:synthetic-lookalike-3'`,
+      );
+      await key("ArrowLeft", 37);
+      await wait(
+        `document.activeElement?.id === 'aux-tab-thread:synthetic-lookalike-2' && window.__uiPolishAuxiliary.getState().selected === 'thread:synthetic-lookalike-2'`,
+      );
+      await waitReveal(names[2]);
+      const middleLayout = await layoutGeometry();
+      await key("Escape", 27);
+      await waitNoReveal();
+      await delay(450);
+      assert.equal(await reveal(), null);
+      const middle = await state();
+      assert.equal(middle.focus, "aux-tab-thread:synthetic-lookalike-2");
+      assert.equal(middle.renderedThreadId, "synthetic-lookalike-2");
+      assert.equal(middle.heading, names[2]);
+      assert.deepEqual(await layoutGeometry(), middleLayout);
+      if (inflowAcceptance) await checkRestored(restingContent);
+      const middleLabels = await restingLabels();
+      const middleWidths = await saveCrowdedWidths(
+        theme,
+        "middle-selected",
+        captureTheme,
+      );
+      await screenshot(
+        `tabs-crowded-conversations-${captureTheme}-middle-resting.png`,
+      );
+      await recordCrowdedRestingCheck(captureTheme, "middle-selected", () => {
+        assertRestingLabels(middleLabels, names, endings, middleWidths);
+        assert.equal(middleWidths.tabs[2].selected, "true");
+        assert.equal(
+          middleLabels[2].label,
+          endings[2],
+          "the selected fallback retains its true identifier at the stronger weight",
+        );
+        for (const [index, label] of middleLabels.entries()) {
+          assert.equal(
+            label.label.replace(/^… /u, ""),
+            compactLabels[index].label.replace(/^… /u, ""),
+            "keyboard scrolling and selection preserve each resting identifier",
+          );
+        }
+      });
       await key("Home", 36);
       await wait(
         `document.activeElement?.id === 'aux-tab-thread:synthetic-lookalike-0' && document.querySelector('[role=tablist]').scrollLeft < 2`,
@@ -787,7 +893,10 @@ await withPreviewBrowser(
         pointerRestored,
         keyboardContent,
         keyboardRestored,
+        language,
         theme,
+        middle,
+        middleLabels,
         width: 1280,
         before,
         pointerReveal,
@@ -926,7 +1035,7 @@ await writeFile(
         "Production side-conversation tab and heading path populated through conversations with synthetic thread IDs and read-only body. No live child Thread, pending approval, rename editor or persistence coverage. Canonical ARIA titles, fitted and distinct resting suffixes, visual reveal contents and geometry are measured separately. aria-hidden duplication guard is not an AX-tree validation. Native tooltip suppression is intentional for these conversation tabs. Geometry is not visual suffix-recognition proof; inspect screenshots. No requirement that clipping remain in a later candidate.",
       lookalikeResults,
       crowdedConversationScope:
-        "Desktop 1280x720, five synthetic conversations through production conversation tabs. Records bounding-box overlap and elementFromPoint hit stacks with current heading, heading text, fullscreen target and tabs; overlap is observational only when ZENX_EXPECT_INFLOW_REVEAL=0. By default this gates no overlap, fullscreen center hit, bounded/restored content displacement, and eight-step pointer crossing with midpoint samples. Center hit testing does not activate fullscreen. Not native desktop, live Host, mobile, rename, approval or AX-tree coverage.",
+        "Desktop 1280x720, five English or Chinese synthetic conversations through production conversation tabs. Records bounding-box overlap and elementFromPoint hit stacks with current heading, heading text, fullscreen target and tabs; overlap is observational only when ZENX_EXPECT_INFLOW_REVEAL=0. By default this gates no overlap, fullscreen center hit, bounded/restored content displacement, and eight-step pointer crossing with midpoint samples. Center hit testing does not activate fullscreen. Not native desktop, live Host, mobile, rename, approval or AX-tree coverage.",
       crowdedConversationResults,
       crowdedRestingErrors,
     },
@@ -937,6 +1046,6 @@ await writeFile(
 assert.deepEqual(
   crowdedRestingErrors,
   [],
-  "All five crowded resting labels must pass in both themes; widths and screenshots are retained",
+  "All five crowded resting labels must pass in both languages and themes; widths and screenshots are retained",
 );
 console.log("Tab discoverability visual and interaction checks passed.");
