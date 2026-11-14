@@ -1299,6 +1299,10 @@ button:disabled {
 .thread-model-name {
   flex: 0 1 auto;
 }
+.sidebar .thread-model > .thread-child-label {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
 .thread-state-inline {
   display: inline-flex;
   flex: 0 0 auto;

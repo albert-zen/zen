@@ -5,6 +5,7 @@ import {
   type ReactNode,
   createContext,
   useContext,
+  useId,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -63,6 +64,8 @@ import {
   type RoomConversationState,
 } from "./room-conversations.js";
 
+import { uniqueSidebarParentTitles } from "./sidebar-child-context.js";
+
 const THREAD_DENSITY_STORAGE_KEY = "zenx.sidebar.thread-density";
 type ThreadDensity = "compact" | "detailed";
 const SidebarSettingsContext = createContext<{
@@ -72,6 +75,7 @@ const SidebarSettingsContext = createContext<{
   refreshTriggers(): Promise<void>;
   unreadThreadIds: ReadonlySet<string>;
   selectionKey: string;
+  parentTitles: ReadonlyMap<string, string>;
 } | null>(null);
 
 interface SidebarProps {
@@ -206,6 +210,10 @@ export function Sidebar({
   const visibleThreads = useMemo(
     () => deriveSidebarThreads(threads, visibleSubagentThreadIds),
     [threads, visibleSubagentThreadIds],
+  );
+  const parentTitles = useMemo(
+    () => uniqueSidebarParentTitles(threads),
+    [threads],
   );
   const [recentLimit, setRecentLimit] = useState(30);
   const recentRevealFocus = useRef<{
@@ -537,6 +545,7 @@ export function Sidebar({
       value={{
         settings,
         projects,
+        parentTitles,
         triggers: triggers.state,
         refreshTriggers: triggers.refresh,
         unreadThreadIds,
@@ -834,6 +843,7 @@ export function Sidebar({
                         <ThreadRow
                           key={thread.threadId}
                           rowScope="recent"
+                          showChildContext
                           thread={thread}
                           hasActiveTurn={threadHasActiveTurn(
                             thread,
@@ -1954,6 +1964,7 @@ function ProjectRows({
                 selected={thread.threadId === selectedThreadId}
                 thread={thread}
                 projectWorkspace={group.workspace}
+                showChildContext
                 watching={watchingThreadIds.has(thread.threadId)}
                 reorder={
                   threadReorder === undefined
@@ -2020,6 +2031,7 @@ function ThreadRow({
   watching,
   inbox = false,
   rowScope = "",
+  showChildContext = false,
   reorder,
 }: {
   thread: NativeThreadSummary;
@@ -2039,11 +2051,26 @@ function ThreadRow({
   watching: boolean;
   inbox?: boolean;
   rowScope?: string;
+  showChildContext?: boolean;
   reorder?: ThreadRowReorderHandlers;
 }) {
   const rowIdentity = `${rowScope ? `${rowScope}-` : ""}${thread.threadId}`;
   const rowRef = useRef<HTMLDivElement>(null);
   const information = useContext(SidebarSettingsContext);
+  const childDescriptionId = useId();
+  const isChild =
+    showChildContext &&
+    thread.status !== "systemError" &&
+    !!thread.parentThreadId;
+  const parentTitle =
+    thread.parentThreadId !== thread.threadId
+      ? information?.parentTitles.get(thread.parentThreadId ?? "")
+      : undefined;
+  const childDescription = isChild
+    ? parentTitle
+      ? i18n.t("shell:sidebarChildOf", { parent: parentTitle })
+      : i18n.t("shell:sidebarChildConversation")
+    : null;
   const debugMenu = useContext(ThreadDebugMenuContext);
   const detailsRef = useRef<HTMLDivElement>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -2328,8 +2355,18 @@ function ThreadRow({
       </span>
       {(identity === null || modelProvider === null) &&
       !pendingApproval &&
-      !hasActiveTurn ? null : (
+      !hasActiveTurn &&
+      !childDescription ? null : (
         <span className="thread-model">
+          {childDescription ? (
+            <span
+              className="thread-child-label"
+              aria-hidden="true"
+              title={childDescription}
+            >
+              {i18n.t("shell:sidebarChild")}
+            </span>
+          ) : null}
           {identity === null || modelProvider === null ? null : (
             <>
               <ProviderLogo
@@ -2462,6 +2499,7 @@ function ThreadRow({
           type="button"
           id={reorder?.controlId}
           aria-current={selected ? "page" : undefined}
+          aria-describedby={childDescription ? childDescriptionId : undefined}
           aria-keyshortcuts={
             reorder === undefined ? undefined : "Alt+ArrowUp Alt+ArrowDown"
           }
@@ -2474,6 +2512,11 @@ function ThreadRow({
           {contents}
         </button>
       )}
+      {childDescription ? (
+        <span id={childDescriptionId} className="sr-only">
+          {childDescription}
+        </span>
+      ) : null}
       <span className="thread-status-rail">
         {boundTriggers.length > 0 ? (
           <span className="thread-status-slot">
