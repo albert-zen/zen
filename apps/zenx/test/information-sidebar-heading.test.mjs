@@ -4,6 +4,8 @@ import test from "node:test";
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const css = read("../src/renderer/src/styles.css");
 const source = read("../src/renderer/src/subagents-ui.tsx");
+const panels = read("../src/renderer/src/i18n/panels.ts");
+const shell = read("../src/renderer/src/i18n/shell.ts");
 
 test("only the desktop dock's existing Sidebar heading is restored visually", () => {
   const section = css.slice(css.indexOf("/* Preserve standalone rows;"));
@@ -42,6 +44,7 @@ test("one existing localized heading retains its row/control guard and switches 
   );
   assert.match(source, /information\?\.embedded \? " sr-only" : ""/u);
   assert.match(source, /role="switch"/u);
+  assert.match(source, /aria-label=\{i18n\.t\("shell:showSubagentInSidebar"/u);
   assert.match(source, /aria-checked=\{visible\}/u);
   assert.match(source, /aria-disabled=\{busy\}/u);
   assert.match(source, /aria-busy=\{busy\}/u);
@@ -50,4 +53,30 @@ test("one existing localized heading retains its row/control guard and switches 
     source,
     /await sidebar\.setVisible\(thread\.threadId, !visible\)/u,
   );
+});
+
+test("the heading names the left destination without renaming switch states or card Hide", () => {
+  const values = (dictionary, key) =>
+    [...dictionary.matchAll(new RegExp(`^  ${key}: "([^"]*)",$`, "gmu"))].map(
+      (match) => match[1],
+    );
+  assert.deepEqual(values(panels, "subagentSidebarHeading"), [
+    "Left sidebar",
+    "左侧栏",
+  ]);
+  assert.deepEqual(values(panels, "informationHide"), ["Hide", "隐藏"]);
+  assert.deepEqual(values(shell, "sidebarShown"), ["Shown", "已显示"]);
+  assert.deepEqual(values(shell, "sidebarHidden"), ["Hidden", "已隐藏"]);
+  assert.deepEqual(values(shell, "showSubagentInSidebar"), [
+    "Show in sidebar: {{title}}",
+    "在侧栏显示：{{title}}",
+  ]);
+  assert.deepEqual(values(shell, "showInSidebar"), [
+    "Show in sidebar",
+    "在侧栏显示",
+  ]);
+  assert.deepEqual(values(shell, "hideFromSidebar"), [
+    "Hide from sidebar",
+    "从侧栏隐藏",
+  ]);
 });
