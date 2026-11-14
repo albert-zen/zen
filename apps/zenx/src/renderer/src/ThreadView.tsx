@@ -37,6 +37,7 @@ import { checkQueuedSteer } from "./queue-steer-request.js";
 import { checkQueuedReorder } from "./queue-reorder-request.js";
 import { PendingSendRows } from "./PendingSendRows.js";
 import { indexTurnOutcomeItems } from "./turn-outcome-index.js";
+import { informationConversationGutter } from "./information-conversation-gutter.js";
 import { steerPreviewColumn } from "./steer-preview-column.js";
 import { PendingSteerPanel } from "./PendingSteerPanel.js";
 import type { SteerRecallStore } from "./steer-recall-state.js";
@@ -1058,7 +1059,30 @@ function ThreadViewContent({
         ".virtual-transcript-header, .messages-inner",
       );
     if (!zone || !column) return;
+    const view = viewRef.current;
+    const scrollport = column.closest<HTMLElement>(".messages");
+    const desktop = window.matchMedia?.("(min-width: 961px)");
     const measure = () => {
+      const surface = view?.closest(".agent-surface");
+      const workspace = surface?.parentElement;
+      const dock = workspace?.matches(".workspace")
+        ? workspace.querySelector<HTMLElement>(":scope > .information-dock")
+        : null;
+      // Native thin scrollbar widths differ across OSes. Keep history, preview
+      // and Composer on one rail while recovering only the missing gutter space.
+      const gutter = informationConversationGutter(
+        scrollport?.clientWidth ?? 0,
+        desktop?.matches === true &&
+          !!dock &&
+          dock.getBoundingClientRect().width > 0,
+      );
+      if (view) {
+        if (gutter === null) view.style.removeProperty("--conversation-gutter");
+        else if (
+          view.style.getPropertyValue("--conversation-gutter") !== `${gutter}px`
+        )
+          view.style.setProperty("--conversation-gutter", `${gutter}px`);
+      }
       const rect = column.getBoundingClientRect();
       if (rect.width <= 0) return;
       const contentOrigin =
@@ -1090,15 +1114,20 @@ function ThreadViewContent({
       }
     };
     measure();
-    if (typeof ResizeObserver === "undefined") return;
+    if (typeof ResizeObserver === "undefined")
+      return () => view?.style.removeProperty("--conversation-gutter");
     const observer = new ResizeObserver(measure);
     observer.observe(column);
     // A fixed-width column can move when its scrollport gains a native gutter.
-    const scrollport = column.closest(".messages");
     if (scrollport) observer.observe(scrollport);
     observer.observe(zone);
     if (tray) observer.observe(tray);
-    return () => observer.disconnect();
+    desktop?.addEventListener?.("change", measure);
+    return () => {
+      observer.disconnect();
+      desktop?.removeEventListener?.("change", measure);
+      view?.style.removeProperty("--conversation-gutter");
+    };
   });
   const composerTextareaRef = useRef<ComposerInput>(null);
   const returnToLive = () => {
