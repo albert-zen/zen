@@ -2381,7 +2381,14 @@ function ThreadRow({
           )}
           {pendingApproval ? (
             <span className="thread-state-inline">
-              {i18n.t("shell:needsYourApproval")}
+              <span className="thread-approval-full">
+                {i18n.t("shell:needsYourApproval")}
+              </span>
+              {childDescription ? (
+                <span className="thread-approval-compact" aria-hidden="true">
+                  {i18n.t("shell:sidebarApprovalCompact")}
+                </span>
+              ) : null}
             </span>
           ) : null}
         </span>

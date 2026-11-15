@@ -13671,3 +13671,70 @@ button:disabled {
   line-height: 12px;
   color: var(--color-text-secondary);
 }
+
+/* Local pending-child experiment: reserve actual controls, prioritize approval. */
+.thread-approval-compact {
+  display: none;
+}
+@media (min-width: 961px) and (hover: hover) and (pointer: fine) {
+  .sidebar
+    .thread-row-shell:has(> .thread-row .thread-child-label):has(
+      > .thread-row .thread-state-inline
+    ):is(:hover, :focus-within, [data-menu-open="true"])
+    > .thread-row {
+    padding-inline-end: calc(
+      10px + var(--thread-state-space, 0px) + var(--thread-shortcut-space) +
+        var(--thread-menu-action-width)
+    );
+  }
+  .sidebar
+    .thread-row-shell:has(> .thread-row .thread-child-label):has(
+      > .thread-row .thread-state-inline
+    ):is(:hover, :focus-within, [data-menu-open="true"])
+    > .thread-status-rail {
+    padding-inline-start: 0;
+    background: transparent;
+  }
+  .sidebar
+    .thread-row-shell:has(> .thread-row .thread-child-label):has(
+      > .thread-row .thread-state-inline
+    ):is(:hover, :focus-within, [data-menu-open="true"])
+    > .thread-row
+    .thread-model
+    > .provider-logo {
+    display: none;
+  }
+  .sidebar
+    .thread-row-shell:has(> .thread-row .thread-child-label):has(
+      > .thread-row .thread-state-inline
+    ):is(:hover, :focus-within, [data-menu-open="true"])
+    > .thread-row
+    .thread-approval-compact {
+    display: inline;
+  }
+  .sidebar
+    .thread-row-shell:has(> .thread-row .thread-child-label):has(
+      > .thread-row .thread-state-inline
+    ):is(:hover, :focus-within, [data-menu-open="true"])
+    > .thread-row
+    :is(.thread-approval-full, .thread-model-name) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+  @media (forced-colors: active) {
+    .sidebar
+      .thread-row-shell:has(> .thread-row .thread-child-label):has(
+        > .thread-row .thread-state-inline
+      ):is(:hover, :focus-within, [data-menu-open="true"])
+      > .thread-status-rail {
+      background: Canvas;
+    }
+  }
+}
