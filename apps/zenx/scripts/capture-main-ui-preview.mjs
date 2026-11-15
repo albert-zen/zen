@@ -233,6 +233,49 @@ if (source.scenes.information) {
 }
 if (desktopReading || desktopRoom || desktopReentry || desktopNested)
   files.set("/font-probe.html", Buffer.from(fontProbeHTML));
+// Main fixture only: this is a blank-paint guard, not OCR or general visual acceptance.
+function inspectMainReplyPixels(data, width, height, rect) {
+  const x0 = Math.ceil(rect.x),
+    y0 = Math.ceil(rect.y);
+  const x1 = Math.floor(rect.right),
+    y1 = Math.floor(rect.bottom);
+  if (x0 < 0 || y0 < 0 || x1 > width || y1 > height || x1 <= x0 || y1 <= y0)
+    return { passed: false, reason: "reply-pixel-region-outside-image" };
+  let min = 255,
+    max = 0,
+    edges = 0;
+  for (let y = y0; y < y1; y++) {
+    let previous;
+    for (let x = x0; x < x1; x++) {
+      const i = (y * width + x) * 4;
+      const value = (data[i] + data[i + 1] + data[i + 2]) / 3;
+      min = Math.min(min, value);
+      max = Math.max(max, value);
+      if (previous !== undefined && Math.abs(value - previous) >= 24) edges++;
+      previous = value;
+    }
+  }
+  return {
+    passed: max - min >= 48 && edges >= 20,
+    min,
+    max,
+    edges,
+    region: { x0, y0, x1, y1 },
+  };
+}
+const mainReplyProbe = `(() => {
+  const expected="已检查工作区。你可以在右侧阅读和编辑计划，同时保留当前对话。";
+  const matches=[...document.querySelectorAll('.thread-view .agent-copy p')].filter(e=>e.textContent.trim()===expected);
+  const describe=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return {tag:e.tagName,classes:[...e.classList].slice(0,6),rect:{x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom},display:s.display,visibility:s.visibility,opacity:s.opacity,overflowX:s.overflowX,overflowY:s.overflowY,scrollTop:e.scrollTop,scrollLeft:e.scrollLeft};};
+  const e=matches.length===1?matches[0]:null;
+  const ancestors=[];for(let p=e;p&&ancestors.length<12;p=p.parentElement)ancestors.push(describe(p));
+  const r=e?.getBoundingClientRect();
+  const hidden=ancestors.some(a=>a.display==='none'||a.visibility!=='visible'||Number(a.opacity)===0);
+  const clipped=!!r&&ancestors.slice(1).some(a=>((['hidden','clip','scroll','auto'].includes(a.overflowY))&&(r.y<a.rect.y-1||r.bottom>a.rect.bottom+1))||((['hidden','clip','scroll','auto'].includes(a.overflowX))&&(r.x<a.rect.x-1||r.right>a.rect.right+1)));
+  return {expected,count:matches.length,rect:r?describe(e).rect:null,ancestors,passed:!!r&&r.width>0&&r.height>0&&r.x>=0&&r.y>=0&&r.right<=innerWidth&&r.bottom<=innerHeight&&!hidden&&!clipped};
+})()`;
+// End main fixture blank-paint helpers.
+
 const evidence = {
   schemaVersion: 1,
   source,
@@ -486,6 +529,19 @@ try {
       const composerAccess={editor:target('.composer textarea'),primary:target('.composer .action-orb')};
       return {composerAccess,pendingLayout,url:location.href,input:{finePointer:matchMedia('(pointer:fine)').matches,coarsePointer:matchMedia('(pointer:coarse)').matches,hover:matchMedia('(hover:hover)').matches,noHover:matchMedia('(hover:none)').matches,touchPoints:navigator.maxTouchPoints},viewport:{width:innerWidth,height:innerHeight},overflow:document.documentElement.scrollWidth>innerWidth,visibleText:document.body.innerText.slice(0,12000),geometry:Object.fromEntries(Object.entries(selectors).map(([k,s])=>[k,rect(document.querySelector(s))])),names:[...document.querySelectorAll('.subagent-tree-title')].map(e=>({text:e.textContent,rect:rect(e),scrollWidth:e.scrollWidth,clientWidth:e.clientWidth})),buttons:[...document.querySelectorAll('.queue-shelf button')].map(e=>({label:e.getAttribute('aria-label'),disabled:e.disabled,rect:rect(e),color:getComputedStyle(e).color,background:getComputedStyle(e).backgroundColor})),active:{tag:document.activeElement?.tagName,label:document.activeElement?.getAttribute('aria-label')}};
     })()`);
+    const checkMainReply =
+      scene === "main" &&
+      !coarse &&
+      options.width === 1280 &&
+      options.height === 900;
+    const observeMainReply = async () => {
+      try {
+        return await evaluate(mainReplyProbe);
+      } catch (error) {
+        return { passed: false, error: String(error) };
+      }
+    };
+    const replyBefore = checkMainReply ? await observeMainReply() : null;
     const result = await send("Page.captureScreenshot", {
       format: "png",
       captureBeyondViewport: false,
@@ -504,6 +560,50 @@ try {
       path.join(directory, evidenceFile),
       JSON.stringify(evidence, null, 2) + "\n",
     );
+    if (checkMainReply) {
+      // The first genuine PNG and its hash are already saved, even on failure.
+      const replyAfter = await observeMainReply();
+      const check = {
+        before: replyBefore,
+        after: replyAfter,
+        pixels: null,
+        error: null,
+      };
+      (evidence.mainReplyChecks ??= []).push({
+        screenshot: filename,
+        ...check,
+      });
+      const receipt = evidence.mainReplyChecks.at(-1);
+      try {
+        assert(
+          replyBefore.passed && replyAfter.passed,
+          "Main fixture reply must be visible in viewport",
+        );
+        assert.deepEqual(
+          replyAfter,
+          replyBefore,
+          "Main reply geometry/style stable across raw capture",
+        );
+        receipt.pixels = await evaluate(`(async () => {
+          const bytes=Uint8Array.from(atob(${JSON.stringify(result.data)}),c=>c.charCodeAt(0));
+          const bitmap=await createImageBitmap(new Blob([bytes],{type:'image/png'}));
+          try {
+            if(bitmap.width!==innerWidth||bitmap.height!==innerHeight)throw Error('Unexpected screenshot pixel scale');
+            const canvas=new OffscreenCanvas(bitmap.width,bitmap.height),ctx=canvas.getContext('2d');
+            if(!ctx)throw Error('Screenshot decoder unavailable');
+            ctx.drawImage(bitmap,0,0);
+            return (${inspectMainReplyPixels.toString()})(ctx.getImageData(0,0,bitmap.width,bitmap.height).data,bitmap.width,bitmap.height,${JSON.stringify(replyBefore.rect)});
+          } finally {bitmap.close();}
+        })()`);
+        assert(
+          receipt.pixels.passed,
+          "Main reply region contains no proven text-like pixel variation",
+        );
+      } catch (error) {
+        receipt.error = String(error);
+        throw error;
+      }
+    }
     if (scene === "pending" && options.height === 600) {
       assert(
         observation.composerAccess.editor?.fullyInViewport &&
