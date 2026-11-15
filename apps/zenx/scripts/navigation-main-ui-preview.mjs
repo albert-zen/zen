@@ -1013,6 +1013,7 @@ export function observeBusyChild() {
     }));
     return {
       text: element.textContent,
+      ariaHidden: element.getAttribute("aria-hidden"),
       disabled:
         !!element.disabled || element.getAttribute("aria-disabled") === "true",
       title: element.getAttribute("title"),
@@ -1089,6 +1090,8 @@ export function observeBusyChild() {
         model: read(row?.querySelector(".thread-model-name")),
         metadata: read(row?.querySelector(".thread-model")),
         approval: read(row?.querySelector(".thread-state-inline")),
+        approvalFull: read(row?.querySelector(".thread-approval-full")),
+        approvalCompact: read(row?.querySelector(".thread-approval-compact")),
         menu: read(shell?.querySelector(".thread-menu-trigger")),
         asking: !!row?.querySelector(".thread-asking-badge"),
       };
@@ -1141,7 +1144,29 @@ export function verifyBusyChild(state, focusScope, baseline) {
     assert.equal(alias.model.text, state.fixture.model);
     assert.equal(alias.model.title, state.fixture.model);
     assert.equal(alias.child.text, "Child");
-    assert.equal(alias.approval.text, "Needs your approval");
+    // textContent includes the decorative compact variant even when CSS hides it.
+    // Keep the canonical accessible wording exact, and validate both variants
+    // instead of accepting a prefix or weakening the approval-only assertion.
+    assert.equal(
+      (alias.approvalFull ?? alias.approval).text,
+      "Needs your approval",
+    );
+    if (alias.approvalFull || alias.approvalCompact) {
+      assert(
+        alias.approvalFull,
+        "Compact approval requires canonical full text",
+      );
+      assert.notEqual(alias.approvalFull.ariaHidden, "true");
+      if (alias.approvalCompact) {
+        assert.equal(alias.approvalCompact.text, "Needs approval");
+        assert.equal(alias.approvalCompact.ariaHidden, "true");
+      }
+      assert.equal(
+        alias.approval.text,
+        alias.approvalFull.text + (alias.approvalCompact?.text ?? ""),
+        "Approval wrapper contains only the validated wording variants",
+      );
+    }
     assert.equal(
       alias.asking,
       false,

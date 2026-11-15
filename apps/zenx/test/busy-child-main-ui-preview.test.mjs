@@ -108,6 +108,38 @@ test("busy measurement checks exact owner/name/model/approval and keyboard revea
     assert.throws(() => verifyBusyChild(bad, "project-group"));
   }
 });
+test("approval-only observer validates canonical and decorative compact text separately", () => {
+  const dual = () => {
+    const state = sample();
+    for (const alias of state.aliases) {
+      alias.approval.text = "Needs your approvalNeeds approval";
+      alias.approvalFull = { ...box("Needs your approval"), ariaHidden: null };
+      alias.approvalCompact = { ...box("Needs approval"), ariaHidden: "true" };
+    }
+    return state;
+  };
+  const state = dual();
+  verifyBusyChild(state, null);
+  verifyBusyChild(state, "project-group", state);
+  verifyBusyChild(state, "recent-thread-group", state);
+  for (const mutate of [
+    (a) => (a.approvalFull.text = "Wrong full wording"),
+    (a) => (a.approvalFull.ariaHidden = "true"),
+    (a) => (a.approvalFull = null),
+    (a) => (a.approvalCompact.text = "Wrong compact wording"),
+    (a) => (a.approvalCompact.ariaHidden = null),
+    (a) => (a.approval.text += "unexpected text"),
+  ]) {
+    for (const index of [0, 1]) {
+      const bad = dual();
+      mutate(bad.aliases[index]);
+      assert.throws(() => verifyBusyChild(bad, null));
+    }
+  }
+  const legacyWrong = sample();
+  legacyWrong.aliases[0].approval.text = "Needs your approvalNeeds approval";
+  assert.throws(() => verifyBusyChild(legacyWrong, null));
+});
 test("busy fixture is navigation opt-in, approval-only and preserves ordinary row/model seeds", async () => {
   const source = await read("./fixtures/ui-polish-visual.tsx");
   const ts = await import("typescript");
@@ -324,7 +356,7 @@ test("busy receipt separately records wrapped detail facts without changing inli
     await import("../scripts/navigation-main-ui-preview.mjs");
   // Unit geometry only: no claim that JSDOM renders or validates wrapping.
   const dom = new JSDOM(
-    `<div class="thread-information"><dl><div data-thread-fact="pending-approval"><dt>Status</dt><dd>Needs your approval</dd></div><div data-thread-fact="model"><dt>Model</dt><dd>Long genuine model</dd></div></dl></div>`,
+    `<div class="sidebar">${["project-group", "recent-thread-group"].map((scope) => `<div class="${scope}"><div data-thread-id="design-child"><div class="thread-row"><span class="thread-state-inline"><span class="thread-approval-full">Needs your approval</span><span class="thread-approval-compact" aria-hidden="true">Needs approval</span></span></div></div></div>`).join("")}</div><div class="thread-information"><dl><div data-thread-fact="pending-approval"><dt>Status</dt><dd>Needs your approval</dd></div><div data-thread-fact="model"><dt>Model</dt><dd>Long genuine model</dd></div></dl></div>`,
     { runScripts: "outside-only" },
   );
   try {
@@ -355,6 +387,13 @@ test("busy receipt separately records wrapped detail facts without changing inli
         ["model", "Model", "Long genuine model"],
       ],
     );
+    for (const alias of result.aliases) {
+      assert.equal(alias.approval.text, "Needs your approvalNeeds approval");
+      assert.equal(alias.approvalFull.text, "Needs your approval");
+      assert.equal(alias.approvalFull.ariaHidden, null);
+      assert.equal(alias.approvalCompact.text, "Needs approval");
+      assert.equal(alias.approvalCompact.ariaHidden, "true");
+    }
     assert.equal(result.detailFacts[1].value.glyphs.length, 1);
     assert.equal(result.detailFacts[1].value.rect.height, 40);
     assert.equal(typeof result.detailFacts[1].value.scrollWidth, "number");

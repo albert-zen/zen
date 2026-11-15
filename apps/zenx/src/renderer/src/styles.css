@@ -13672,7 +13672,8 @@ button:disabled {
   color: var(--color-text-secondary);
 }
 
-/* Local pending-child experiment: reserve actual controls, prioritize approval. */
+/* Pending child rows keep approval priority at rest and during interaction.
+   Reserve menu controls only when revealed; preserve full context for AT/detail. */
 .thread-approval-compact {
   display: none;
 }
@@ -13698,7 +13699,7 @@ button:disabled {
   .sidebar
     .thread-row-shell:has(> .thread-row .thread-child-label):has(
       > .thread-row .thread-state-inline
-    ):is(:hover, :focus-within, [data-menu-open="true"])
+    )
     > .thread-row
     .thread-model
     > .provider-logo {
@@ -13707,7 +13708,7 @@ button:disabled {
   .sidebar
     .thread-row-shell:has(> .thread-row .thread-child-label):has(
       > .thread-row .thread-state-inline
-    ):is(:hover, :focus-within, [data-menu-open="true"])
+    )
     > .thread-row
     .thread-approval-compact {
     display: inline;
@@ -13715,7 +13716,7 @@ button:disabled {
   .sidebar
     .thread-row-shell:has(> .thread-row .thread-child-label):has(
       > .thread-row .thread-state-inline
-    ):is(:hover, :focus-within, [data-menu-open="true"])
+    )
     > .thread-row
     :is(.thread-approval-full, .thread-model-name) {
     position: absolute;
