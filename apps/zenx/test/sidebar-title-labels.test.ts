@@ -7,7 +7,7 @@ const title =
 const rows = [
   { id: "a", title, parentId: "parent" },
   { id: "b", title: `${title} · alternate review`, parentId: "parent" },
-];
+] as const;
 test("prefix-extension pair preserves canonical first title and identifies only its sibling", () => {
   const plans = sidebarChildTitlePlans(rows);
   assert.equal(plans.size, 1);
@@ -63,7 +63,9 @@ test("CJK/emoji names remain grapheme-safe exact suffixes", () => {
   );
   assert.equal(plans.size, 2);
   for (const [id, plan] of plans) {
-    assert(names[Number(id)].endsWith(plan.bare!));
+    const name = names[Number(id)];
+    assert(name !== undefined, "Plan references an existing fixture name");
+    assert(name.endsWith(plan.bare!));
     assert(!plan.bare!.includes("\udcbb"));
   }
 });
