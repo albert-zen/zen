@@ -15,7 +15,7 @@ test("explicit existing artifact is bounded and inert until read", async () => {
   const value = await f.read("thread-1", "RESULT.md");
   assert.equal(value.path, "RESULT.md");
   assert.equal(value.text, RESULT_FILE_TEXT);
-  assert.equal(value.editable, false);
+  assert.deepEqual(Object.keys(value).sort(), ["path", "revision", "text"]);
   value.text = "changed local copy";
   assert.equal((await f.read("thread-1", "RESULT.md")).text, RESULT_FILE_TEXT);
   assert.deepEqual(Object.keys(f).sort(), ["read", "receipt"]);
@@ -74,7 +74,14 @@ import {
   RESULT_DRAFT,
 } from "../scripts/result-file-main-ui-preview.mjs";
 const base = {
-  receipt: { synthetic: true, owner: "thread-1", path: "RESULT.md", reads: [] },
+  receipt: {
+    synthetic: true,
+    owner: "thread-1",
+    path: "RESULT.md",
+    reads: [],
+    activeReads: 0,
+    maxConcurrentReads: 0,
+  },
   draft: RESULT_DRAFT,
   href: "http://fixture/#/threads/thread-1",
   alerts: [],
@@ -89,12 +96,16 @@ const opened = {
   ...structuredClone(base),
   receipt: {
     ...base.receipt,
-    reads: [{ threadId: "thread-1", path: "RESULT.md" }],
+    reads: [
+      { threadId: "thread-1", path: "RESULT.md" },
+      { threadId: "thread-1", path: "RESULT.md" },
+    ],
+    maxConcurrentReads: 1,
   },
   selectedFile: { title: "RESULT.md" },
   file: {
     text: "This in-memory document is the exact linked artifact.",
-    editable: false,
+    editable: true,
   },
   closeVisible: true,
   workspaceOpen: true,
@@ -143,7 +154,25 @@ for (const [name, phase, original, mutate] of [
     opened,
     (s) => (s.selectedFile.title = "PLAN.md"),
   ],
-  ["editable file", "opened", opened, (s) => (s.file.editable = true)],
+  [
+    "invented read-only viewer",
+    "opened",
+    opened,
+    (s) => (s.file.editable = false),
+  ],
+  [
+    "missing second admitted read",
+    "opened",
+    opened,
+    (s) => s.receipt.reads.pop(),
+  ],
+  [
+    "overlapping reads",
+    "opened",
+    opened,
+    (s) => (s.receipt.maxConcurrentReads = 2),
+  ],
+  ["unsettled read", "opened", opened, (s) => (s.receipt.activeReads = 1)],
   ["lost restored focus", "returned", returned, (s) => (s.focus.id = "")],
   ["lost draft", "returned", returned, (s) => (s.draft = "")],
   ["lost route", "opened", opened, (s) => (s.href = "other")],
@@ -262,4 +291,39 @@ test("retained closed or inert workspace children are not active file controls",
   } finally {
     dom.window.close();
   }
+});
+
+import { guardReadingBridge } from "./fixtures/ui-polish-reading.ts";
+test("existing guard prohibits saves before inner fixture without claiming attempt telemetry", async () => {
+  const f = createResultFileFixture();
+  let innerSaveCalls = 0;
+  const guarded = guardReadingBridge({
+    workspaceFiles: {
+      read: f.read,
+      save() {
+        innerSaveCalls++;
+        throw new Error("inner save must never run");
+      },
+    },
+  });
+  assert.throws(
+    () => guarded.workspaceFiles.save(),
+    /Reading bridge denied: workspaceFiles.save/,
+  );
+  assert.equal(innerSaveCalls, 0);
+  assert.deepEqual(await guarded.workspaceFiles.read("thread-1", "RESULT.md"), {
+    path: "RESULT.md",
+    text: RESULT_FILE_TEXT,
+    revision: "synthetic-result-0",
+  });
+});
+test("read overlap is observed rather than hidden by fixture deduplication", async () => {
+  const f = createResultFileFixture();
+  await Promise.all([
+    f.read("thread-1", "RESULT.md"),
+    f.read("thread-1", "RESULT.md"),
+  ]);
+  assert.equal(f.receipt().maxConcurrentReads, 2);
+  assert.equal(f.receipt().activeReads, 0);
+  assert.equal(f.receipt().reads.length, 2);
 });

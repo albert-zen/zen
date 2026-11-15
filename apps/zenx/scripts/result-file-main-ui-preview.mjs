@@ -93,6 +93,14 @@ export function verifyResultFile(state, phase, baseline) {
   assert(state?.receipt?.synthetic);
   assert.equal(state.receipt.owner, "thread-1");
   assert.equal(state.receipt.path, "RESULT.md");
+  // The unchanged reading bridge prohibits save calls before the fixture.
+  // This observer does not claim to count attempted writes.
+  assert.equal(state.receipt.activeReads, 0, "All admitted reads settled");
+  assert.equal(
+    state.receipt.maxConcurrentReads,
+    phase === "focused" ? 0 : 1,
+    "No overlapping reads",
+  );
   assert.equal(state.draft, RESULT_DRAFT);
   assert.deepEqual(state.alerts, []);
   assert.equal(state.link?.href, "RESULT.md");
@@ -114,7 +122,10 @@ export function verifyResultFile(state, phase, baseline) {
     assert.equal(state.workspaceOpen, false);
     assert(!state.closeVisible, "Comparable closed-panel starting width");
   } else {
+    // Existing production path: canonical admission, then mounted viewer read.
+    // Exactly two sequential reads, never an eager read or a third read on close.
     assert.deepEqual(state.receipt.reads, [
+      { threadId: "thread-1", path: "RESULT.md" },
       { threadId: "thread-1", path: "RESULT.md" },
     ]);
     if (phase === "opened") {
@@ -124,7 +135,11 @@ export function verifyResultFile(state, phase, baseline) {
           "This in-memory document is the exact linked artifact.",
         ),
       );
-      assert(!state.file.editable);
+      assert.equal(
+        state.file.editable,
+        true,
+        "Existing workspace editor remains editable; only fixture saves are denied",
+      );
       assert.equal(state.workspaceOpen, true);
       assert(state.closeVisible);
       // Record actual focus destination rather than inventing a focus contract.
@@ -270,7 +285,7 @@ export async function captureResultFile({
     await dispatchNavigationKey(send, "Enter", "Enter", 13);
     stage = "opened-readiness";
     await wait(
-      "window.__resultFileFixture.receipt().reads.length === 1 && !!document.querySelector('#thread-workspace-panel[data-open=true]:not([inert]) [role=tab][aria-selected=true][data-canonical-title=\"RESULT.md\"]')",
+      "window.__resultFileFixture.receipt().reads.length === 2 && !!document.querySelector('#thread-workspace-panel[data-open=true]:not([inert]) [role=tab][aria-selected=true][data-canonical-title=\"RESULT.md\"]')",
     );
     await wait(`(() => {
     const tab = document.querySelector('#thread-workspace-panel[data-open="true"]:not([inert]) [role="tab"][aria-selected="true"][data-canonical-title="RESULT.md"]');

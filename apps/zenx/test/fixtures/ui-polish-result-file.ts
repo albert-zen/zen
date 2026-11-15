@@ -11,17 +11,21 @@ export const RESULT_FILE_MARKDOWN = [
 ].join("\n\n");
 export function createResultFileFixture() {
   const reads: Array<{ threadId: string; path: string }> = [];
+  let activeReads = 0;
+  let maxConcurrentReads = 0;
   return {
     async read(threadId: string, path: string) {
       if (threadId !== RESULT_FILE_OWNER || path !== RESULT_FILE_PATH)
         throw new Error("Synthetic result fixture rejected owner or path");
       reads.push({ threadId, path });
-      return {
-        path,
-        text: RESULT_FILE_TEXT,
-        revision: "synthetic-result-0",
-        editable: false,
-      };
+      activeReads++;
+      maxConcurrentReads = Math.max(maxConcurrentReads, activeReads);
+      try {
+        await Promise.resolve();
+        return { path, text: RESULT_FILE_TEXT, revision: "synthetic-result-0" };
+      } finally {
+        activeReads--;
+      }
     },
     receipt() {
       return {
@@ -29,6 +33,8 @@ export function createResultFileFixture() {
         owner: RESULT_FILE_OWNER,
         path: RESULT_FILE_PATH,
         reads: reads.map((r) => ({ ...r })),
+        activeReads,
+        maxConcurrentReads,
       };
     },
   };
