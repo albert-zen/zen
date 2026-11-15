@@ -504,15 +504,21 @@ test("scoped child detail placement keeps default algorithm, protects Composer a
       "getComputedStyle",
       "setLayout",
       "observer",
+      "lockSize",
       code,
     )(
       {
         getBoundingClientRect: () => a,
         matches: (selector) => {
+          if (selector === ".thread-menu-trigger")
+            return changes.trigger === true;
           assert.equal(selector, '.thread-row-shell[data-child-thread="true"]');
           return changes.child === true;
         },
-        closest: () => {
+        closest: (selector) => {
+          if (selector === '.thread-row-shell[data-child-thread="true"]')
+            return changes.child === true ? {} : null;
+          assert.equal(selector, ".app-shell");
           queried++;
           return {
             querySelector: (selector) => {
@@ -527,7 +533,10 @@ test("scoped child detail placement keeps default algorithm, protects Composer a
       },
       {
         getBoundingClientRect: () => m,
-        matches: () => changes.informationOnly !== false,
+        matches: (selector) =>
+          selector === ".thread-information"
+            ? changes.informationOnly !== false
+            : selector === ".thread-item-menu" && changes.actionMenu === true,
         querySelector: () => (changes.pending !== false ? {} : null),
       },
       null,
@@ -545,6 +554,7 @@ test("scoped child detail placement keeps default algorithm, protects Composer a
         },
         unobserve: () => {},
       },
+      changes.lockSize === true,
     );
     const original = api.base(a, m, 1280, 900);
     api.update();
@@ -579,6 +589,83 @@ test("scoped child detail placement keeps default algorithm, protects Composer a
     const unchanged = run({ pending: false, child: true, ...changes });
     assert.deepEqual(unchanged.result, unchanged.original);
     if (changes.informationOnly === false)
+      assert.deepEqual(
+        [
+          unchanged.queried,
+          unchanged.measured,
+          unchanged.styled,
+          unchanged.observed,
+        ],
+        [0, 0, 0, 0],
+      );
+  }
+  assert.match(
+    fn("SidebarMenuPopover").getText(ast),
+    /\[anchorRef, menuRef, lockSize\]/,
+    "Rename state refreshes the scoped positioning effect",
+  );
+  // Exact fd43 Recent action-menu bounds; same dimensions/content, only vertical cap.
+  const childAction = {
+    pending: false,
+    child: true,
+    informationOnly: false,
+    actionMenu: true,
+    trigger: true,
+    anchor: {
+      left: 212,
+      right: 240,
+      top: 581.53125,
+      bottom: 609.53125,
+      width: 28,
+      height: 28,
+    },
+    menu: { height: 414.578125 },
+  };
+  const action = run(childAction);
+  assert.equal(action.original.top, 477);
+  assert.equal(action.result.top, 351);
+  assert.equal(action.result.left, action.original.left);
+  assert.equal(action.result.placement, action.original.placement);
+  assert(action.result.top + action.m.height + 8 <= action.c.top);
+  assert(action.result.top + action.m.height > action.a.top);
+  const sharedTail = run({ ...childAction, menu: { height: 395.984375 } });
+  assert.equal(sharedTail.original.top, 496);
+  assert.equal(sharedTail.result.top, 370);
+  assert(sharedTail.result.top + sharedTail.m.height + 8 <= sharedTail.c.top);
+  const projectExtension = run({
+    ...childAction,
+    anchor: { ...childAction.anchor, top: 366.140625, bottom: 394.140625 },
+  });
+  assert.equal(projectExtension.original.top, 366);
+  assert.equal(projectExtension.result.top, 351);
+  assert(
+    projectExtension.result.top + projectExtension.m.height + 8 <=
+      projectExtension.c.top,
+  );
+  // Already-clear Project menu, other owners, rename, and impossible-fit fallback.
+  for (const changes of [
+    {
+      anchor: { ...childAction.anchor, top: 366.140625, bottom: 394.140625 },
+      menu: { height: 395.984375 },
+    },
+    { child: false },
+    { trigger: false },
+    { actionMenu: false },
+    { lockSize: true },
+    { missingComposer: true },
+    { hidden: true },
+    { composer: { left: 900, right: 1200, width: 300 } },
+    { menu: { height: 800 } },
+    { anchor: { ...childAction.anchor, top: 850, bottom: 878 } },
+  ]) {
+    const unchanged = run({ ...childAction, ...changes });
+    assert.deepEqual(unchanged.result, unchanged.original);
+    if (
+      changes.child === false ||
+      changes.trigger === false ||
+      changes.actionMenu === false ||
+      changes.lockSize === true
+    )
       assert.deepEqual(
         [
           unchanged.queried,

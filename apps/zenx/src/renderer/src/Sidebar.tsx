@@ -3338,13 +3338,21 @@ function SidebarMenuPopover({
         menu.matches(".thread-information") &&
         (!!menu.querySelector('[data-thread-fact="pending-approval"]') ||
           anchor.matches('.thread-row-shell[data-child-thread="true"]'));
-      const nextComposer = scopedDetail
-        ? (anchor
-            .closest(".app-shell")
-            ?.querySelector<HTMLElement>(
-              ":scope > main.workspace #primary-conversation-content .composer",
-            ) ?? null)
-        : null;
+      // An explicitly opened child action menu may prefer the same draft clearance.
+      // Rename stays size-locked; ordinary/project menus retain viewport placement.
+      const scopedChildMenu =
+        !lockSize &&
+        menu.matches(".thread-item-menu") &&
+        anchor.matches(".thread-menu-trigger") &&
+        !!anchor.closest('.thread-row-shell[data-child-thread="true"]');
+      const nextComposer =
+        scopedDetail || scopedChildMenu
+          ? (anchor
+              .closest(".app-shell")
+              ?.querySelector<HTMLElement>(
+                ":scope > main.workspace #primary-conversation-content .composer",
+              ) ?? null)
+          : null;
       if (nextComposer !== composer) {
         if (composer) observer?.unobserve(composer);
         composer = nextComposer;
@@ -3400,7 +3408,7 @@ function SidebarMenuPopover({
       window.removeEventListener("scroll", update, true);
       observer?.disconnect();
     };
-  }, [anchorRef, menuRef]);
+  }, [anchorRef, menuRef, lockSize]);
 
   const element = (
     <div
