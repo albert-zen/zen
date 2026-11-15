@@ -283,7 +283,11 @@ export function verifyResultFileSource(
   assert.match(expectedHead ?? "", /^[a-f0-9]{40}$/);
   assert.equal(source.commit, expectedHead);
   assert.equal(source.tree, actualTree);
-  assert.equal(source.clean, true);
+  assert.equal(source.schemaVersion, 1);
+  assert(
+    Object.hasOwn(source, "dirtyFiles") && Array.isArray(source.dirtyFiles),
+  );
+  assert.deepEqual(source.dirtyFiles, []);
   assert.equal(clean, true);
   assert.deepEqual(Object.keys(source.scenes ?? {}), ["reading"]);
   for (const file of [

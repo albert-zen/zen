@@ -167,7 +167,8 @@ test("exact source receipt accepts only exact clean reading source", () => {
   const source = {
     commit: head,
     tree,
-    clean: true,
+    schemaVersion: 1,
+    dirtyFiles: [],
     scenes: { reading: {} },
     sources: Object.fromEntries(
       [
@@ -182,7 +183,12 @@ test("exact source receipt accepts only exact clean reading source", () => {
   for (const mutate of [
     (s) => (s.commit = "d".repeat(40)),
     (s) => (s.tree = "d".repeat(40)),
-    (s) => (s.clean = false),
+    (s) => delete s.dirtyFiles,
+    (s) => (s.dirtyFiles = [" M apps/zenx/test/fixtures/ui-polish-visual.tsx"]),
+    (s) => (s.dirtyFiles = ""),
+    (s) => (s.dirtyFiles = {}),
+    (s) => (s.dirtyFiles = null),
+    (s) => (s.schemaVersion = 0),
     (s) => (s.scenes.extra = {}),
     (s) => delete s.sources["apps/zenx/test/fixtures/ui-polish-result-file.ts"],
   ]) {

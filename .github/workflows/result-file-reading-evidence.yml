@@ -1,0 +1,147 @@
+name: Experimental result-file reading evidence
+on:
+  pull_request:
+    paths:
+      - .github/workflows/result-file-reading-evidence.yml
+      - apps/zenx/scripts/result-file-main-ui-preview.mjs
+      - apps/zenx/test/result-file-main-ui-preview.test.mjs
+      - apps/zenx/test/fixtures/ui-polish-result-file.ts
+      - apps/zenx/test/fixtures/ui-polish-visual.tsx
+      - apps/zenx/scripts/reading-main-ui-preview.mjs
+      - apps/zenx/scripts/capture-main-ui-preview.mjs
+      - apps/zenx/scripts/build-main-ui-preview.mjs
+permissions:
+  contents: read
+concurrency:
+  group: result-file-evidence-pr755-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  result-file-experiment:
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.number == 755 }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Select changed experimental evidence only
+        id: selection
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { appendFileSync } from 'node:fs';
+          const paths = new Set([".github/workflows/result-file-reading-evidence.yml", "apps/zenx/scripts/result-file-main-ui-preview.mjs", "apps/zenx/test/result-file-main-ui-preview.test.mjs", "apps/zenx/test/fixtures/ui-polish-result-file.ts", "apps/zenx/test/fixtures/ui-polish-visual.tsx", "apps/zenx/scripts/reading-main-ui-preview.mjs", "apps/zenx/scripts/capture-main-ui-preview.mjs", "apps/zenx/scripts/build-main-ui-preview.mjs"]);
+          const changed = execFileSync('git', ['diff', '--name-only', 'HEAD^', 'HEAD'], { encoding: 'utf8' }).trim().split('\n');
+          appendFileSync(process.env.GITHUB_OUTPUT, `needsCapture=${changed.some(path => paths.has(path))}\n`);
+          NODE
+      - uses: actions/setup-node@v4
+        if: steps.selection.outputs.needsCapture == 'true'
+        with:
+          node-version: 22
+          cache: npm
+      - if: steps.selection.outputs.needsCapture == 'true'
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        timeout-minutes: 3
+      - if: steps.selection.outputs.needsCapture == 'true'
+        run: node apps/zenx/scripts/prepare-legend-list.mjs
+      - name: Restore pinned official CJK font data
+        if: steps.selection.outputs.needsCapture == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/preview-fonts/*.ttc
+            ${{ runner.temp }}/preview-fonts/OFL.txt
+          key: zenx-noto-cjk-523d033d6cb47f4a80c58a35753646f5c3608a78-v1
+      - name: Verify or fetch pinned CJK fonts
+        id: readingFonts
+        if: steps.selection.outputs.needsCapture == 'true'
+        run: |
+          mkdir -p "${{ runner.temp }}/desktop-reading"
+          trap 'cp "${{ runner.temp }}/preview-fonts/fonts.json" "${{ runner.temp }}/desktop-reading/font-environment.json"' EXIT
+          node apps/zenx/scripts/prepare-preview-fonts.mjs "${{ runner.temp }}/preview-fonts" --allow-download
+        timeout-minutes: 2
+      - name: Build existing SDK dependency for component tests
+        if: steps.selection.outputs.needsCapture == 'true'
+        run: npm run build --workspace @zenx/plugin-sdk
+      - name: Build exact existing reading bundle for experiment
+        id: resultFileBuild
+        if: steps.selection.outputs.needsCapture == 'true'
+        run: node apps/zenx/scripts/build-main-ui-preview.mjs "${{ runner.temp }}/desktop-reading" reading
+        timeout-minutes: 2
+      - name: Existing result-to-file keyboard evidence
+        id: resultFileEvidence
+        if: steps.selection.outputs.needsCapture == 'true'
+        timeout-minutes: 1
+        env:
+          FONTCONFIG_FILE: ${{ runner.temp }}/preview-fonts/fonts.conf
+          ZENX_PREVIEW_FONT_RECEIPT: ${{ runner.temp }}/preview-fonts/fonts.json
+          ZENX_RESULT_FILE_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          RESULT_FILE_DIRECTORY: ${{ runner.temp }}/desktop-reading-result-file
+          RESULT_FILE_BUILD: ${{ runner.temp }}/desktop-reading
+        run: |
+          set -euo pipefail
+          mkdir -p "$RESULT_FILE_DIRECTORY"
+          export RESULT_FILE_STAGE=copy
+          write_receipt() {
+            export RESULT_FILE_EXIT="$?"
+            node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import { createHash } from 'node:crypto';
+          import { join } from 'node:path';
+          const directory = process.env.RESULT_FILE_DIRECTORY;
+          let commit = null, sourceSha256 = null;
+          try {
+            const bytes = readFileSync(join(directory, 'source.json'));
+            commit = JSON.parse(bytes).commit;
+            sourceSha256 = createHash('sha256').update(bytes).digest('hex');
+          } catch {}
+          const exitCode = Number(process.env.RESULT_FILE_EXIT);
+          writeFileSync(join(directory, 'step-exit.json'), JSON.stringify({
+            schemaVersion: 1, experimental: true, stage: process.env.RESULT_FILE_STAGE,
+            exitCode, passed: exitCode === 0, expectedHead: process.env.ZENX_RESULT_FILE_EXPECTED_HEAD,
+            sourceCommit: commit, sourceSha256,
+            note: 'Independent synthetic keyboard evidence; require actual successful capture and complete original receipts.'
+          }, null, 2) + '\n');
+          NODE
+            exit "$RESULT_FILE_EXIT"
+          }
+          trap write_receipt EXIT
+          cp "$RESULT_FILE_BUILD/reading.html" "$RESULT_FILE_BUILD/source.json" "$RESULT_FILE_BUILD/font-environment.json" "$RESULT_FILE_DIRECTORY/"
+          export RESULT_FILE_STAGE=tests
+          timeout --signal=TERM --kill-after=2s 10s node --import tsx --test apps/zenx/test/result-file-main-ui-preview.test.mjs
+          export RESULT_FILE_STAGE=capture
+          timeout --signal=TERM --kill-after=5s 35s node apps/zenx/scripts/capture-main-ui-preview.mjs "$RESULT_FILE_DIRECTORY" desktop-reading-result-file
+          export RESULT_FILE_STAGE=complete
+      - name: Record experimental outcomes without changing the verdict
+        if: ${{ always() && steps.selection.outputs.needsCapture == 'true' }}
+        env:
+          RESULT_FILE_DIRECTORY: ${{ runner.temp }}/desktop-reading-result-file
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          FONT_OUTCOME: ${{ steps.readingFonts.outcome }}
+          BUILD_OUTCOME: ${{ steps.resultFileBuild.outcome }}
+          CAPTURE_OUTCOME: ${{ steps.resultFileEvidence.outcome }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { mkdirSync, writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const directory = process.env.RESULT_FILE_DIRECTORY;
+          mkdirSync(directory, {recursive: true});
+          writeFileSync(join(directory, 'run-status.json'), JSON.stringify({
+            schemaVersion: 1, experimental: true,
+            expectedHead: process.env.EXPECTED_HEAD,
+            fontOutcome: process.env.FONT_OUTCOME,
+            buildOutcome: process.env.BUILD_OUTCOME,
+            captureOutcome: process.env.CAPTURE_OUTCOME,
+            note: 'Outcomes only. Require exact source, exit receipt, completed browser evidence and original PNG hashes for acceptance.'
+          }, null, 2) + '\n');
+          NODE
+      - name: Upload experimental result-to-file evidence and exit status
+        if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.number == 755 && steps.selection.outputs.needsCapture == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-reading-result-file-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/desktop-reading-result-file/*
+          if-no-files-found: warn
+          retention-days: 7
