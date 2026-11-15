@@ -45,7 +45,9 @@ const root = path.resolve(fileURLToPath(new URL("../../..", import.meta.url)));
 const directory = path.resolve(process.argv[2] ?? ".main-ui-preview");
 const captureProfile = process.argv[3] ?? "fine";
 const desktopQueue = captureProfile === "desktop-queue";
-const desktopReading = captureProfile === "desktop-reading";
+const desktopResultFile = captureProfile === "desktop-reading-result-file";
+let desktopReading = captureProfile === "desktop-reading";
+if (desktopResultFile) desktopReading = true;
 const desktopRoom = captureProfile === "desktop-room";
 const desktopReentry = captureProfile === "desktop-reading-reentry";
 const desktopNested = captureProfile === "desktop-reading-nested-output";
@@ -106,6 +108,22 @@ assert.equal(
   source.commit,
   "Rebuild after source commit changes",
 );
+if (desktopResultFile) {
+  const { verifyResultFileSource } =
+    await import("./result-file-main-ui-preview.mjs");
+  verifyResultFileSource(
+    source,
+    process.env.ZENX_RESULT_FILE_EXPECTED_HEAD,
+    execFileSync("git", ["rev-parse", "HEAD^{tree}"], {
+      cwd: root,
+      encoding: "utf8",
+    }).trim(),
+    execFileSync("git", ["status", "--porcelain"], {
+      cwd: root,
+      encoding: "utf8",
+    }).trim() === "",
+  );
+}
 if (desktopRoom || source.scenes?.room) {
   assert(
     desktopRoom,
@@ -670,6 +688,7 @@ try {
         platform: "linux",
       });
       if (scene === "reading") query.set("scene", "reading");
+      if (desktopResultFile) query.set("resultFile", "1");
       if (desktopReentry) query.set("streaming", "1");
       if (scene === "information") query.set("scene", "lineage");
       if (scene === "navigation") {

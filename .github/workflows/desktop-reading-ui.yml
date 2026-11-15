@@ -150,3 +150,58 @@ jobs:
           path: ${{ runner.temp }}/desktop-reading/*
           if-no-files-found: warn
           retention-days: 7
+
+      - name: Optional existing result-to-file keyboard evidence
+        id: resultFileEvidence
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.number == 755 && steps.selection.outputs.needsCapture == 'true' && steps.readingFonts.outcome == 'success' && steps.readingBuild.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          FONTCONFIG_FILE: ${{ runner.temp }}/preview-fonts/fonts.conf
+          ZENX_PREVIEW_FONT_RECEIPT: ${{ runner.temp }}/preview-fonts/fonts.json
+          ZENX_RESULT_FILE_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          RESULT_FILE_DIRECTORY: ${{ runner.temp }}/desktop-reading-result-file
+          RESULT_FILE_BUILD: ${{ runner.temp }}/desktop-reading
+        run: |
+          set -euo pipefail
+          mkdir -p "$RESULT_FILE_DIRECTORY"
+          export RESULT_FILE_STAGE=copy
+          write_receipt() {
+            export RESULT_FILE_EXIT="$?"
+            node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import { createHash } from 'node:crypto';
+          import { join } from 'node:path';
+          const directory = process.env.RESULT_FILE_DIRECTORY;
+          let commit = null, sourceSha256 = null;
+          try {
+            const bytes = readFileSync(join(directory, 'source.json'));
+            commit = JSON.parse(bytes).commit;
+            sourceSha256 = createHash('sha256').update(bytes).digest('hex');
+          } catch {}
+          const exitCode = Number(process.env.RESULT_FILE_EXIT);
+          writeFileSync(join(directory, 'step-exit.json'), JSON.stringify({
+            schemaVersion: 1, optional: true, stage: process.env.RESULT_FILE_STAGE,
+            exitCode, passed: exitCode === 0, expectedHead: process.env.ZENX_RESULT_FILE_EXPECTED_HEAD,
+            sourceCommit: commit, sourceSha256,
+            note: 'Independent synthetic keyboard evidence; overall workflow green does not imply this probe passed.'
+          }, null, 2) + '\n');
+          NODE
+            exit "$RESULT_FILE_EXIT"
+          }
+          trap write_receipt EXIT
+          cp "$RESULT_FILE_BUILD/reading.html" "$RESULT_FILE_BUILD/source.json" "$RESULT_FILE_BUILD/font-environment.json" "$RESULT_FILE_DIRECTORY/"
+          export RESULT_FILE_STAGE=tests
+          timeout --signal=TERM --kill-after=2s 10s node --import tsx --test apps/zenx/test/result-file-main-ui-preview.test.mjs
+          export RESULT_FILE_STAGE=capture
+          timeout --signal=TERM --kill-after=5s 35s node apps/zenx/scripts/capture-main-ui-preview.mjs "$RESULT_FILE_DIRECTORY" desktop-reading-result-file
+          export RESULT_FILE_STAGE=complete
+      - name: Upload optional result-to-file evidence and exit status
+        if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.number == 755 && steps.selection.outputs.needsCapture == 'true' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-reading-result-file-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/desktop-reading-result-file/*
+          if-no-files-found: warn
+          retention-days: 7

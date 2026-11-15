@@ -1,3 +1,10 @@
+import {
+  createResultFileFixture,
+  RESULT_FILE_MARKDOWN,
+  RESULT_FILE_OWNER,
+  RESULT_FILE_PATH,
+  resultFileSceneEnabled,
+} from "./ui-polish-result-file";
 import { sidebarIdentityCase } from "../../scripts/sidebar-identity-cases.mjs";
 import { createChildQuestionData } from "./child-question-data.js";
 import "../../src/renderer/src/shell-thread-panel.css";
@@ -94,6 +101,12 @@ const syntheticVisibleSubagentThreadIds = childQuestionData
     : null;
 const questionListeners = new Set<(method: string, params: unknown) => void>();
 const readingScene = params.get("scene") === "reading";
+const resultFileScene = resultFileSceneEnabled(params);
+const resultFileFixture = resultFileScene ? createResultFileFixture() : null;
+if (resultFileFixture)
+  Object.assign(window, {
+    __resultFileFixture: { receipt: resultFileFixture.receipt },
+  });
 const readingStream =
   readingScene && params.get("streaming") === "1"
     ? createReadingStreamFixture(thread())
@@ -237,7 +250,11 @@ const options = {
         request,
         thread(),
         readingPending,
-        codeWrapScene ? codeWrapMarkdown : tableKeyboardMarkdown,
+        resultFileScene
+          ? RESULT_FILE_MARKDOWN
+          : codeWrapScene
+            ? codeWrapMarkdown
+            : tableKeyboardMarkdown,
         resultScene,
         inlineTraceScene,
         inlineTraceScene && params.get("nestedOutput") === "1",
@@ -743,21 +760,45 @@ Object.assign(zenx, {
     configureApplication: async () => {
       throw new Error("Synthetic preview: no native picker is opened");
     },
-    list: async () => ({
-      path: ".",
-      entries: [
-        { name: "PLAN.md", path: "PLAN.md", kind: "file" },
-        { name: "src", path: "src", kind: "directory" },
-      ],
-      truncated: false,
-    }),
-    read: async () => ({ ...fixtureFile }),
+    list: async (threadId: string, path: string) => {
+      if (resultFileFixture) {
+        if (threadId !== RESULT_FILE_OWNER || path !== ".")
+          throw new Error(
+            "Synthetic result fixture rejected list owner or path",
+          );
+        return {
+          path: ".",
+          entries: [
+            {
+              name: RESULT_FILE_PATH,
+              path: RESULT_FILE_PATH,
+              kind: "file" as const,
+            },
+          ],
+          truncated: false,
+        };
+      }
+      return {
+        path: ".",
+        entries: [
+          { name: "PLAN.md", path: "PLAN.md", kind: "file" },
+          { name: "src", path: "src", kind: "directory" },
+        ],
+        truncated: false,
+      };
+    },
+    read: async (threadId: string, path: string) =>
+      resultFileFixture
+        ? resultFileFixture.read(threadId, path)
+        : { ...fixtureFile },
     save: async (
       _threadId: string,
       _path: string,
       text: string,
       revision: string,
     ) => {
+      if (resultFileFixture)
+        throw new Error("Synthetic result fixture is read-only");
       await new Promise((resolve) => setTimeout(resolve, 200));
       if (revision !== fixtureFile.revision)
         return { status: "conflict", file: { ...fixtureFile } };

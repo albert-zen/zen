@@ -1,3 +1,4 @@
+import { captureResultFile } from "./result-file-main-ui-preview.mjs";
 import {
   captureInlineTrace,
   observeInlineTrace,
@@ -483,6 +484,17 @@ export async function captureDesktopReading({
   options,
   url,
 }) {
+  if (new URL(url).searchParams.get("resultFile") === "1")
+    return captureResultFile({
+      send,
+      evaluate,
+      wait,
+      click,
+      capture,
+      evidence,
+      options,
+      url,
+    });
   const observe = () => evaluate(`(${observeReading.toString()})()`);
   const openThread = async () => {
     await click('.project-group [data-thread-id="thread-1"] .thread-row');
