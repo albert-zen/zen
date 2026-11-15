@@ -1444,6 +1444,48 @@ for (const language of ["en", "zh-CN"] as const) {
         assert.equal(badge.title, badge.getAttribute("aria-label"));
         assert.equal(badge.getAttribute("tabindex"), null);
       }
+      // A request may contain several questions. This summary counts open
+      // requests, and reducing two requests to one must retain attention.
+      const activeRow = row("active-two");
+      const activeBadge = activeRow.querySelector(".thread-asking-badge");
+      assert.ok(activeBadge);
+      const twoRequestLabel = activeBadge.getAttribute("aria-label");
+      assert.notEqual(
+        twoRequestLabel,
+        row("idle-one")
+          .querySelector(".thread-asking-badge")
+          ?.getAttribute("aria-label"),
+      );
+      activeRow.focus();
+      const callsBeforePartialClear = f.calls.length;
+      await f.render("parent", "panel", [
+        withQuestions("idle-one", 1),
+        withQuestions("active-two", 1, true),
+        ...children.slice(2),
+      ]);
+      const remainingBadge = row("active-two").querySelector(
+        ".thread-asking-badge",
+      );
+      assert.ok(remainingBadge);
+      assert.equal(row("active-two"), activeRow);
+      assert.equal(f.dom.window.document.activeElement, activeRow);
+      assert.equal(remainingBadge.textContent, badgeText);
+      assert.equal(
+        remainingBadge.getAttribute("aria-label"),
+        i18n.t("shell:threadAskingCount", { count: 1 }),
+      );
+      assert.notEqual(
+        remainingBadge.getAttribute("aria-label"),
+        twoRequestLabel,
+      );
+      assert.equal(
+        remainingBadge.getAttribute("title"),
+        remainingBadge.getAttribute("aria-label"),
+      );
+      assert.ok(activeRow.textContent?.includes(working));
+      assert.equal(f.calls.length, callsBeforePartialClear);
+      assert.deepEqual(f.routes, []);
+      assert.deepEqual(visibilityChanges, []);
       for (const id of ["zero", "legacy", "unavailable"])
         assert.equal(row(id).querySelector(".thread-asking-badge"), null);
       const focused = row("idle-one");
