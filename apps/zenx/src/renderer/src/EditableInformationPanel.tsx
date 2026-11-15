@@ -116,7 +116,10 @@ function InformationPanel({
     new Map<string, (visible: boolean) => void>(),
   );
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  // Null records a missing Host, translated at render time rather than owning reads.
+  const [errorDetail, setError] = useState<string | null>("");
+  const error =
+    errorDetail === null ? t("informationHostUnavailable") : errorDetail;
   const [pending, setPending] = useState<Pending | null>(
     () => retainedEdits.get(ownerKey) ?? null,
   );
@@ -155,7 +158,7 @@ function InformationPanel({
   const refresh = useCallback(async () => {
     const api = window.zenx.information;
     if (!api) {
-      setError(t("informationHostUnavailable"));
+      setError(null);
       return;
     }
     const sequence = ++readSequence.current;
@@ -185,7 +188,7 @@ function InformationPanel({
       )
         setError(String(reason));
     }
-  }, [ownerKey, owner.kind, ownerId, t]);
+  }, [ownerKey, owner.kind, ownerId]);
   useEffect(() => {
     mounted.current = true;
     setReceipt(null);
@@ -228,7 +231,7 @@ function InformationPanel({
     };
   }, [ownerKey, refresh]);
   useEffect(() => {
-    if (!error || busy) return;
+    if (errorDetail === "" || busy) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     const retry = async () => {
@@ -240,7 +243,7 @@ function InformationPanel({
       active = false;
       clearTimeout(timer);
     };
-  }, [error, busy, refresh]);
+  }, [errorDetail, busy, refresh]);
   useEffect(() => {
     if (previousRoster.current === rosterFingerprint) return;
     previousRoster.current = rosterFingerprint;

@@ -800,3 +800,97 @@ test("empty guidance waits for the current owner's layout and never replaces rea
     await f.close();
   }
 });
+
+test("locale changes preserve mounted information widgets and unsaved customization without rereading the owner", async () => {
+  const f = await fixture();
+  try {
+    await waitFor(
+      () => f.row("triggers")?.textContent?.includes("Synthetic timer"),
+      "trigger content",
+    );
+    await f.click("Customize information");
+    const address = document.querySelector<HTMLSelectElement>(
+      'select[aria-label="Component"]',
+    )!;
+    assert.ok(address);
+    await f.change(address, "triggers");
+    const initialReads = f.readCount();
+    const widgets = [...document.querySelectorAll(".information-widget")];
+    for (const language of ["zh-CN", "en"]) {
+      await act(async () => {
+        await i18n.changeLanguage(language);
+      });
+      assert.equal(
+        f.readCount(),
+        initialReads,
+        "locale is not a new owner/read request",
+      );
+      assert.equal(
+        document.querySelectorAll(".information-widget").length,
+        widgets.length,
+      );
+      widgets.forEach((widget, index) =>
+        assert.equal(
+          document.querySelectorAll(".information-widget")[index],
+          widget,
+          "existing widget DOM remains mounted",
+        ),
+      );
+      assert.ok(
+        address.isConnected,
+        "customization stays open without replacing the unsaved type selection",
+      );
+      assert.equal(address.value, "triggers");
+      assert.equal(f.updates.length, 0, "no locale-triggered persistence");
+    }
+    await f.switchThread("different-owner");
+    await waitFor(
+      () =>
+        f.readCount() > initialReads &&
+        document.querySelector(
+          '.editable-information-panel[data-owner="thread:different-owner"] .information-widget',
+        ),
+      "different owner performs its own read",
+    );
+  } finally {
+    await f.close();
+    await i18n.changeLanguage("en");
+  }
+});
+
+test("missing Host error retranslates without replacing the owner read lifecycle", async () => {
+  const f = await fixture();
+  const host = (
+    f.dom.window as unknown as { zenx: { information?: typeof f.api } }
+  ).zenx;
+  try {
+    delete host.information;
+    await f.focus();
+    const initialReads = f.readCount();
+    for (const language of ["zh-CN", "en"]) {
+      await act(async () => {
+        await i18n.changeLanguage(language);
+      });
+      assert.ok(
+        document.body.textContent?.includes(
+          i18n.t("panels:informationHostUnavailable"),
+        ),
+      );
+      assert.equal(f.readCount(), initialReads);
+    }
+    host.information = f.api;
+    await f.focus();
+    await waitFor(
+      () =>
+        f.readCount() > initialReads &&
+        !document.body.textContent?.includes(
+          i18n.t("panels:informationHostUnavailable"),
+        ),
+      "Host recovery retains normal refresh",
+    );
+  } finally {
+    host.information = f.api;
+    await f.close();
+    await i18n.changeLanguage("en");
+  }
+});
