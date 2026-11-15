@@ -13572,6 +13572,7 @@ button:disabled {
     min-width: 0;
   }
   .information-dock .subagent-tree-title {
+    text-wrap: balance;
     flex: 0 1 auto;
     width: max-content;
     max-width: 100%;
