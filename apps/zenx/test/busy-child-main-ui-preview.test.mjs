@@ -129,6 +129,7 @@ test("busy fixture is navigation opt-in, approval-only and preserves ordinary ro
       )
       .getText(ast);
   const setup = [
+    "combinedAttention",
     "busyChild",
     "busyChildTitle",
     "busyChildModel",
@@ -136,8 +137,10 @@ test("busy fixture is navigation opt-in, approval-only and preserves ordinary ro
   ]
     .map(variable)
     .join("\n");
-  for (const [query, on] of [
+  for (const [query, on, combined] of [
     ["scene=navigation&busyChild=approval", true],
+    ["scene=navigation&busyChild=approval-asking", true, true],
+    ["scene=reading&busyChild=approval-asking", false],
     ["scene=reading&busyChild=approval", false],
     ["scene=navigation", false],
     ["scene=navigation&busyChild=asking", false],
@@ -167,8 +170,14 @@ test("busy fixture is navigation opt-in, approval-only and preserves ordinary ro
       row.currentMetadata.model,
       on ? result.busyChildModel : "fake",
     );
-    assert.equal(row.userQuestionSummary?.openCount, on ? 0 : undefined);
-    assert.equal(result.sideConversations[1].name, "Test coverage");
+    assert.equal(
+      row.userQuestionSummary?.openCount,
+      combined ? 2 : on ? 0 : undefined,
+    );
+    assert.equal(
+      result.sideConversations[1].name,
+      combined ? `${row.name} · alternate review` : "Test coverage",
+    );
   }
   const threadList = await read("../src/renderer/src/thread-list.ts");
   const modelAst = ts.createSourceFile(
@@ -224,13 +233,25 @@ test("isolated fine desktop profile binds clean navigation bundle and keeps nati
   );
   assert.match(
     source,
-    /desktopChildNavigation \|\| desktopBusyChild\s*\? "navigation"/,
+    /desktopChildNavigation \|\| desktopBusyChild \|\| desktopCombinedAttention\s*\? "navigation"/,
   );
   assert.match(
     source,
     /if \(desktopBusyChild\) query.set\("busyChild", "approval"\)/,
   );
   assert.match(source, /desktopBusyChild\s*\? captureBusyChild/);
+  assert.match(
+    source,
+    /desktopCombinedAttention\s*\? process.env.ZENX_COMBINED_ATTENTION_EXPECTED_HEAD/,
+  );
+  assert.match(
+    source,
+    /if \(desktopCombinedAttention\) query.set\("busyChild", "approval-asking"\)/,
+  );
+  assert.match(
+    source,
+    /desktopCombinedAttention\s*\? combinedAttentionCapture/,
+  );
   assert.match(source, /process.env.GITHUB_ACTIONS,\s*"true"/);
   assert.doesNotMatch(source, /"--no-sandbox"/);
   assert.match(
