@@ -65,6 +65,11 @@ import {
 } from "./room-conversations.js";
 
 import { uniqueSidebarParentTitles } from "./sidebar-child-context.js";
+import { sidebarChildTitlePlans } from "./sidebar-title-labels.js";
+import {
+  restingLabelFitMode,
+  type RestingLabelPlan,
+} from "./workspace-resting-labels.js";
 
 const THREAD_DENSITY_STORAGE_KEY = "zenx.sidebar.thread-density";
 type ThreadDensity = "compact" | "detailed";
@@ -76,6 +81,7 @@ const SidebarSettingsContext = createContext<{
   unreadThreadIds: ReadonlySet<string>;
   selectionKey: string;
   parentTitles: ReadonlyMap<string, string>;
+  childTitlePlans: ReadonlyMap<string, RestingLabelPlan>;
 } | null>(null);
 
 interface SidebarProps {
@@ -214,6 +220,18 @@ export function Sidebar({
   const parentTitles = useMemo(
     () => uniqueSidebarParentTitles(threads),
     [threads],
+  );
+  const childTitlePlans = useMemo(
+    () =>
+      sidebarChildTitlePlans(
+        visibleThreads.map((thread) => ({
+          id: thread.threadId,
+          title: threadTitle(thread),
+          parentId:
+            thread.status !== "systemError" ? thread.parentThreadId : null,
+        })),
+      ),
+    [visibleThreads],
   );
   const [recentLimit, setRecentLimit] = useState(30);
   const recentRevealFocus = useRef<{
@@ -546,6 +564,7 @@ export function Sidebar({
         settings,
         projects,
         parentTitles,
+        childTitlePlans,
         triggers: triggers.state,
         refreshTriggers: triggers.refresh,
         unreadThreadIds,
@@ -2016,6 +2035,84 @@ interface ThreadRowReorderHandlers {
   onKeyDown(event: ReactKeyboardEvent<HTMLElement>): void;
 }
 
+function SidebarCollisionTitle({
+  title,
+  plan,
+}: {
+  title: string;
+  plan: RestingLabelPlan;
+}) {
+  const wrapper = useRef<HTMLSpanElement>(null);
+  const [mode, setMode] = useState<"canonical" | "marked" | "bare">(
+    "canonical",
+  );
+  useLayoutEffect(() => {
+    const element = wrapper.current;
+    const query = window.matchMedia?.("(min-width: 961px)");
+    if (!element || !query || typeof ResizeObserver !== "function") return;
+    const full = element.querySelector<HTMLElement>(
+      ".sidebar-title-full-probe",
+    )!;
+    const marked = element.querySelector<HTMLElement>(
+      ".sidebar-title-marked-probe",
+    )!;
+    const bare = element.querySelector<HTMLElement>(
+      ".sidebar-title-bare-probe",
+    );
+    let disposed = false;
+    const measure = () => {
+      if (disposed) return;
+      setMode(
+        restingLabelFitMode({
+          desktop: query.matches,
+          available: element.clientWidth,
+          full: full.getBoundingClientRect().width,
+          marked: marked.getBoundingClientRect().width,
+          bare: bare?.getBoundingClientRect().width,
+        }),
+      );
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    [element, full, marked, bare].forEach((node) => {
+      if (node) observer.observe(node);
+    });
+    query.addEventListener("change", measure);
+    document.fonts?.ready.then(measure);
+    document.fonts?.addEventListener("loadingdone", measure);
+    return () => {
+      disposed = true;
+      observer.disconnect();
+      query.removeEventListener("change", measure);
+      document.fonts?.removeEventListener("loadingdone", measure);
+    };
+  }, [title, plan.marked, plan.bare]);
+  return (
+    <span
+      className="sidebar-collision-title"
+      ref={wrapper}
+      data-label-mode={mode}
+      data-canonical-title={title}
+    >
+      <span className="sidebar-title-canonical">{title}</span>
+      <span className="sidebar-title-display" aria-hidden="true">
+        {mode === "marked" ? plan.marked : mode === "bare" ? plan.bare : title}
+      </span>
+      <span className="sidebar-title-full-probe" aria-hidden="true">
+        {title}
+      </span>
+      <span className="sidebar-title-marked-probe" aria-hidden="true">
+        {plan.marked}
+      </span>
+      {plan.bare && (
+        <span className="sidebar-title-bare-probe" aria-hidden="true">
+          {plan.bare}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function ThreadRow({
   thread,
   projectWorkspace,
@@ -2342,7 +2439,14 @@ function ThreadRow({
         </span>
       ) : null}
       <span className="thread-title">
-        <span>{threadTitle(thread)}</span>
+        {isChild && information?.childTitlePlans.has(thread.threadId) ? (
+          <SidebarCollisionTitle
+            title={threadTitle(thread)}
+            plan={information.childTitlePlans.get(thread.threadId)!}
+          />
+        ) : (
+          <span>{threadTitle(thread)}</span>
+        )}
         {openQuestionCount > 0 ? (
           <span
             className="thread-asking-badge"

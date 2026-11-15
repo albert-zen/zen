@@ -13572,7 +13572,6 @@ button:disabled {
     min-width: 0;
   }
   .information-dock .subagent-tree-title {
-    text-wrap: balance;
     flex: 0 1 auto;
     width: max-content;
     max-width: 100%;
@@ -13747,4 +13746,44 @@ button:disabled {
     font-size: 13px;
     color: var(--text-2);
   }
+}
+
+/* Only measured, colliding sibling titles use a distinct suffix. */
+.sidebar-collision-title {
+  position: relative;
+  flex: 0 1 auto;
+}
+.sidebar-title-display {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-title-canonical {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.sidebar-title-full-probe,
+.sidebar-title-marked-probe,
+.sidebar-title-bare-probe {
+  position: absolute;
+  width: max-content;
+  visibility: hidden;
+  pointer-events: none;
+}
+/* Keep the original full-title intrinsic budget, so Asking never pays for a new label. */
+.sidebar-collision-title > .sidebar-title-full-probe {
+  position: relative;
+  display: inline-block;
+}
+.sidebar-collision-title > .sidebar-title-display {
+  position: absolute;
+  inset: 0;
 }

@@ -1359,6 +1359,49 @@ export async function captureBusyChild({
 }
 
 // Opt-in evidence only; the original approval-only acceptance remains unchanged.
+/** Preserve exact canonical identity separately from fitted presentation evidence. */
+export function verifySidebarTitlePresentation(presentation, expected, slot) {
+  if (!presentation) return;
+  assert.equal(
+    presentation.canonical?.text,
+    expected,
+    "Exact canonical sibling title",
+  );
+  assert.equal(
+    presentation.canonicalAttribute,
+    expected,
+    "Canonical marker matches actual text",
+  );
+  assert.equal(presentation.canonicalCount, 1);
+  assert.equal(presentation.canonicalExposed, true);
+  assert.equal(presentation.displayHiddenFromAT, true);
+  assert.equal(presentation.probesHiddenFromAT, true);
+  assert.equal(presentation.additionalTabStops, 0);
+  const { mode, display } = presentation;
+  assert(["canonical", "marked", "bare"].includes(mode));
+  assert(display?.visible, "Presentation is visible");
+  if (mode === "canonical") {
+    assert.equal(display.text, expected);
+  } else {
+    const suffix = mode === "marked" ? display.text.slice(2) : display.text;
+    if (mode === "marked") assert(display.text.startsWith("… "));
+    assert(
+      suffix && expected.endsWith(suffix),
+      "Presentation is an exact canonical suffix",
+    );
+    assert.equal(
+      display.ellipsized,
+      false,
+      "Abbreviated label must fit, not clip again",
+    );
+    assert(
+      display.rect.width > 0 &&
+        display.rect.x >= slot.rect.x - 1 &&
+        display.rect.right <= slot.rect.right + 1,
+    );
+  }
+}
+
 export function observeCombinedAttention() {
   const read = (element) => {
     if (!element) return null;
@@ -1418,6 +1461,31 @@ export function observeCombinedAttention() {
       glyphs,
     };
   };
+  const presentation = (element) => {
+    if (!element?.matches(".sidebar-collision-title")) return null;
+    const canonical = element.querySelector(".sidebar-title-canonical");
+    const display = element.querySelector(".sidebar-title-display");
+    const probes = [...element.querySelectorAll('[class$="-probe"]')];
+    return {
+      canonical: read(canonical),
+      canonicalAttribute: element.getAttribute("data-canonical-title"),
+      canonicalCount: element.querySelectorAll(".sidebar-title-canonical")
+        .length,
+      canonicalExposed:
+        !!canonical &&
+        !canonical.closest('[aria-hidden="true"]') &&
+        getComputedStyle(canonical).visibility === "visible",
+      display: read(display),
+      displayHiddenFromAT: display?.getAttribute("aria-hidden") === "true",
+      probesHiddenFromAT:
+        probes.length >= 2 &&
+        probes.every((probe) => probe.getAttribute("aria-hidden") === "true"),
+      additionalTabStops: element.querySelectorAll(
+        "[tabindex],button,a[href],input,select,textarea",
+      ).length,
+      mode: element.getAttribute("data-label-mode"),
+    };
+  };
   const shell = document
     .querySelector('.sidebar .project-group [data-thread-id="design-child"]')
     ?.closest(".app-shell");
@@ -1452,6 +1520,9 @@ export function observeCombinedAttention() {
         scope,
         row: read(row),
         title: read(row?.querySelector(".thread-title > span")),
+        titlePresentation: presentation(
+          row?.querySelector(".thread-title > span"),
+        ),
         child: read(row?.querySelector(".thread-child-label")),
         model: read(row?.querySelector(".thread-model-name")),
         metadata: read(row?.querySelector(".thread-model")),
@@ -1464,6 +1535,11 @@ export function observeCombinedAttention() {
         approvalFull: read(row?.querySelector(".thread-approval-full")),
         approvalCompact: read(row?.querySelector(".thread-approval-compact")),
         siblingTitle: read(
+          document.querySelector(
+            `.sidebar .${scope} [data-thread-id="test-child"] .thread-title > span`,
+          ),
+        ),
+        siblingTitlePresentation: presentation(
           document.querySelector(
             `.sidebar .${scope} [data-thread-id="test-child"] .thread-title > span`,
           ),
@@ -1533,11 +1609,24 @@ export function verifyCombinedAttention(state, options) {
         alias.asking &&
         alias.menu,
     );
-    assert.equal(alias.title.text, state.fixture.title);
+    verifySidebarTitlePresentation(
+      alias.titlePresentation,
+      state.fixture.title,
+      alias.title,
+    );
+    assert.equal(
+      (alias.titlePresentation?.canonical ?? alias.title).text,
+      state.fixture.title,
+    );
     assert.equal(alias.model.text, state.fixture.model);
     assert.equal(
-      alias.siblingTitle?.text,
+      (alias.siblingTitlePresentation?.canonical ?? alias.siblingTitle)?.text,
       `${state.fixture.title} · alternate review`,
+    );
+    verifySidebarTitlePresentation(
+      alias.siblingTitlePresentation,
+      `${state.fixture.title} · alternate review`,
+      alias.siblingTitle,
     );
     assert.equal(alias.child.text, wording.child, "Rendered child locale");
     assert.equal(alias.asking.text, wording.asking, "Rendered Asking locale");
