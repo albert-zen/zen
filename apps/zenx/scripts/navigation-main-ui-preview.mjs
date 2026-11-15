@@ -1332,3 +1332,312 @@ export async function captureBusyChild({
     trip.elapsedMs = Date.now() - started;
   }
 }
+
+// Opt-in evidence only; the original approval-only acceptance remains unchanged.
+export function observeCombinedAttention() {
+  const read = (element) => {
+    if (!element) return null;
+    const r = element.getBoundingClientRect(),
+      css = getComputedStyle(element);
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const glyphs = [...range.getClientRects()].map((r) => ({
+      x: r.x,
+      y: r.y,
+      right: r.right,
+      bottom: r.bottom,
+      width: r.width,
+      height: r.height,
+      centerHit: element.contains(
+        document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2),
+      ),
+    }));
+    return {
+      text: element.textContent,
+      disabled:
+        !!element.disabled || element.getAttribute("aria-disabled") === "true",
+      title: element.getAttribute("title"),
+      rect: {
+        x: r.x,
+        y: r.y,
+        right: r.right,
+        bottom: r.bottom,
+        width: r.width,
+        height: r.height,
+      },
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      ellipsized: element.scrollWidth > element.clientWidth + 1,
+      visible:
+        r.width > 0 &&
+        r.height > 0 &&
+        r.x >= 0 &&
+        r.y >= 0 &&
+        r.right <= innerWidth &&
+        r.bottom <= innerHeight &&
+        css.visibility === "visible" &&
+        Number(css.opacity) > 0,
+      centerHit: element.contains(
+        document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2),
+      ),
+      focused: document.activeElement === element,
+      focusVisible: element.matches(":focus-visible"),
+      outline: {
+        width: css.outlineWidth,
+        style: css.outlineStyle,
+        color: css.outlineColor,
+      },
+      font: css.font,
+      glyphs,
+    };
+  };
+  const shell = document
+    .querySelector('.sidebar .project-group [data-thread-id="design-child"]')
+    ?.closest(".app-shell");
+  const composers = [
+    ...(shell?.querySelectorAll(
+      ":scope > main.workspace #primary-conversation-content .composer",
+    ) ?? []),
+  ].filter((element) => {
+    const rect = element.getBoundingClientRect(),
+      style = getComputedStyle(element);
+    return (
+      rect.width > 0 &&
+      rect.height > 0 &&
+      style.visibility === "visible" &&
+      Number(style.opacity) > 0
+    );
+  });
+  const composer = composers.length === 1 ? composers[0] : null;
+  const editor = composer?.querySelector('[contenteditable="true"], textarea');
+  return {
+    composerCount: composers.length,
+    fixture: window.__busyChildFixture,
+    theme: document.documentElement.dataset.appearance,
+    language: document.documentElement.lang,
+    viewport: { width: innerWidth, height: innerHeight },
+    aliases: ["project-group", "recent-thread-group"].map((scope) => {
+      const shell = document.querySelector(
+        `.sidebar .${scope} [data-thread-id="design-child"]`,
+      );
+      const row = shell?.querySelector(".thread-row");
+      return {
+        scope,
+        row: read(row),
+        title: read(row?.querySelector(".thread-title > span")),
+        child: read(row?.querySelector(".thread-child-label")),
+        model: read(row?.querySelector(".thread-model-name")),
+        metadata: read(row?.querySelector(".thread-model")),
+        approval: read(row?.querySelector(".thread-state-inline")),
+        menu: read(shell?.querySelector(".thread-menu-trigger")),
+        asking: read(row?.querySelector(".thread-asking-badge")),
+        askingLabel: row
+          ?.querySelector(".thread-asking-badge")
+          ?.getAttribute("aria-label"),
+        approvalFull: read(row?.querySelector(".thread-approval-full")),
+        approvalCompact: read(row?.querySelector(".thread-approval-compact")),
+        siblingTitle: read(
+          document.querySelector(
+            `.sidebar .${scope} [data-thread-id="test-child"] .thread-title > span`,
+          ),
+        ),
+      };
+    }),
+    reveal: read(document.querySelector(".thread-information-title > span")),
+    detailFacts: [
+      ...document.querySelectorAll(".thread-information [data-thread-fact]"),
+    ].map((fact) => ({
+      kind: fact.getAttribute("data-thread-fact"),
+      row: read(fact),
+      label: read(fact.querySelector("dt")),
+      value: read(fact.querySelector("dd")),
+    })),
+    selected: [
+      ...document.querySelectorAll('.sidebar .thread-row[aria-current="page"]'),
+    ].map((e) => e.closest("[data-thread-id]")?.dataset.threadId),
+    pane: read(document.querySelector(".thread-information")),
+    composerEditor: read(editor),
+    composerPrimary: read(composer?.querySelector(".action-orb")),
+    composer: read(composer),
+    draft: editor
+      ? "value" in editor
+        ? editor.value
+        : editor.textContent
+      : null,
+    telemetry: window.__uiPolishTelemetry,
+  };
+}
+
+export function verifyCombinedAttention(state, options) {
+  assert.deepEqual(state.viewport, { width: 1280, height: 900 });
+  assert.equal(state.theme, options.theme);
+  const wording = {
+    en: {
+      child: "Child",
+      asking: "Asking",
+      count: "2 open question requests",
+      approval: "Needs your approval",
+      compact: "Needs approval",
+    },
+    "zh-CN": {
+      child: "子会话",
+      asking: "待回答",
+      count: "2 组问题待回答",
+      approval: "需要你的审批",
+      compact: "待审批",
+    },
+  }[options.lang];
+  assert(wording, "Explicit supported capture locale is required");
+  assert.equal(state.fixture?.scene, "approval-asking");
+  assert.equal(state.fixture.approval, true);
+  assert.equal(state.fixture.openQuestionCount, 2);
+  assert.equal(state.fixture.asking, true);
+  assert.equal(state.aliases.length, 2);
+  assert.deepEqual(
+    state.aliases.map((a) => a.scope),
+    ["project-group", "recent-thread-group"],
+  );
+  for (const alias of state.aliases) {
+    assert(
+      alias.title &&
+        alias.model &&
+        alias.child &&
+        alias.approval &&
+        alias.asking &&
+        alias.menu,
+    );
+    assert.equal(alias.title.text, state.fixture.title);
+    assert.equal(alias.model.text, state.fixture.model);
+    assert.equal(
+      alias.siblingTitle?.text,
+      `${state.fixture.title} · alternate review`,
+    );
+    assert.equal(alias.child.text, wording.child, "Rendered child locale");
+    assert.equal(alias.asking.text, wording.asking, "Rendered Asking locale");
+    assert.equal(alias.askingLabel, wording.count, "Localized Asking count");
+    assert.equal(
+      (alias.approvalFull ?? alias.approval).text,
+      wording.approval,
+      "Localized full approval text",
+    );
+    if (alias.approvalCompact)
+      assert.equal(alias.approvalCompact.text, wording.compact);
+  }
+  assert.equal(state.composerCount, 1);
+  assert.equal(state.draft, navigationDraft);
+  assert(
+    state.selected.length > 0 &&
+      state.selected.every((id) => id === "thread-1"),
+  );
+  assert.equal(state.telemetry.informationUpdates, 0);
+  assert(
+    !state.telemetry.protocolCalls.some((method) =>
+      /send|respond|interrupt|archive|delete|create|answer/.test(method),
+    ),
+  );
+  // Observational baseline may expose clipping: record it, never bless it as fit.
+}
+
+export async function captureCombinedAttention({
+  send,
+  evaluate,
+  wait,
+  click,
+  tabTo,
+  capture,
+  evidence,
+  options,
+}) {
+  const trip = {
+    scope: "synthetic-combined-sidebar-observation",
+    status: "running",
+    states: [],
+    visualAcceptance:
+      "Not asserted; inspect matched original captures for legibility.",
+  };
+  (evidence.combinedAttentionTrips ??= []).push(trip);
+  const observe = () => evaluate(`(${observeCombinedAttention.toString()})()`);
+  const summary = ({ telemetry, ...geometry }) => geometry;
+  const record = async (name, scope, baseline) => {
+    let previous;
+    let sample;
+    for (let n = 0; n < 12; n++) {
+      await evaluate(
+        "document.fonts.ready.then(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))))",
+      );
+      const state = await observe();
+      trip.lastObservation = state;
+      const value = JSON.stringify(summary(state));
+      if (previous === value) {
+        sample = state;
+        break;
+      }
+      previous = value;
+    }
+    assert(sample, "Combined status geometry did not settle");
+    const entry = { name, before: sample };
+    trip.states.push(entry);
+    await capture(
+      `combined-attention-${options.name}-${name}`,
+      options,
+      "navigation",
+    );
+    entry.after = await observe();
+    verifyCombinedAttention(sample, options);
+    verifyCombinedAttention(entry.after, options);
+    assert.deepEqual(summary(entry.after), summary(sample));
+    for (const control of [sample.composerEditor, sample.composerPrimary])
+      assert(control?.visible && control.centerHit && !control.disabled);
+    if (baseline)
+      assert.deepEqual(sample.composer.rect, baseline.composer.rect);
+    if (scope) {
+      const alias = sample.aliases.find((a) => a.scope === scope);
+      assert(alias?.row?.focused && alias.row.focusVisible);
+      assert(alias.menu?.visible && alias.menu.centerHit);
+      assert.equal(sample.reveal?.text, sample.fixture.title);
+      assert(
+        sample.pane?.visible &&
+          sample.pane.rect.bottom <= sample.composer.rect.y,
+      );
+    }
+    return sample;
+  };
+  try {
+    await wait(
+      "window.__busyChildFixture?.scene==='approval-asking' && document.querySelectorAll('.sidebar [data-thread-id=\"design-child\"] .thread-asking-badge').length===2",
+    );
+    await click(navigationSelectors.project);
+    await wait(
+      `!!document.querySelector(${JSON.stringify(navigationSelectors.editor)})`,
+    );
+    await click(navigationSelectors.editor);
+    await send("Input.insertText", { text: navigationDraft });
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: 700,
+      y: 220,
+    });
+    await wait("!document.querySelector('.thread-information')");
+    const baseline = await record("rest", null, null);
+    for (const scope of ["project-group", "recent-thread-group"]) {
+      const row = `.sidebar .${scope} [data-thread-id="design-child"] .thread-row`;
+      assert(
+        await tabTo(`${row}:focus-visible`),
+        "Keyboard reaches existing child row",
+      );
+      await wait(
+        `document.querySelector('.thread-information-title > span')?.textContent===${JSON.stringify(baseline.fixture.title)}`,
+      );
+      await record(`${scope}-keyboard-reveal`, scope, baseline);
+      await dispatchNavigationKey(send, "Escape", "Escape", 27);
+      await wait("!document.querySelector('.thread-information')");
+    }
+    trip.status = "observed";
+  } catch (error) {
+    trip.status = "failed";
+    trip.error = String(error);
+    throw error;
+  }
+}

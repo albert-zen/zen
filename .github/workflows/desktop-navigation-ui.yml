@@ -151,3 +151,26 @@ jobs:
         timeout-minutes: 1
         working-directory: apps/zenx
         run: node --import tsx --test test/sidebar-information-interaction.test.ts
+
+      - name: Observe combined approval and Asking in existing desktop fixture
+        continue-on-error: true
+        if: ${{ !cancelled() && steps.fonts.outcome == 'success' && steps.navigationBuild.outcome == 'success' }}
+        timeout-minutes: 2
+        env:
+          ZENX_COMBINED_ATTENTION_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mkdir -p "${{ runner.temp }}/desktop-combined-attention"
+          cp "${{ runner.temp }}/desktop-navigation-preview/navigation.html" "${{ runner.temp }}/desktop-navigation-preview/source.json" "${{ runner.temp }}/desktop-combined-attention/"
+          node apps/zenx/scripts/capture-main-ui-preview.mjs "${{ runner.temp }}/desktop-combined-attention" desktop-combined-attention
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true
+        if: always()
+        with:
+          name: desktop-combined-attention-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/desktop-combined-attention/*
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Combined attention evidence boundary
+        continue-on-error: true
+        if: always()
+        run: echo 'Combined approval and Asking uses production Sidebar with synthetic read-only summaries. This is scoped observation, not a claim of fit, comparative improvement, native App acceptance or approval interaction. Original navigation acceptance remains separate and unchanged.' >> "$GITHUB_STEP_SUMMARY"

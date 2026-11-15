@@ -51,6 +51,17 @@ const desktopNested = captureProfile === "desktop-reading-nested-output";
 const desktopChildSidebar = captureProfile === "desktop-child-sidebar";
 const desktopChildNavigation = captureProfile === "desktop-child-navigation";
 const desktopBusyChild = captureProfile === "desktop-busy-child";
+const desktopCombinedAttention =
+  captureProfile === "desktop-combined-attention";
+const combinedAttentionCapture = desktopCombinedAttention
+  ? (await import("./navigation-main-ui-preview.mjs")).captureCombinedAttention
+  : null;
+if (desktopCombinedAttention)
+  assert.equal(
+    typeof combinedAttentionCapture,
+    "function",
+    "Combined capture helper required",
+  );
 // Older profiles must not load this separately scoped receipt/capture helper.
 const roomCapture = desktopRoom
   ? await import("./room-file-owner-main-ui-preview.mjs")
@@ -62,7 +73,8 @@ const otherPointer =
   desktopNested ||
   desktopChildSidebar ||
   desktopChildNavigation ||
-  desktopBusyChild
+  desktopBusyChild ||
+  desktopCombinedAttention
     ? "fine"
     : captureProfile;
 const pointer = desktopOnly ? "fine" : otherPointer;
@@ -129,24 +141,29 @@ if (
   desktopNested ||
   desktopChildSidebar ||
   desktopChildNavigation ||
-  desktopBusyChild
+  desktopBusyChild ||
+  desktopCombinedAttention
 ) {
   assert.equal(
     source.commit,
-    desktopBusyChild
-      ? process.env.ZENX_BUSY_CHILD_EXPECTED_HEAD
-      : desktopChildNavigation
-        ? process.env.ZENX_CHILD_NAVIGATION_EXPECTED_HEAD
-        : desktopChildSidebar
-          ? process.env.ZENX_CHILD_SIDEBAR_EXPECTED_HEAD
-          : desktopNested
-            ? process.env.ZENX_NESTED_EXPECTED_HEAD
-            : process.env.ZENX_REENTRY_EXPECTED_HEAD,
+    desktopCombinedAttention
+      ? process.env.ZENX_COMBINED_ATTENTION_EXPECTED_HEAD
+      : desktopBusyChild
+        ? process.env.ZENX_BUSY_CHILD_EXPECTED_HEAD
+        : desktopChildNavigation
+          ? process.env.ZENX_CHILD_NAVIGATION_EXPECTED_HEAD
+          : desktopChildSidebar
+            ? process.env.ZENX_CHILD_SIDEBAR_EXPECTED_HEAD
+            : desktopNested
+              ? process.env.ZENX_NESTED_EXPECTED_HEAD
+              : process.env.ZENX_REENTRY_EXPECTED_HEAD,
     "Re-entry uses the exact event head",
   );
   const originalScene = desktopChildSidebar ? "navigation" : "reading";
   const isolatedScene =
-    desktopChildNavigation || desktopBusyChild ? "navigation" : originalScene;
+    desktopChildNavigation || desktopBusyChild || desktopCombinedAttention
+      ? "navigation"
+      : originalScene;
   assert.deepEqual(Object.keys(source.scenes), [isolatedScene]);
   assert.equal(source.scenes[isolatedScene].html, `${isolatedScene}.html`);
   assert.deepEqual(
@@ -607,7 +624,18 @@ try {
                 (c) =>
                   c.width === 1280 && c.height === 900 && c.theme === "light",
               )
-            : cases) {
+            : desktopCombinedAttention
+              ? ["light", "dark"].flatMap((theme) =>
+                  ["en", "zh-CN"].map((lang) => ({
+                    name: `desktop-${theme}-${lang}`,
+                    width: 1280,
+                    height: 900,
+                    theme,
+                    lang,
+                    onlyScene: "navigation",
+                  })),
+                )
+              : cases) {
     await send("Emulation.setDeviceMetricsOverride", {
       width: options.width,
       height: options.height,
@@ -636,6 +664,7 @@ try {
           query.set("childSidebar", "1");
         if (desktopChildNavigation) query.set("childNavigation", "1");
         if (desktopBusyChild) query.set("busyChild", "approval");
+        if (desktopCombinedAttention) query.set("busyChild", "approval-asking");
       }
       if (scene === "pending") {
         query.set("many", "");
@@ -734,13 +763,15 @@ try {
       }
       if (scene === "navigation") {
         await (
-          desktopBusyChild
-            ? captureBusyChild
-            : desktopChildNavigation
-              ? captureChildNavigation
-              : desktopChildSidebar
-                ? captureChildSidebar
-                : captureDesktopNavigation
+          desktopCombinedAttention
+            ? combinedAttentionCapture
+            : desktopBusyChild
+              ? captureBusyChild
+              : desktopChildNavigation
+                ? captureChildNavigation
+                : desktopChildSidebar
+                  ? captureChildSidebar
+                  : captureDesktopNavigation
         )({
           send,
           evaluate,

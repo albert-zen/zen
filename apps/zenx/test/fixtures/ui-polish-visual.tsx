@@ -42,9 +42,12 @@ const childSidebar =
     ? createChildSidebarPreference()
     : null;
 // Opt-in display-only stress fixture. Ordinary navigation seeds are unchanged.
+const combinedAttention =
+  params.get("scene") === "navigation" &&
+  params.get("busyChild") === "approval-asking";
 const busyChild =
   params.get("scene") === "navigation" &&
-  params.get("busyChild") === "approval";
+  (params.get("busyChild") === "approval" || combinedAttention);
 const busyChildTitle =
   "Design review · shared component accessibility and release readiness";
 const busyChildModel = "Local demonstration model · extended reasoning preview";
@@ -157,13 +160,18 @@ const sideConversations = childQuestionData?.rows ?? [
             ...summary().currentMetadata,
             model: busyChildModel,
           },
-          userQuestionSummary: { openCount: 0 },
+          userQuestionSummary: { openCount: combinedAttention ? 2 : 0 },
         }
       : {}),
     parentThreadId: "thread-1",
   },
   {
-    ...summary("test-child", rails?.children[1] ?? "Test coverage"),
+    ...summary(
+      "test-child",
+      combinedAttention
+        ? `${busyChildTitle} · alternate review`
+        : (rails?.children[1] ?? "Test coverage"),
+    ),
     parentThreadId: "thread-1",
   },
 ];
@@ -759,7 +767,10 @@ if (busyChild)
       title: busyChildTitle,
       model: busyChildModel,
       approval: true,
-      asking: false,
+      asking: combinedAttention,
+      ...(combinedAttention
+        ? { openQuestionCount: 2, scene: "approval-asking" }
+        : {}),
     },
   });
 if (childSidebar) {
