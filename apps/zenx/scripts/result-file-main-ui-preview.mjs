@@ -30,14 +30,17 @@ export function observeResultFile() {
   const editor = document.querySelector(
     '.composer [contenteditable="true"], .composer textarea',
   );
-  const selected = document.querySelector(
+  const workspace = document.querySelector(
+    '#thread-workspace-panel[data-open="true"]:not([inert])',
+  );
+  const selected = workspace?.querySelector(
     '[role="tab"][aria-selected="true"][data-canonical-title="RESULT.md"]',
   );
   const panel =
     selected && document.getElementById(selected.getAttribute("aria-controls"));
-  const close = [...document.querySelectorAll(".auxiliary-close-button")].find(
-    visible,
-  );
+  const close = [
+    ...(workspace?.querySelectorAll(".auxiliary-close-button") ?? []),
+  ].find(visible);
   const focus = document.activeElement;
   const messages = document.querySelector(".messages");
   return {
@@ -71,6 +74,7 @@ export function observeResultFile() {
           rect: rect(panel),
         }
       : null,
+    workspaceOpen: !!workspace,
     closeVisible: !!close,
     closeFocused: !!close && focus === close,
     focus: {
@@ -107,6 +111,7 @@ export function verifyResultFile(state, phase, baseline) {
       state.link.focused && state.link.focusVisible,
       "Native keyboard focus reaches link",
     );
+    assert.equal(state.workspaceOpen, false);
     assert(!state.closeVisible, "Comparable closed-panel starting width");
   } else {
     assert.deepEqual(state.receipt.reads, [
@@ -120,9 +125,11 @@ export function verifyResultFile(state, phase, baseline) {
         ),
       );
       assert(!state.file.editable);
+      assert.equal(state.workspaceOpen, true);
       assert(state.closeVisible);
       // Record actual focus destination rather than inventing a focus contract.
     } else if (phase === "returned") {
+      assert.equal(state.workspaceOpen, false);
       assert(!state.closeVisible);
       assert.equal(
         state.focus?.id,
@@ -196,6 +203,7 @@ export async function captureResultFile({
         marker: s.marker?.rect,
         composer: s.composer,
         file: s.file,
+        workspaceOpen: s.workspaceOpen,
         closeVisible: s.closeVisible,
         focus: s.focus,
         messages: s.messages,
@@ -207,11 +215,25 @@ export async function captureResultFile({
     }
     assert.fail("Result-file geometry/focus did not settle within 2 seconds");
   };
+  let stage = "initial-panel-state";
   try {
-    if ((await observe()).closeVisible) await click(".auxiliary-close-button");
+    if ((await observe()).workspaceOpen) {
+      stage = "initial-close-readiness";
+      await wait(`(() => {
+        const e = document.querySelector('#thread-workspace-panel[data-open="true"]:not([inert]) .auxiliary-close-button');
+        if (!e || e.disabled) return false;
+        const r = e.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && e.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2));
+      })()`);
+      stage = "initial-close-pointer";
+      await click(
+        '#thread-workspace-panel[data-open="true"]:not([inert]) .auxiliary-close-button',
+      );
+    }
     await wait(
-      "!Array.from(document.querySelectorAll('.auxiliary-close-button')).some(e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden')",
+      "!document.querySelector('#thread-workspace-panel[data-open=true]:not([inert])')",
     );
+    stage = "compose-draft";
     await click('.composer [contenteditable="true"], .composer textarea');
     await send("Input.insertText", { text: RESULT_DRAFT });
     const tabTo = async (condition) => {
@@ -223,6 +245,7 @@ export async function captureResultFile({
         "Native Tab traversal did not reach expected control in 60 steps",
       );
     };
+    stage = "tab-to-result-link";
     await tabTo((s) => s.link?.focused);
     let baseline;
     const save = async (phase) => {
@@ -241,26 +264,36 @@ export async function captureResultFile({
       );
       return state;
     };
+    stage = "focused-receipt";
     baseline = await save("focused");
+    stage = "activate-result-link";
     await dispatchNavigationKey(send, "Enter", "Enter", 13);
+    stage = "opened-readiness";
     await wait(
-      "window.__resultFileFixture.receipt().reads.length === 1 && !!document.querySelector('[role=tab][aria-selected=true][data-canonical-title=\"RESULT.md\"]')",
+      "window.__resultFileFixture.receipt().reads.length === 1 && !!document.querySelector('#thread-workspace-panel[data-open=true]:not([inert]) [role=tab][aria-selected=true][data-canonical-title=\"RESULT.md\"]')",
     );
     await wait(`(() => {
-    const tab = document.querySelector('[role="tab"][aria-selected="true"][data-canonical-title="RESULT.md"]');
+    const tab = document.querySelector('#thread-workspace-panel[data-open="true"]:not([inert]) [role="tab"][aria-selected="true"][data-canonical-title="RESULT.md"]');
     const panel = tab && document.getElementById(tab.getAttribute("aria-controls"));
     return !!panel && !panel.hidden && panel.textContent.includes("This in-memory document is the exact linked artifact.");
   })()`);
+    stage = "opened-receipt";
     await save("opened");
+    stage = "tab-to-close";
     await tabTo((s) => s.closeFocused);
+    stage = "activate-close";
     await dispatchNavigationKey(send, "Enter", "Enter", 13);
+    stage = "closed-readiness";
     await wait(
-      "!Array.from(document.querySelectorAll('.auxiliary-close-button')).some(e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden')",
+      "!document.querySelector('#thread-workspace-panel[data-open=true]:not([inert])')",
     );
+    stage = "returned-receipt";
     await save("returned");
   } catch (error) {
     // Preserve what actually rendered on readiness/assertion failure, without repair.
     evidence.resultFileFailure = {
+      stage,
+      theme: options.theme,
       message: String(error),
       observed: await observe().catch(() => null),
     };

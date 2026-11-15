@@ -83,6 +83,7 @@ const base = {
   messages: { rect: { y: 50, bottom: 800 } },
   composer: { y: 774, width: 700 },
   closeVisible: false,
+  workspaceOpen: false,
 };
 const opened = {
   ...structuredClone(base),
@@ -96,11 +97,13 @@ const opened = {
     editable: false,
   },
   closeVisible: true,
+  workspaceOpen: true,
 };
 const returned = {
   ...structuredClone(opened),
   file: null,
   closeVisible: false,
+  workspaceOpen: false,
   focus: { id: "thread-browser-toggle" },
 };
 test("all three evidence phases accept valid synthetic receipts", () => {
@@ -198,4 +201,65 @@ test("exact source receipt accepts only exact clean reading source", () => {
   }
   assert.throws(() => verifyResultFileSource(source, undefined, tree, true));
   assert.throws(() => verifyResultFileSource(source, head, tree, false));
+});
+
+import { observeResultFile } from "../scripts/result-file-main-ui-preview.mjs";
+test("retained closed or inert workspace children are not active file controls", async () => {
+  const { JSDOM } = await import("jsdom");
+  const dom = new JSDOM(
+    `
+    <aside id="other-panel" data-open="true"><button class="auxiliary-close-button">Unrelated close</button></aside>
+    <aside id="thread-workspace-panel" class="auxiliary-panel" data-open="false" inert>
+      <button class="auxiliary-close-button" id="actual-close">Close</button>
+      <span data-tab-id="file:RESULT.md"><button role="tab" aria-selected="true"
+        data-canonical-title="RESULT.md" aria-controls="file-body">RESULT.md</button></span>
+      <div id="file-body" role="tabpanel">This in-memory document is the exact linked artifact.</div>
+    </aside>`,
+    { runScripts: "outside-only" },
+  );
+  try {
+    const { document, HTMLElement } = dom.window;
+    // Structural regression only: retained descendants can have nonzero own
+    // boxes even when their closed ancestor clips them. Not pixel evidence.
+    HTMLElement.prototype.getClientRects = () => [{ width: 24, height: 24 }];
+    HTMLElement.prototype.getBoundingClientRect = () => ({
+      x: 0,
+      y: 0,
+      width: 24,
+      height: 24,
+      bottom: 24,
+    });
+    const panel = document.getElementById("thread-workspace-panel");
+    const observe = () =>
+      dom.window.eval(`(${observeResultFile.toString()})()`);
+    for (const [open, inert] of [
+      [false, true],
+      [false, false],
+      [true, true],
+    ]) {
+      panel.dataset.open = String(open);
+      panel.toggleAttribute("inert", inert);
+      const s = observe();
+      assert.equal(s.closeVisible, false);
+      assert.equal(s.workspaceOpen, false);
+      assert.equal(s.closeFocused, false);
+      assert.equal(s.selectedFile, undefined);
+      assert.equal(s.file, null);
+    }
+    panel.dataset.open = "true";
+    panel.removeAttribute("inert");
+    const s = observe();
+    assert.equal(s.workspaceOpen, true);
+    assert.equal(s.closeVisible, true);
+    assert.equal(s.selectedFile.title, "RESULT.md");
+    assert.equal(s.selectedFile.tabId, "file:RESULT.md");
+    panel.remove();
+    assert.equal(
+      observe().closeVisible,
+      false,
+      "Other panel cannot own this control",
+    );
+  } finally {
+    dom.window.close();
+  }
 });
