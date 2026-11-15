@@ -75,7 +75,31 @@ export function observeQueueReading() {
     tray?.closest(".thread-view")?.querySelector(".messages"),
   );
   const rows = [...(tray?.querySelectorAll(".queue-row") ?? [])];
+  const senderRow = tray?.querySelector(
+    '[data-queue-id="synthetic-thread-message"]',
+  );
+  const senderLink = senderRow?.querySelector(".message-source-link");
+  const senderLine = senderLink?.closest(".message-source-line");
+  const senderBubble = senderRow?.querySelector(
+    ".queue-message-body .user-bubble",
+  );
+  const senderContent = senderRow?.querySelector(".queue-row-content");
   return {
+    senderAttribution: {
+      rowId: senderRow?.getAttribute("data-queue-id"),
+      source: target(senderLink),
+      sourceLine: target(senderLine),
+      bubble: target(senderBubble),
+      sameRow:
+        !!senderLink &&
+        !!senderBubble &&
+        senderLink.closest(".queue-row") === senderBubble.closest(".queue-row"),
+      sourceText: senderLink?.textContent,
+      bodyText: senderBubble?.textContent,
+      overflow: [senderContent, senderLine, senderLink, senderBubble].some(
+        (e) => !e || e.scrollWidth > e.clientWidth + 1,
+      ),
+    },
     toggle: target(".queue-reading-toggle"),
     expanded: toggle?.getAttribute("aria-expanded"),
     controls: toggle?.getAttribute("aria-controls"),
@@ -249,6 +273,42 @@ export function verifyQueueReading(s, baseline, expanded, focus) {
         "Focus outline exists",
       );
   }
+}
+
+/** Rest/expanded only: these original states expose the known source row. */
+export function verifyQueueSenderAttribution(s, baseline = s) {
+  const a = s.senderAttribution;
+  assert.equal(a?.rowId, "synthetic-thread-message");
+  assert(
+    a.sameRow && a.sourceText?.trim() && a.bodyText?.trim(),
+    "Source and body belong to the known nonempty sender row",
+  );
+  assert.equal(a.sourceText, baseline.senderAttribution.sourceText);
+  assert.equal(a.bodyText, baseline.senderAttribution.bodyText);
+  assert.equal(
+    a.overflow,
+    false,
+    "Source and body do not overflow their existing row",
+  );
+  assert(
+    a.source?.visible && a.source.hit && a.bubble?.visible && a.bubble.hit,
+    "Known source action and body are visible and not covered",
+  );
+  assert(
+    Math.abs(a.source.rect.x - a.bubble.rect.x) <= 2,
+    "Source starts at its own bubble, not at the group header edge",
+  );
+  assert(
+    a.sourceLine?.visible,
+    "Entire source line including any status is visible",
+  );
+  const gap = a.bubble.rect.y - a.sourceLine.rect.bottom;
+  assert(gap >= -1 && gap <= 12, "Source is immediately above its own message");
+  assert(
+    a.source.rect.right <= s.tray.rect.right + 1 &&
+      a.bubble.rect.right <= s.tray.rect.right + 1,
+    "Attribution stays inside the tray",
+  );
 }
 
 export function verifyQueueReturn(s, baseline, expanded) {
@@ -438,6 +498,7 @@ export async function captureQueueReading({
     const baseline = await save("rest");
     verifyQueueReading(baseline, baseline, false);
     verifyQueueReturn(baseline, baseline, false);
+    verifyQueueSenderAttribution(baseline);
     await click(".queue-reading-toggle");
     await wait(
       "document.querySelector('.queue-reading-toggle')?.getAttribute('aria-expanded')==='true'",
@@ -445,6 +506,7 @@ export async function captureQueueReading({
     const expanded = await save("expanded");
     verifyQueueReading(expanded, baseline, true);
     verifyQueueReturn(expanded, baseline, true);
+    verifyQueueSenderAttribution(expanded, baseline);
     assert(
       expanded.readableRows >= baseline.readableRows,
       "More space does not reduce visible rows",

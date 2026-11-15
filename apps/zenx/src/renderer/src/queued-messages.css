@@ -809,3 +809,19 @@
     min-height: 32px;
   }
 }
+
+/* Keep pending provenance with its own bubble without changing the input lane. */
+.pending-tray .queue-message-group.has-sender {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  min-width: 0;
+  margin-inline-start: auto;
+}
+.pending-tray .queue-message-group.has-sender > .queue-message-body {
+  align-items: flex-start;
+}
+.pending-tray .queue-message-group.has-sender > .message-source-line {
+  min-width: 0;
+  max-width: 100%;
+}

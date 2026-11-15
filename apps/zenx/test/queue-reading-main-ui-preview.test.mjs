@@ -473,3 +473,55 @@ test("empty tray bodies cannot masquerade as a real reading-space result", () =>
     /real queued-message body/,
   );
 });
+
+import { verifyQueueSenderAttribution } from "../scripts/queue-reading-main-ui-preview.mjs";
+const attributionState = () => ({
+  tray: { rect: { right: 1180 } },
+  senderAttribution: {
+    rowId: "synthetic-thread-message",
+    sameRow: true,
+    sourceText: "From Planning assistant",
+    bodyText: "Exact known body",
+    overflow: false,
+    sourceLine: { visible: true, rect: { bottom: 450 } },
+    source: {
+      visible: true,
+      hit: true,
+      rect: { x: 540, right: 700, bottom: 450 },
+    },
+    bubble: { visible: true, hit: true, rect: { x: 540, right: 1020, y: 456 } },
+  },
+});
+test("known sender attribution verifies own-message alignment without relaxing existing queue checks", () => {
+  const s = attributionState();
+  verifyQueueSenderAttribution(s);
+  const detached = attributionState();
+  detached.senderAttribution.source.rect.x = 370;
+  assert.throws(() => verifyQueueSenderAttribution(detached), /own bubble/);
+});
+test("sender criterion rejects clipping, cross-row attribution, overflow and changed identities", () => {
+  for (const mutate of [
+    (s) => (s.senderAttribution.rowId = "other"),
+    (s) => (s.senderAttribution.sameRow = false),
+    (s) => (s.senderAttribution.source.hit = false),
+    (s) => (s.senderAttribution.bubble.visible = false),
+    (s) => (s.senderAttribution.overflow = true),
+    (s) => (s.senderAttribution.sourceLine.rect.bottom = 400),
+    (s) => (s.senderAttribution.sourceLine.rect.bottom = 470),
+    (s) => (s.senderAttribution.bubble.rect.right = 1300),
+    (s) => (s.senderAttribution.sourceText = "Other sender"),
+    (s) => (s.senderAttribution.bodyText = "Other body"),
+  ]) {
+    const s = attributionState();
+    mutate(s);
+    assert.throws(() => verifyQueueSenderAttribution(s, attributionState()));
+  }
+});
+
+test("source status line owns adjacency while actual source action stays hittable", () => {
+  const s = attributionState();
+  s.senderAttribution.source.rect.bottom = 430;
+  verifyQueueSenderAttribution(s);
+  s.senderAttribution.source.hit = false;
+  assert.throws(() => verifyQueueSenderAttribution(s), /not covered/);
+});

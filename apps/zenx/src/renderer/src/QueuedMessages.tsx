@@ -5,7 +5,14 @@ import { parseSentReferenceContent } from "./reference-draft.js";
 import type { AnsweredQuestionPresentation } from "./answered-question-presentation.js";
 import { MessageSourceLink } from "./message-source-navigation.js";
 import { HostMessageContent } from "./HostMessageContent.js";
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import {
+  Fragment,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { QueuedCancellationTarget } from "../../../../../src/app-server.js";
@@ -576,6 +583,34 @@ function QueuedMessageRow({
   const imagesId = useId();
   const [expanded, setExpanded] = useState(false);
   const [overflow, setOverflow] = useState(false);
+  const groupSender =
+    rich && message.sender !== undefined && message.hostSource === undefined;
+  const MessageGroup = groupSender ? "div" : Fragment;
+  const source =
+    message.sender === undefined ? null : (
+      <MessageSourceLink
+        active={imagesVisible}
+        target={{
+          kind: "thread",
+          id: message.sender.threadId,
+          ...(message.sender.deviceId === undefined
+            ? {}
+            : {
+                deviceId: message.sender.deviceId,
+                itemId: message.id,
+                returnBound: message.sender.returnRoute !== undefined,
+              }),
+        }}
+        label={t(
+          message.sender.deviceId === undefined
+            ? "threadMessageFrom"
+            : "remoteThreadMessageFrom",
+          {
+            name: message.sender.threadName ?? t("threadMessageUnnamed"),
+          },
+        )}
+      />
+    );
   const hasText = message.text.trim().length > 0;
   const expandable = hasText && (expanded || overflow);
   const availableImages =
@@ -622,73 +657,57 @@ function QueuedMessageRow({
         <div
           className={`queue-row-content${message.imageCount > 0 ? " has-images" : ""}`}
         >
-          {message.sender === undefined ? null : (
-            <MessageSourceLink
-              active={imagesVisible}
-              target={{
-                kind: "thread",
-                id: message.sender.threadId,
-                ...(message.sender.deviceId === undefined
-                  ? {}
-                  : {
-                      deviceId: message.sender.deviceId,
-                      itemId: message.id,
-                      returnBound: message.sender.returnRoute !== undefined,
-                    }),
-              }}
-              label={t(
-                message.sender.deviceId === undefined
-                  ? "threadMessageFrom"
-                  : "remoteThreadMessageFrom",
-                {
-                  name: message.sender.threadName ?? t("threadMessageUnnamed"),
-                },
-              )}
-            />
-          )}
+          {groupSender ? null : source}
           {rich && message.hostSource === undefined ? (
-            <div className="queue-message-body user-row">
-              {message.imageCount > 0 ? (
-                <span
-                  className={
-                    unavailableImages > 0
-                      ? "queue-image-unavailable"
-                      : "sr-only"
-                  }
-                >
-                  {t("imageCount", { count: message.imageCount })}
-                  {unavailableImages > 0
-                    ? ` · ${t("queueUnavailablePreviews", { count: unavailableImages })}`
-                    : ""}
-                </span>
-              ) : null}
-              {message.imageCount > 0 ? (
-                <QueuedImageStrip
-                  message={message}
-                  attachments={attachments}
-                  visible={imagesVisible}
-                  compact={compact}
-                  hasText={hasText}
-                  onReadAttachment={onReadAttachment}
-                  onOpenImage={onOpenImage}
-                />
-              ) : null}
-              {hasText || message.answer ? (
-                <div className="user-bubble">
-                  <UserMessageContent
-                    parts={[
-                      message.sender
-                        ? { text: message.text, references: [] }
-                        : parseSentReferenceContent(
-                            message.text,
-                            message.clientId,
-                          ),
-                    ]}
-                    answer={message.answer}
+            <MessageGroup
+              {...(groupSender
+                ? { className: "queue-message-group has-sender" }
+                : {})}
+            >
+              {groupSender ? source : null}
+              <div className="queue-message-body user-row">
+                {message.imageCount > 0 ? (
+                  <span
+                    className={
+                      unavailableImages > 0
+                        ? "queue-image-unavailable"
+                        : "sr-only"
+                    }
+                  >
+                    {t("imageCount", { count: message.imageCount })}
+                    {unavailableImages > 0
+                      ? ` · ${t("queueUnavailablePreviews", { count: unavailableImages })}`
+                      : ""}
+                  </span>
+                ) : null}
+                {message.imageCount > 0 ? (
+                  <QueuedImageStrip
+                    message={message}
+                    attachments={attachments}
+                    visible={imagesVisible}
+                    compact={compact}
+                    hasText={hasText}
+                    onReadAttachment={onReadAttachment}
+                    onOpenImage={onOpenImage}
                   />
-                </div>
-              ) : null}
-            </div>
+                ) : null}
+                {hasText || message.answer ? (
+                  <div className="user-bubble">
+                    <UserMessageContent
+                      parts={[
+                        message.sender
+                          ? { text: message.text, references: [] }
+                          : parseSentReferenceContent(
+                              message.text,
+                              message.clientId,
+                            ),
+                      ]}
+                      answer={message.answer}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            </MessageGroup>
           ) : message.hostSource !== undefined ? (
             <HostMessageContent
               sourceNavigation
