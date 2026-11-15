@@ -1,3 +1,4 @@
+import { sidebarIdentityCase } from "./sidebar-identity-cases.mjs";
 import { fontProbeHTML, probePreviewFonts } from "./preview-font-probe.mjs";
 import { fontRevision, fontAssets } from "./prepare-preview-fonts.mjs";
 import {
@@ -53,6 +54,14 @@ const desktopChildNavigation = captureProfile === "desktop-child-navigation";
 const desktopBusyChild = captureProfile === "desktop-busy-child";
 const desktopCombinedAttention =
   captureProfile === "desktop-combined-attention";
+const identityCaseName = process.env.ZENX_SIDEBAR_IDENTITY_CASE;
+assert(
+  !identityCaseName || desktopCombinedAttention,
+  "Identity cases require existing exact-head combined profile",
+);
+const identityCase = identityCaseName
+  ? sidebarIdentityCase(identityCaseName)
+  : null;
 const combinedAttentionCapture = desktopCombinedAttention
   ? (await import("./navigation-main-ui-preview.mjs")).captureCombinedAttention
   : null;
@@ -625,15 +634,21 @@ try {
                   c.width === 1280 && c.height === 900 && c.theme === "light",
               )
             : desktopCombinedAttention
-              ? ["light", "dark"].flatMap((theme) =>
-                  ["en", "zh-CN"].map((lang) => ({
-                    name: `desktop-${theme}-${lang}`,
-                    width: 1280,
-                    height: 900,
-                    theme,
-                    lang,
-                    onlyScene: "navigation",
-                  })),
+              ? (identityCase ? ["light"] : ["light", "dark"]).flatMap(
+                  (theme) =>
+                    (identityCase ? [identityCase.lang] : ["en", "zh-CN"]).map(
+                      (lang) => ({
+                        name: `desktop-${theme}-${lang}${identityCaseName ? `-${identityCaseName}` : ""}`,
+                        ...(identityCaseName
+                          ? { identityCase: identityCaseName }
+                          : {}),
+                        width: 1280,
+                        height: 900,
+                        theme,
+                        lang,
+                        onlyScene: "navigation",
+                      }),
+                    ),
                 )
               : cases) {
     await send("Emulation.setDeviceMetricsOverride", {
@@ -665,6 +680,7 @@ try {
         if (desktopChildNavigation) query.set("childNavigation", "1");
         if (desktopBusyChild) query.set("busyChild", "approval");
         if (desktopCombinedAttention) query.set("busyChild", "approval-asking");
+        if (identityCaseName) query.set("identityCase", identityCaseName);
       }
       if (scene === "pending") {
         query.set("many", "");

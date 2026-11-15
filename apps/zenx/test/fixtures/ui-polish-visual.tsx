@@ -1,3 +1,4 @@
+import { sidebarIdentityCase } from "../../scripts/sidebar-identity-cases.mjs";
 import { createChildQuestionData } from "./child-question-data.js";
 import "../../src/renderer/src/shell-thread-panel.css";
 import "../../src/renderer/src/agent-readiness-notice.css";
@@ -48,8 +49,17 @@ const combinedAttention =
 const busyChild =
   params.get("scene") === "navigation" &&
   (params.get("busyChild") === "approval" || combinedAttention);
+const identityCaseName = combinedAttention ? params.get("identityCase") : null;
+const identityCase = identityCaseName
+  ? sidebarIdentityCase(identityCaseName)
+  : null;
+if (identityCase && params.get("lang") !== identityCase.lang)
+  throw new Error("Identity case requires its actual title language");
 const busyChildTitle =
+  identityCase?.title ??
   "Design review · shared component accessibility and release readiness";
+const busyChildSiblingTitle =
+  identityCase?.siblingTitle ?? `${busyChildTitle} · alternate review`;
 const busyChildModel = "Local demonstration model · extended reasoning preview";
 const childNavigation =
   childSidebar !== null && params.get("childNavigation") === "1";
@@ -169,7 +179,7 @@ const sideConversations = childQuestionData?.rows ?? [
     ...summary(
       "test-child",
       combinedAttention
-        ? `${busyChildTitle} · alternate review`
+        ? busyChildSiblingTitle
         : (rails?.children[1] ?? "Test coverage"),
     ),
     parentThreadId: "thread-1",
@@ -765,6 +775,12 @@ if (busyChild)
   Object.assign(window, {
     __busyChildFixture: {
       title: busyChildTitle,
+      ...(identityCaseName
+        ? {
+            identityCase: identityCaseName,
+            siblingTitle: busyChildSiblingTitle,
+          }
+        : {}),
       model: busyChildModel,
       approval: true,
       asking: combinedAttention,

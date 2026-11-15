@@ -1,3 +1,4 @@
+import { sidebarIdentityCase } from "./sidebar-identity-cases.mjs";
 import assert from "node:assert/strict";
 
 export const navigationSelectors = {
@@ -1534,6 +1535,19 @@ export function observeCombinedAttention() {
           ?.getAttribute("aria-label"),
         approvalFull: read(row?.querySelector(".thread-approval-full")),
         approvalCompact: read(row?.querySelector(".thread-approval-compact")),
+        siblingRow: read(
+          document.querySelector(
+            `.sidebar .${scope} [data-thread-id="test-child"] > .thread-row`,
+          ),
+        ),
+        siblingMenu: read(
+          document.querySelector(
+            `.sidebar .${scope} [data-thread-id="test-child"] > .thread-menu-trigger`,
+          ),
+        ),
+        siblingMenuId: document.querySelector(
+          `.sidebar .${scope} [data-thread-id="test-child"] > .thread-menu-trigger`,
+        )?.id,
         siblingTitle: read(
           document.querySelector(
             `.sidebar .${scope} [data-thread-id="test-child"] .thread-title > span`,
@@ -1546,6 +1560,15 @@ export function observeCombinedAttention() {
         ),
       };
     }),
+    menuPanel: read(document.querySelector(".thread-item-menu")),
+    menuPanelCount: document.querySelectorAll(".thread-item-menu").length,
+    menuPanelLabelledBy: document
+      .querySelector(".thread-item-menu")
+      ?.getAttribute("aria-labelledby"),
+    menuPanelFocusWithin:
+      document
+        .querySelector(".thread-item-menu")
+        ?.contains(document.activeElement) ?? false,
     reveal: read(document.querySelector(".thread-information-title > span")),
     detailFacts: [
       ...document.querySelectorAll(".thread-information [data-thread-fact]"),
@@ -1591,6 +1614,20 @@ export function verifyCombinedAttention(state, options) {
     },
   }[options.lang];
   assert(wording, "Explicit supported capture locale is required");
+  const identity = options.identityCase
+    ? sidebarIdentityCase(options.identityCase)
+    : null;
+  assert.equal(
+    state.fixture?.identityCase ?? null,
+    options.identityCase ?? null,
+  );
+  const siblingTitle =
+    identity?.siblingTitle ?? `${state.fixture.title} · alternate review`;
+  if (identity) {
+    assert.equal(options.lang, identity.lang);
+    assert.equal(state.fixture.title, identity.title);
+    assert.equal(state.fixture.siblingTitle, identity.siblingTitle);
+  }
   assert.equal(state.fixture?.scene, "approval-asking");
   assert.equal(state.fixture.approval, true);
   assert.equal(state.fixture.openQuestionCount, 2);
@@ -1621,11 +1658,11 @@ export function verifyCombinedAttention(state, options) {
     assert.equal(alias.model.text, state.fixture.model);
     assert.equal(
       (alias.siblingTitlePresentation?.canonical ?? alias.siblingTitle)?.text,
-      `${state.fixture.title} · alternate review`,
+      siblingTitle,
     );
     verifySidebarTitlePresentation(
       alias.siblingTitlePresentation,
-      `${state.fixture.title} · alternate review`,
+      siblingTitle,
       alias.siblingTitle,
     );
     assert.equal(alias.child.text, wording.child, "Rendered child locale");
@@ -1674,7 +1711,13 @@ export async function captureCombinedAttention({
   (evidence.combinedAttentionTrips ??= []).push(trip);
   const observe = () => evaluate(`(${observeCombinedAttention.toString()})()`);
   const summary = ({ telemetry, ...geometry }) => geometry;
-  const record = async (name, scope, baseline) => {
+  const record = async (
+    name,
+    scope,
+    baseline,
+    sibling = false,
+    menuOpen = false,
+  ) => {
     let previous;
     let sample;
     for (let n = 0; n < 12; n++) {
@@ -1708,13 +1751,27 @@ export async function captureCombinedAttention({
       assert.deepEqual(sample.composer.rect, baseline.composer.rect);
     if (scope) {
       const alias = sample.aliases.find((a) => a.scope === scope);
-      assert(alias?.row?.focused && alias.row.focusVisible);
-      assert(alias.menu?.visible && alias.menu.centerHit);
-      assert.equal(sample.reveal?.text, sample.fixture.title);
-      assert(
-        sample.pane?.visible &&
-          sample.pane.rect.bottom <= sample.composer.rect.y,
+      const row = sibling ? alias?.siblingRow : alias?.row;
+      const menu = sibling ? alias?.siblingMenu : alias?.menu;
+      if (!menuOpen) assert(row?.focused && row.focusVisible);
+      assert(menu?.visible && menu.centerHit);
+      assert.equal(
+        sample.reveal?.text,
+        sibling ? sample.fixture.siblingTitle : sample.fixture.title,
       );
+      if (menuOpen) {
+        assert(sample.menuPanel?.visible && sample.menuPanelFocusWithin);
+        assert.equal(
+          sample.menuPanelCount,
+          1,
+          "Exactly one second sibling menu",
+        );
+        assert.equal(sample.menuPanelLabelledBy, alias.siblingMenuId);
+      } else
+        assert(
+          sample.pane?.visible &&
+            sample.pane.rect.bottom <= sample.composer.rect.y,
+        );
     }
     return sample;
   };
@@ -1747,6 +1804,50 @@ export async function captureCombinedAttention({
       await record(`${scope}-keyboard-reveal`, scope, baseline);
       await dispatchNavigationKey(send, "Escape", "Escape", 27);
       await wait("!document.querySelector('.thread-information')");
+    }
+    if (options.identityCase) {
+      for (const scope of ["project-group", "recent-thread-group"]) {
+        const shell = `.sidebar .${scope} [data-thread-id="test-child"]`;
+        assert(
+          await tabTo(`${shell} > .thread-row:focus-visible`),
+          "Native Tab reaches second sibling",
+        );
+        await wait(
+          `document.querySelector('.thread-information-title > span')?.textContent===${JSON.stringify(baseline.fixture.siblingTitle)}`,
+        );
+        await record(`${scope}-second-sibling-detail`, scope, baseline, true);
+        assert(
+          await tabTo(`${shell} > .thread-menu-trigger:focus-visible`),
+          "Native Tab reaches second sibling menu",
+        );
+        await dispatchNavigationKey(send, "Enter", "Enter", 13);
+        await wait("!!document.querySelector('.thread-item-menu')");
+        await record(
+          `${scope}-second-sibling-menu`,
+          scope,
+          baseline,
+          true,
+          true,
+        );
+        await dispatchNavigationKey(send, "Escape", "Escape", 27);
+        await wait("!document.querySelector('.thread-item-menu')");
+        const returned = await observe();
+        verifyCombinedAttention(returned, options);
+        assert.equal(
+          returned.menuPanelCount,
+          0,
+          "Escape removes second sibling menu",
+        );
+        const alias = returned.aliases.find((a) => a.scope === scope);
+        assert(
+          alias?.siblingMenu?.focused,
+          "Escape restores exact second sibling menu trigger",
+        );
+        trip.states.push({
+          name: `${scope}-second-sibling-menu-dismissed`,
+          after: returned,
+        });
+      }
     }
     trip.status = "observed";
   } catch (error) {

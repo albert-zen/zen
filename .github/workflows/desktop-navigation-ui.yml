@@ -37,6 +37,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 6
     steps:
+      - name: Record bounded optional evidence budget
+        run: echo "ZENX_NAVIGATION_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -174,3 +176,57 @@ jobs:
         continue-on-error: true
         if: always()
         run: echo 'Combined approval and Asking uses production Sidebar with synthetic read-only summaries. This is scoped observation, not a claim of fit, comparative improvement, native App acceptance or approval interaction. Original navigation acceptance remains separate and unchanged.' >> "$GITHUB_STEP_SUMMARY"
+
+      # Remove these optional steps and the budget marker to disable this trial.
+      # Only PR #755; no new trigger, permission, installation or browser policy.
+      - name: Optional Chinese sidebar identity evidence
+        id: sidebarIdentity
+        continue-on-error: true
+        if: ${{ !cancelled() && github.event.pull_request.number == 755 && steps.fonts.outcome == 'success' && steps.navigationBuild.outcome == 'success' }}
+        timeout-minutes: 2
+        env:
+          ZENX_COMBINED_ATTENTION_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          root="${{ runner.temp }}/desktop-sidebar-identity"
+          mkdir -p "$root"
+          elapsed=$(( $(date +%s) - ZENX_NAVIGATION_STARTED_AT ))
+          if [ "$elapsed" -gt 180 ]; then
+            printf 'skipped-budget: original phases consumed %ss; no identity capture attempted\n' "$elapsed" | tee "$root/activation-status.txt"
+            exit 0
+          fi
+          test_code=0
+          timeout --signal=TERM --kill-after=2s 10s node --import tsx --test apps/zenx/test/sidebar-identity-matrix.test.mjs apps/zenx/test/sidebar-identity-labels.test.ts > "$root/matrix-test.log" 2>&1 || test_code=$?
+          if [ "$test_code" -ne 0 ]; then
+            printf 'test-failed: matrix exit=%s; no identity capture attempted\n' "$test_code" | tee "$root/activation-status.txt"
+            exit "$test_code"
+          fi
+          printf 'matrix-tests-passed\n' > "$root/activation-status.txt"
+          failed=0
+          for identity in zh-extension zh-shared-tail; do
+            dir="$root/$identity"
+            mkdir -p "$dir"
+            cp "${{ runner.temp }}/desktop-navigation-preview/navigation.html" "${{ runner.temp }}/desktop-navigation-preview/source.json" "$dir/"
+            code=0
+            ZENX_SIDEBAR_IDENTITY_CASE="$identity" timeout --signal=TERM --kill-after=5s 35s node apps/zenx/scripts/capture-main-ui-preview.mjs "$dir" desktop-combined-attention > "$dir/capture.log" 2>&1 || code=$?
+            printf '%s exit=%s (124/137 means bounded timeout, not acceptance)\n' "$identity" "$code" | tee -a "$root/activation-status.txt"
+            if [ "$code" -ne 0 ]; then failed=1; fi
+          done
+          exit "$failed"
+      - name: Retain optional identity evidence separately
+        continue-on-error: true
+        if: ${{ always() && github.event.pull_request.number == 755 }}
+        timeout-minutes: 1
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-sidebar-identity-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/desktop-sidebar-identity/**
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Report optional identity outcome without replacing original acceptance
+        continue-on-error: true
+        if: ${{ always() && github.event.pull_request.number == 755 }}
+        run: |
+          echo 'Optional sidebar identity outcome: ${{ steps.sidebarIdentity.outcome }}. Inspect each exact-head evidence.json AND activation-status.txt; skip, timeout, missing receipt or failure is not acceptance. Original navigation and combined receipts remain authoritative for their own phases. This trial supplies synthetic Chinese light-desktop observations only, not visual approval or native Electron acceptance.' >> "$GITHUB_STEP_SUMMARY"
+          if [ -f "${{ runner.temp }}/desktop-sidebar-identity/activation-status.txt" ]; then
+            cat "${{ runner.temp }}/desktop-sidebar-identity/activation-status.txt" >> "$GITHUB_STEP_SUMMARY"
+          fi

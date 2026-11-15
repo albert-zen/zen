@@ -1,3 +1,7 @@
+import {
+  sidebarIdentityCases,
+  sidebarIdentityCase,
+} from "../scripts/sidebar-identity-cases.mjs";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
@@ -163,19 +167,28 @@ test("busy fixture is navigation opt-in, approval-only and preserves ordinary ro
   const setup = [
     "combinedAttention",
     "busyChild",
+    "identityCaseName",
+    "identityCase",
     "busyChildTitle",
+    "busyChildSiblingTitle",
     "busyChildModel",
     "sideConversations",
   ]
     .map(variable)
     .join("\n");
-  for (const [query, on, combined] of [
+  for (const [query, on, combined, identityName] of [
     ["scene=navigation&busyChild=approval", true],
     ["scene=navigation&busyChild=approval-asking", true, true],
     ["scene=reading&busyChild=approval-asking", false],
     ["scene=reading&busyChild=approval", false],
     ["scene=navigation", false],
     ["scene=navigation&busyChild=asking", false],
+    ...Object.entries(sidebarIdentityCases).map(([name, scene]) => [
+      `scene=navigation&busyChild=approval-asking&identityCase=${name}&lang=${scene.lang}`,
+      true,
+      true,
+      name,
+    ]),
   ]) {
     const result = vm.runInNewContext(
       ts.transpileModule(
@@ -186,6 +199,7 @@ test("busy fixture is navigation opt-in, approval-only and preserves ordinary ro
       ).outputText,
       {
         params: new URLSearchParams(query),
+        sidebarIdentityCase,
         childQuestionData: null,
         rails: null,
         summary: (id = "thread-1", name = "Thread one") => ({
@@ -197,6 +211,8 @@ test("busy fixture is navigation opt-in, approval-only and preserves ordinary ro
     );
     assert.equal(result.busyChild, on);
     const row = result.sideConversations[0];
+    if (identityName)
+      assert.equal(row.name, sidebarIdentityCase(identityName).title);
     assert.equal(row.parentThreadId, "thread-1");
     assert.equal(
       row.currentMetadata.model,
@@ -208,7 +224,11 @@ test("busy fixture is navigation opt-in, approval-only and preserves ordinary ro
     );
     assert.equal(
       result.sideConversations[1].name,
-      combined ? `${row.name} · alternate review` : "Test coverage",
+      identityName
+        ? sidebarIdentityCase(identityName).siblingTitle
+        : combined
+          ? `${row.name} · alternate review`
+          : "Test coverage",
     );
   }
   const threadList = await read("../src/renderer/src/thread-list.ts");
