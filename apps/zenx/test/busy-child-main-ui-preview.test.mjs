@@ -19,6 +19,17 @@ const box = (text) => ({
   ellipsized: false,
   clientHeight: 20,
   scrollHeight: 20,
+  glyphs: [
+    {
+      x: 15,
+      y: 12,
+      right: 100,
+      bottom: 28,
+      width: 85,
+      height: 16,
+      centerHit: true,
+    },
+  ],
 });
 function sample() {
   const title = "Synthetic long title",
@@ -40,7 +51,25 @@ function sample() {
     reveal: box(title),
     selected: ["thread-1", "thread-1"],
     draft: navigationDraft,
-    composer: box(""),
+    composer: {
+      ...box(""),
+      rect: { x: 0, y: 500, right: 800, bottom: 608, width: 800, height: 108 },
+    },
+    composerCount: 1,
+    composerEditor: box(""),
+    composerPrimary: box(""),
+    pane: {
+      ...box(""),
+      rect: { x: 0, y: 0, right: 328, bottom: 300, width: 328, height: 300 },
+    },
+    detailFacts: [
+      {
+        kind: "pending-approval",
+        label: box("Status"),
+        value: box("Needs your approval"),
+      },
+      { kind: "model", label: box("Model"), value: box(model) },
+    ],
     telemetry: {
       informationUpdates: 0,
       protocolCalls: ["initialize", "zen/thread/resume-window"],
@@ -65,6 +94,14 @@ test("busy measurement checks exact owner/name/model/approval and keyboard revea
     (s) => (s.reveal.centerHit = false),
     (s) => (s.aliases[0].row.focusVisible = false),
     (s) => s.telemetry.protocolCalls.push("zen/turn/send"),
+    (s) => (s.pane = null),
+    (s) => (s.pane.rect.bottom = 501),
+    (s) => (s.composerCount = 2),
+    (s) => (s.composerEditor.centerHit = false),
+    (s) => (s.composerPrimary.disabled = true),
+    (s) => (s.detailFacts[1].value.glyphs = []),
+    (s) => (s.detailFacts[1].value.glyphs[0].right = 400),
+    (s) => (s.detailFacts[1].value.glyphs[0].centerHit = false),
   ]) {
     const bad = sample();
     mutate(bad);
@@ -315,7 +352,142 @@ test("busy receipt separately records wrapped detail facts without changing inli
   );
   assert.doesNotMatch(
     verify,
-    /detailFacts/,
+    /alias\.model\.ellipsized/,
     "New receipt does not relabel the previous observed inline fit as passed",
   );
+});
+
+test("scoped pending-child placement keeps default algorithm, protects Composer and preserves row hover bridge", async () => {
+  const ts = await import("typescript");
+  const source = await read("../src/renderer/src/Sidebar.tsx");
+  const ast = ts.createSourceFile(
+    "Sidebar.tsx",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+  const fn = (n) =>
+    ast.statements.find(
+      (s) => ts.isFunctionDeclaration(s) && s.name?.text === n,
+    );
+  let update;
+  const visit = (n) => {
+    if (ts.isVariableDeclaration(n) && n.name.getText(ast) === "update")
+      update = n.initializer;
+    ts.forEachChild(n, visit);
+  };
+  visit(fn("SidebarMenuPopover"));
+  assert(update);
+  const code = ts.transpileModule(
+    `const SIDEBAR_MENU_GAP=6, SIDEBAR_MENU_VIEWPORT_MARGIN=8;\n${fn("sidebarMenuLayout").getText(ast)};return {update:(${update.getText(ast)}), base:sidebarMenuLayout};`,
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const run = (changes = {}) => {
+    const a = {
+      left: 8,
+      right: 246,
+      top: 512,
+      bottom: 562,
+      width: 238,
+      height: 50,
+      ...changes.anchor,
+    };
+    const m = { width: 328, height: 280.8, ...changes.menu };
+    const c = {
+      left: 371.5,
+      right: 1171.5,
+      top: 774,
+      bottom: 882,
+      width: 800,
+      height: 108,
+      ...changes.composer,
+    };
+    let result,
+      queried = 0,
+      measured = 0,
+      styled = 0,
+      observed = 0;
+    const target = changes.missingComposer
+      ? null
+      : {
+          getBoundingClientRect: () => {
+            measured++;
+            return c;
+          },
+        };
+    const api = new Function(
+      "anchor",
+      "menu",
+      "composer",
+      "window",
+      "getComputedStyle",
+      "setLayout",
+      "observer",
+      code,
+    )(
+      {
+        getBoundingClientRect: () => a,
+        closest: () => {
+          queried++;
+          return { querySelector: () => target };
+        },
+      },
+      {
+        getBoundingClientRect: () => m,
+        matches: () => changes.informationOnly !== false,
+        querySelector: () => (changes.pending !== false ? {} : null),
+      },
+      null,
+      { innerWidth: 1280, innerHeight: 900 },
+      () => {
+        styled++;
+        return { visibility: "visible", opacity: changes.hidden ? "0" : "1" };
+      },
+      (f) => {
+        result = f(result);
+      },
+      {
+        observe: () => {
+          observed++;
+        },
+        unobserve: () => {},
+      },
+    );
+    const original = api.base(a, m, 1280, 900);
+    api.update();
+    return { result, original, a, m, c, queried, measured, styled, observed };
+  };
+  const recent = run();
+  assert.equal(recent.result.top, 485);
+  assert(recent.result.top + recent.m.height + 8 <= recent.c.top);
+  assert(recent.result.top + recent.m.height > recent.a.top);
+  const project = run({ anchor: { top: 302, bottom: 352 } });
+  assert.deepEqual(project.result, project.original);
+  for (const changes of [
+    { pending: false },
+    { informationOnly: false },
+    { missingComposer: true },
+    { hidden: true },
+    { menu: { width: 0 } },
+    { menu: { height: 0 } },
+    { composer: { height: 0 } },
+    { anchor: { height: 0 } },
+    { composer: { left: 900, right: 1200, width: 300 } },
+    { menu: { height: 800 } },
+    { anchor: { top: 850, bottom: 900 } },
+  ]) {
+    const s = run(changes);
+    assert.deepEqual(s.result, s.original);
+    if (changes.pending === false || changes.informationOnly === false)
+      assert.deepEqual(
+        [s.queried, s.measured, s.styled, s.observed],
+        [0, 0, 0, 0],
+      );
+  }
+  assert.match(
+    source,
+    /:scope > main\.workspace #primary-conversation-content \.composer/,
+  );
+  assert.match(source, /if \(composer\) observer\?\.observe\(composer\)/);
 });

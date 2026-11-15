@@ -3209,13 +3209,63 @@ function SidebarMenuPopover({
     ) {
       return;
     }
+    let composer: HTMLElement | null = null;
+    let observer: ResizeObserver | null = null;
     const update = () => {
+      const anchorRect = anchor.getBoundingClientRect();
+      const menuRect = menu.getBoundingClientRect();
       const next = sidebarMenuLayout(
-        anchor.getBoundingClientRect(),
-        menu.getBoundingClientRect(),
+        anchorRect,
+        menuRect,
         window.innerWidth,
         window.innerHeight,
       );
+      // Only the scoped pending-child detail facts opt into this measured bound.
+      // Preserve the ordinary algorithm and the hover bridge to the actual row.
+      const scopedDetail =
+        menu.matches(".thread-information") &&
+        !!menu.querySelector('[data-thread-fact="pending-approval"]');
+      const nextComposer = scopedDetail
+        ? (anchor
+            .closest(".app-shell")
+            ?.querySelector<HTMLElement>(
+              ":scope > main.workspace #primary-conversation-content .composer",
+            ) ?? null)
+        : null;
+      if (nextComposer !== composer) {
+        if (composer) observer?.unobserve(composer);
+        composer = nextComposer;
+        if (composer) observer?.observe(composer);
+      }
+      const composerRect = composer?.getBoundingClientRect();
+      const composerStyle = composer ? getComputedStyle(composer) : null;
+      if (
+        anchorRect.width > 0 &&
+        anchorRect.height > 0 &&
+        menuRect.width > 0 &&
+        menuRect.height > 0 &&
+        composerRect &&
+        composerRect.width > 0 &&
+        composerRect.height > 0 &&
+        composerStyle?.visibility === "visible" &&
+        Number(composerStyle.opacity) > 0 &&
+        next.left < composerRect.right &&
+        next.left + menuRect.width > composerRect.left &&
+        next.top < composerRect.bottom &&
+        next.top + menuRect.height >
+          composerRect.top - SIDEBAR_MENU_VIEWPORT_MARGIN
+      ) {
+        const boundedTop = Math.floor(
+          composerRect.top - SIDEBAR_MENU_VIEWPORT_MARGIN - menuRect.height,
+        );
+        if (
+          boundedTop >= SIDEBAR_MENU_VIEWPORT_MARGIN &&
+          boundedTop + menuRect.height > anchorRect.top
+        )
+          next.top = Math.min(next.top, boundedTop);
+        // If it cannot fit while touching the row's vertical band, keep the
+        // original placement; do not hide content or invent a different owner.
+      }
       setLayout((current) =>
         current?.left === next.left &&
         current.top === next.top &&
@@ -3227,10 +3277,11 @@ function SidebarMenuPopover({
     update();
     window.addEventListener("resize", update);
     window.addEventListener("scroll", update, true);
-    const observer =
+    observer =
       typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
     observer?.observe(anchor);
     observer?.observe(menu);
+    if (composer) observer?.observe(composer);
     return () => {
       window.removeEventListener("resize", update);
       window.removeEventListener("scroll", update, true);

@@ -1007,9 +1007,14 @@ export function observeBusyChild() {
       bottom: r.bottom,
       width: r.width,
       height: r.height,
+      centerHit: element.contains(
+        document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2),
+      ),
     }));
     return {
       text: element.textContent,
+      disabled:
+        !!element.disabled || element.getAttribute("aria-disabled") === "true",
       title: element.getAttribute("title"),
       rect: {
         x: r.x,
@@ -1047,7 +1052,27 @@ export function observeBusyChild() {
       glyphs,
     };
   };
+  const shell = document
+    .querySelector('.sidebar .project-group [data-thread-id="design-child"]')
+    ?.closest(".app-shell");
+  const composers = [
+    ...(shell?.querySelectorAll(
+      ":scope > main.workspace #primary-conversation-content .composer",
+    ) ?? []),
+  ].filter((element) => {
+    const rect = element.getBoundingClientRect(),
+      style = getComputedStyle(element);
+    return (
+      rect.width > 0 &&
+      rect.height > 0 &&
+      style.visibility === "visible" &&
+      Number(style.opacity) > 0
+    );
+  });
+  const composer = composers.length === 1 ? composers[0] : null;
+  const editor = composer?.querySelector('[contenteditable="true"], textarea');
   return {
+    composerCount: composers.length,
     fixture: window.__busyChildFixture,
     theme: document.documentElement.dataset.appearance,
     viewport: { width: innerWidth, height: innerHeight },
@@ -1080,13 +1105,15 @@ export function observeBusyChild() {
     selected: [
       ...document.querySelectorAll('.sidebar .thread-row[aria-current="page"]'),
     ].map((e) => e.closest("[data-thread-id]")?.dataset.threadId),
-    composer: read(document.querySelector(".composer")),
-    draft: (() => {
-      const e = document.querySelector(
-        '.composer [contenteditable="true"], .composer textarea',
-      );
-      return e ? ("value" in e ? e.value : e.textContent) : null;
-    })(),
+    pane: read(document.querySelector(".thread-information")),
+    composerEditor: read(editor),
+    composerPrimary: read(composer?.querySelector(".action-orb")),
+    composer: read(composer),
+    draft: editor
+      ? "value" in editor
+        ? editor.value
+        : editor.textContent
+      : null,
     telemetry: window.__uiPolishTelemetry,
   };
 }
@@ -1134,6 +1161,16 @@ export function verifyBusyChild(state, focusScope, baseline) {
     ),
     "No real or simulated action is accepted",
   );
+  assert.equal(
+    state.composerCount,
+    1,
+    "Exactly one visible primary Composer is measured",
+  );
+  for (const control of [state.composerEditor, state.composerPrimary])
+    assert(
+      control?.visible && control.centerHit && !control.disabled,
+      "Actual Composer editor and action remain usable",
+    );
   if (baseline) {
     assert.deepEqual(state.composer.rect, baseline.composer.rect);
     assert.equal(
@@ -1142,6 +1179,48 @@ export function verifyBusyChild(state, focusScope, baseline) {
     );
   }
   if (focusScope) {
+    const pane = state.pane?.rect,
+      composer = state.composer?.rect;
+    assert(
+      state.pane?.visible &&
+        pane.width > 0 &&
+        pane.height > 0 &&
+        composer?.width > 0 &&
+        composer.height > 0,
+      "Observe actual pane and Composer, not only a computed layout",
+    );
+    if (pane.x < composer.right && pane.right > composer.x)
+      assert(
+        pane.bottom + 8 <= composer.y,
+        "Pending child detail keeps an actual 8px Composer gap",
+      );
+    assert.deepEqual(
+      state.detailFacts.map((f) => f.kind),
+      ["pending-approval", "model"],
+    );
+    assert.equal(state.detailFacts[0].value.text, "Needs your approval");
+    assert.equal(state.detailFacts[1].value.text, state.fixture.model);
+    for (const fact of state.detailFacts)
+      for (const part of [fact.label, fact.value]) {
+        assert(
+          part.visible &&
+            part.centerHit &&
+            !part.ellipsized &&
+            part.glyphs.length > 0,
+          "Detail fact has observed visible text",
+        );
+        for (const glyph of part.glyphs)
+          assert(
+            glyph.width > 0 &&
+              glyph.height > 0 &&
+              glyph.centerHit &&
+              glyph.x >= Math.max(pane.x, part.rect.x) - 1 &&
+              glyph.right <= Math.min(pane.right, part.rect.right) + 1 &&
+              glyph.y >= Math.max(pane.y, part.rect.y) - 1 &&
+              glyph.bottom <= Math.min(pane.bottom, part.rect.bottom) + 1,
+            "Full fact glyph fragments fit their own value and the actual pane",
+          );
+      }
     const target = state.aliases.find((a) => a.scope === focusScope).row;
     assert(
       target.focused &&
