@@ -1403,7 +1403,7 @@ export function verifySidebarTitlePresentation(presentation, expected, slot) {
   }
 }
 
-export function observeCombinedAttention() {
+export function observeCombinedAttention(owner = null) {
   const read = (element) => {
     if (!element) return null;
     const r = element.getBoundingClientRect(),
@@ -1506,7 +1506,65 @@ export function observeCombinedAttention() {
   });
   const composer = composers.length === 1 ? composers[0] : null;
   const editor = composer?.querySelector('[contenteditable="true"], textarea');
+  const trigger = owner
+    ? document.querySelector(
+        `.sidebar .${owner.scope} [data-thread-id="test-child"] > .thread-status-rail > .thread-menu-trigger`,
+      )
+    : null;
+  const expectedId = trigger?.id?.replace(
+    /^thread-menu-trigger-/,
+    "thread-menu-",
+  );
+  const panels = owner
+    ? [
+        ...document.querySelectorAll(".thread-information, .thread-item-menu"),
+      ].filter((element) => {
+        const rect = element.getBoundingClientRect(),
+          style = getComputedStyle(element);
+        return (
+          rect.width > 0 &&
+          rect.height > 0 &&
+          style.visibility === "visible" &&
+          Number(style.opacity) > 0
+        );
+      })
+    : [];
+  const owned = owner
+    ? panels.find(
+        (element) =>
+          element.id === expectedId &&
+          element.getAttribute("aria-labelledby") === trigger?.id,
+      )
+    : null;
+  const panelRoot = owner ? owned : document;
+  const detailPane = owner
+    ? owned?.matches(".thread-information")
+      ? owned
+      : null
+    : document.querySelector(".thread-information");
+  const actionMenu = owner
+    ? owned?.matches(".thread-item-menu")
+      ? owned
+      : null
+    : document.querySelector(".thread-item-menu");
   return {
+    ...(owner
+      ? {
+          paneOwnership: {
+            expectedId,
+            triggerId: trigger?.id,
+            controls: trigger?.getAttribute("aria-controls"),
+            visibleCount: panels.length,
+            ownedId: owned?.id,
+            labelledBy: owned?.getAttribute("aria-labelledby"),
+            kind: owned?.matches(".thread-item-menu")
+              ? "menu"
+              : owned?.matches(".thread-information")
+                ? "detail"
+                : null,
+          },
+        }
+      : {}),
     composerCount: composers.length,
     fixture: window.__busyChildFixture,
     theme: document.documentElement.dataset.appearance,
@@ -1542,11 +1600,11 @@ export function observeCombinedAttention() {
         ),
         siblingMenu: read(
           document.querySelector(
-            `.sidebar .${scope} [data-thread-id="test-child"] > .thread-menu-trigger`,
+            `.sidebar .${scope} [data-thread-id="test-child"] > .thread-status-rail > .thread-menu-trigger`,
           ),
         ),
         siblingMenuId: document.querySelector(
-          `.sidebar .${scope} [data-thread-id="test-child"] > .thread-menu-trigger`,
+          `.sidebar .${scope} [data-thread-id="test-child"] > .thread-status-rail > .thread-menu-trigger`,
         )?.id,
         siblingTitle: read(
           document.querySelector(
@@ -1560,18 +1618,17 @@ export function observeCombinedAttention() {
         ),
       };
     }),
-    menuPanel: read(document.querySelector(".thread-item-menu")),
-    menuPanelCount: document.querySelectorAll(".thread-item-menu").length,
-    menuPanelLabelledBy: document
-      .querySelector(".thread-item-menu")
-      ?.getAttribute("aria-labelledby"),
-    menuPanelFocusWithin:
-      document
-        .querySelector(".thread-item-menu")
-        ?.contains(document.activeElement) ?? false,
-    reveal: read(document.querySelector(".thread-information-title > span")),
+    menuPanel: read(actionMenu),
+    menuPanelCount: owner
+      ? panels.filter((e) => e.matches(".thread-item-menu")).length
+      : document.querySelectorAll(".thread-item-menu").length,
+    menuPanelLabelledBy: actionMenu?.getAttribute("aria-labelledby"),
+    menuPanelFocusWithin: actionMenu?.contains(document.activeElement) ?? false,
+    reveal: read(panelRoot?.querySelector(".thread-information-title > span")),
     detailFacts: [
-      ...document.querySelectorAll(".thread-information [data-thread-fact]"),
+      ...(owner
+        ? (owned?.querySelectorAll("[data-thread-fact]") ?? [])
+        : document.querySelectorAll(".thread-information [data-thread-fact]")),
     ].map((fact) => ({
       kind: fact.getAttribute("data-thread-fact"),
       row: read(fact),
@@ -1581,7 +1638,7 @@ export function observeCombinedAttention() {
     selected: [
       ...document.querySelectorAll('.sidebar .thread-row[aria-current="page"]'),
     ].map((e) => e.closest("[data-thread-id]")?.dataset.threadId),
-    pane: read(document.querySelector(".thread-information")),
+    pane: read(detailPane),
     composerEditor: read(editor),
     composerPrimary: read(composer?.querySelector(".action-orb")),
     composer: read(composer),
@@ -1691,6 +1748,19 @@ export function verifyCombinedAttention(state, options) {
   // Observational baseline may expose clipping: record it, never bless it as fit.
 }
 
+export function combinedPaneOwned(state, menuOpen) {
+  const p = state.paneOwnership;
+  return (
+    !!p?.triggerId &&
+    !!p.expectedId &&
+    p.visibleCount === 1 &&
+    p.ownedId === p.expectedId &&
+    p.labelledBy === p.triggerId &&
+    p.kind === (menuOpen ? "menu" : "detail") &&
+    (!menuOpen || p.controls === p.expectedId)
+  );
+}
+
 export async function captureCombinedAttention({
   send,
   evaluate,
@@ -1709,7 +1779,10 @@ export async function captureCombinedAttention({
       "Not asserted; inspect matched original captures for legibility.",
   };
   (evidence.combinedAttentionTrips ??= []).push(trip);
-  const observe = () => evaluate(`(${observeCombinedAttention.toString()})()`);
+  const observe = (owner = null) =>
+    evaluate(
+      `(${observeCombinedAttention.toString()})(${JSON.stringify(owner)})`,
+    );
   const summary = ({ telemetry, ...geometry }) => geometry;
   const record = async (
     name,
@@ -1718,22 +1791,28 @@ export async function captureCombinedAttention({
     sibling = false,
     menuOpen = false,
   ) => {
+    const owner = options.identityCase && sibling ? { scope, menuOpen } : null;
     let previous;
     let sample;
+    let stable = 0;
     for (let n = 0; n < 12; n++) {
       await evaluate(
-        "document.fonts.ready.then(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))))",
+        owner
+          ? "document.fonts.ready.then(()=>new Promise(r=>setTimeout(()=>requestAnimationFrame(()=>requestAnimationFrame(r)),100)))"
+          : "document.fonts.ready.then(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))))",
       );
-      const state = await observe();
+      const state = await observe(owner);
       trip.lastObservation = state;
       const value = JSON.stringify(summary(state));
-      if (previous === value) {
+      const ready = !owner || combinedPaneOwned(state, menuOpen);
+      stable = ready && previous === value ? stable + 1 : 0;
+      if (ready && stable >= (owner ? 3 : 1)) {
         sample = state;
         break;
       }
-      previous = value;
+      previous = ready ? value : undefined;
     }
-    assert(sample, "Combined status geometry did not settle");
+    assert(sample, "Combined status geometry/owner did not settle");
     const entry = { name, before: sample };
     trip.states.push(entry);
     await capture(
@@ -1741,7 +1820,12 @@ export async function captureCombinedAttention({
       options,
       "navigation",
     );
-    entry.after = await observe();
+    entry.after = await observe(owner);
+    if (owner)
+      assert(
+        combinedPaneOwned(entry.after, menuOpen),
+        "Screenshot retains exact pane owner",
+      );
     verifyCombinedAttention(sample, options);
     verifyCombinedAttention(entry.after, options);
     assert.deepEqual(summary(entry.after), summary(sample));
@@ -1817,7 +1901,9 @@ export async function captureCombinedAttention({
         );
         await record(`${scope}-second-sibling-detail`, scope, baseline, true);
         assert(
-          await tabTo(`${shell} > .thread-menu-trigger:focus-visible`),
+          await tabTo(
+            `${shell} > .thread-status-rail > .thread-menu-trigger:focus-visible`,
+          ),
           "Native Tab reaches second sibling menu",
         );
         await dispatchNavigationKey(send, "Enter", "Enter", 13);
