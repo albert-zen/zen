@@ -554,6 +554,17 @@ function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
                         })}
                       >
                         {i18n.t("shell:threadAsking")}
+                        {child.userQuestionSummary!.openCount > 1 ? (
+                          <span
+                            className="subagent-asking-count"
+                            aria-hidden="true"
+                          >
+                            {" "}
+                            {new Intl.NumberFormat(
+                              i18n.resolvedLanguage,
+                            ).format(child.userQuestionSummary!.openCount)}
+                          </span>
+                        ) : null}
                       </span>
                     ) : null}
                     {approvalThreads.has(child.threadId) ? (

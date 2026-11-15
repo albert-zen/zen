@@ -1435,7 +1435,19 @@ for (const language of ["en", "zh-CN"] as const) {
         const badge = row(id).querySelector<HTMLElement>(
           ".thread-asking-badge",
         )!;
-        assert.equal(badge.textContent, badgeText);
+        const expectedCount = new Intl.NumberFormat(language).format(count);
+        assert.equal(
+          badge.textContent,
+          count > 1 ? `${badgeText} ${expectedCount}` : badgeText,
+        );
+        const countLabel = badge.querySelector(".subagent-asking-count");
+        if (count > 1) {
+          assert.ok(countLabel);
+          assert.equal(countLabel.textContent, ` ${expectedCount}`);
+          assert.equal(countLabel.getAttribute("aria-hidden"), "true");
+        } else {
+          assert.equal(countLabel, null);
+        }
         assert.equal(badge.getAttribute("role"), "img");
         assert.equal(
           badge.getAttribute("aria-label"),
@@ -1470,6 +1482,10 @@ for (const language of ["en", "zh-CN"] as const) {
       assert.equal(row("active-two"), activeRow);
       assert.equal(f.dom.window.document.activeElement, activeRow);
       assert.equal(remainingBadge.textContent, badgeText);
+      assert.equal(
+        remainingBadge.querySelector(".subagent-asking-count"),
+        null,
+      );
       assert.equal(
         remainingBadge.getAttribute("aria-label"),
         i18n.t("shell:threadAskingCount", { count: 1 }),
