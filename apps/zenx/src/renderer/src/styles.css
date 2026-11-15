@@ -13739,3 +13739,11 @@ button:disabled {
     }
   }
 }
+
+/* Expanded fallback output is requested reading, not collapsed trace metadata. */
+@media (min-width: 961px) {
+  .thread-view .trace-output > .tool-result-fallback > pre {
+    font-size: 13px;
+    color: var(--text-2);
+  }
+}
