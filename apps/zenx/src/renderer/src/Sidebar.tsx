@@ -2535,6 +2535,7 @@ function ThreadRow({
       ref={rowRef}
       className={`thread-row-shell${reorder === undefined ? "" : " reorderable"}`}
       data-thread-id={thread.threadId}
+      data-child-thread={isChild || undefined}
       data-selected={selected || undefined}
       data-menu-open={menuOpen || undefined}
       data-unread={unread || undefined}
@@ -3331,11 +3332,12 @@ function SidebarMenuPopover({
         window.innerWidth,
         window.innerHeight,
       );
-      // Only the scoped pending-child detail facts opt into this measured bound.
+      // Child detail previews opt into this measured bound, with or without approval.
       // Preserve the ordinary algorithm and the hover bridge to the actual row.
       const scopedDetail =
         menu.matches(".thread-information") &&
-        !!menu.querySelector('[data-thread-fact="pending-approval"]');
+        (!!menu.querySelector('[data-thread-fact="pending-approval"]') ||
+          anchor.matches('.thread-row-shell[data-child-thread="true"]'));
       const nextComposer = scopedDetail
         ? (anchor
             .closest(".app-shell")

@@ -437,7 +437,7 @@ test("busy receipt separately records wrapped detail facts without changing inli
   );
 });
 
-test("scoped pending-child placement keeps default algorithm, protects Composer and preserves row hover bridge", async () => {
+test("scoped child detail placement keeps default algorithm, protects Composer and preserves row hover bridge", async () => {
   const ts = await import("typescript");
   const source = await read("../src/renderer/src/Sidebar.tsx");
   const ast = ts.createSourceFile(
@@ -508,9 +508,21 @@ test("scoped pending-child placement keeps default algorithm, protects Composer 
     )(
       {
         getBoundingClientRect: () => a,
+        matches: (selector) => {
+          assert.equal(selector, '.thread-row-shell[data-child-thread="true"]');
+          return changes.child === true;
+        },
         closest: () => {
           queried++;
-          return { querySelector: () => target };
+          return {
+            querySelector: (selector) => {
+              assert.equal(
+                selector,
+                ":scope > main.workspace #primary-conversation-content .composer",
+              );
+              return target;
+            },
+          };
         },
       },
       {
@@ -542,6 +554,42 @@ test("scoped pending-child placement keeps default algorithm, protects Composer 
   assert.equal(recent.result.top, 485);
   assert(recent.result.top + recent.m.height + 8 <= recent.c.top);
   assert(recent.result.top + recent.m.height > recent.a.top);
+  // Exact hosted d7f0 Chinese extension Recent second-sibling geometry.
+  const secondChild = run({
+    pending: false,
+    child: true,
+    anchor: { top: 569.78125, bottom: 621.28125, height: 51.5 },
+    menu: { height: 208.578125 },
+  });
+  assert.equal(secondChild.original.top, 570);
+  assert.equal(secondChild.result.top, 557);
+  assert(
+    secondChild.result.top + secondChild.m.height + 8 <= secondChild.c.top,
+  );
+  assert(secondChild.result.top + secondChild.m.height > secondChild.a.top);
+  for (const changes of [
+    { anchor: { top: 302, bottom: 352 } },
+    { informationOnly: false },
+    { missingComposer: true },
+    { hidden: true },
+    { composer: { left: 900, right: 1200, width: 300 } },
+    { menu: { height: 800 } },
+    { anchor: { top: 850, bottom: 900 } },
+  ]) {
+    const unchanged = run({ pending: false, child: true, ...changes });
+    assert.deepEqual(unchanged.result, unchanged.original);
+    if (changes.informationOnly === false)
+      assert.deepEqual(
+        [
+          unchanged.queried,
+          unchanged.measured,
+          unchanged.styled,
+          unchanged.observed,
+        ],
+        [0, 0, 0, 0],
+      );
+  }
+  assert.match(source, /data-child-thread=\{isChild \|\| undefined\}/);
   const project = run({ anchor: { top: 302, bottom: 352 } });
   assert.deepEqual(project.result, project.original);
   for (const changes of [
