@@ -1046,6 +1046,8 @@ function ThreadViewContent({
   const bottomZoneRef = useRef<HTMLDivElement>(null);
   const pendingTrayRef = useRef<HTMLDivElement>(null);
   const pendingTrayId = useId();
+  const [queueReadingBridgeHost, setQueueReadingBridgeHost] =
+    useState<HTMLDivElement | null>(null);
   // Align the shared content box, not its border or native scrollbar, with
   // the real transcript column. Both groups keep one scrolling owner.
   useLayoutEffect(() => {
@@ -2162,9 +2164,9 @@ function ThreadViewContent({
             }
             usage={threadUsage?.turns[row.turn.id]}
             wakeups={wakeups}
-            canonicalPresentation={canonicalPresentation.turns.get(
-              row.turn.id,
-            )!}
+            canonicalPresentation={
+              canonicalPresentation.turns.get(row.turn.id)!
+            }
             sourceThreadId={sourceThreadId}
             isForkCurrent={isForkCurrent}
             imageCwd={displayedThread?.cwd}
@@ -2563,6 +2565,7 @@ function ThreadViewContent({
                 <QueuedMessages
                   integrated
                   viewportId={pendingTrayId}
+                  readingBridgeHost={queueReadingBridgeHost}
                   threadId={thread.id}
                   messages={(thread.queuedMessages ?? []).map((message) => ({
                     ...message,
@@ -2737,6 +2740,10 @@ function ThreadViewContent({
                 />
               ) : null}
             </div>
+            <div
+              className="queue-reading-bridge-host"
+              ref={setQueueReadingBridgeHost}
+            />
           </MessageQuoteSourceContext.Provider>
         </MessageLinkContext.Provider>
         {composer.compaction?.status === "failed" ||
@@ -2949,7 +2956,6 @@ function ThreadViewContent({
               }
               onSelect={(event) => selector.select(event.currentTarget)}
               onBlur={() => selector.dismiss()}
-
               disabled={composerDisabled}
               onChange={(event) => {
                 selector.reopen();

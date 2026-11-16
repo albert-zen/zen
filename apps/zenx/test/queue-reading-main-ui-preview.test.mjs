@@ -5,6 +5,7 @@ import {
   verifyQueueReading,
   observeQueueReading,
   verifyQueueReturn,
+  verifyQueueBridge,
   tabToQueueControl,
 } from "../scripts/queue-reading-main-ui-preview.mjs";
 const target = () => ({
@@ -40,20 +41,43 @@ const returnState = (expanded = false) => ({
   rowActions: [{ control: "edit", disabled: false, tabIndex: 0 }],
   returnAction: null,
   returnFooter: null,
-  returnHost: null,
+  returnHost: { ...target(), rect: { height: 0 } },
+  bridge: expanded
+    ? {
+        ...target(),
+        controls: "pending",
+        expanded: "true",
+        focusVisible: false,
+        hit: false,
+        pointerEvents: "none",
+        clipPath: "inset(50%)",
+      }
+    : null,
+  returnPlacement: {
+    ownerMatchesTray: true,
+    outsideTray: true,
+    followsTray: true,
+    bridgeInHost: true,
+    beforeComposer: true,
+  },
   bottomZone: { ...target(), scrollsVertical: false },
 });
-test("header-only expansion has no footer and preserves row actions", () => {
+test("keyboard bridge has no footer footprint and preserves row actions", () => {
   const baseline = returnState();
   verifyQueueReturn(baseline, baseline, false);
   verifyQueueReturn(returnState(true), baseline, true);
-  for (const field of ["returnAction", "returnFooter", "returnHost"]) {
+  for (const field of ["returnAction", "returnFooter"]) {
     const s = returnState(true);
     s[field] = target();
     assert.throws(() => verifyQueueReturn(s, baseline, true));
   }
   for (const mutate of [
     (s) => s.rowActions.pop(),
+    (s) => (s.returnHost.rect.height = 8),
+    (s) => (s.bridge = null),
+    (s) => (s.bridge.hit = true),
+    (s) => (s.bridge.controls = "another-thread"),
+    (s) => (s.returnPlacement.outsideTray = false),
     (s) => (s.rowActions[0].tabIndex = -1),
     (s) => (s.rowActions[0].disabled = true),
     (s) => (s.toggle.hit = false),
@@ -154,7 +178,14 @@ test("header-only implementation retains localized accessibility and Composer fo
     "utf8",
   );
   assert.doesNotMatch(q + t, /readingReturnHost|queue-reading-return-host/);
-  assert.doesNotMatch(q, /createPortal/);
+  assert.match(q, /integrated && readingExpanded && readingBridgeHost/);
+  assert.match(q, /if \(event.key !== "Escape"\) return/);
+  assert.doesNotMatch(
+    q,
+    /event.key === "Tab"|event.key !== "Tab"|tabIndex=\{[1-9]/,
+  );
+  assert.match(t, /readingBridgeHost=\{queueReadingBridgeHost\}/);
+  assert.match(q, /aria-controls=\{viewportId\}/);
   assert.match(q, /if \(readingExpanded\) focusComposer\?\.\(\)/);
   assert.match(q, /name=\{readingExpanded \? "compress" : "expand"\}/);
   assert.match(
@@ -405,4 +436,84 @@ test("source status line owns adjacency while actual source action stays hittabl
   verifyQueueSenderAttribution(s);
   s.senderAttribution.source.hit = false;
   assert.throws(() => verifyQueueSenderAttribution(s), /not covered/);
+});
+
+const bridgeState = () => ({
+  ...returnState(true),
+  tray: {
+    rect: { x: 100, y: 200, width: 500, right: 600, bottom: 500, height: 300 },
+  },
+  composer: { rect: { x: 100, y: 506, width: 500, height: 100 } },
+  bottomZone: { rect: { x: 80, y: 190, width: 540, height: 430 } },
+  bridge: {
+    ...target(),
+    clipPath: "none",
+    rect: { x: 400, y: 460, right: 592, bottom: 492, width: 192, height: 32 },
+  },
+});
+test("focused bridge is reachable without geometry cost or Composer overlap", () => {
+  const rest = bridgeState();
+  verifyQueueBridge(bridgeState(), rest);
+  for (const mutate of [
+    (s) => (s.bridge.hit = false),
+    (s) => (s.bridge.focusVisible = false),
+    (s) => (s.bridge.clipPath = "inset(50%)"),
+    (s) => (s.bridge.outlineWidth = 0),
+    (s) => (s.bridge.rect.bottom = 510),
+    (s) => (s.bridge.rect.y = 100),
+    (s) => (s.composer.rect.y += 8),
+    (s) => (s.bottomZone.rect.height += 8),
+    (s) => (s.tray.rect.height -= 8),
+  ]) {
+    const s = bridgeState();
+    mutate(s);
+    assert.throws(() => verifyQueueBridge(s, rest));
+  }
+});
+test("bridge host and approval reuse one gap token without changing coarse layouts", async () => {
+  const css = await readFile(
+    new URL("../src/renderer/src/queued-messages.css", import.meta.url),
+    "utf8",
+  );
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    styles,
+    /--bottom-zone-gap: 8px;\s*gap: var\(--bottom-zone-gap\)/,
+  );
+  assert.match(css, /@media \(min-width: 961px\) and \(pointer: fine\)/);
+  assert.match(
+    css,
+    /margin-block-start: calc\(-1 \* var\(--bottom-zone-gap, 0px\)\)/,
+  );
+  assert.match(css, /queue-reading-bridge-host \{\s*display: none/);
+  assert.match(css, /queue-reading-bridge:focus-visible/);
+});
+test("observer binds bridge and Composer to the selected thread, not a decoy", async () => {
+  const { JSDOM } = await import("jsdom");
+  const thread = (id) =>
+    `<div class="thread-view"><div class="bottom-zone"><div class="pending-tray" id="${id}"><section class="queue-shelf"><button class="queue-reading-toggle" aria-controls="${id}" aria-expanded="true"></button><ul class="queue-shelf-list"><li class="queue-row"><button data-queue-control="edit"></button></li></ul></section></div><div class="queue-reading-bridge-host"><button data-queue-control="reading-bridge" aria-controls="${id}" aria-expanded="true"></button></div><form class="composer" id="composer-${id}"><textarea id="editor-${id}"></textarea></form></div></div>`;
+  const dom = new JSDOM(thread("decoy") + thread("actual"), {
+    runScripts: "outside-only",
+  });
+  try {
+    dom.window.matchMedia = () => ({ matches: false });
+    dom.window.document.elementFromPoint = () => null;
+    const observe = () =>
+      dom.window.eval(`(${observeQueueReading.toString()})("actual")`);
+    const s = observe();
+    assert.equal(s.trayId, "actual");
+    assert.equal(s.composer.id, "composer-actual");
+    assert.equal(s.editor.id, "editor-actual");
+    assert.equal(s.bridge.controls, "actual");
+    assert(Object.values(s.returnPlacement).every(Boolean));
+    dom.window.document
+      .querySelector("#actual + div button")
+      .setAttribute("aria-controls", "decoy");
+    assert.equal(observe().returnPlacement.ownerMatchesTray, false);
+  } finally {
+    dom.window.close();
+  }
 });

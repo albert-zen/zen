@@ -288,7 +288,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 #### 统一待发送区
 
 - 所有尚未被 Host 纳入本轮输入的普通、Steer、Queue 消息都位于 Composer 上方的同一个待发送区；发送中、已接收待更新、结果未知也留在这里，不提前混入正式 transcript。实际模型输入由 canonical 语义输入 Item 证明；待发送队列、晋升与排序由 Host 持久化的 canonical 控制事实证明，不进入模型语义 ItemList。Renderer 的本地发送提示与请求锁只是瞬态交互反馈。
-- 待发送区是一个统一限高、内部 overflow 的容器。Steer 在上、Queue 在下，组间轻分隔，空组隐藏，不使用两个并列 Tab，也不为两组分别叠加限高或滚动区。Queue 所有行可在同一滚动区访问，不另设“查看全部”层；总高度应克制，保留对话阅读空间。桌面待发送区的外框左右对齐 Composer，滚动条留在框内；阅读空间的展开／收起只在现有组标题栏留一个图标，不额外占行。
+- 待发送区是一个统一限高、内部 overflow 的容器。Steer 在上、Queue 在下，组间轻分隔，空组隐藏，不使用两个并列 Tab，也不为两组分别叠加限高或滚动区。Queue 所有行可在同一滚动区访问，不另设“查看全部”层；总高度应克制，保留对话阅读空间。桌面待发送区的外框左右对齐 Composer，滚动条留在框内；阅读空间的展开／收起在现有组标题栏保留一个常显图标；桌面展开后可从 Composer 逆向 Tab 直接到达仅聚焦时出现的收起按钮，默认不额外占行。
 - 排队消息的线程或触发器来源跟随自己的气泡或卡片，不挂在待发送区的左边。
 - 普通消息、Steer 与 Queue 复用正文展示语义：Markdown、typed 引用胶囊、原生结构化问题回答气泡与独立图片行保持可读，图片预览可以关闭并归还焦点。问题呈现只取可信 questionReply 与原始问题，不从相似文字猜测结构。
 - 活动 Turn 内将用户 Queue 转为 Steer 是 Host 的原子晋升：保留 queued ID、client ID 与完整输入，通过 canonical 晋升事实增加 revision 并移入上层。发送回执不等于模型已消费，晋升后的 pending Steer 仍可通过整批原子撤回恢复输入；消费/撤回竞态拒绝时不得假装撤回成功。
@@ -1320,11 +1320,9 @@ The nonmodal Send surface becomes inert as soon as it is logically closed, even 
 
 ### Expanded queue return to writing
 
-Desktop expanded reading provides an additional Less space action after the queue rows, adjacent in DOM order to the Composer. This makes the return available from the writing end without traversing every per-message action. The header control remains, every message action retains ordinary keyboard reachability, and neither positive tab indices nor special Tab handling change navigation. The trailing control is not sticky and cannot cover a message; activating it reduces reading space and returns focus to the Composer before the control disappears. It appears only during explicit desktop expansion. Actual browser verification must measure reverse-Tab distance and the footer's space cost; component tests alone do not prove a visual improvement.
+The existing queue header remains the only persistent reading-size control. In an expanded desktop queue with a fine primary pointer, one reverse Tab from the Composer editor reaches a localized collapse button placed after the queue rows in DOM order. It appears only on keyboard focus, inside the tray edge but outside its clipped scroller. Enter or Space collapses the queue and restores focus to that Composer; Escape on the button restores focus without collapsing. Ordinary forward and reverse Tab keep the original row controls reachable. Do not add positive tab indices or intercept Tab.
 
-The expanded reading return occupies its own normal-flow host immediately after the pending tray, not inside the tray's clipped scrolling viewport. Its reserved space therefore cannot obscure a message or require scrolling to discover the return. The message viewport keeps the existing bounded desktop reading height; the return uses a 32px fine-pointer control and retains 44px coarse-pointer sizing. The collapsed/empty host has no layout box. This trades a small amount of conversation height for a reliably visible return, so acceptance must inspect the whole bottom zone, not only count queue rows.
-
-Within the existing bottom-zone height budget, expanded queue reading is the flexible sibling: its viewport may shrink while the Composer and the reading-return control retain their measured sizes. Do not increase the zone's cap or hide overflow to conceal excess content. This preserves the uncovered conversation lane and keeps scrolling in the message tray when the normal expanded queue, return and Composer fit together. Other unusually tall approvals or attachments retain the existing outer overflow fallback. The externally hosted return uses the same themed button reset and visible focus treatment as queue controls, rather than browser-default styling.
+The shortcut has no reserved row and does not change the tray, Composer or bottom-zone dimensions, including when the approval layout supplies a flex gap. The focused control has a visible outline and does not overlap the Composer. The existing height cap, tray scrolling and outer-overflow fallback for unusually tall approvals or attachments remain in place. Verify the two native Tab directions, collapse and Escape, focus visibility and resting/focused geometry in light and dark desktop captures. A synthetic gap stress test does not replace actual approval-flow acceptance.
 
 ### Desktop conversation reading hierarchy
 
@@ -1401,3 +1399,4 @@ Only Room file tabs sharing an exact relative path across different resource own
 ### Child context in detailed Sidebar rows
 
 Project and Recent child rows may name their relationship with a quiet, noninteractive Child / 子会话 label in the existing model line. Preserve their title, provider/model text and tooltip, approval/status rail, order and navigation. The marker is excluded from the existing accessible name; a per-mounted unique description and native tooltip name an already-loaded parent only when its known displayed title is unambiguous, otherwise say Child conversation / 子会话 without an ID. Compact density still hides the metadata line; do not add a third line or unhide it. This is a limited visual hypothesis until matched production-component captures show useful differentiation without unacceptable model truncation; it does not assert a hierarchy for Inbox or Pinned.
+

@@ -10699,7 +10699,8 @@ button:disabled {
   max-height: calc(100% - 24px);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  --bottom-zone-gap: 8px;
+  gap: var(--bottom-zone-gap);
   padding-bottom: 8px;
   overflow: auto;
 }

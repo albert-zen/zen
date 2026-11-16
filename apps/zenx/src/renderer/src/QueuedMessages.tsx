@@ -13,6 +13,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { QueuedCancellationTarget } from "../../../../../src/app-server.js";
 import type { AttachmentRef } from "../../../../../src/attachment.js";
@@ -74,6 +75,7 @@ export interface QueuedMessagesProps {
   /** Share the Composer tray's one scrolling surface. */
   integrated?: boolean;
   viewportId?: string;
+  readingBridgeHost?: HTMLElement | null;
   editableIds?: ReadonlySet<string>;
   /** Saving rows may reopen their existing read-only edit session. */
   editingIds?: ReadonlySet<string>;
@@ -123,6 +125,7 @@ function QueueShelf({
   compact = false,
   integrated = false,
   viewportId,
+  readingBridgeHost,
   editableIds,
   editingIds,
   onEdit,
@@ -482,6 +485,31 @@ function QueueShelf({
           </button>
         ) : null}
       </div>
+      {integrated && readingExpanded && readingBridgeHost
+        ? createPortal(
+            <button
+              type="button"
+              className="queue-reading-bridge"
+              data-queue-control="reading-bridge"
+              aria-controls={viewportId}
+              aria-expanded={true}
+              onClick={() => {
+                setReadingExpanded(false);
+                focusComposer?.();
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Escape") return;
+                event.preventDefault();
+                event.stopPropagation();
+                focusComposer?.();
+              }}
+            >
+              <Icon name="compress" size={14} />
+              {t("queueReduceReadingArea")}
+            </button>,
+            readingBridgeHost,
+          )
+        : null}
     </section>
   );
 }

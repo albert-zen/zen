@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-export function observeQueueReading() {
+export function observeQueueReading(viewportId) {
   const target = (selector) => {
     const e =
       typeof selector === "string"
@@ -49,6 +49,7 @@ export function observeQueueReading() {
       display: style.display,
       opacity: Number(style.opacity),
       pointerEvents: style.pointerEvents,
+      clipPath: style.clipPath,
       overflowY: style.overflowY,
       scrollsVertical:
         /auto|scroll/.test(style.overflowY) &&
@@ -57,18 +58,24 @@ export function observeQueueReading() {
       expanded: e.getAttribute("aria-expanded"),
     };
   };
-  const toggle = document.querySelector(".queue-reading-toggle"),
+  const selectedTray = viewportId ? document.getElementById(viewportId) : null;
+  const toggle = (viewportId ? selectedTray : document)?.querySelector(
+      ".queue-reading-toggle",
+    ),
     tray = document.getElementById(toggle?.getAttribute("aria-controls")),
-    returnAction = document.querySelector(
-      '[data-queue-control="reading-return"]',
-    ),
-    returnOwner = document.getElementById(
-      returnAction?.getAttribute("aria-controls"),
-    ),
-    returnFooter = returnAction?.closest(".queue-reading-return"),
-    returnHost = tray?.nextElementSibling?.matches(".queue-reading-return-host")
+    returnHost = tray?.nextElementSibling?.matches(".queue-reading-bridge-host")
       ? tray.nextElementSibling
       : null,
+    bridge = returnHost?.querySelector('[data-queue-control="reading-bridge"]'),
+    returnOwner = document.getElementById(
+      bridge?.getAttribute("aria-controls"),
+    ),
+    returnAction = tray
+      ?.closest(".bottom-zone")
+      ?.querySelector('[data-queue-control="reading-return"]'),
+    returnFooter = tray
+      ?.closest(".bottom-zone")
+      ?.querySelector(".queue-reading-return"),
     queue = toggle?.closest(".queue-shelf"),
     composer = tray?.closest(".bottom-zone")?.querySelector(".composer");
   const r = tray?.getBoundingClientRect();
@@ -151,6 +158,7 @@ export function observeQueueReading() {
       composer?.querySelector('[contenteditable="true"], textarea'),
     ),
     edit: target(queue?.querySelector(".queue-row-edit:not(:disabled)")),
+    bridge: target(bridge),
     returnAction: target(returnAction),
     returnFooter: target(returnFooter),
     returnHost: target(returnHost),
@@ -159,7 +167,7 @@ export function observeQueueReading() {
         !!returnOwner && returnOwner === tray && tray.matches(".pending-tray"),
       outsideTray: !!returnHost && !tray.contains(returnHost),
       followsTray: !!returnHost && tray.nextElementSibling === returnHost,
-      footerInHost: !!returnFooter && returnFooter.parentElement === returnHost,
+      bridgeInHost: !!bridge && bridge.parentElement === returnHost,
       beforeComposer:
         !!returnHost &&
         !!composer &&
@@ -169,7 +177,7 @@ export function observeQueueReading() {
         ),
     },
     // Queue ownership comes from its original header inside the aria-controlled
-    // tray, not from the portalled footer or the earlier Steer shelf.
+    // tray, not from the portalled shortcut or the earlier Steer shelf.
     lastRow: target(
       tray?.contains(queue)
         ? queue.querySelector(".queue-shelf-list > .queue-row:last-child")
@@ -346,7 +354,28 @@ export function verifyQueueReturn(s, baseline, expanded) {
   );
   assert.equal(s.returnAction, null, "No extra return control");
   assert.equal(s.returnFooter, null, "No separate footer space cost");
-  assert.equal(s.returnHost, null, "No empty return host");
+  assert(
+    s.returnHost && s.returnHost.rect.height === 0,
+    "Bridge host has no flow footprint",
+  );
+  if (expanded) {
+    assert(s.bridge, "Expanded reading has a native keyboard bridge");
+    assert.equal(s.bridge.controls, s.trayId);
+    assert.equal(s.bridge.expanded, "true");
+    assert(
+      Object.values(s.returnPlacement).every(Boolean),
+      "Bridge belongs to its own tray before Composer",
+    );
+    if (!s.bridge.focusVisible) {
+      assert(
+        !s.bridge.hit &&
+          s.bridge.pointerEvents === "none" &&
+          s.bridge.clipPath !== "none",
+        "Unfocused bridge is clipped and cannot intercept pointer actions",
+      );
+    }
+  } else
+    assert.equal(s.bridge, null, "Collapsed reading has no bridge tab stop");
   assert(
     s.toggle?.visible && s.toggle.hit,
     "Header collapse remains reachable",
@@ -357,6 +386,39 @@ export function verifyQueueReturn(s, baseline, expanded) {
     s.bottomZone &&
       (!s.bottomZone.scrollsVertical || baseline.bottomZone.scrollsVertical),
     "Header return does not introduce whole bottom-zone scrolling",
+  );
+}
+
+export function verifyQueueBridge(s, rest) {
+  const b = s.bridge;
+  assert(
+    b?.focused && b.focusVisible && b.visible && b.hit && !b.disabled,
+    "Focused bridge is visible and operable outside the clipped scroller",
+  );
+  assert(
+    b.outline !== "none" && b.outlineWidth > 0,
+    "Bridge has a visible keyboard focus ring",
+  );
+  assert(b.clipPath === "none", "Focused bridge is not clipped");
+  for (const name of ["tray", "composer", "bottomZone"]) {
+    for (const edge of ["x", "y", "width", "height"]) {
+      assert(
+        Number.isFinite(s[name].rect[edge]) &&
+          Math.abs(s[name].rect[edge] - rest[name].rect[edge]) <= 1,
+        "Focusing bridge does not move or resize reading/writing surfaces",
+      );
+    }
+  }
+  assert(
+    b.rect.x >= s.tray.rect.x + 2 &&
+      b.rect.right <= s.tray.rect.right - 2 &&
+      b.rect.y >= s.tray.rect.y + 2 &&
+      b.rect.bottom <= s.tray.rect.bottom + 1,
+    "Bridge and its focus ring stay inside the tray frame, above Composer",
+  );
+  assert(
+    b.rect.bottom + 2 <= s.composer.rect.y,
+    "Bridge focus ring does not cover Composer",
   );
 }
 
@@ -476,6 +538,51 @@ export async function captureQueueReading({
     verifyQueueReading(expanded, baseline, true);
     verifyQueueReturn(expanded, baseline, true);
     verifyQueueSenderAttribution(expanded, baseline);
+    // Geometry-only stress, not an approval-decision or full approval-flow test.
+    // Compare with the optional host suppressed; restore every style/class before
+    // any native interaction or screenshot, including on an assertion failure.
+    const bridgeGeometry = await evaluate(`(() => {
+      const tray = document.getElementById(document.querySelector('.queue-reading-toggle').getAttribute('aria-controls'));
+      const zone = tray.closest('.bottom-zone');
+      const host = tray.nextElementSibling;
+      const composer = zone.querySelector('.composer');
+      const originalClass = zone.className;
+      const originalDisplay = host.style.display;
+      const rects = () => [tray, composer, zone].map(e => {
+        const r = e.getBoundingClientRect();
+        return {x:r.x,y:r.y,width:r.width,height:r.height};
+      });
+      const result = [];
+      try {
+        for (const approvalGap of [false, true]) {
+          zone.classList.toggle('has-approval', approvalGap);
+          host.style.display = 'none';
+          const withoutHost = rects();
+          host.style.display = originalDisplay;
+          const withHost = rects();
+          result.push({approvalGap, withoutHost, withHost, hostHeight:host.getBoundingClientRect().height});
+        }
+      } finally {
+        zone.className = originalClass;
+        host.style.display = originalDisplay;
+      }
+      return result;
+    })()`);
+    for (const geometry of bridgeGeometry) {
+      assert.equal(geometry.hostHeight, 0);
+      for (let i = 0; i < geometry.withHost.length; i++)
+        for (const edge of ["x", "y", "width", "height"])
+          assert(
+            Math.abs(
+              geometry.withHost[i][edge] - geometry.withoutHost[i][edge],
+            ) <= 1,
+            "Bridge has zero layout cost with ordinary queue and approval-gap layout",
+          );
+    }
+    (evidence.queueReadingBridgeGeometry ??= []).push({
+      theme: options.theme,
+      cases: bridgeGeometry,
+    });
     assert(
       expanded.readableRows >= baseline.readableRows,
       "More space does not reduce visible rows",
@@ -487,34 +594,98 @@ export async function captureQueueReading({
       "composer",
     );
     verifyQueueReading(await save("composer-focus"), baseline, true, "editor");
-    const returnTrace = await tab(
-      ".queue-reading-toggle:focus-visible",
-      "reading-header",
+    const bridgeSelector =
+      '[data-queue-control="reading-bridge"]:focus-visible';
+    const editorSelector =
+      '.composer [contenteditable="true"]:focus-visible, .composer textarea:focus-visible';
+    const key = async (key, code = key, windowsVirtualKeyCode = 27) => {
+      for (const type of ["keyDown", "keyUp"])
+        await send("Input.dispatchKeyEvent", {
+          type,
+          key,
+          code,
+          windowsVirtualKeyCode,
+          ...(key === "Enter" && type === "keyDown"
+            ? { text: "\r", unmodifiedText: "\r" }
+            : {}),
+        });
+    };
+    const returnTrace = await tab(bridgeSelector, "reading-bridge", "backward");
+    assert.equal(
+      returnTrace.steps,
+      1,
+      "Composer reaches bridge in one reverse Tab",
+    );
+    const returnState = await save("collapse-bridge-focus");
+    verifyQueueReading(returnState, baseline, true, "bridge");
+    verifyQueueReturn(returnState, baseline, true);
+    verifyQueueBridge(returnState, expanded);
+    const forward = await tab(editorSelector, "bridge-forward-composer");
+    assert.equal(
+      forward.steps,
+      1,
+      "Forward Tab leaves bridge for Composer without interception",
+    );
+    verifyQueueReading(
+      await save("bridge-forward-composer-focus"),
+      baseline,
+      true,
+      "editor",
+    );
+    await tab(bridgeSelector, "bridge-escape", "backward");
+    await key("Escape");
+    const escaped = await save("bridge-escape-composer-focus");
+    verifyQueueReading(escaped, baseline, true, "editor");
+    verifyQueueReturn(escaped, baseline, true);
+    // Escape elsewhere must not become a global queue-close/focus shortcut.
+    await tab(bridgeSelector, "bridge-row-access", "backward");
+    const rowTrace = await tab(
+      ".queue-row button:focus-visible",
+      "bridge-to-row",
       "backward",
     );
-    const returnState = await save("collapse-header-focus");
-    verifyQueueReading(returnState, baseline, true, "toggle");
-    verifyQueueReturn(returnState, baseline, true);
+    assert.equal(
+      rowTrace.steps,
+      1,
+      "Reverse Tab preserves ordinary per-row access",
+    );
+    const rowBeforeEscape = await observe();
+    await key("Escape");
+    const rowAfterEscape = await observe();
+    assert(
+      rowAfterEscape.active.inQueueRow,
+      "Escape in a row does not hijack focus to Composer",
+    );
+    assert.deepEqual(
+      rowAfterEscape.active,
+      rowBeforeEscape.active,
+      "Bridge Escape handling is local to its own button",
+    );
+    assert.equal(rowAfterEscape.expanded, "true");
+    await tab(editorSelector, "rows-to-composer");
+    const collapseTrace = await tab(
+      bridgeSelector,
+      "bridge-collapse",
+      "backward",
+    );
+    assert.equal(collapseTrace.steps, 1);
+    verifyQueueBridge(await save("bridge-enter-focus"), expanded);
     const trip = {
       theme: options.theme,
       backwardTabs: returnTrace.steps,
+      forwardTabs: forward.steps,
+      rowAccessTabs: rowTrace.steps,
       footerHeight: 0,
       fullyVisibleRows: returnState.fullyVisibleRows,
       bottomZoneHeight: returnState.bottomZone.rect.height,
-      headerFocused: returnState.toggle.focused,
+      bridgeFocused: returnState.bridge.focused,
+      escapeKeepsExpanded: escaped.expanded === "true",
       returnedToComposer: false,
     };
     (evidence.queueReadingReturnTrips ??= []).push(trip);
-    for (const type of ["keyDown", "keyUp"])
-      await send("Input.dispatchKeyEvent", {
-        type,
-        key: "Enter",
-        code: "Enter",
-        windowsVirtualKeyCode: 13,
-        ...(type === "keyDown" ? { text: "\r", unmodifiedText: "\r" } : {}),
-      });
+    await key("Enter", "Enter", 13);
     await wait(
-      "document.querySelector('.queue-reading-toggle')?.getAttribute('aria-expanded')==='false' && !document.querySelector('[data-queue-control=\"reading-return\"]') && document.activeElement?.matches('.composer [contenteditable=\"true\"], .composer textarea')",
+      "document.querySelector('.queue-reading-toggle')?.getAttribute('aria-expanded')==='false' && !document.querySelector('[data-queue-control=\"reading-bridge\"]') && document.activeElement?.matches('.composer [contenteditable=\"true\"], .composer textarea')",
     );
     const collapsed = await save("collapsed-composer-focus");
     verifyQueueReading(collapsed, baseline, false, "editor");
