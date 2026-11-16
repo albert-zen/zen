@@ -1399,4 +1399,3 @@ Only Room file tabs sharing an exact relative path across different resource own
 ### Child context in detailed Sidebar rows
 
 Project and Recent child rows may name their relationship with a quiet, noninteractive Child / 子会话 label in the existing model line. Preserve their title, provider/model text and tooltip, approval/status rail, order and navigation. The marker is excluded from the existing accessible name; a per-mounted unique description and native tooltip name an already-loaded parent only when its known displayed title is unambiguous, otherwise say Child conversation / 子会话 without an ID. Compact density still hides the metadata line; do not add a third line or unhide it. This is a limited visual hypothesis until matched production-component captures show useful differentiation without unacceptable model truncation; it does not assert a hierarchy for Inbox or Pinned.
-

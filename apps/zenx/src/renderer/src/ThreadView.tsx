@@ -2164,9 +2164,9 @@ function ThreadViewContent({
             }
             usage={threadUsage?.turns[row.turn.id]}
             wakeups={wakeups}
-            canonicalPresentation={
-              canonicalPresentation.turns.get(row.turn.id)!
-            }
+            canonicalPresentation={canonicalPresentation.turns.get(
+              row.turn.id,
+            )!}
             sourceThreadId={sourceThreadId}
             isForkCurrent={isForkCurrent}
             imageCwd={displayedThread?.cwd}
