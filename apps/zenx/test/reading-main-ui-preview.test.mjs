@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFile } from "node:fs/promises";
 import {
+  captureMessageTimes,
   observeMessageTimes,
   verifyMessageTimes,
   informationDockReady,
@@ -1535,6 +1536,8 @@ const messageTimesState = (hovered = "answer") => ({
     text: "Oct 15 09:00",
     expectedClock: "09:00",
     visible: true,
+    targetVisible: true,
+    clockHit: true,
     hit: true,
     hovered: hovered === "user",
     focused: false,
@@ -1547,6 +1550,8 @@ const messageTimesState = (hovered = "answer") => ({
     text: "Oct 15 09:05",
     expectedClock: "09:05",
     visible: true,
+    targetVisible: true,
+    clockHit: true,
     hit: true,
     hovered: hovered === "answer",
     focused: false,
@@ -1568,8 +1573,10 @@ test("message timestamp acceptance distinguishes sent, start, completion and rec
     (s) => (s.user.hovered = true),
     (s) => (s.answer.focused = true),
     (s) => (s.answer.opacity = 0),
+    (s) => (s.answer.clockHit = false),
     (s) => (s.answer.visibility = "hidden"),
     (s) => (s.answer.visible = false),
+    (s) => (s.answer.targetVisible = false),
     (s) => (s.user.hit = false),
     (s) => (s.sameTurn = false),
     (s) => (s.selectedThread = "other"),
@@ -1608,4 +1615,39 @@ test("message timestamp observer reads real time attributes without manufacturin
   } finally {
     dom.window.close();
   }
+});
+
+test("message timestamp failure preserves target diagnostics before asserting without dispatching unproven input", async () => {
+  const state = messageTimesState("user"),
+    evidence = {},
+    inputs = [];
+  state.user.hit = false;
+  state.user.oldPoint = { x: 500, y: 140 };
+  state.user.oldHit = false;
+  state.user.boundaries = { top: 88, bottom: 774 };
+  await assert.rejects(
+    captureMessageTimes({
+      options: { theme: "light", lang: "en" },
+      url: "http://localhost/reading.html?scene=reading",
+      send: async (method, params) => {
+        if (method === "Input.dispatchMouseEvent") inputs.push(params);
+      },
+      evaluate: async () => state,
+      wait: async () => {},
+      click: async () => {},
+      capture: async () => {
+        throw Error("Unverified frame must not pass");
+      },
+      evidence,
+    }),
+    /Native hover target is on screen/,
+  );
+  assert.equal(inputs.length, 0);
+  assert.equal(evidence.messageTimeAttempts[0].phase, "before");
+  assert.deepEqual(evidence.messageTimeAttempts[0].state.user, state.user);
+  assert.match(
+    observeMessageTimes.toString(),
+    /owner.querySelector\("\.user-bubble, \[data-message-quote-body\]"\)/,
+  );
+  assert.match(observeMessageTimes.toString(), /owner.closest\("\.messages"\)/);
 });

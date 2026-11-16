@@ -483,11 +483,6 @@ export function observeMessageTimes(locale) {
   const answer = document.querySelector(
     '.turn-final [data-read-message-id="message-times-answer"]',
   );
-  const bottom =
-    document.querySelector(".bottom-zone")?.getBoundingClientRect().top ?? 0;
-  const top =
-    document.querySelector(".thread-view")?.getBoundingClientRect().top ??
-    innerHeight;
   const now = new Date();
   const clock = new Intl.DateTimeFormat(locale, {
     hour: "2-digit",
@@ -497,8 +492,40 @@ export function observeMessageTimes(locale) {
   const read = (owner, expected) => {
     const time = owner?.querySelector(".message-actions time");
     if (!owner || !time) return null;
+    // The article includes empty alignment space. Hover its actual message body.
+    const body = owner.querySelector(".user-bubble, [data-message-quote-body]");
+    const view = owner.closest(".thread-view");
+    const viewport = owner.closest(".messages")?.getBoundingClientRect();
+    const viewRect = view?.getBoundingClientRect();
+    const bottomRect = view
+      ?.querySelector(":scope > .bottom-zone")
+      ?.getBoundingClientRect();
+    const top = Math.max(
+      0,
+      viewRect?.top ?? innerHeight,
+      viewport?.top ?? innerHeight,
+    );
+    const bottom = Math.min(
+      innerHeight,
+      viewRect?.bottom ?? 0,
+      viewport?.bottom ?? 0,
+      bottomRect?.top ?? 0,
+    );
     const rect = time.getBoundingClientRect(),
       row = owner.getBoundingClientRect();
+    const bodyRect = body?.getBoundingClientRect();
+    const oldPoint = { x: row.x + row.width / 2, y: row.y + row.height / 2 };
+    const point = bodyRect
+      ? {
+          x: bodyRect.x + bodyRect.width / 2,
+          y: bodyRect.y + bodyRect.height / 2,
+        }
+      : null;
+    const hitAt = (p) => (p ? document.elementFromPoint(p.x, p.y) : null);
+    const oldHit = hitAt(oldPoint),
+      hit = hitAt(point);
+    const identity = (e) =>
+      e ? { tag: e.tagName, className: e.className } : null;
     const actions = time.closest(".message-actions"),
       style = getComputedStyle(actions);
     return {
@@ -516,13 +543,34 @@ export function observeMessageTimes(locale) {
         rect.right <= innerWidth &&
         rect.top >= top &&
         rect.bottom <= bottom,
-      hit: owner.contains(
+      hit: !!body && body.contains(hit),
+      point,
+      targetVisible:
+        !!bodyRect &&
+        bodyRect.width > 0 &&
+        bodyRect.height > 0 &&
+        bodyRect.left >= 0 &&
+        bodyRect.right <= innerWidth &&
+        bodyRect.top >= top &&
+        bodyRect.bottom <= bottom,
+      boundaries: {
+        top,
+        bottom,
+        viewTop: viewRect?.top,
+        viewportTop: viewport?.top,
+        viewportBottom: viewport?.bottom,
+        composerTop: bottomRect?.top,
+      },
+      oldPoint,
+      oldHit: owner.contains(oldHit),
+      oldHitTarget: identity(oldHit),
+      hitTarget: identity(hit),
+      clockHit: owner.contains(
         document.elementFromPoint(
-          row.x + row.width / 2,
-          row.y + row.height / 2,
+          rect.x + rect.width / 2,
+          rect.y + rect.height / 2,
         ),
       ),
-      point: { x: row.x + row.width / 2, y: row.y + row.height / 2 },
       rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
     };
   };
@@ -571,7 +619,7 @@ export function verifyMessageTimes(s, hovered) {
   ]) {
     const row = s[name];
     assert(
-      row?.visible && row.hit,
+      row?.visible && row.targetVisible && row.hit,
       "Both actual message timestamps fit the reading band",
     );
     assert.equal(row.dateTime, expected);
@@ -590,6 +638,7 @@ export function verifyMessageTimes(s, hovered) {
       "No stale message focus may substitute for hover",
     );
     if (name === hovered) {
+      assert.equal(row.clockHit, true, "Revealed timestamp is not covered");
       assert.equal(row.opacity, 1);
       assert.equal(row.visibility, "visible");
     }
@@ -622,29 +671,54 @@ export async function captureMessageTimes({
     );
   for (const owner of ["user", "answer"]) {
     const before = await observe();
+    (evidence.messageTimeAttempts ??= []).push({
+      theme: options.theme,
+      owner,
+      phase: "before",
+      state: before,
+    });
     assert(
-      before[owner]?.visible && before[owner].hit,
+      before[owner]?.visible &&
+        before[owner].targetVisible &&
+        before[owner].hit,
       "Native hover target is on screen",
     );
     await send("Input.dispatchMouseEvent", {
       type: "mouseMoved",
       ...before[owner].point,
     });
-    await wait(
-      `(() => { const s = (${observeMessageTimes.toString()})(${JSON.stringify(options.lang)}); return s.${owner}?.hovered && s.${owner}.opacity === 1; })()`,
-    );
-    const state = await observe();
-    verifyMessageTimes(state, owner);
-    (evidence.messageTimeCases ??= []).push({
-      theme: options.theme,
-      hovered: owner,
-      ...state,
-    });
-    await capture(
-      `reading-${options.name}-message-time-${owner}-hover`,
-      options,
-      "reading",
-    );
+    try {
+      await wait(
+        `(() => { const s = (${observeMessageTimes.toString()})(${JSON.stringify(options.lang)}); return s.${owner}?.hovered && s.${owner}.opacity === 1; })()`,
+      );
+      const state = await observe();
+      (evidence.messageTimeAttempts ??= []).push({
+        theme: options.theme,
+        owner,
+        phase: "after",
+        state,
+      });
+      verifyMessageTimes(state, owner);
+      (evidence.messageTimeCases ??= []).push({
+        theme: options.theme,
+        hovered: owner,
+        ...state,
+      });
+      await capture(
+        `reading-${options.name}-message-time-${owner}-hover`,
+        options,
+        "reading",
+      );
+    } catch (error) {
+      (evidence.messageTimeAttempts ??= []).push({
+        theme: options.theme,
+        owner,
+        phase: "failed",
+        state: await observe().catch(() => null),
+        error: String(error),
+      });
+      throw error;
+    }
   }
 }
 
