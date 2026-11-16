@@ -101,6 +101,76 @@ const syntheticVisibleSubagentThreadIds = childQuestionData
     : null;
 const questionListeners = new Set<(method: string, params: unknown) => void>();
 const readingScene = params.get("scene") === "reading";
+// Opt-in static recovery fixture: real App/ThreadView, no fake tooltip or live claim.
+const messageTimesScene = readingScene && params.get("messageTimes") === "1";
+const messageTimes = {
+  threadId: "thread-1",
+  turnId: "message-times-turn",
+  userId: "message-times-user",
+  answerId: "message-times-answer",
+  sent: "2026-10-15T09:00:00.000Z",
+  started: "2026-10-15T09:01:00.000Z",
+  completed: "2026-10-15T09:05:00.000Z",
+};
+let messageTimesReceived: string | null = null;
+function messageTimesRecovery() {
+  messageTimesReceived = new Date().toISOString();
+  const recovery = nativeRecoveryForThread(
+    {
+      ...thread(),
+      turns: [
+        {
+          id: messageTimes.turnId,
+          itemsView: "full",
+          status: "completed",
+          error: null,
+          startedAt: Date.parse(messageTimes.started) / 1000,
+          completedAt: Date.parse(messageTimes.completed) / 1000,
+          durationMs: 240000,
+          items: [
+            {
+              id: messageTimes.userId,
+              type: "userMessage",
+              clientId: null,
+              content: [
+                {
+                  type: "text",
+                  text: "Synthetic request: compare message times.",
+                  text_elements: [],
+                },
+              ],
+            },
+            {
+              id: messageTimes.answerId,
+              type: "agentMessage",
+              phase: "final_answer",
+              text: "Synthetic final answer: the review is complete.",
+              memoryCitation: null,
+            },
+          ],
+        },
+      ],
+    },
+    { sandbox: "read-only", approvalPolicy: "on-request" },
+  );
+  for (const item of [
+    ...recovery.thread.items,
+    ...recovery.thread.turns.flatMap((turn) => turn.items),
+  ])
+    if (item.id === messageTimes.userId) item.createdAt = messageTimes.sent;
+  return recovery;
+}
+if (messageTimesScene)
+  Object.assign(window, {
+    __messageTimesFixture: {
+      receipt: () => ({
+        ...messageTimes,
+        received: messageTimesReceived,
+        scope: "static recovery, not live delivery",
+      }),
+    },
+  });
+
 const resultFileScene = resultFileSceneEnabled(params);
 const resultFileFixture = resultFileScene ? createResultFileFixture() : null;
 if (resultFileFixture)
@@ -244,8 +314,8 @@ const options = {
       uiPolishTelemetry.navigationReads!.push({ method, threadId });
     }
     if (readingStream) return readingStream.read(method, request);
-    if (readingScene)
-      return readReadingRequest(
+    if (readingScene) {
+      const result = readReadingRequest(
         method,
         request,
         thread(),
@@ -259,6 +329,17 @@ const options = {
         inlineTraceScene,
         inlineTraceScene && params.get("nestedOutput") === "1",
       );
+      if (messageTimesScene) {
+        if (
+          method === "zen/thread/resume" ||
+          method === "zen/thread/resume-window"
+        )
+          return messageTimesRecovery();
+        if (method === "zen/thread/read")
+          return { thread: messageTimesRecovery().thread };
+      }
+      return result;
+    }
     if (
       params.get("scene") === "navigation" &&
       method === "zen/thread/questions/list"

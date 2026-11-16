@@ -474,6 +474,180 @@ export async function captureSidebarNames({
   );
 }
 
+/** Observe production time elements; never inject text, focus, style or geometry. */
+export function observeMessageTimes(locale) {
+  const receipt = window.__messageTimesFixture?.receipt();
+  const user = document.querySelector(
+    '[data-sent-message-id="message-times-user"]',
+  );
+  const answer = document.querySelector(
+    '.turn-final [data-read-message-id="message-times-answer"]',
+  );
+  const bottom =
+    document.querySelector(".bottom-zone")?.getBoundingClientRect().top ?? 0;
+  const top =
+    document.querySelector(".thread-view")?.getBoundingClientRect().top ??
+    innerHeight;
+  const now = new Date();
+  const clock = new Intl.DateTimeFormat(locale, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  });
+  const read = (owner, expected) => {
+    const time = owner?.querySelector(".message-actions time");
+    if (!owner || !time) return null;
+    const rect = time.getBoundingClientRect(),
+      row = owner.getBoundingClientRect();
+    const actions = time.closest(".message-actions"),
+      style = getComputedStyle(actions);
+    return {
+      dateTime: time.getAttribute("datetime"),
+      text: time.textContent.trim(),
+      expectedClock: clock.format(new Date(expected)),
+      hovered: owner.matches(":hover"),
+      focused: owner.contains(document.activeElement),
+      opacity: Number(style.opacity),
+      visibility: style.visibility,
+      visible:
+        rect.width > 0 &&
+        rect.height > 0 &&
+        rect.left >= 0 &&
+        rect.right <= innerWidth &&
+        rect.top >= top &&
+        rect.bottom <= bottom,
+      hit: owner.contains(
+        document.elementFromPoint(
+          row.x + row.width / 2,
+          row.y + row.height / 2,
+        ),
+      ),
+      point: { x: row.x + row.width / 2, y: row.y + row.height / 2 },
+      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+    };
+  };
+  return {
+    receipt,
+    capturedAt: now.toISOString(),
+    locale,
+    timeZone: new Intl.DateTimeFormat().resolvedOptions().timeZone,
+    selectedThread: document
+      .querySelector('.project-group .thread-row[aria-current="page"]')
+      ?.closest("[data-thread-id]")?.dataset.threadId,
+    sameTurn: !!user && user.closest(".turn") === answer?.closest(".turn"),
+    userCount: document.querySelectorAll(
+      '[data-sent-message-id="message-times-user"]',
+    ).length,
+    answerCount: document.querySelectorAll(
+      '.turn-final [data-read-message-id="message-times-answer"]',
+    ).length,
+    user: receipt ? read(user, receipt.sent) : null,
+    answer: receipt ? read(answer, receipt.completed) : null,
+  };
+}
+
+export function verifyMessageTimes(s, hovered) {
+  assert.equal(s.selectedThread, "thread-1");
+  assert.equal(s.receipt?.threadId, "thread-1");
+  assert.equal(s.sameTurn, true);
+  assert.equal(s.userCount, 1);
+  assert.equal(s.answerCount, 1);
+  assert.equal(s.receipt.sent, "2026-10-15T09:00:00.000Z");
+  assert.equal(s.receipt.started, "2026-10-15T09:01:00.000Z");
+  assert.equal(s.receipt.completed, "2026-10-15T09:05:00.000Z");
+  assert(Number.isFinite(Date.parse(s.receipt.received)));
+  assert.equal(
+    new Set([
+      s.receipt.sent,
+      s.receipt.started,
+      s.receipt.completed,
+      s.receipt.received,
+    ]).size,
+    4,
+  );
+  for (const [name, expected] of [
+    ["user", s.receipt.sent],
+    ["answer", s.receipt.completed],
+  ]) {
+    const row = s[name];
+    assert(
+      row?.visible && row.hit,
+      "Both actual message timestamps fit the reading band",
+    );
+    assert.equal(row.dateTime, expected);
+    assert(
+      row.text.endsWith(row.expectedClock),
+      "Visible local clock matches the canonical time",
+    );
+    assert.equal(
+      row.hovered,
+      name === hovered,
+      "Only the intended message owns native hover",
+    );
+    assert.equal(
+      row.focused,
+      false,
+      "No stale message focus may substitute for hover",
+    );
+    if (name === hovered) {
+      assert.equal(row.opacity, 1);
+      assert.equal(row.visibility, "visible");
+    }
+  }
+}
+
+export async function captureMessageTimes({
+  send,
+  evaluate,
+  wait,
+  click,
+  capture,
+  evidence,
+  options,
+  url,
+}) {
+  const target = new URL(url);
+  target.searchParams.set("messageTimes", "1");
+  await send("Page.navigate", { url: target.href });
+  await wait(
+    `location.href === ${JSON.stringify(target.href)} && !!document.querySelector('.thread-row')`,
+  );
+  await click('.project-group [data-thread-id="thread-1"] .thread-row');
+  await wait(
+    "!!document.querySelector('.turn-final [data-read-message-id=\"message-times-answer\"] .message-time')",
+  );
+  const observe = () =>
+    evaluate(
+      `(${observeMessageTimes.toString()})(${JSON.stringify(options.lang)})`,
+    );
+  for (const owner of ["user", "answer"]) {
+    const before = await observe();
+    assert(
+      before[owner]?.visible && before[owner].hit,
+      "Native hover target is on screen",
+    );
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      ...before[owner].point,
+    });
+    await wait(
+      `(() => { const s = (${observeMessageTimes.toString()})(${JSON.stringify(options.lang)}); return s.${owner}?.hovered && s.${owner}.opacity === 1; })()`,
+    );
+    const state = await observe();
+    verifyMessageTimes(state, owner);
+    (evidence.messageTimeCases ??= []).push({
+      theme: options.theme,
+      hovered: owner,
+      ...state,
+    });
+    await capture(
+      `reading-${options.name}-message-time-${owner}-hover`,
+      options,
+      "reading",
+    );
+  }
+}
+
 export async function captureDesktopReading({
   send,
   evaluate,
@@ -728,6 +902,16 @@ export async function captureDesktopReading({
       options,
       url,
       scrollToTop: () => scroll(),
+    });
+    await captureMessageTimes({
+      send,
+      evaluate,
+      wait,
+      click,
+      capture,
+      evidence,
+      options,
+      url,
     });
     (evidence.approvalReadingTrips ??= []).push({
       theme: options.theme,

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFile } from "node:fs/promises";
 import {
+  observeMessageTimes,
+  verifyMessageTimes,
   informationDockReady,
   verifyReadingReentry,
   captureReadingReentry,
@@ -1513,5 +1515,97 @@ test("post-wheel failure observations persist before checks; unknown or ineffect
           assert.equal(wheel.samples[0].continuation.page[1], 1);
       }
     }
+  }
+});
+
+const messageTimesState = (hovered = "answer") => ({
+  selectedThread: "thread-1",
+  sameTurn: true,
+  userCount: 1,
+  answerCount: 1,
+  receipt: {
+    threadId: "thread-1",
+    sent: "2026-10-15T09:00:00.000Z",
+    started: "2026-10-15T09:01:00.000Z",
+    completed: "2026-10-15T09:05:00.000Z",
+    received: "2026-11-16T10:00:00.000Z",
+  },
+  user: {
+    dateTime: "2026-10-15T09:00:00.000Z",
+    text: "Oct 15 09:00",
+    expectedClock: "09:00",
+    visible: true,
+    hit: true,
+    hovered: hovered === "user",
+    focused: false,
+    opacity: 1,
+    visibility: "visible",
+    point: { x: 400, y: 200 },
+  },
+  answer: {
+    dateTime: "2026-10-15T09:05:00.000Z",
+    text: "Oct 15 09:05",
+    expectedClock: "09:05",
+    visible: true,
+    hit: true,
+    hovered: hovered === "answer",
+    focused: false,
+    opacity: 1,
+    visibility: "visible",
+    point: { x: 400, y: 300 },
+  },
+});
+
+test("message timestamp acceptance distinguishes sent, start, completion and receipt with actual hover ownership", () => {
+  for (const owner of ["user", "answer"])
+    verifyMessageTimes(messageTimesState(owner), owner);
+  for (const fault of [
+    (s) => (s.answer.dateTime = s.receipt.started),
+    (s) => (s.answer.dateTime = s.receipt.received),
+    (s) => (s.user.dateTime = s.receipt.completed),
+    (s) => (s.answer.text = "Wrong displayed clock"),
+    (s) => (s.answer.hovered = false),
+    (s) => (s.user.hovered = true),
+    (s) => (s.answer.focused = true),
+    (s) => (s.answer.opacity = 0),
+    (s) => (s.answer.visibility = "hidden"),
+    (s) => (s.answer.visible = false),
+    (s) => (s.user.hit = false),
+    (s) => (s.sameTurn = false),
+    (s) => (s.selectedThread = "other"),
+    (s) => (s.answerCount = 2),
+    (s) => (s.receipt.received = s.receipt.completed),
+  ]) {
+    const s = messageTimesState();
+    fault(s);
+    assert.throws(() => verifyMessageTimes(s, "answer"));
+  }
+});
+
+test("message timestamp observer reads real time attributes without manufacturing a tooltip or layout", async () => {
+  const { JSDOM } = await import("jsdom");
+  const dom = new JSDOM(
+    '<div class="project-group"><div data-thread-id="thread-1"><button class="thread-row" aria-current="page"></button></div></div><div class="thread-view"><section class="turn"><article data-sent-message-id="message-times-user"><div class="message-actions"><time datetime="2026-10-15T09:00:00.000Z">Sent</time></div></article><div class="turn-final"><article data-read-message-id="message-times-answer"><div class="message-actions"><time datetime="2026-10-15T09:05:00.000Z">Done</time></div></article></div></section><div class="bottom-zone"></div></div>',
+    { runScripts: "outside-only" },
+  );
+  try {
+    dom.window.__messageTimesFixture = {
+      receipt: () => messageTimesState().receipt,
+    };
+    dom.window.document.elementFromPoint = () => null;
+    const before = dom.window.document.body.innerHTML;
+    const s = dom.window.eval(`(${observeMessageTimes.toString()})("en")`);
+    assert.equal(s.user.dateTime, s.receipt.sent);
+    assert.equal(s.answer.dateTime, s.receipt.completed);
+    assert.equal(
+      s.answer.text,
+      "Done",
+      "Actual DOM text, not expected fixture text",
+    );
+    assert.equal(s.sameTurn, true);
+    assert.equal(s.answer.visible, false, "JSDOM is not pixel acceptance");
+    assert.equal(dom.window.document.body.innerHTML, before);
+  } finally {
+    dom.window.close();
   }
 });
