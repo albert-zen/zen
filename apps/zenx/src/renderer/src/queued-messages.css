@@ -40,7 +40,6 @@
 }
 
 .queue-shelf:where(:not(.steer-shelf)) button,
-.queue-reading-return button,
 .steer-shelf button:where(:not(.image-thumbnail)) {
   border: 0;
   background: transparent;
@@ -55,7 +54,6 @@
 }
 
 .queue-shelf button:focus-visible,
-.queue-reading-return button:focus-visible,
 .queue-preview:focus-visible,
 .queue-row-error:focus-visible,
 .queue-shelf-details:focus-visible {
@@ -746,8 +744,7 @@
   scroll-padding-block-start: 64px;
 }
 
-/* A visible Send now label must not strand Cancel on a second desktop row.
-   Keep wrapping available for long localized pending-status labels. */
+/* Localized in-progress labels may still need to wrap, unlike the idle icon. */
 @media (pointer: fine) and (min-width: 481px) {
   .pending-tray .queue-row-actions {
     max-width: 192px;
@@ -765,48 +762,24 @@
   }
   .pending-tray:has(> .queue-shelf[data-reading-expanded="true"]) {
     max-height: min(480px, 55dvh);
-    /* The bottom zone reserves a conversation lane. Its Composer and return
-       are fixed-size siblings; only the message viewport yields when their
+    /* The bottom zone reserves a conversation lane. Its Composer
+       is a fixed-size sibling; only the message viewport yields when their
        combined height reaches that existing cap. */
     flex-shrink: 1;
   }
 }
 
-/* End-of-reading return lives outside the tray scroller, without overlay.
-   Empty hosts have no box, so the collapsed layout is unchanged.
-   End-of-reading return: ordinary reverse Tab from the Composer reaches this
-   before individual message actions. No actions are removed from tab order. */
-.queue-reading-return {
-  display: none;
-}
+/* Match the Composer's outer frame; the scrollbar stays inside this width. */
 @media (min-width: 961px) {
-  .queue-reading-return {
-    display: flex;
-    justify-content: flex-end;
-    padding: 0 10px;
-    min-height: 32px;
+  .thread-view .bottom-zone > .pending-tray {
+    left: var(--composer-column-left, 0px);
+    width: var(--composer-column-width, 100%);
+    max-width: var(--conversation-width);
+    margin-inline: 0;
   }
-}
-
-.queue-reading-return-host:empty {
-  display: none;
-}
-
-.queue-reading-return-host {
-  display: none;
-  flex: 0 0 auto;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-caption);
-  line-height: 1.5;
-}
-@media (min-width: 961px) {
-  .queue-reading-return-host:not(:empty) {
-    display: block;
-  }
-}
-@media (min-width: 961px) and (pointer: fine) {
-  .queue-reading-return .queue-header-action {
-    min-height: 32px;
+  .queue-shelf .queue-reading-toggle {
+    min-width: 32px;
+    padding-inline: 8px;
   }
 }
 
@@ -824,4 +797,25 @@
 .pending-tray .queue-message-group.has-sender > .message-source-line {
   min-width: 0;
   max-width: 100%;
+}
+
+/* Host-authored updates have their own card rather than a user bubble. Keep
+   their header and summary together on the same aligned queue content rail. */
+.pending-tray .queue-row-content > .host-message-content {
+  width: fit-content;
+  max-width: 100%;
+  margin-inline-start: auto;
+  padding-inline: 10px;
+  overflow-wrap: anywhere;
+}
+
+/* A qualified desktop pointer can discover the action without a permanent
+   label; keyboard focus reveals it, and touch or forced colors retain it. */
+@media (hover: hover) and (pointer: fine) and (forced-colors: none) and (not (any-pointer: coarse)) {
+  .pending-tray
+    .queue-row:not(:hover, :focus-within)
+    .queue-row-steer:not(.is-pending) {
+    opacity: 0;
+    pointer-events: none;
+  }
 }

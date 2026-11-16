@@ -15,7 +15,7 @@ const target = () => ({
   disabled: false,
   outline: "solid",
   outlineWidth: 2,
-  rect: { height: 100 },
+  rect: { x: 100, right: 600, height: 100 },
 });
 
 const state = () => ({
@@ -36,124 +36,54 @@ const state = () => ({
 
 const returnState = (expanded = false) => ({
   ...state(),
-  rowActions: [
-    {
-      control: "edit",
-      classes: "queue-row-edit",
-      disabled: false,
-      tabIndex: 0,
-    },
-  ],
-  returnAction: expanded
-    ? { ...target(), controls: "pending", expanded: "true" }
-    : null,
-  returnFooter: expanded
-    ? {
-        ...target(),
-        position: "static",
-        rect: { y: 600, bottom: 634, height: 34 },
-      }
-    : null,
-  returnHost: {
-    ...target(),
-    position: "static",
-    rect: expanded
-      ? { y: 600, bottom: 634, height: 34 }
-      : { y: 0, bottom: 0, height: 0 },
-  },
-  returnPlacement: {
-    ownerMatchesTray: true,
-    outsideTray: true,
-    followsTray: true,
-    footerInHost: true,
-    beforeComposer: true,
-  },
-  // Scroll content can extend well below the tray viewport. It must not be
-  // confused with the visible boundary for an external normal-flow footer.
-  lastRow: { ...target(), rect: { y: 1200, bottom: 1300, height: 100 } },
-  tray: { ...target(), rect: { y: 300, bottom: 600, height: 300 } },
-  bottomZone: {
-    ...target(),
-    scrollsVertical: false,
-    rect: { y: 300, bottom: 850, height: 550 },
-  },
-  composer: { ...target(), rect: { y: 700, height: 100 } },
+  expanded: String(expanded),
+  rowActions: [{ control: "edit", disabled: false, tabIndex: 0 }],
+  returnAction: null,
+  returnFooter: null,
+  returnHost: null,
+  bottomZone: { ...target(), scrollsVertical: false },
 });
-test("return footer exists only when expanded and leaves row actions and writing space intact", () => {
+test("header-only expansion has no footer and preserves row actions", () => {
   const baseline = returnState();
   verifyQueueReturn(baseline, baseline, false);
-  verifyQueueReturn(returnState(true), baseline, true, true);
-  const phantom = returnState(true);
-  assert.throws(
-    () => verifyQueueReturn(phantom, baseline, false),
-    /no extra return/,
-  );
-});
-test("return verification rejects missing controls, floating overlap and removed/retabbed actions", () => {
-  for (const fault of [
-    "missing",
-    "controls",
-    "sticky",
-    "tray-overlap",
-    "host-sticky",
-    "footer-outside-host",
-    "initial-clipped",
-    "initial-covered",
-    "new-bottom-scroll",
-    "host-clipped",
-    "wrong-owner",
-    "inside-tray",
-    "wrong-order",
-    "missing-host",
-    "composer-overlap",
-    "removed-action",
-    "disabled-action",
-    "retabbed-action",
-    "missing-row",
+  verifyQueueReturn(returnState(true), baseline, true);
+  for (const field of ["returnAction", "returnFooter", "returnHost"]) {
+    const s = returnState(true);
+    s[field] = target();
+    assert.throws(() => verifyQueueReturn(s, baseline, true));
+  }
+  for (const mutate of [
+    (s) => s.rowActions.pop(),
+    (s) => (s.rowActions[0].tabIndex = -1),
+    (s) => (s.rowActions[0].disabled = true),
+    (s) => (s.toggle.hit = false),
+    (s) => (s.controls = "wrong"),
+    (s) => (s.bottomZone.scrollsVertical = true),
   ]) {
-    const baseline = returnState(),
-      s = returnState(true);
-    if (fault === "missing") s.returnAction = null;
-    if (fault === "controls") s.returnAction.controls = "wrong-tray";
-    if (fault === "sticky") s.returnFooter.position = "sticky";
-    if (fault === "tray-overlap") s.returnHost.rect.y = 598;
-    if (fault === "host-sticky") s.returnHost.position = "sticky";
-    if (fault === "footer-outside-host") s.returnFooter.rect.bottom = 650;
-    if (fault === "initial-clipped") s.returnFooter.visible = false;
-    if (fault === "initial-covered") s.returnAction.hit = false;
-    if (fault === "new-bottom-scroll") s.bottomZone.scrollsVertical = true;
-    if (fault === "host-clipped") s.bottomZone.rect.y = 610;
-    if (fault === "wrong-owner") s.returnPlacement.ownerMatchesTray = false;
-    if (fault === "inside-tray") s.returnPlacement.outsideTray = false;
-    if (fault === "wrong-order") s.returnPlacement.beforeComposer = false;
-    if (fault === "missing-host") s.returnHost = null;
-    if (fault === "composer-overlap") s.returnHost.rect.bottom = 702;
-    if (fault === "removed-action") s.rowActions = [];
-    if (fault === "disabled-action") s.rowActions[0].disabled = true;
-    if (fault === "retabbed-action") s.rowActions[0].tabIndex = -1;
-    if (fault === "missing-row") s.lastRow = null;
-    assert.throws(
-      () => verifyQueueReturn(s, baseline, true, true),
-      undefined,
-      fault,
-    );
+    const s = returnState(true);
+    mutate(s);
+    assert.throws(() => verifyQueueReturn(s, baseline, true));
   }
 });
-test("footer focus requires its own visible hit target while retaining the original header contract elsewhere", () => {
-  const baseline = returnState(),
-    s = returnState(true);
+test("outer frame matches Composer exactly, including native scrollbar width", () => {
+  const b = state();
+  verifyQueueReading(b, b, false);
+  for (const edge of ["x", "right"]) {
+    const s = state();
+    s.tray.rect[edge] += 8;
+    assert.throws(() => verifyQueueReading(s, b, false), /outer frame/);
+  }
+});
+test("header collapse requires its own visible keyboard focus", () => {
+  const b = state(),
+    s = state();
   s.expanded = "true";
-  s.tray.rect.height = 500;
-  s.toggle.visible = s.toggle.hit = false;
-  verifyQueueReading(s, baseline, true, "returnAction");
+  s.tray.rect.height = 300;
+  verifyQueueReading(s, b, true, "toggle");
+  s.toggle.focusVisible = false;
   assert.throws(
-    () => verifyQueueReading(s, baseline, true, "edit"),
-    /Reading toggle remains reachable/,
-  );
-  s.returnAction.hit = false;
-  assert.throws(
-    () => verifyQueueReading(s, baseline, true, "returnAction"),
-    /Native keyboard focus/,
+    () => verifyQueueReading(s, b, true, "toggle"),
+    /Native keyboard/,
   );
 });
 test("reverse-Tab distance counts actual native key pairs and stops at the observed return", async () => {
@@ -166,8 +96,8 @@ test("reverse-Tab distance counts actual native key pairs and stops at the obser
     evaluate: async () => ++attempts === 3,
     evidence,
     options: { theme: "light" },
-    selector: '[data-queue-control="reading-return"]:focus-visible',
-    step: "reading-return",
+    selector: '[data-queue-control="reading-space"]:focus-visible',
+    step: "reading-space",
     direction: "backward",
   });
   assert.equal(result.steps, 3);
@@ -202,7 +132,7 @@ test("failed native search retains all 80 attempts without success or an enlarge
       evidence,
       options: { theme: "dark" },
       selector: "not-found",
-      step: "reading-return",
+      step: "reading-space",
       direction: "backward",
     }),
     /Native Tab failed/,
@@ -214,71 +144,22 @@ test("failed native search retains all 80 attempts without success or an enlarge
   assert.equal(result.observations.length, 80);
   assert.equal(calls, 160);
 });
-test("observer resolves portalled return by aria-controls, not first tray or preceding Steer", async () => {
-  const { JSDOM } = await import("jsdom");
-  const dom = new JSDOM(
-    `<form class="composer" id="decoy-composer"><textarea></textarea></form><div class="pending-tray" id="decoy"><div class="queue-row"><button class="queue-row-edit">Unrelated</button></div></div>
-    <div class="thread-view"><div class="messages"></div><div class="bottom-zone">
-      <div class="pending-tray" id="pending:actual">
-        <section class="queue-shelf steer-shelf"><ul class="queue-shelf-list"><li class="queue-row" id="steer-last"></li></ul></section>
-        <section class="queue-shelf"><button class="queue-reading-toggle" aria-controls="pending:actual"></button>
-          <div class="queue-shelf-details"><ul class="queue-shelf-list"><li class="queue-row"><button id="actual-edit" class="queue-row-edit" data-queue-control="edit">Edit</button></li><li class="queue-row" id="queued-last"><button disabled>Move</button></li></ul></div>
-        </section>
-      </div>
-      <div class="queue-reading-return-host"><div class="queue-reading-return"><button data-queue-control="reading-return" aria-expanded="true" aria-controls="pending:actual">Less space</button></div></div>
-      <form class="composer" id="actual-composer"><textarea id="actual-editor"></textarea></form>
-    </div></div>`,
-    { runScripts: "outside-only" },
+test("header-only implementation retains localized accessibility and Composer focus on collapse", async () => {
+  const q = await readFile(
+    new URL("../src/renderer/src/QueuedMessages.tsx", import.meta.url),
+    "utf8",
   );
-  try {
-    dom.window.matchMedia = () => ({ matches: false });
-    dom.window.document.elementFromPoint = () => null;
-    const observe = () =>
-      dom.window.eval(`(${observeQueueReading.toString()})()`);
-    const observed = observe();
-    assert.equal(observed.trayId, "pending:actual");
-    assert.equal(observed.composer.id, "actual-composer");
-    assert.equal(observed.editor.id, "actual-editor");
-    assert.equal(observed.edit.id, "actual-edit");
-    assert.equal(observed.lastRow.id, "queued-last");
-    assert.equal(observed.returnAction.controls, "pending:actual");
-    assert.equal(observed.returnAction.expanded, "true");
-    assert(Object.values(observed.returnPlacement).every(Boolean));
-    assert.equal(
-      observed.returnFooter.rect.height,
-      0,
-      "JSDOM is not pixel evidence",
-    );
-    assert.equal(observed.fullyVisibleRows, 0);
-    assert.equal(
-      observed.rowActions.length,
-      2,
-      "Unrelated tray actions excluded",
-    );
-    assert.equal(observed.rowActions[1].disabled, true);
-    assert(observed.bottomZone && observed.conversation);
-    dom.window.document
-      .querySelector('[data-queue-control="reading-return"]')
-      .setAttribute("aria-controls", "decoy");
-    assert.equal(observe().returnPlacement.ownerMatchesTray, false);
-    dom.window.document
-      .querySelector(".pending-tray#decoy")
-      .append(dom.window.document.querySelector(".queue-reading-return-host"));
-    const moved = observe();
-    assert.equal(moved.returnHost, null);
-    assert.equal(moved.returnPlacement.followsTray, false);
-  } finally {
-    dom.window.close();
-  }
-});
-
-test("collapsed external host remains empty with no height cost", () => {
-  const baseline = returnState();
-  const s = returnState();
-  s.returnHost.rect.height = 32;
-  assert.throws(
-    () => verifyQueueReturn(s, baseline, false),
-    /no collapsed space cost/,
+  const t = await readFile(
+    new URL("../src/renderer/src/ThreadView.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(q + t, /readingReturnHost|queue-reading-return-host/);
+  assert.doesNotMatch(q, /createPortal/);
+  assert.match(q, /if \(readingExpanded\) focusComposer\?\.\(\)/);
+  assert.match(q, /name=\{readingExpanded \? "compress" : "expand"\}/);
+  assert.match(
+    q,
+    /title=\{t\(\s*readingExpanded\s*\? "queueReduceReadingArea"/,
   );
 });
 

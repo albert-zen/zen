@@ -108,6 +108,23 @@ initial = applyQueueItem(initial, {
     },
   ],
 });
+if (params.has("hostQueue")) {
+  const text = zh ? "计划检查已排队。" : "Scheduled checks are queued.";
+  initial = applyQueueItem(initial, {
+    type: "host_message_queued",
+    id: "synthetic-trigger-message",
+    clientId: "synthetic-trigger-client",
+    threadId: initial.id,
+    createdAt: "2026-10-14T06:00:01.000Z",
+    sender: "host",
+    source: "trigger",
+    sourceId: "synthetic-trigger",
+    intent: "queue",
+    deliveryMode: "batch-next",
+    input: [{ type: "text", text }],
+    text,
+  });
+}
 initial = applyQueueItem(initial, {
   ...queueItem(7, [
     {

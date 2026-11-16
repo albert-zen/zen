@@ -2303,7 +2303,7 @@ test("expanded Turn renders a steer at its delivery point", async () => {
   });
 });
 
-test("message controls are Turn-backed, accessible, and stable while hovering", () => {
+test("message controls retain actions and do not invent missing input timestamps", () => {
   const completedAt = new Date();
   completedAt.setHours(12, 34, 0, 0);
   const html = renderTurns([
@@ -2323,7 +2323,7 @@ test("message controls are Turn-backed, accessible, and stable while hovering", 
   assert.match(html, /aria-label="Copy assistant message"/u);
   assert.equal((html.match(/data-icon="copy"/gu) ?? []).length, 2);
   assert.doesNotMatch(html, />Copy<|>Completed /u);
-  assert.equal((html.match(/class="message-time"/gu) ?? []).length, 2);
+  assert.equal((html.match(/class="message-time"/gu) ?? []).length, 1);
   const todayTime = new Intl.DateTimeFormat(undefined, {
     hour: "2-digit",
     minute: "2-digit",
@@ -2331,8 +2331,56 @@ test("message controls are Turn-backed, accessible, and stable while hovering", 
   }).format(completedAt);
   assert.equal(
     (html.match(new RegExp(`>${todayTime}</time>`, "gu")) ?? []).length,
-    2,
+    1,
   );
+});
+
+test("input sent time and final answer completion time stay distinct", () => {
+  const sent = "2026-10-15T09:00:00.000Z";
+  const ended = "2026-10-15T09:05:00.000Z";
+  for (const completedAt of [Date.parse(ended) / 1_000, null, NaN]) {
+    const value = thread([
+      {
+        ...turnWithItems("completed", [user("Request"), agent("Done")]),
+        startedAt: Date.parse("2026-10-15T09:01:00Z") / 1_000,
+        completedAt,
+      },
+    ]);
+    value.canonicalItems = [
+      {
+        id: "user-1",
+        type: "user_message",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        createdAt: sent,
+        content: [{ type: "text", text: "Request" }],
+      },
+    ];
+    const html = renderToStaticMarkup(
+      createElement(ThreadView, {
+        approvals: [],
+        composer: emptyComposerState(),
+        thread: value,
+        onDraftChange: () => undefined,
+        onInterrupt: noop,
+        onRespondToApproval: noop,
+        onSubmit: noop,
+      }),
+    );
+    const document = new JSDOM(html).window.document;
+    assert.equal(
+      document
+        .querySelector(".user-message-actions time")
+        ?.getAttribute("dateTime"),
+      sent,
+    );
+    assert.equal(
+      document
+        .querySelector(".assistant-message-actions time")
+        ?.getAttribute("dateTime") ?? null,
+      Number.isFinite(completedAt) && completedAt !== null ? ended : null,
+    );
+  }
 });
 
 test("Turn disclosure does not repeat cache telemetry from assistant actions", () => {
@@ -2459,7 +2507,7 @@ test("terminal Turn timestamps show time only today and add a date across local 
 
     assert.equal(
       (html.match(new RegExp(`>${todayTime}</time>`, "gu")) ?? []).length,
-      status === "completed" ? 2 : 1,
+      status === "completed" ? 1 : 0,
     );
     assert.doesNotMatch(html, />(?:Completed|Interrupted|Failed) /u);
   }
@@ -2484,7 +2532,7 @@ test("terminal Turn timestamps show time only today and add a date across local 
   assert.equal(
     (html.match(new RegExp(`>${otherDate} ${otherTime}</time>`, "gu")) ?? [])
       .length,
-    2,
+    1,
   );
 });
 

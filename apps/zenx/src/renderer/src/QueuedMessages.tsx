@@ -13,7 +13,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { QueuedCancellationTarget } from "../../../../../src/app-server.js";
 import type { AttachmentRef } from "../../../../../src/attachment.js";
@@ -75,7 +74,6 @@ export interface QueuedMessagesProps {
   /** Share the Composer tray's one scrolling surface. */
   integrated?: boolean;
   viewportId?: string;
-  readingReturnHost?: HTMLElement | null;
   editableIds?: ReadonlySet<string>;
   /** Saving rows may reopen their existing read-only edit session. */
   editingIds?: ReadonlySet<string>;
@@ -125,7 +123,6 @@ function QueueShelf({
   compact = false,
   integrated = false,
   viewportId,
-  readingReturnHost,
   editableIds,
   editingIds,
   onEdit,
@@ -339,9 +336,17 @@ function QueueShelf({
                   ? "queueReduceReadingArea"
                   : "queueExpandReadingArea",
               )}
-              onClick={() => setReadingExpanded((current) => !current)}
+              title={t(
+                readingExpanded
+                  ? "queueReduceReadingArea"
+                  : "queueExpandReadingArea",
+              )}
+              onClick={() => {
+                setReadingExpanded(!readingExpanded);
+                if (readingExpanded) focusComposer?.();
+              }}
             >
-              {t(readingExpanded ? "queueLessSpace" : "queueMoreSpace")}
+              <Icon name={readingExpanded ? "compress" : "expand"} size={14} />
             </button>
           ) : null}
           {onCancelAll !== undefined && messages.length > 1 ? (
@@ -477,35 +482,6 @@ function QueueShelf({
           </button>
         ) : null}
       </div>
-      {integrated && readingExpanded && readingReturnHost
-        ? createPortal(
-            <div className="queue-reading-return">
-              <button
-                type="button"
-                className="queue-header-action"
-                data-queue-control="reading-return"
-                aria-controls={viewportId}
-                aria-expanded={true}
-                aria-label={t("queueReduceReadingArea")}
-                onClick={() => {
-                  setReadingExpanded(false);
-                  // This footer disappears on collapse; return to writing rather
-                  // than losing focus or traversing every message action again.
-                  if (focusComposer) focusComposer();
-                  else
-                    rootRef.current
-                      ?.querySelector<HTMLElement>(
-                        '[data-queue-control="reading-space"]',
-                      )
-                      ?.focus();
-                }}
-              >
-                {t("queueLessSpace")}
-              </button>
-            </div>,
-            readingReturnHost,
-          )
-        : null}
     </section>
   );
 }
@@ -869,7 +845,7 @@ function QueuedMessageRow({
                 steering
                   ? steeringStatus
                   : running
-                    ? "queueSteerHint"
+                    ? "steerNow"
                     : "queueSendNow",
               )}
               onClick={() => onSteer(message)}
@@ -877,7 +853,7 @@ function QueuedMessageRow({
               {steering ? (
                 <span role="status">{t(steeringStatus)}</span>
               ) : (
-                <span>{t("queueSendNow")}</span>
+                <Icon name="send" size={14} />
               )}
             </button>
           )}

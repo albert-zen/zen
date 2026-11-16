@@ -47,6 +47,8 @@ export function observeQueueReading() {
       disabled: !!e.disabled,
       position: style.position,
       display: style.display,
+      opacity: Number(style.opacity),
+      pointerEvents: style.pointerEvents,
       overflowY: style.overflowY,
       scrollsVertical:
         /auto|scroll/.test(style.overflowY) &&
@@ -84,7 +86,27 @@ export function observeQueueReading() {
     ".queue-message-body .user-bubble",
   );
   const senderContent = senderRow?.querySelector(".queue-row-content");
+  const triggerRow = tray?.querySelector(
+    '[data-queue-id="synthetic-trigger-message"]',
+  );
+  const triggerContent = triggerRow?.querySelector(".queue-row-content");
+  const triggerCard = triggerRow?.querySelector(".host-message-content");
+  const triggerSteer = triggerRow?.querySelector(".queue-row-steer");
   return {
+    triggerRow: triggerRow
+      ? {
+          content: target(triggerContent),
+          card: target(triggerCard),
+          header: target(triggerCard?.querySelector("header")),
+          summary: target(triggerCard?.querySelector(".host-message-summary")),
+          source: target(triggerCard?.querySelector(".host-message-source")),
+          steer: target(triggerSteer),
+          steerTitle: triggerSteer?.getAttribute("title"),
+          steerLabel: triggerSteer?.getAttribute("aria-label"),
+          steerText: triggerSteer?.textContent?.trim(),
+          hasSteerIcon: !!triggerSteer?.querySelector("svg"),
+        }
+      : null,
     senderAttribution: {
       rowId: senderRow?.getAttribute("data-queue-id"),
       source: target(senderLink),
@@ -208,13 +230,14 @@ export function verifyQueueReading(s, baseline, expanded, focus) {
     "Observe real queued-message body content, not an empty tray",
   );
   assert(s.toggle, "Original header reading toggle remains present");
-  // At the trailing return, require the focused footer's real hit target below.
-  // The sticky header's geometry remains recorded, not a second focus contract.
-  if (focus !== "returnAction")
+  assert(s.toggle.visible && s.toggle.hit, "Reading toggle remains reachable");
+  for (const edge of ["x", "right"]) {
     assert(
-      s.toggle.visible && s.toggle.hit,
-      "Reading toggle remains reachable",
+      Number.isFinite(s.tray.rect[edge]) &&
+        Math.abs(s.tray.rect[edge] - s.composer.rect[edge]) <= 1,
+      "Queue outer frame matches Composer edges",
     );
+  }
   assert.equal(s.expanded, String(expanded));
   assert(
     s.controls && s.controls === s.trayId,
@@ -321,74 +344,19 @@ export function verifyQueueReturn(s, baseline, expanded) {
     baseline.rowActions,
     "Return shortcut does not remove or retab message actions",
   );
-  if (!expanded) {
-    assert.equal(
-      s.returnAction,
-      null,
-      "Default/collapsed state has no extra return control",
-    );
-    assert.equal(
-      s.returnFooter,
-      null,
-      "Default/collapsed state has no footer space cost",
-    );
-    assert(
-      s.returnHost && s.returnHost.rect.height === 0,
-      "Empty return host has no collapsed space cost",
-    );
-    return;
-  }
+  assert.equal(s.returnAction, null, "No extra return control");
+  assert.equal(s.returnFooter, null, "No separate footer space cost");
+  assert.equal(s.returnHost, null, "No empty return host");
   assert(
-    s.returnAction && s.returnFooter && s.returnHost && s.lastRow,
-    "Expanded return and actual controlled Queue are observed",
+    s.toggle?.visible && s.toggle.hit,
+    "Header collapse remains reachable",
   );
-  assert(
-    [
-      "ownerMatchesTray",
-      "outsideTray",
-      "followsTray",
-      "footerInHost",
-      "beforeComposer",
-    ].every((key) => s.returnPlacement?.[key] === true),
-    "Return belongs to the actual tray and its adjacent external host before Composer",
-  );
-  assert(
-    s.returnAction.visible &&
-      s.returnAction.hit &&
-      !s.returnAction.disabled &&
-      s.returnFooter.visible &&
-      s.returnHost.visible,
-    "External return is visible and hittable immediately, not only after keyboard scrolling",
-  );
-  assert.equal(s.returnAction.controls, s.trayId);
-  assert.equal(s.returnAction.expanded, "true");
-  assert(
-    [s.returnFooter, s.returnHost].every((t) =>
-      ["static", "relative"].includes(t.position),
-    ),
-    "Return is ordinary flow, not a sticky or floating overlay",
-  );
-  assert(s.returnFooter.rect.height > 0, "Record real footer space cost");
-  assert(
-    s.returnHost.rect.y >= s.tray.rect.bottom - 1 &&
-      s.returnFooter.rect.y >= s.returnHost.rect.y - 1 &&
-      s.returnFooter.rect.bottom <= s.returnHost.rect.bottom + 1,
-    "External footer starts after the tray viewport and stays within its own host",
-  );
-  assert(
-    s.returnHost.rect.bottom <= s.composer.rect.y + 1,
-    "Return host stays above the Composer without overlay",
-  );
-  assert(
-    s.bottomZone &&
-      s.returnHost.rect.y >= s.bottomZone.rect.y - 1 &&
-      s.returnHost.rect.bottom <= s.bottomZone.rect.bottom + 1,
-    "Return host is fully inside the bottom-zone clipping boundary",
-  );
+  assert.equal(s.expanded, String(expanded));
+  assert.equal(s.controls, s.trayId);
   assert(
     s.bottomZone &&
       (!s.bottomZone.scrollsVertical || baseline.bottomZone.scrollsVertical),
-    "External return does not introduce whole bottom-zone scrolling",
+    "Header return does not introduce whole bottom-zone scrolling",
   );
 }
 
@@ -462,12 +430,13 @@ export async function captureQueueReading({
     ...(await evaluate(`(${observeQueueReading.toString()})()`)),
     backendNodeId: await identity(),
   });
-  const save = async (step) => {
-    await send("Input.dispatchMouseEvent", {
-      type: "mouseMoved",
-      x: 700,
-      y: 180,
-    });
+  const save = async (step, keepPointer = false) => {
+    if (!keepPointer)
+      await send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: 700,
+        y: 180,
+      });
     await new Promise((r) => setTimeout(r, 300));
     const s = await observe();
     s.queueBodyVisibleHeight = s.bodyReading.reduce(
@@ -519,29 +488,20 @@ export async function captureQueueReading({
     );
     verifyQueueReading(await save("composer-focus"), baseline, true, "editor");
     const returnTrace = await tab(
-      '[data-queue-control="reading-return"]:focus-visible',
-      "reading-return",
+      ".queue-reading-toggle:focus-visible",
+      "reading-header",
       "backward",
     );
-    assert(
-      !returnTrace.observations.some((s) => s.active.inQueueRow),
-      "Reverse Tab reaches the trailing return before per-message actions",
-    );
-    const returnState = await save("collapse-return-focus");
-    verifyQueueReading(returnState, baseline, true, "returnAction");
+    const returnState = await save("collapse-header-focus");
+    verifyQueueReading(returnState, baseline, true, "toggle");
     verifyQueueReturn(returnState, baseline, true);
     const trip = {
       theme: options.theme,
       backwardTabs: returnTrace.steps,
-      footerHeight: returnState.returnFooter.rect.height,
-      returnHostHeight: returnState.returnHost.rect.height,
+      footerHeight: 0,
       fullyVisibleRows: returnState.fullyVisibleRows,
       bottomZoneHeight: returnState.bottomZone.rect.height,
-      conversationHeight: returnState.conversation?.rect.height ?? null,
-      conversationUncoveredHeight: returnState.conversationUncoveredHeight,
-      initialReturnHittable: expanded.returnAction.hit,
-      footerToComposerGap:
-        returnState.composer.rect.y - returnState.returnFooter.rect.bottom,
+      headerFocused: returnState.toggle.focused,
       returnedToComposer: false,
     };
     (evidence.queueReadingReturnTrips ??= []).push(trip);
@@ -560,6 +520,54 @@ export async function captureQueueReading({
     verifyQueueReading(collapsed, baseline, false, "editor");
     verifyQueueReturn(collapsed, baseline, false);
     trip.returnedToComposer = collapsed.editor.focused;
+    // A separate Host-source scene preserves matched, six-row before/after
+    // evidence above. No action is invoked on the synthetic queued message.
+    const hostUrl = new URL(await evaluate("location.href"));
+    hostUrl.searchParams.set("hostQueue", "1");
+    await send("Page.navigate", { url: hostUrl.href });
+    await wait(
+      `location.href===${JSON.stringify(hostUrl.href)} && !!document.querySelector('.queue-reading-toggle')`,
+    );
+    await click(".queue-reading-toggle");
+    const hostSelector = '[data-queue-id="synthetic-trigger-message"]';
+    await wait(
+      `!!document.querySelector(${JSON.stringify(hostSelector + " .host-message-source")})`,
+    );
+    await evaluate(
+      `document.querySelector(${JSON.stringify(hostSelector)}).scrollIntoView({block:"center",inline:"nearest"})`,
+    );
+    const hostRest = (await save("trigger-source-rest")).triggerRow;
+    assert(
+      hostRest?.source?.visible &&
+        hostRest.source.hit &&
+        hostRest.summary?.visible &&
+        hostRest.card?.visible &&
+        Math.abs(hostRest.card.rect.right - hostRest.content.rect.right) <= 2 &&
+        Math.abs(hostRest.header.rect.x - hostRest.summary.rect.x) <= 2,
+      "Queued trigger source belongs to its own aligned card and stays operable",
+    );
+    assert(
+      hostRest.steer?.opacity === 0 &&
+        hostRest.steer.pointerEvents === "none" &&
+        !hostRest.steerText &&
+        hostRest.hasSteerIcon &&
+        hostRest.steerTitle &&
+        hostRest.steerLabel,
+      "Resting desktop Steer is a labelled icon with no invisible pointer action",
+    );
+    const { x, y, width, height } = hostRest.summary.rect;
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: x + width / 2,
+      y: y + height / 2,
+    });
+    const hover = (await save("trigger-source-hover", true)).triggerRow;
+    assert(
+      hover?.steer?.opacity === 1 &&
+        hover.steer.hit &&
+        hover.steer.pointerEvents !== "none",
+      "Steer appears and can be reached when hovering its own row",
+    );
   } catch (error) {
     (evidence.queueReadingFailures ??= []).push({
       theme: options.theme,

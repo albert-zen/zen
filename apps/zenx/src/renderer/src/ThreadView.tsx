@@ -1046,8 +1046,6 @@ function ThreadViewContent({
   const bottomZoneRef = useRef<HTMLDivElement>(null);
   const pendingTrayRef = useRef<HTMLDivElement>(null);
   const pendingTrayId = useId();
-  const [queueReadingReturnHost, setQueueReadingReturnHost] =
-    useState<HTMLDivElement | null>(null);
   // Align the shared content box, not its border or native scrollbar, with
   // the real transcript column. Both groups keep one scrolling owner.
   useLayoutEffect(() => {
@@ -2565,7 +2563,6 @@ function ThreadViewContent({
                 <QueuedMessages
                   integrated
                   viewportId={pendingTrayId}
-                  readingReturnHost={queueReadingReturnHost}
                   threadId={thread.id}
                   messages={(thread.queuedMessages ?? []).map((message) => ({
                     ...message,
@@ -2740,10 +2737,6 @@ function ThreadViewContent({
                 />
               ) : null}
             </div>
-            <div
-              className="queue-reading-return-host"
-              ref={setQueueReadingReturnHost}
-            />
           </MessageQuoteSourceContext.Provider>
         </MessageLinkContext.Provider>
         {composer.compaction?.status === "failed" ||
@@ -5078,6 +5071,11 @@ function InputMessage({
         )}
         text={text}
         turn={turn}
+        timestamp={
+          canonical === undefined
+            ? null
+            : Date.parse(canonical.createdAt) / 1_000
+        }
       />
     </article>
   );
@@ -5192,6 +5190,7 @@ function MessageActions({
   turn,
   usage,
   forkTarget,
+  timestamp = turn.completedAt,
 }: {
   className: string;
   copyLabel: string;
@@ -5200,6 +5199,7 @@ function MessageActions({
   turn: Turn;
   usage?: ModelUsageAggregate;
   forkTarget?: MessageForkTarget;
+  timestamp?: number | null;
 }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
@@ -5213,12 +5213,12 @@ function MessageActions({
   };
   return (
     <div className={`message-actions ${className}`}>
-      {turn.completedAt === null ? null : (
+      {timestamp === null || !Number.isFinite(timestamp) ? null : (
         <time
           className="message-time"
-          dateTime={new Date(turn.completedAt * 1_000).toISOString()}
+          dateTime={new Date(timestamp * 1_000).toISOString()}
         >
-          {formatCompletedAt(turn.completedAt)}
+          {formatCompletedAt(timestamp)}
         </time>
       )}
       {usage === undefined ? null : (
