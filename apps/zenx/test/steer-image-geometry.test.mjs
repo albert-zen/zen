@@ -8,6 +8,7 @@ import {
 // Pure guard tests only. These numbers are NOT browser evidence.
 const geometry = () => ({
   overflow: false,
+  rails: { desktop: false },
   normal: {
     bubble: { right: 350 },
     text: "Question?",
@@ -286,3 +287,145 @@ for (const className of ["bottom-zone", "pending-tray"]) {
     dom.window.close();
   });
 }
+
+// Synthetic guard values exercise independent rails, not rendered acceptance.
+const desktopGeometry = (gutter = 15) => {
+  const right = 350 - 1 - gutter;
+  return {
+    overflow: false,
+    rails: {
+      desktop: true,
+      tray: { left: 0, right: 350, width: 350 },
+      composer: { left: 0, right: 350 },
+      canonicalColumn: { left: 0, right: 350 },
+      clientLeft: 1,
+      clientWidth: 348 - gutter,
+      offsetWidth: 350,
+      borderLeft: 1,
+      borderRight: 1,
+      paddingLeft: 0,
+      paddingRight: 0,
+    },
+    normal: {
+      row: { left: 0, right: 350 },
+      bubble: { right: 350 },
+      text: "Question?",
+      images: [{ width: 96, height: 72, right: 350 }],
+    },
+    pending: {
+      row: { left: 1, right },
+      bubble: { left: right - 130, right },
+      text: "Question?",
+      separate: true,
+      images: [{ left: right - 96, right, width: 96, height: 72 }],
+    },
+  };
+};
+for (const gutter of [0, 6, 15, 19])
+  test(`desktop retains equal outer frames and measured safe rail with ${gutter}px native gutter`, () => {
+    assertSteerGeometry(desktopGeometry(gutter), 1, "synthetic desktop guards");
+  });
+for (const [name, mutate] of [
+  [
+    "old widened outer tray",
+    (g) => {
+      g.rails.tray.right += 17;
+      g.rails.tray.width += 17;
+      g.rails.offsetWidth += 17;
+    },
+  ],
+  [
+    "shifted outer tray",
+    (g) => {
+      g.rails.tray.left += 8;
+      g.rails.tray.right += 8;
+    },
+  ],
+  [
+    "canonical column moved to hide mismatch",
+    (g) => {
+      g.normal.row.right -= 16;
+      g.normal.bubble.right -= 16;
+      g.normal.images[0].right -= 16;
+    },
+  ],
+  [
+    "body pushed over gutter to canonical edge",
+    (g) => (g.pending.bubble.right = 350),
+  ],
+  ["image pushed over gutter", (g) => (g.pending.images[0].right = 350)],
+  [
+    "whole pending rail shifted",
+    (g) => {
+      g.pending.row.right -= 8;
+      g.pending.bubble.right -= 8;
+      g.pending.images[0].right -= 8;
+    },
+  ],
+  ["body locally detached", (g) => (g.pending.bubble.right -= 8)],
+  ["image locally detached", (g) => (g.pending.images[0].right -= 8)],
+  ["image left overflow", (g) => (g.pending.images[0].left = -8)],
+  ["missing native measurements", (g) => delete g.rails.clientWidth],
+  ["missing canonical column", (g) => (g.rails.canonicalColumn = null)],
+])
+  test(`desktop rail contract rejects ${name}`, () => {
+    const g = desktopGeometry();
+    mutate(g);
+    assert.throws(() => assertSteerGeometry(g, 1, name));
+  });
+test("narrow layout retains original absolute canonical alignment contract", () => {
+  const g = geometry();
+  g.pending.bubble.right -= 16;
+  assert.throws(() => assertSteerGeometry(g, 1, "narrow mismatch"));
+});
+
+test("DOM rail probe records native boxes rather than inferring a scrollbar constant", () => {
+  const dom = new JSDOM(
+    `<div class="thread-view"><div class="virtual-transcript-header"></div><article data-sent-message-id="synthetic-normal"><div class="user-bubble">Q</div></article><div class="bottom-zone"><div class="pending-tray" style="border:1px solid; padding:0"><section class="pending-steer-panel"><ol><li><div class="user-bubble"><div class="pending-steer-text">Q</div></div></li></ol></section></div><form class="composer"></form></div></div>`,
+  );
+  try {
+    const doc = dom.window.document;
+    Object.defineProperty(dom.window, "innerWidth", {
+      value: 1100,
+      configurable: true,
+    });
+    const tray = doc.querySelector(".pending-tray");
+    Object.defineProperties(tray, {
+      clientLeft: { value: 1 },
+      clientWidth: { value: 783 },
+      offsetWidth: { value: 800 },
+    });
+    tray.getBoundingClientRect = () => ({
+      left: 150,
+      right: 950,
+      width: 800,
+      height: 170,
+    });
+    for (const selector of [".composer", ".virtual-transcript-header"])
+      doc.querySelector(selector).getBoundingClientRect = () => ({
+        left: 150,
+        right: 950,
+        width: 800,
+        height: 100,
+      });
+    const rail = measureSteerComparison(doc).rails;
+    assert.equal(rail.desktop, true);
+    assert.equal(rail.clientLeft, 1);
+    assert.equal(rail.clientWidth, 783);
+    assert.equal(rail.offsetWidth, 800);
+    assert.equal(rail.borderRight, 1);
+    assert.equal(rail.paddingRight, 0);
+    assert.deepEqual(rail.tray, {
+      left: 150,
+      right: 950,
+      width: 800,
+      height: 170,
+    });
+    assert.equal(rail.composer.right, 950);
+    assert.equal(rail.canonicalColumn.right, 950);
+    Object.defineProperty(dom.window, "innerWidth", { value: 390 });
+    assert.equal(measureSteerComparison(doc).rails.desktop, false);
+  } finally {
+    dom.window.close();
+  }
+});

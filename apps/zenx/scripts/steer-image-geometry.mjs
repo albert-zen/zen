@@ -13,9 +13,111 @@ export function assertSteerGeometry(geometry, count, scene) {
     geometry.normal.text.trim(),
     `${scene}: exact body retained`,
   );
+  assert.equal(
+    typeof geometry.rails?.desktop,
+    "boolean",
+    `${scene}: missing rail measurements`,
+  );
+  let pendingRight = geometry.normal.bubble.right;
+  if (geometry.rails.desktop) {
+    const rail = geometry.rails;
+    const near = (a, b, message, tolerance = 2) =>
+      assert.ok(
+        Number.isFinite(a) &&
+          Number.isFinite(b) &&
+          Math.abs(a - b) <= tolerance,
+        `${scene}: ${message}: ${JSON.stringify(geometry)}`,
+      );
+    for (const edge of ["left", "right"]) {
+      near(
+        rail.tray?.[edge],
+        rail.composer?.[edge],
+        "tray outer frame differs from Composer",
+        1,
+      );
+      near(
+        rail.composer?.[edge],
+        rail.canonicalColumn?.[edge],
+        "Composer differs from canonical column",
+        1,
+      );
+      near(
+        geometry.normal.row?.[edge],
+        rail.canonicalColumn?.[edge],
+        "canonical row differs from its column",
+      );
+    }
+    assert.ok(
+      [
+        rail.clientLeft,
+        rail.clientWidth,
+        rail.offsetWidth,
+        rail.borderLeft,
+        rail.borderRight,
+        rail.paddingLeft,
+        rail.paddingRight,
+      ].every((value) => Number.isFinite(value) && value >= 0),
+      `${scene}: invalid frame measurements`,
+    );
+    near(
+      rail.offsetWidth,
+      rail.tray.width,
+      "tray frame width differs from native box",
+    );
+    assert.ok(
+      rail.clientWidth > 0 && rail.clientWidth <= rail.offsetWidth,
+      `${scene}: invalid tray client width`,
+    );
+    const safeLeft = rail.tray.left + rail.clientLeft + rail.paddingLeft;
+    const safeRight =
+      rail.tray.left + rail.clientLeft + rail.clientWidth - rail.paddingRight;
+    const rightInset =
+      rail.offsetWidth - rail.clientLeft - rail.clientWidth + rail.paddingRight;
+    assert.ok(
+      safeLeft >= rail.tray.left + rail.borderLeft - 1 &&
+        safeRight <= rail.tray.right - rail.borderRight + 1 &&
+        safeRight > safeLeft,
+      `${scene}: safe rail escapes the tray border`,
+    );
+    near(
+      geometry.pending.row?.left,
+      safeLeft,
+      "pending row misses safe left rail",
+    );
+    near(
+      geometry.pending.row?.right,
+      safeRight,
+      "pending row misses safe right rail",
+    );
+    near(
+      geometry.normal.bubble.right,
+      rail.canonicalColumn.right,
+      "canonical body misses its column",
+    );
+    near(
+      geometry.normal.images.at(-1)?.right,
+      rail.canonicalColumn.right,
+      "canonical images miss their column",
+    );
+    near(
+      geometry.normal.bubble.right - geometry.pending.bubble.right,
+      rail.canonicalColumn.right - rail.tray.right + rightInset,
+      "body offset does not equal actual frame border/gutter",
+    );
+    for (const box of [geometry.pending.bubble, ...geometry.pending.images]) {
+      assert.ok(
+        Number.isFinite(box?.left) &&
+          Number.isFinite(box?.right) &&
+          box.left >= safeLeft - 1 &&
+          box.right <= safeRight + 1,
+        `${scene}: pending content overlaps scrollbar or escapes safe rail`,
+      );
+    }
+    pendingRight = safeRight;
+  }
   assert.ok(
-    Math.abs(geometry.pending.bubble.right - geometry.normal.bubble.right) <= 2,
-    `${scene}: body right edges differ: ${JSON.stringify(geometry)}`,
+    Math.abs(geometry.pending.bubble.right - pendingRight) <= 2,
+    `${scene}: body misses its reading rail: ${JSON.stringify(geometry)}`,
   );
   assert.equal(geometry.pending.images.length, count);
   for (let i = 0; i < count; i++) {
@@ -34,9 +136,11 @@ export function assertSteerGeometry(geometry, count, scene) {
   assert.ok(
     Math.abs(
       geometry.pending.images.at(-1).right -
-        geometry.normal.images.at(-1).right,
+        (geometry.rails.desktop
+          ? pendingRight
+          : geometry.normal.images.at(-1).right),
     ) <= 2,
-    `${scene}: image right edges differ`,
+    `${scene}: images miss their reading rail`,
   );
 }
 
@@ -71,7 +175,25 @@ export function measureSteerComparison(root) {
         : null,
     };
   };
+  const tray = pending?.closest(".pending-tray");
+  const view = tray?.closest(".thread-view");
+  const style = tray ? root.defaultView.getComputedStyle(tray) : null;
   return {
+    rails: {
+      desktop: root.defaultView.innerWidth >= 961,
+      tray: rect(tray),
+      composer: rect(tray?.closest(".bottom-zone")?.querySelector(".composer")),
+      canonicalColumn: rect(
+        view?.querySelector(".virtual-transcript-header, .messages-inner"),
+      ),
+      clientLeft: tray?.clientLeft,
+      clientWidth: tray?.clientWidth,
+      offsetWidth: tray?.offsetWidth,
+      borderLeft: parseFloat(style?.borderLeftWidth),
+      borderRight: parseFloat(style?.borderRightWidth),
+      paddingLeft: parseFloat(style?.paddingLeft),
+      paddingRight: parseFloat(style?.paddingRight),
+    },
     normal: measure(normal, false),
     pending: measure(pending, true),
     overflow:
