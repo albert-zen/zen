@@ -645,6 +645,17 @@ export function verifyMessageTimes(s, hovered) {
   }
 }
 
+// LegendList mounts rows before its initial-layout/scroll readiness removes
+// pointer suppression. DOM presence alone is not an actionable hover target.
+export function messageTimesReady(s) {
+  return (
+    s.sameTurn &&
+    ["user", "answer"].every(
+      (name) => s[name]?.visible && s[name].targetVisible && s[name].hit,
+    )
+  );
+}
+
 export async function captureMessageTimes({
   send,
   evaluate,
@@ -670,24 +681,34 @@ export async function captureMessageTimes({
       `(${observeMessageTimes.toString()})(${JSON.stringify(options.lang)})`,
     );
   for (const owner of ["user", "answer"]) {
-    const before = await observe();
+    const initial = await observe();
     (evidence.messageTimeAttempts ??= []).push({
       theme: options.theme,
       owner,
       phase: "before",
-      state: before,
-    });
-    assert(
-      before[owner]?.visible &&
-        before[owner].targetVisible &&
-        before[owner].hit,
-      "Native hover target is on screen",
-    );
-    await send("Input.dispatchMouseEvent", {
-      type: "mouseMoved",
-      ...before[owner].point,
+      state: initial,
     });
     try {
+      await wait(
+        `(${messageTimesReady.toString()})((${observeMessageTimes.toString()})(${JSON.stringify(options.lang)}))`,
+      );
+      const before = await observe();
+      (evidence.messageTimeAttempts ??= []).push({
+        theme: options.theme,
+        owner,
+        phase: "ready",
+        state: before,
+      });
+      assert(
+        before[owner]?.visible &&
+          before[owner].targetVisible &&
+          before[owner].hit,
+        "Native hover target is on screen",
+      );
+      await send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        ...before[owner].point,
+      });
       await wait(
         `(() => { const s = (${observeMessageTimes.toString()})(${JSON.stringify(options.lang)}); return s.${owner}?.hovered && s.${owner}.opacity === 1; })()`,
       );

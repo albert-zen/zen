@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFile } from "node:fs/promises";
 import {
+  messageTimesReady,
   captureMessageTimes,
   observeMessageTimes,
   verifyMessageTimes,
@@ -1650,4 +1651,63 @@ test("message timestamp failure preserves target diagnostics before asserting wi
     /owner.querySelector\("\.user-bubble, \[data-message-quote-body\]"\)/,
   );
   assert.match(observeMessageTimes.toString(), /owner.closest\("\.messages"\)/);
+});
+
+test("message timestamp waits for actual body hit before input and preserves bounded timeout evidence", async () => {
+  for (const settle of [true, false]) {
+    const state = messageTimesState(),
+      evidence = {},
+      inputs = [],
+      captures = [];
+    for (const owner of ["user", "answer"]) {
+      state[owner].hit = state[owner].hovered = state[owner].clockHit = false;
+    }
+    const run = captureMessageTimes({
+      options: { theme: "light", lang: "en", name: "desktop-light" },
+      url: "http://localhost/reading.html?scene=reading",
+      send: async (method, params) => {
+        if (method !== "Input.dispatchMouseEvent") return;
+        assert.equal(
+          messageTimesReady(state),
+          true,
+          "Never dispatch into an unready virtual list",
+        );
+        inputs.push(params);
+        for (const owner of ["user", "answer"]) state[owner].hovered = false;
+        const owner = params.y === state.user.point.y ? "user" : "answer";
+        state[owner].hovered = state[owner].clockHit = true;
+      },
+      evaluate: async () => structuredClone(state),
+      wait: async (expression) => {
+        if (!expression.includes("function messageTimesReady")) return;
+        if (!settle) throw Error("Bounded readiness timeout");
+        state.user.hit = state.answer.hit = true;
+        assert.equal(
+          messageTimesReady(state),
+          true,
+          "Hidden action clocks need not be hit before hover",
+        );
+      },
+      click: async () => {},
+      capture: async (name) => captures.push(name),
+      evidence,
+    });
+    if (settle) {
+      await run;
+      assert.equal(inputs.length, 2);
+      assert.equal(captures.length, 2);
+      assert.equal(evidence.messageTimeAttempts[0].state.user.hit, false);
+      assert.equal(evidence.messageTimeAttempts[1].phase, "ready");
+      assert.equal(evidence.messageTimeAttempts[1].state.user.hit, true);
+    } else {
+      await assert.rejects(run, /Bounded readiness timeout/);
+      assert.equal(inputs.length, 0);
+      assert.equal(captures.length, 0);
+      assert.deepEqual(
+        evidence.messageTimeAttempts.map((s) => s.phase),
+        ["before", "failed"],
+      );
+      assert.equal(evidence.messageTimeAttempts[1].state.answer.hit, false);
+    }
+  }
 });
