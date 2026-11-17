@@ -13431,6 +13431,10 @@ button:disabled {
 /* Desktop supporting rails: readable identities and quiet grouping around the
    primary conversation canvas, without changing routes or disclosure state. */
 @media (min-width: 961px) {
+  .thread-information .thread-information-title:focus-visible {
+    border-radius: 4px;
+    outline-offset: 4px;
+  }
   .sidebar .sidebar-view-head {
     color: var(--color-text-secondary);
     padding-block: 8px;
