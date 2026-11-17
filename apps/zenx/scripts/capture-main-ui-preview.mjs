@@ -719,60 +719,64 @@ try {
       ["reading"],
       "Desktop reading requires only the production App reading bundle",
     );
-  const cases = ordinaryTitles
-    ? ["light", "dark"].flatMap((theme) =>
-        ["baseline", "two-lines"].map((variant) => ({
-          name: `ordinary-titles-${theme}-${variant}`,
-          width: 1280,
-          height: 900,
-          theme,
-          variant,
-          lang: "zh-CN",
-          onlyScene: "navigation",
-        })),
-      )
-    : coarse
-      ? [
-          {
-            name: "compact-short-coarse-light",
-            width: 390,
-            height: 600,
-            theme: "light",
-            lang: "en",
-            onlyScene: "pending",
-          },
-          {
-            name: "compact-short-coarse-dark",
-            width: 390,
-            height: 600,
-            theme: "dark",
-            lang: "en",
-            onlyScene: "pending",
-          },
-        ]
-      : fineCases;
-  for (const options of desktopOnly
-    ? cases.filter((c) => c.width === 1280 && c.height === 900)
-    : desktopRoom
-      ? cases
-          .filter((c) => c.width === 1280 && c.height === 900)
-          .map((c) => ({ ...c, width: 1440, lang: "zh-CN" }))
-      : desktopReentry || desktopNested || desktopChildNavigation
-        ? cases.filter(
-            (c) => c.width === 1280 && c.height === 900 && c.theme === "light",
-          )
-        : desktopChildSidebar
-          ? cases.filter((c) => c.width === 1280 && c.height === 900)
-          : desktopBusyChild
-            ? cases.filter(
-                (c) =>
-                  c.width === 1280 && c.height === 900 && c.theme === "light",
-              )
-            : desktopCombinedAttention
-              ? (identityCase ? ["light"] : ["light", "dark"]).flatMap(
-                  (theme) =>
-                    (identityCase ? [identityCase.lang] : ["en", "zh-CN"]).map(
-                      (lang) => ({
+  const ordinaryTitleCases = ["light", "dark"].flatMap((theme) =>
+    ["baseline", "two-lines"].map((variant) => ({
+      name: `ordinary-titles-${theme}-${variant}`,
+      width: 1280,
+      height: 900,
+      theme,
+      variant,
+      lang: "zh-CN",
+      onlyScene: "navigation",
+    })),
+  );
+  const cases = coarse
+    ? [
+        {
+          name: "compact-short-coarse-light",
+          width: 390,
+          height: 600,
+          theme: "light",
+          lang: "en",
+          onlyScene: "pending",
+        },
+        {
+          name: "compact-short-coarse-dark",
+          width: 390,
+          height: 600,
+          theme: "dark",
+          lang: "en",
+          onlyScene: "pending",
+        },
+      ]
+    : fineCases;
+  for (const options of ordinaryTitles
+    ? ordinaryTitleCases
+    : desktopOnly
+      ? cases.filter((c) => c.width === 1280 && c.height === 900)
+      : desktopRoom
+        ? cases
+            .filter((c) => c.width === 1280 && c.height === 900)
+            .map((c) => ({ ...c, width: 1440, lang: "zh-CN" }))
+        : desktopReentry || desktopNested || desktopChildNavigation
+          ? cases.filter(
+              (c) =>
+                c.width === 1280 && c.height === 900 && c.theme === "light",
+            )
+          : desktopChildSidebar
+            ? cases.filter((c) => c.width === 1280 && c.height === 900)
+            : desktopBusyChild
+              ? cases.filter(
+                  (c) =>
+                    c.width === 1280 && c.height === 900 && c.theme === "light",
+                )
+              : desktopCombinedAttention
+                ? (identityCase ? ["light"] : ["light", "dark"]).flatMap(
+                    (theme) =>
+                      (identityCase
+                        ? [identityCase.lang]
+                        : ["en", "zh-CN"]
+                      ).map((lang) => ({
                         name: `desktop-${theme}-${lang}${identityCaseName ? `-${identityCaseName}` : ""}`,
                         ...(identityCaseName
                           ? { identityCase: identityCaseName }
@@ -782,10 +786,9 @@ try {
                         theme,
                         lang,
                         onlyScene: "navigation",
-                      }),
-                    ),
-                )
-              : cases) {
+                      })),
+                  )
+                : cases) {
     await send("Emulation.setDeviceMetricsOverride", {
       width: options.width,
       height: options.height,
