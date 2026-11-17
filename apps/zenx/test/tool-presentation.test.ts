@@ -4,6 +4,7 @@ import type { ThreadItem } from "../src/protocol-client/index.js";
 import {
   commandPhase,
   commandStatus,
+  commandTraceStatus,
   commandSummary,
   commandTitle,
   toolPresentation,
@@ -198,6 +199,38 @@ test("completed invocation labels preserve raw result status and never infer suc
         assert.deepEqual(item, before);
       }
     }
+  }
+});
+
+test("only a failed inline shell command with a recorded nonzero exit shows that outcome", () => {
+  const failed = {
+    ...command("shell"),
+    status: "failed" as const,
+    exitCode: 1,
+  };
+  assert.equal(commandTraceStatus(failed), "Exit code 1");
+  assert.equal(commandStatus(failed), "Completed");
+  assert.equal(
+    commandTraceStatus({ ...failed, toolName: "zenx_shell", exitCode: 127 }),
+    "Exit code 127",
+  );
+  for (const item of [
+    { ...failed, toolName: "wait" },
+    { ...failed, toolName: "run_code" },
+    { ...failed, toolName: undefined },
+    { ...failed, contentType: "application/vnd.zen.tool-task+json" },
+    { ...failed, contentType: "zen.imported-tool-result.v1" },
+    { ...failed, toolName: "my_shell", aggregatedOutput: "exit code 1" },
+    { ...failed, status: "completed" as const },
+    { ...failed, status: "declined" as const },
+    { ...failed, status: "unknown" as const },
+    { ...failed, status: "inProgress" as const },
+    ...[null, 0, 0.5, Number.NaN, Number.POSITIVE_INFINITY].map((exitCode) => ({
+      ...failed,
+      exitCode,
+    })),
+  ]) {
+    assert.equal(commandTraceStatus(item), commandStatus(item));
   }
 });
 

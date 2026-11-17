@@ -100,7 +100,7 @@ import { parseSkillDraft, withSkillDraft } from "./skill-draft.js";
 import {
   commandPhaseLabel,
   commandPhase,
-  commandStatus,
+  commandTraceStatus,
   toolPresentation,
   commandTitle,
 } from "./tool-presentation.js";
@@ -4801,7 +4801,7 @@ function StatusMark({
   }
   if (item.type !== "commandExecution") return null;
   const phase = commandPhase(item, turnStatus);
-  const status = commandStatus(item, turnStatus);
+  const status = commandTraceStatus(item, turnStatus);
   if (phase === "requested")
     return (
       <span

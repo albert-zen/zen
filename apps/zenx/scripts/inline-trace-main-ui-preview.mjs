@@ -342,6 +342,10 @@ export function observeInlineTrace(
       traces: [...e.querySelectorAll(".trace-item-toggle,.trace-toggle")].map(
         (b) => ({
           text: b.textContent,
+          status:
+            b
+              .querySelector(".trace-item-status .tool-status")
+              ?.textContent?.trim() ?? "",
           expanded: b.getAttribute("aria-expanded"),
           visible: visible(b),
           detailVisible: visible(
@@ -1231,6 +1235,12 @@ export async function captureInlineTrace({
       prior = now;
     }
     assert(stable, "Inline disclosure geometry failed to settle");
+    assert(
+      stable.turns[1].traces.some(
+        (trace) => trace.visible && trace.status === "Exit code 1",
+      ),
+      "A failed shell row shows its recorded exit code even when details are closed",
+    );
     await capture(
       `reading-${options.name}-inline-trace-${step}`,
       options,
