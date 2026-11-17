@@ -230,3 +230,33 @@ jobs:
           if [ -f "${{ runner.temp }}/desktop-sidebar-identity/activation-status.txt" ]; then
             cat "${{ runner.temp }}/desktop-sidebar-identity/activation-status.txt" >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      - name: Compare ordinary sidebar titles without changing the product
+        continue-on-error: true
+        if: ${{ !cancelled() && github.event.pull_request.number == 755 && steps.fonts.outcome == 'success' && steps.navigationBuild.outcome == 'success' }}
+        timeout-minutes: 1
+        env:
+          ZENX_SIDEBAR_ORDINARY_TITLES: "1"
+        run: |
+          dir="${{ runner.temp }}/desktop-ordinary-titles"
+          mkdir -p "$dir"
+          elapsed=$(( $(date +%s) - ZENX_NAVIGATION_STARTED_AT ))
+          if [ "$elapsed" -gt 180 ]; then
+            printf 'skipped-budget: original phases consumed %ss\n' "$elapsed" > "$dir/activation-status.txt"
+            exit 0
+          fi
+          cp "${{ runner.temp }}/desktop-navigation-preview/navigation.html" "${{ runner.temp }}/desktop-navigation-preview/source.json" "$dir/"
+          node apps/zenx/scripts/capture-main-ui-preview.mjs "$dir" fine
+      - name: Retain ordinary-title comparison separately
+        continue-on-error: true
+        if: ${{ always() && github.event.pull_request.number == 755 }}
+        timeout-minutes: 1
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-ordinary-titles-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/desktop-ordinary-titles/*.png
+            ${{ runner.temp }}/desktop-ordinary-titles/*.json
+            ${{ runner.temp }}/desktop-ordinary-titles/*.txt
+          if-no-files-found: warn
+          retention-days: 7

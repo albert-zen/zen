@@ -1,0 +1,15 @@
+/* Candidate presentation is opt-in and exists only in the synthetic preview. */
+@media (min-width: 1100px) {
+  :root[data-ordinary-title-preview="two-lines"]
+    .sidebar[data-thread-density="detailed"]
+    :is(.project-group, .recent-thread-group)
+    .thread-row-shell:not([data-child-thread])
+    > .thread-row:not(.inbox, .system-error)
+    .thread-title
+    > span:first-child {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    white-space: normal;
+  }
+}

@@ -41,6 +41,7 @@ import type { NativeInformationApi } from "../../src/native-information.js";
 import { installScrollbarVisibility } from "../../src/renderer/src/scrollbar-visibility.js";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
+import "./ui-polish-visual-ordinary-titles.css";
 // Match the production renderer startup; never hide scrollbars only for captures.
 installScrollbarVisibility(document);
 Object.assign(globalThis, { React });
@@ -240,6 +241,26 @@ let compactions = 0;
 // Controlled browser state for toolbar layout; no external site is loaded.
 let previewTabs: import("../../src/main/workspace-browser.js").WorkspaceBrowserTab[] =
   [];
+
+const ordinaryTitleVariant = params.get("ordinaryTitles");
+const ordinaryTitles =
+  params.get("scene") === "navigation" &&
+  (ordinaryTitleVariant === "baseline" || ordinaryTitleVariant === "two-lines")
+    ? [
+        summary("ordinary-keyboard", "设计评审 · 桌面共享组件键盘导航检查结果"),
+        summary("ordinary-reader", "设计评审 · 桌面共享组件屏幕阅读检查结果"),
+      ]
+    : [];
+if (ordinaryTitles.length) {
+  document.documentElement.dataset.ordinaryTitlePreview =
+    ordinaryTitleVariant ?? "";
+  Object.assign(window, {
+    __ordinaryTitleFixture: ordinaryTitles.map(({ threadId, name }) => ({
+      threadId,
+      title: name,
+    })),
+  });
+}
 
 const sideConversations = childQuestionData?.rows ?? [
   {
@@ -532,6 +553,7 @@ const zenx = {
         ? []
         : [
             ...(params.has("noProjects") ? [] : [summary()]),
+            ...ordinaryTitles,
             ...(projectlessScene
               ? [summary("projectless-existing", "Trip planning")]
               : []),
@@ -582,6 +604,7 @@ const zenx = {
               isDefault: true,
               threadIds: [
                 "thread-1",
+                ...ordinaryTitles.map((row) => row.threadId),
                 ...(params.has("conversationTabs") || childQuestionScene
                   ? sideConversations.map((entry) => entry.threadId)
                   : []),

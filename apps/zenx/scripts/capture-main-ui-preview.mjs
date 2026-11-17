@@ -44,6 +44,11 @@ const started = performance.now();
 const root = path.resolve(fileURLToPath(new URL("../../..", import.meta.url)));
 const directory = path.resolve(process.argv[2] ?? ".main-ui-preview");
 const captureProfile = process.argv[3] ?? "fine";
+const ordinaryTitles = process.env.ZENX_SIDEBAR_ORDINARY_TITLES === "1";
+assert(
+  !ordinaryTitles || captureProfile === "fine",
+  "Ordinary title probe uses existing fine navigation capture",
+);
 const desktopQueue = captureProfile === "desktop-queue";
 const desktopResultFile = captureProfile === "desktop-reading-result-file";
 let desktopReading = captureProfile === "desktop-reading";
@@ -714,26 +719,38 @@ try {
       ["reading"],
       "Desktop reading requires only the production App reading bundle",
     );
-  const cases = coarse
-    ? [
-        {
-          name: "compact-short-coarse-light",
-          width: 390,
-          height: 600,
-          theme: "light",
-          lang: "en",
-          onlyScene: "pending",
-        },
-        {
-          name: "compact-short-coarse-dark",
-          width: 390,
-          height: 600,
-          theme: "dark",
-          lang: "en",
-          onlyScene: "pending",
-        },
-      ]
-    : fineCases;
+  const cases = ordinaryTitles
+    ? ["light", "dark"].flatMap((theme) =>
+        ["baseline", "two-lines"].map((variant) => ({
+          name: `ordinary-titles-${theme}-${variant}`,
+          width: 1280,
+          height: 900,
+          theme,
+          variant,
+          lang: "zh-CN",
+          onlyScene: "navigation",
+        })),
+      )
+    : coarse
+      ? [
+          {
+            name: "compact-short-coarse-light",
+            width: 390,
+            height: 600,
+            theme: "light",
+            lang: "en",
+            onlyScene: "pending",
+          },
+          {
+            name: "compact-short-coarse-dark",
+            width: 390,
+            height: 600,
+            theme: "dark",
+            lang: "en",
+            onlyScene: "pending",
+          },
+        ]
+      : fineCases;
   for (const options of desktopOnly
     ? cases.filter((c) => c.width === 1280 && c.height === 900)
     : desktopRoom
@@ -793,6 +810,7 @@ try {
       if (scene === "information") query.set("scene", "lineage");
       if (scene === "navigation") {
         query.set("scene", "navigation");
+        if (ordinaryTitles) query.set("ordinaryTitles", options.variant);
         query.set("conversationTabs", "true");
         if (desktopChildSidebar || desktopChildNavigation)
           query.set("childSidebar", "1");
@@ -1011,6 +1029,7 @@ try {
     "No external resource requests",
   );
   assert.deepEqual(evidence.rendererErrors, [], "No renderer exceptions");
+  if (ordinaryTitles) assert.equal(evidence.ordinaryTitleCases?.length, 4);
   evidence.status = "passed";
   lifecycle.captureFinished("passed");
 } catch (error) {
