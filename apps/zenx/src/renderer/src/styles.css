@@ -13489,6 +13489,19 @@ button:disabled {
   .information-dock .information-widget > header {
     padding-right: 30px;
   }
+  /* The floating Customize button shares only the first visible header.
+     Earlier widgets can stay mounted with the hidden attribute. */
+  .information-dock
+    .information-widget-list
+    > .information-widget:not([hidden])
+    ~ .information-widget
+    > header,
+  .information-dock
+    .editable-information-panel:has(> .information-attention:not(:empty))
+    .information-widget
+    > header {
+    padding-right: 0;
+  }
   .information-dock
     .editable-information-panel:has(> .information-attention:not(:empty))
     .information-settings-toolbar {

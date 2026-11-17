@@ -845,6 +845,53 @@ export async function captureDesktopReading({
         "Array.from(document.querySelectorAll('.information-widget')).filter(e => !e.hidden && e.getBoundingClientRect().height > 0).length >= 2",
       );
       await save(`supporting-rails-${rails}`, { information: true });
+      const headers = await evaluate(`(() => {
+        const panel = document.querySelector(".information-dock .editable-information-panel");
+        const toolbar = panel?.querySelector(":scope > .information-settings-toolbar");
+        if (!toolbar) return null;
+        const hit = (element) => {
+          const r = element.getBoundingClientRect();
+          return r.width > 0 && r.height > 0 &&
+            element.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2));
+        };
+        const customize = toolbar.querySelector(".information-customize");
+        return {
+          toolbarPosition: getComputedStyle(toolbar).position,
+          toolbarLeft: toolbar.getBoundingClientRect().left,
+          customizeHit: !!customize && hit(customize),
+          widgets: [...panel.querySelectorAll(
+            ":scope > .information-widget-list > .information-widget:not([hidden]) > header"
+          )].map(header => {
+            const controls = [...header.querySelectorAll("button")];
+            return {
+              right: header.getBoundingClientRect().right,
+              paddingRight: parseFloat(getComputedStyle(header).paddingRight),
+              controlRight: Math.max(...controls.map(e => e.getBoundingClientRect().right)),
+              controlsHit: controls.length > 0 && controls.every(hit),
+            };
+          }),
+        };
+      })()`);
+      assert(headers?.customizeHit, "Customize stays hittable");
+      assert.equal(headers.toolbarPosition, "absolute");
+      assert(
+        headers.widgets.length >= 2,
+        "First and later widgets are rendered",
+      );
+      for (const [index, header] of headers.widgets.entries()) {
+        const padding = index === 0 ? 30 : 0;
+        assert.equal(header.paddingRight, padding);
+        assert(header.controlsHit, "Visible widget controls stay hittable");
+        assert(header.controlRight <= header.right - padding + 1);
+        if (index === 0) {
+          assert(header.controlRight <= headers.toolbarLeft + 1);
+        }
+      }
+      (evidence.dockHeaderCases ??= []).push({
+        theme: options.theme,
+        rails,
+        ...headers,
+      });
       if (rails === "long")
         await captureSidebarNames({
           send,
