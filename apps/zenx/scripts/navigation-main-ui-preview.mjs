@@ -1979,52 +1979,74 @@ export async function captureOrdinaryTitles({
   await evaluate(
     "document.fonts.ready.then(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))))",
   );
-  await wait(
-    `['project-group','recent-thread-group'].every(scope =>
-      window.__ordinaryTitleFixture.every(item =>
-        !!document.querySelector('.'+scope+' [data-thread-id="'+item.threadId+'"] .thread-title > span:first-child')))`,
-  );
-  const state = await evaluate(`(() => {
-    const sidebar=document.querySelector('.sidebar'), scroll=sidebar.querySelector('.sidebar-scroll'), band=scroll.getBoundingClientRect();
-    const rect=e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom,width:r.width,height:r.height}};
-    const rows=[...sidebar.querySelectorAll('.thread-row-shell[data-thread-id]')];
-    const pair=window.__ordinaryTitleFixture.flatMap(item=>['project-group','recent-thread-group'].map(scope=>{
-      const shell=sidebar.querySelector('.'+scope+' [data-thread-id="'+item.threadId+'"]'), row=shell.querySelector('.thread-row'), title=row.querySelector('.thread-title > span:first-child'),r=title.getBoundingClientRect(),css=getComputedStyle(title);
-      const canvas=new OffscreenCanvas(1, 1),ctx=canvas.getContext('2d');ctx.font=css.font;
-      const clipped=(title.scrollWidth>title.clientWidth||title.scrollHeight>title.clientHeight), reserve=clipped?ctx.measureText('…').width:0;
-      const glyphs=[...new Intl.Segmenter('zh-CN',{granularity:'grapheme'}).segment(title.textContent)].map(({segment,index})=>{
-        const range=document.createRange();range.setStart(title.firstChild,index);range.setEnd(title.firstChild,index+segment.length);const g=range.getBoundingClientRect();
-        return {text:segment,top:g.top,visible:g.width>0&&g.left>=r.left&&g.right<=r.right-reserve&&g.top>=Math.max(r.top,band.top)&&g.bottom<=Math.min(r.bottom,band.bottom)};
+  const observe = async (scope) => {
+    await wait(
+      `window.__ordinaryTitleFixture.every(item =>
+        !!document.querySelector('.'+${JSON.stringify(scope)}+' [data-thread-id="'+item.threadId+'"] .thread-title > span:first-child'))`,
+    );
+    const state = await evaluate(`(() => {
+      const sidebar=document.querySelector('.sidebar'), scroll=sidebar.querySelector('.sidebar-scroll'), band=scroll.getBoundingClientRect();
+      const rect=e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom,width:r.width,height:r.height}};
+      const scope=${JSON.stringify(scope)};
+      const rows=[...sidebar.querySelectorAll('.'+scope+' .thread-row-shell[data-thread-id]')];
+      const pair=window.__ordinaryTitleFixture.map(item=>{
+        const shell=sidebar.querySelector('.'+scope+' [data-thread-id="'+item.threadId+'"]'), row=shell.querySelector('.thread-row'), title=row.querySelector('.thread-title > span:first-child'),r=title.getBoundingClientRect(),css=getComputedStyle(title);
+        const canvas=new OffscreenCanvas(1, 1),ctx=canvas.getContext('2d');ctx.font=css.font;
+        const clipped=(title.scrollWidth>title.clientWidth||title.scrollHeight>title.clientHeight), reserve=clipped?ctx.measureText('…').width:0;
+        const glyphs=[...new Intl.Segmenter('zh-CN',{granularity:'grapheme'}).segment(title.textContent)].map(({segment,index})=>{
+          const range=document.createRange();range.setStart(title.firstChild,index);range.setEnd(title.firstChild,index+segment.length);const g=range.getBoundingClientRect();
+          return {text:segment,top:g.top,visible:g.width>0&&g.left>=r.left&&g.right<=r.right-reserve&&g.top>=Math.max(r.top,band.top)&&g.bottom<=Math.min(r.bottom,band.bottom)};
+        });
+        return {id:item.threadId,scope,fullTitle:title.textContent,expected:item.title,cue:item.cue,ordinary:!title.matches('.sidebar-collision-title'),row:rect(row),title:rect(title),clamp:css.webkitLineClamp,clipped,visibleText:glyphs.filter(g=>g.visible).map(g=>g.text).join(''),lineCount:new Set(glyphs.filter(g=>g.visible).map(g=>Math.round(g.top))).size};
       });
-      return {id:item.threadId,scope,fullTitle:title.textContent,expected:item.title,ordinary:!title.matches('.sidebar-collision-title'),row:rect(row),title:rect(title),clamp:css.webkitLineClamp,clipped,visibleText:glyphs.filter(g=>g.visible).map(g=>g.text).join(''),lineCount:new Set(glyphs.filter(g=>g.visible).map(g=>Math.round(g.top))).size};
-    }));
-    return {density:sidebar.dataset.threadDensity,width:sidebar.getBoundingClientRect().width,pair,order:rows.map(e=>e.dataset.threadId),visibleRows:rows.filter(e=>{const r=e.getBoundingClientRect();return r.height>0&&r.top>=band.top&&r.bottom<=band.bottom}).length,scrollTop:scroll.scrollTop};
-  })()`);
+      return {scope,density:sidebar.dataset.threadDensity,width:sidebar.getBoundingClientRect().width,pair,order:rows.map(e=>e.dataset.threadId),visibleRows:rows.filter(e=>{const r=e.getBoundingClientRect();return r.height>0&&r.top>=band.top&&r.bottom<=band.bottom}).length,scrollTop:scroll.scrollTop,scrollHeight:scroll.scrollHeight,clientHeight:scroll.clientHeight};
+    })()`);
+    await capture(`${options.name}-${scope}`, options, "navigation");
+    assert.equal(state.density, "detailed");
+    assert(state.width > 0);
+    assert.equal(state.pair.length, 2);
+    assert(
+      state.scrollHeight > state.clientHeight,
+      "Crowded scroll band must actually overflow",
+    );
+    assert(
+      state.order.length > state.visibleRows,
+      "Some rows must sit below the fold",
+    );
+    for (const item of state.pair) {
+      assert.equal(item.fullTitle, item.expected);
+      assert(item.ordinary);
+      assert.equal(item.clamp, options.variant === "two-lines" ? "2" : "none");
+      assert(
+        item.lineCount >= 1 &&
+          item.lineCount <= (options.variant === "baseline" ? 1 : 2),
+      );
+    }
+    return state;
+  };
+  const projects = await observe("project-group");
+  await click(navigationSelectors.projects);
+  await wait(
+    `document.querySelector('.projects-section-toggle').getAttribute('aria-expanded') === 'false'`,
+  );
+  const recent = await observe("recent-thread-group");
+  await click(navigationSelectors.projects);
+  await wait(
+    `!!document.querySelector(${JSON.stringify(navigationSelectors.project)})`,
+  );
   (evidence.ordinaryTitleCases ??= []).push({
     theme: options.theme,
     variant: options.variant,
     scope:
-      "Default-width resting Detailed preview; Compact/minimum-width/control actions not covered",
-    ...state,
+      "Crowded Detailed desktop; Project and Recent measured separately at rest",
+    projects,
+    recent,
   });
-  await capture(`${options.name}-rest`, options, "navigation");
-  assert.equal(state.density, "detailed");
-  assert(state.width > 0);
-  assert.equal(state.pair.length, 4);
-  for (const item of state.pair) {
-    assert.equal(item.fullTitle, item.expected);
-    assert(item.ordinary);
-    assert.equal(item.clamp, options.variant === "two-lines" ? "2" : "none");
-    assert(
-      item.lineCount >= 1 &&
-        item.lineCount <= (options.variant === "baseline" ? 1 : 2),
-    );
-  }
   if (options.theme !== "dark" || options.variant !== "two-lines") return;
   const target =
     '.project-group [data-thread-id="ordinary-reader"] > .thread-row:focus-visible';
   assert(await tabTo(target), "Native Tab reaches ordinary title");
-  const full = state.pair.find(
+  const full = projects.pair.find(
     (item) => item.id === "ordinary-reader",
   ).fullTitle;
   await wait(

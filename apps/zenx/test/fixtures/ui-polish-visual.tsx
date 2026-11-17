@@ -243,22 +243,47 @@ let previewTabs: import("../../src/main/workspace-browser.js").WorkspaceBrowserT
   [];
 
 const ordinaryTitleVariant = params.get("ordinaryTitles");
-const ordinaryTitles =
+const ordinaryTitleExperiment =
   params.get("scene") === "navigation" &&
-  (ordinaryTitleVariant === "baseline" || ordinaryTitleVariant === "two-lines")
-    ? [
-        summary("ordinary-keyboard", "设计评审 · 桌面共享组件键盘导航检查结果"),
-        summary("ordinary-reader", "设计评审 · 桌面共享组件屏幕阅读检查结果"),
-      ]
-    : [];
-if (ordinaryTitles.length) {
+  (ordinaryTitleVariant === "baseline" || ordinaryTitleVariant === "two-lines");
+const ordinaryTitlePair = ordinaryTitleExperiment
+  ? ["键盘导航", "屏幕阅读"].map((cue, index) => ({
+      ...summary(
+        index === 0 ? "ordinary-keyboard" : "ordinary-reader",
+        `桌面共享组件下半年验收记录和问题归档复查 · ${cue}`,
+      ),
+      updatedAt: `2026-10-15T03:0${9 - index}:00.000Z`,
+      cue,
+    }))
+  : [];
+const ordinaryTitleFillers = ordinaryTitleExperiment
+  ? [
+      "欢迎面板与首次会话入口对照",
+      "工作区颜色与常用工具栏对照记录",
+      "代理任务完成通知样式检查",
+      "会话导航和桌面快捷键说明复核",
+      "文档预览滚动位置记录",
+      "输入框工具和按钮状态汇总",
+      "侧栏与信息面板的布局核对记录",
+      "资料卡空态截图整理",
+      "浅色界面的图标与状态文字复查",
+      "弹出菜单关闭和焦点返回对照",
+      "工具结果引用样式记录",
+      "主题更新和历史回复样式核对",
+    ].map((name, index) => summary(`ordinary-fill-${index}`, name))
+  : [];
+const ordinaryTitles = [...ordinaryTitlePair, ...ordinaryTitleFillers];
+if (ordinaryTitleExperiment) {
   document.documentElement.dataset.ordinaryTitlePreview =
     ordinaryTitleVariant ?? "";
   Object.assign(window, {
-    __ordinaryTitleFixture: ordinaryTitles.map(({ threadId, name }) => ({
-      threadId,
-      title: name,
-    })),
+    __ordinaryTitleFixture: ordinaryTitlePair.map(
+      ({ threadId, name, cue }) => ({
+        threadId,
+        title: name,
+        cue,
+      }),
+    ),
   });
 }
 
