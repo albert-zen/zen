@@ -2814,6 +2814,21 @@ button:disabled {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Clarify idle desktop model labels without changing permission or active states. */
+@media (min-width: 961px) {
+  .thread-view
+    .composer
+    .composer-model-trigger:not(
+      .permission-trigger,
+      :disabled,
+      .unavailable,
+      :hover,
+      :focus-visible,
+      [aria-expanded="true"]
+    ) {
+    color: var(--color-text-secondary);
+  }
+}
 .composer-model-trigger:hover:not(:disabled),
 .composer-model-trigger[aria-expanded="true"] {
   color: var(--color-text-primary);
