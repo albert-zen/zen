@@ -1,0 +1,52 @@
+.collapsed-workspace-tabs-preview {
+  position: fixed;
+  z-index: 100;
+  box-sizing: border-box;
+  width: min(300px, calc(100vw - 16px));
+  max-height: min(420px, calc(100dvh - 64px));
+  padding: 6px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 10px;
+  background: var(--color-surface-elevated);
+  color: var(--color-text-primary);
+  box-shadow: var(--shadow-medium);
+  overflow-y: auto;
+}
+.collapsed-workspace-tabs-heading {
+  padding: 6px 8px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+}
+.collapsed-workspace-tabs-preview > button {
+  width: 100%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  text-align: start;
+  font: inherit;
+}
+.collapsed-workspace-tabs-preview > button > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.collapsed-workspace-tabs-preview > button > svg {
+  flex-shrink: 0;
+}
+.collapsed-workspace-tabs-preview > button:hover {
+  background: var(--color-surface-hover);
+}
+.collapsed-workspace-tabs-preview > button:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: -2px;
+}
+@media (pointer: coarse) {
+  .collapsed-workspace-tabs-preview > button {
+    min-height: 44px;
+  }
+}

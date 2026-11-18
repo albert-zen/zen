@@ -1,3 +1,5 @@
+import { CollapsedWorkspaceTabsPreview } from "./CollapsedWorkspaceTabsPreview.js";
+import "./collapsed-workspace-tabs-preview.css";
 import { projectInformationCommunications } from "./information-communications.js";
 import { withAppShotContext } from "./app-shot-draft.js";
 import { UserQuestionCards } from "./UserQuestionCards.js";
@@ -4328,6 +4330,7 @@ function AppContent() {
         browserPanels[selectedSummary.threadId] !== true ? (
           <button
             id="thread-browser-toggle"
+            data-workspace-owner={selectedSummary.threadId}
             className="icon-button thread-panel-toggle"
             type="button"
             aria-label={
@@ -5100,6 +5103,15 @@ function AppContent() {
                 workspacePath={threadDetail.cwd}
                 key={threadDetail.id}
                 presentationState={sidebarState.states[threadDetail.id]}
+                renderCollapsedTabPreview={(tabs, activate) => (
+                  <CollapsedWorkspaceTabsPreview
+                    key={threadDetail.id}
+                    tabs={tabs}
+                    ownerId={threadDetail.id}
+                    activate={activate}
+                    label={i18n.t("panels:openedWorkspaceTabs")}
+                  />
+                )}
                 onFullscreenChange={(fullscreen) => {
                   void sidebarState.controller.edit(threadDetail.id, () => ({
                     fullscreen,

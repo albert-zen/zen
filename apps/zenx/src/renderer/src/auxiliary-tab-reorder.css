@@ -60,3 +60,31 @@
   pointer-events: auto;
   overflow-y: auto;
 }
+
+/* Same held-modifier capsule as the left rail; no permanent second label row. */
+.workspace-content-tab > [role="tab"][data-workspace-shortcut-key]::after {
+  content: attr(data-workspace-shortcut-label);
+  flex: 0 0 auto;
+  min-width: 24px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--color-surface-elevated);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+  line-height: 1.25;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Cmd/Ctrl alone may have projected left-rail hints before Option/Alt arrived.
+   Preserve that state, but only advertise the currently held chord. Releasing
+   Option/Alt removes the workspace hint attribute and reveals left hints again. */
+:root:has(
+    .auxiliary-panel[data-open="true"][data-expanded="true"]
+      [data-workspace-shortcut-key]
+  )
+  #primary-sidebar
+  :is(.thread-row, .new-thread-action)[data-shortcut-key]::after {
+  visibility: hidden;
+}

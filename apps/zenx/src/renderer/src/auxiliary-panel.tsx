@@ -1,3 +1,4 @@
+import { installWorkspaceTabShortcuts } from "./workspace-tab-shortcuts.js";
 import { roomFileOwnerLabels } from "./room-file-owner-labels.js";
 import { flushSync } from "react-dom";
 import { ShellTargetNavigationContext } from "./shell-target-navigation.js";
@@ -363,6 +364,11 @@ export interface AuxiliaryCustomTab {
 }
 
 type AuxiliaryPanelProps = {
+  /** Disposable projection of the existing tab rail, never a second tab store. */
+  renderCollapsedTabPreview?(
+    tabs: readonly { id: string; title: string; icon: IconName }[],
+    activate: (id: string) => void,
+  ): React.ReactNode;
   primaryConversation?: AuxiliaryPrimaryConversation;
   presentationState?: ThreadSidebarState;
   onFullscreenChange?(value: boolean): void;
@@ -404,6 +410,7 @@ type AuxiliaryPanelProps = {
 );
 
 export function AuxiliaryPanel({
+  renderCollapsedTabPreview,
   primaryConversation,
   presentationState,
   onFullscreenChange,
@@ -913,6 +920,20 @@ export function AuxiliaryPanel({
           ...tabs,
         ]
       : tabs;
+  useEffect(() => {
+    if (
+      !open ||
+      !expanded ||
+      !["darwin", "win32"].includes(window.zenx?.platform)
+    )
+      return;
+    const rail = tabRail.current;
+    if (!rail) return;
+    return installWorkspaceTabShortcuts(
+      rail,
+      window.zenx.platform === "darwin" ? "darwin" : "win32",
+    );
+  }, [open, expanded, expandedKey]);
   const canReorder =
     tabs.length > 1 && (!presentationState || Boolean(onTabsChange));
   const active =
@@ -1310,13 +1331,13 @@ export function AuxiliaryPanel({
   }, [active, open, signature, width, expanded]);
   useLayoutEffect(() => {
     const target = pendingTabFocus.current;
-    if (target === null || showChooser || active !== target) return;
+    if (!open || target === null || showChooser || active !== target) return;
     const tab = document.getElementById(`aux-tab-${target}`);
     if (tab && panel.current?.contains(tab)) {
       pendingTabFocus.current = null;
       tab.focus({ preventScroll: true });
     }
-  }, [active, selectedTab, showChooser, signature]);
+  }, [active, selectedTab, showChooser, signature, open]);
   useEffect(() => {
     const api = window.zenx.workspaceBrowser;
     selectionEpoch.current += 1;
@@ -1681,7 +1702,7 @@ export function AuxiliaryPanel({
       ),
     [displayTabs],
   );
-  return (
+  const panelContent = (
     <aside
       ref={panel}
       id="thread-workspace-panel"
@@ -1863,9 +1884,19 @@ export function AuxiliaryPanel({
                   }
                   tabIndex={(active ?? displayTabs[0]?.id) === tab.id ? 0 : -1}
                   aria-keyshortcuts={
-                    canReorder && tab.id !== PRIMARY_CONVERSATION_TAB
-                      ? "Alt+ArrowLeft Alt+ArrowRight"
-                      : undefined
+                    [
+                      open &&
+                      expanded &&
+                      ["darwin", "win32"].includes(window.zenx?.platform) &&
+                      index < 9
+                        ? `${window.zenx.platform === "darwin" ? "Meta" : "Control"}+Alt+${index + 1}`
+                        : undefined,
+                      canReorder && tab.id !== PRIMARY_CONVERSATION_TAB
+                        ? "Alt+ArrowLeft Alt+ArrowRight"
+                        : undefined,
+                    ]
+                      .filter(Boolean)
+                      .join(" ") || undefined
                   }
                   aria-description={
                     canReorder && tab.id !== PRIMARY_CONVERSATION_TAB
@@ -2045,7 +2076,7 @@ export function AuxiliaryPanel({
           <Icon name={expanded ? "minimize" : "maximize"} />
         </button>
         {/* Split mode keeps information in the main conversation titlebar.
-            Only a maximized main tab uses this native no-drag hit region. */}
+          Only a maximized main tab uses this native no-drag hit region. */}
         <span className="auxiliary-information-slot" aria-hidden="true" />
         <button
           type="button"
@@ -2478,5 +2509,19 @@ export function AuxiliaryPanel({
         </div>
       </div>
     </aside>
+  );
+  return (
+    <>
+      {!open &&
+        renderCollapsedTabPreview?.(
+          tabs.filter((tab) => baseIds.includes(tab.id)),
+          (id) => {
+            if (!baseIds.includes(id) || !available.has(id)) return;
+            select(id, true);
+            onOpenChange(true);
+          },
+        )}
+      {panelContent}
+    </>
   );
 }
