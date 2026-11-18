@@ -22,6 +22,11 @@ import { createRoot } from "react-dom/client";
 import type { ThreadSummary } from "../../../../src/thread-summary.js";
 import type { Thread } from "../../src/protocol-client/index.js";
 import { App, WindowTitleBar } from "../../src/renderer/src/App.js";
+import {
+  applyResolvedAppearance,
+  DEFAULT_APPEARANCE_PREFERENCE,
+  resolveAppearance,
+} from "../../src/renderer/src/appearance.js";
 import { AuxiliaryPanel } from "../../src/renderer/src/auxiliary-panel.js";
 import { nativeRecoveryForThread } from "../native-recovery-fixture.js";
 import { encodeModelKey } from "../../../../src/protocol/model-key.js";
@@ -232,7 +237,16 @@ const readingApprovalFixture = readingScene
   ? createReadingApprovalFixture(readingPending)
   : null;
 const projectlessScene = params.get("scene") === "projectless";
-document.documentElement.dataset.appearance = params.get("theme") ?? "light";
+const previewTheme = params.get("theme") ?? "light";
+if (readingScene) {
+  // Exercise the same default palette as real desktop boot, including its preset.
+  applyResolvedAppearance(
+    document,
+    resolveAppearance(DEFAULT_APPEARANCE_PREFERENCE, previewTheme === "dark"),
+  );
+} else {
+  document.documentElement.dataset.appearance = previewTheme;
+}
 document.documentElement.dataset.platform = params.get("platform") ?? "win32";
 // Slow the same production transition for inspectable intermediate-frame QA.
 if (params.has("slowMotion"))

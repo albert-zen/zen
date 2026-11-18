@@ -844,7 +844,22 @@ export async function captureDesktopReading({
       await wait(
         "Array.from(document.querySelectorAll('.information-widget')).filter(e => !e.hidden && e.getBoundingClientRect().height > 0).length >= 2",
       );
-      await save(`supporting-rails-${rails}`, { information: true });
+      const scene = await save(`supporting-rails-${rails}`, {
+        information: true,
+      });
+      if (rails === "long") {
+        const dark = options.theme === "dark";
+        assert.equal(
+          scene.sidebar.background,
+          dark ? "rgb(0, 0, 0)" : "rgb(249, 250, 251)",
+          "Desktop capture actually renders the default Graphite sidebar",
+        );
+        assert.equal(
+          scene.thread.background,
+          dark ? "rgb(0, 0, 0)" : "rgb(255, 255, 255)",
+          "Desktop capture actually renders the default Graphite conversation canvas",
+        );
+      }
       const headers = await evaluate(`(() => {
         const panel = document.querySelector(".information-dock .editable-information-panel");
         const toolbar = panel?.querySelector(":scope > .information-settings-toolbar");
