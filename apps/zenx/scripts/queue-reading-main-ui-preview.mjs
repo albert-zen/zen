@@ -521,8 +521,33 @@ export function observeQueueSteerFocus() {
   const hintStyle = hint ? getComputedStyle(hint) : null;
   const source = row?.querySelector(".message-source-link");
   const sourceText = source?.querySelector("span");
+  let scrollport = row?.parentElement ?? null;
+  while (
+    scrollport &&
+    !/(auto|scroll)/.test(getComputedStyle(scrollport).overflowY)
+  )
+    scrollport = scrollport.parentElement;
+  const messages = document.querySelector(".messages");
   const editor = composer?.querySelector('textarea,[contenteditable="true"]');
   return {
+    rowRect: rect(row),
+    scrollport: scrollport && {
+      id: scrollport.id,
+      isQueueTray: scrollport.matches(".pending-tray"),
+      rect: rect(scrollport),
+      top: scrollport.scrollTop,
+      left: scrollport.scrollLeft,
+      clientWidth: scrollport.clientWidth,
+      clientHeight: scrollport.clientHeight,
+      scrollWidth: scrollport.scrollWidth,
+      scrollHeight: scrollport.scrollHeight,
+    },
+    dock: rect(row?.closest(".bottom-zone")),
+    viewport: [innerWidth, innerHeight],
+    outsideScroll: {
+      page: [window.scrollX, window.scrollY],
+      messages: messages ? [messages.scrollLeft, messages.scrollTop] : null,
+    },
     sourceRect: rect(source),
     bodyRect: rect(row?.querySelector(".user-bubble")),
     sourceClipped:
@@ -599,6 +624,83 @@ export function verifyQueueSteerFocus(s, before) {
     assert.deepEqual(s[key], before[key], "Focus must not mutate " + key);
 }
 
+/** Native Tab may scroll its queue. Only measured scroll can explain a rigid shift. */
+export function verifyQueueSteerFocusGeometry(state, before) {
+  assert(
+    state.scrollport?.isQueueTray && before.scrollport?.isQueueTray,
+    "The measured nearest scroll owner is the queue tray",
+  );
+  assert(
+    state.dock && before.dock && state.outsideScroll && before.outsideScroll,
+    "The dock and outer scroll are actually observed",
+  );
+  for (const key of ["dock", "viewport", "outsideScroll"])
+    assert.deepEqual(
+      state[key],
+      before[key],
+      "Focus keeps the outer " + key + " anchored",
+    );
+  for (const key of [
+    "id",
+    "rect",
+    "clientWidth",
+    "clientHeight",
+    "scrollWidth",
+    "scrollHeight",
+  ])
+    assert.deepEqual(
+      state.scrollport[key],
+      before.scrollport[key],
+      "Focus does not change queue scrollport " + key,
+    );
+  const scroll = state.scrollport,
+    original = before.scrollport;
+  for (const sample of [scroll, original]) {
+    assert(
+      [sample.top, sample.left].every(Number.isFinite),
+      "Measured scroll offsets are finite",
+    );
+    assert(
+      sample.top >= 0 &&
+        sample.top <= sample.scrollHeight - sample.clientHeight + 1,
+    );
+    assert(
+      sample.left >= 0 &&
+        sample.left <= sample.scrollWidth - sample.clientWidth + 1,
+    );
+  }
+  const delta = {
+    x: scroll.left - original.left,
+    y: scroll.top - original.top,
+  };
+  for (const [name, current, previous] of [
+    ["row", state.rowRect, before.rowRect],
+    ["source", state.sourceRect, before.sourceRect],
+    ["body", state.bodyRect, before.bodyRect],
+    ["button", state.button.rect, before.button.rect],
+    ["hint", state.hint.rect, before.hint.rect],
+  ]) {
+    assert(current && previous, "Actual geometry exists for " + name);
+    for (const edge of ["x", "right", "y", "bottom", "width", "height"]) {
+      const correction =
+        edge === "x" || edge === "right"
+          ? delta.x
+          : edge === "y" || edge === "bottom"
+            ? delta.y
+            : 0;
+      assert(Number.isFinite(current[edge]) && Number.isFinite(previous[edge]));
+      assert(
+        Math.abs(current[edge] + correction - previous[edge]) <= 0.5,
+        name +
+          " " +
+          edge +
+          " change must be explained by measured queue scroll alone",
+      );
+    }
+  }
+  return { scrollDelta: delta, roundingTolerancePx: 0.5 };
+}
+
 export function verifyQueueSteerFocusCandidate(state, before) {
   verifyQueueSteerFocus(state, before);
   assert(
@@ -621,13 +723,7 @@ export function verifyQueueSteerFocusCandidate(state, before) {
     "Hint cannot become another control",
   );
   assert(!state.sourceClipped, "The evidenced source remains complete");
-  for (const key of ["sourceRect", "bodyRect"])
-    assert.deepEqual(state[key], before[key], "Focus does not move " + key);
-  assert.deepEqual(
-    state.button.rect,
-    before.button.rect,
-    "Steer hit target does not move or resize",
-  );
+  verifyQueueSteerFocusGeometry(state, before);
   assert(
     state.hint.rect.x >= state.sourceRect.right + 4,
     "Hint does not cover provenance",
@@ -695,14 +791,22 @@ export async function captureQueueSteerFocus({
     // Observe a delayed product tooltip if one exists; never synthesize it.
     await evaluate("new Promise(resolve => setTimeout(resolve, 900))");
     const held = (trip.held = await observe());
-    verifyQueueSteerFocusCandidate(held, before);
+    trip.candidateScreenshot = {
+      file: `queue-reading-${options.name}-steer-tab-candidate.png`,
+      captured: false,
+      verification: "pending",
+    };
+    // Keep the real candidate frame even when a following geometry guard fails.
     await capture(
       `queue-reading-${options.name}-steer-tab-candidate`,
       options,
       "pending",
     );
+    trip.candidateScreenshot.captured = true;
     const after = (trip.afterScreenshot = await observe());
+    verifyQueueSteerFocusCandidate(held, before);
     verifyQueueSteerFocusCandidate(after, before);
+    trip.focusGeometry = verifyQueueSteerFocusGeometry(held, before);
     assert.deepEqual(after, held, "Captured focus state remains stable");
     for (const type of ["rawKeyDown", "keyUp"])
       await send("Input.dispatchKeyEvent", {
@@ -712,6 +816,7 @@ export async function captureQueueSteerFocus({
         windowsVirtualKeyCode: 9,
       });
     const released = (trip.afterBlur = await observe());
+    trip.blurGeometry = verifyQueueSteerFocusGeometry(released, before);
     assert(
       !released.button.focused && !released.hint.visible,
       "The hint disappears when native Tab leaves Steer",
@@ -731,8 +836,11 @@ export async function captureQueueSteerFocus({
       );
     trip.nativeTooltipPixels =
       "Not established by Page.captureScreenshot; title attribute recorded separately";
+    trip.candidateScreenshot.verification = "passed";
     trip.status = "passed";
   } catch (error) {
+    if (trip.candidateScreenshot)
+      trip.candidateScreenshot.verification = "failed";
     trip.status = "failed";
     trip.error = String(error);
     throw error;

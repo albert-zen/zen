@@ -6,6 +6,7 @@ import {
   observeQueueSteerFocus,
   verifyQueueSteerFocus,
   verifyQueueSteerFocusCandidate,
+  verifyQueueSteerFocusGeometry,
   captureQueueSteerFocus,
   verifyQueueReading,
   observeQueueReading,
@@ -524,6 +525,21 @@ test("observer binds bridge and Composer to the selected thread, not a decoy", a
 });
 
 const steerFocusState = () => ({
+  rowRect: { x: 350, y: 420, right: 1150, bottom: 500, width: 800, height: 80 },
+  scrollport: {
+    id: "synthetic-tray",
+    isQueueTray: true,
+    rect: { x: 350, y: 300, right: 1150, bottom: 768, width: 800, height: 468 },
+    top: 0,
+    left: 0,
+    clientWidth: 800,
+    clientHeight: 468,
+    scrollWidth: 800,
+    scrollHeight: 800,
+  },
+  dock: { x: 350, y: 300, right: 1150, bottom: 884, width: 800, height: 584 },
+  viewport: [1280, 900],
+  outsideScroll: { page: [0, 0], messages: [0, 150] },
   rowCount: 1,
   text: syntheticSteerFocusText,
   source: "From Planning assistant",
@@ -661,13 +677,23 @@ test("Steer focus acceptance rejects wrong content, hidden focus and changed que
 test("Steer baseline observer distinguishes native title from rendered DOM tooltip without changing the page", async () => {
   const { JSDOM } = await import("jsdom");
   const dom = new JSDOM(
-    `<div class="queue-row" data-queue-id="synthetic-thread-message"><span class="message-source-link">From Planning assistant</span><div class="user-bubble">${syntheticSteerFocusText}</div><button data-queue-control="steer" aria-label="Steer queued message 1" title="At the next safe point"><svg></svg></button></div><form class="composer"><textarea></textarea><button class="action-orb stop"></button></form>`,
+    `<div class="bottom-zone"><div class="pending-tray" id="observe-queue" style="overflow-y:auto"><div class="queue-row" data-queue-id="synthetic-thread-message"><span class="message-source-link">From Planning assistant</span><div class="user-bubble">${syntheticSteerFocusText}</div><button data-queue-control="steer" aria-label="Steer queued message 1" title="At the next safe point"><svg></svg></button></div></div><form class="composer"><textarea></textarea><button class="action-orb stop"></button></form></div>`,
     { runScripts: "outside-only" },
   );
   try {
     dom.window.document.elementFromPoint = () => null;
+    dom.window.document.getElementById("observe-queue").scrollTop = 3;
     const before = dom.window.document.body.innerHTML;
     const s = dom.window.eval(`(${observeQueueSteerFocus.toString()})()`);
+    assert.equal(s.scrollport.id, "observe-queue");
+    assert.equal(s.scrollport.isQueueTray, true);
+    assert.equal(
+      s.scrollport.top,
+      3,
+      "Observe actual queue scroll, not infer it from moved rows",
+    );
+    assert(s.dock);
+    assert.deepEqual(Array.from(s.outsideScroll.page), [0, 0]);
     assert.equal(s.text, syntheticSteerFocusText);
     assert.equal(s.button.nativeTitleAttribute, "At the next safe point");
     assert.equal(s.button.visibleText, "");
@@ -718,4 +744,98 @@ test("keyboard-only candidate rejects missing, clipped, overlapping or geometry-
     mutate(state);
     assert.throws(() => verifyQueueSteerFocusCandidate(state, before));
   }
+});
+
+function scrollSteerFocusState(state, delta) {
+  state.scrollport.top += delta;
+  for (const rect of [
+    state.rowRect,
+    state.sourceRect,
+    state.bodyRect,
+    state.button.rect,
+    state.hint.rect,
+  ]) {
+    rect.y -= delta;
+    rect.bottom -= delta;
+  }
+  return state;
+}
+
+test("a rigid three-pixel shift passes only when measured nearest-queue scroll explains every edge", () => {
+  const before = steerFocusState();
+  before.hint.visible = false;
+  const scrolled = scrollSteerFocusState(steerFocusState(), 3);
+  verifyQueueSteerFocusCandidate(scrolled, before);
+  assert.deepEqual(verifyQueueSteerFocusGeometry(scrolled, before), {
+    scrollDelta: { x: 0, y: 3 },
+    roundingTolerancePx: 0.5,
+  });
+  for (const mutate of [
+    (s) => (s.scrollport.top = 0),
+    (s) => (s.scrollport.top = 2),
+    (s) => (s.scrollport = null),
+    (s) => (s.scrollport.isQueueTray = false),
+    (s) => (s.scrollport.id = "another-owner"),
+    (s) => s.scrollport.rect.y++,
+    (s) => s.scrollport.scrollHeight++,
+    (s) => s.scrollport.clientHeight++,
+    (s) => s.dock.y++,
+    (s) => s.viewport[1]++,
+    (s) => s.outsideScroll.page[1]++,
+    (s) => s.outsideScroll.messages[1]++,
+    (s) => s.bodyRect.height++,
+    (s) => s.sourceRect.y++,
+    (s) => s.button.rect.x++,
+    (s) => s.hint.rect.width++,
+  ]) {
+    const bad = structuredClone(scrolled);
+    mutate(bad);
+    assert.throws(() => verifyQueueSteerFocusCandidate(bad, before));
+  }
+});
+
+test("failed candidate geometry retains the actual screenshot and before/after diagnostics but never passes", async () => {
+  const evidence = {},
+    frames = [];
+  let focused = false;
+  await assert.rejects(
+    captureQueueSteerFocus({
+      options: {
+        width: 1280,
+        height: 900,
+        theme: "light",
+        name: "desktop-light",
+      },
+      evidence,
+      send: async (method, args) => {
+        if (method === "Input.dispatchKeyEvent" && args.type === "keyUp")
+          focused = true;
+      },
+      wait: async () => {},
+      click: async () => {},
+      evaluate: async (expression) => {
+        if (expression === "location.href")
+          return "http://localhost/pending.html?many=";
+        if (expression.startsWith("document.activeElement")) return focused;
+        const state = steerFocusState();
+        state.hint.visible = focused;
+        state.button.focused = focused;
+        if (focused) {
+          scrollSteerFocusState(state, 3);
+          state.scrollport.top = 0; // Movement without measured scroll is not excused.
+        }
+        return state;
+      },
+      capture: async (name) => frames.push(name),
+    }),
+    /measured queue scroll alone/,
+  );
+  const trip = evidence.queueSteerFocusTrips[0];
+  assert.equal(trip.status, "failed");
+  assert.deepEqual(frames, ["queue-reading-desktop-light-steer-tab-candidate"]);
+  assert.equal(trip.candidateScreenshot.captured, true);
+  assert.equal(trip.candidateScreenshot.verification, "failed");
+  assert.equal(trip.held.sourceRect.y - trip.before.sourceRect.y, -3);
+  assert.equal(trip.afterScreenshot.sourceRect.y, trip.held.sourceRect.y);
+  assert.equal(trip.afterBlur, undefined);
 });
