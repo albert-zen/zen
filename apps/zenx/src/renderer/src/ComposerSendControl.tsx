@@ -185,8 +185,13 @@ export function ComposerSendControl({
   // be stolen by delayed auto-focus.
   useLayoutEffect(() => {
     if (!open && focusRequest.current === "return") {
-      (primary.current?.disabled ? anchor.current : primary.current)?.focus();
-      focusRequest.current = null;
+      const target = primary.current?.disabled
+        ? anchor.current
+        : primary.current;
+      target?.focus();
+      // A still-mounted nested Select may trap this attempt. Only consume a
+      // successful return; otherwise its unmount still owns the handoff below.
+      if (document.activeElement === target) focusRequest.current = null;
     }
   }, [open]);
   useEffect(() => () => clearTimeout(timer.current), []);
@@ -332,14 +337,22 @@ export function ComposerSendControl({
         }}
         onCloseAutoFocus={(event) => {
           event.preventDefault();
-          panelOwnsFocus.current = false;
+          const active = document.activeElement;
           if (focusRequest.current === "return") {
-            (primary.current?.disabled
-              ? anchor.current
-              : primary.current
-            )?.focus();
+            // A later outside interaction wins over a deferred nested handoff.
+            if (
+              !active ||
+              active === document.body ||
+              panel.current?.contains(active) ||
+              panelOwnsFocus.current
+            )
+              (primary.current?.disabled
+                ? anchor.current
+                : primary.current
+              )?.focus();
             focusRequest.current = null;
           }
+          panelOwnsFocus.current = false;
         }}
         onFocusOutside={(event) => {
           if (anchor.current?.contains(event.target as Node))

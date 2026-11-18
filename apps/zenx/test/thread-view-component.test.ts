@@ -5454,3 +5454,108 @@ test("local sending presentation hides draft framing but keeps readable skill an
   assert.doesNotMatch(html, /\[skill:11111111/);
   assert.doesNotMatch(html, /data-sent-message-id/);
 });
+
+test("send logical close returns immediately and delayed cleanup never steals outside focus", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    const { flushSync } = await import("react-dom");
+    const calls: string[] = [];
+    await act(async () =>
+      root.render(
+        createElement(
+          React.Fragment,
+          {},
+          createElement(ComposerSendControl, {
+            mode: "soft",
+            running: true,
+            hasDraft: true,
+            disabled: false,
+            sendDisabled: false,
+            primaryMode: "steer",
+            primaryLabel: "Steer now",
+            compact: false,
+            onPrimary: () => assert.fail("unexpected primary"),
+            onSend: (intent) => calls.push(intent),
+            onStop: () => assert.fail("unexpected stop"),
+            onModeChange: async () => {},
+          }),
+          createElement("input", { "aria-label": "After send control" }),
+        ),
+      ),
+    );
+    await act(async () => openSendOptions());
+    await act(async () => {
+      flushSync(() => requiredButton(".composer-send-options button").click());
+      assert.equal(
+        document.activeElement?.getAttribute("aria-label"),
+        "Steer now",
+        "logical close returns before deferred FocusScope cleanup",
+      );
+      requiredElement<HTMLInputElement>(
+        '[aria-label="After send control"]',
+      ).focus();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+    assert.equal(
+      document.activeElement?.getAttribute("aria-label"),
+      "After send control",
+    );
+    assert.deepEqual(calls, ["batch-next"]);
+  });
+});
+
+for (const shiftKey of [false, true])
+  test(`send dialog Tab boundary ${shiftKey ? "backward" : "forward"} preserves destination after cleanup`, async () => {
+    await withDom(async (root) => {
+      const { ComposerSendControl } =
+        await import("../src/renderer/src/ComposerSendControl.js");
+      await act(async () =>
+        root.render(
+          createElement(
+            React.Fragment,
+            {},
+            createElement(ComposerSendControl, {
+              mode: "soft",
+              running: true,
+              hasDraft: true,
+              disabled: false,
+              sendDisabled: false,
+              primaryMode: "steer",
+              primaryLabel: "Steer now",
+              compact: false,
+              onPrimary: () => assert.fail("must not send"),
+              onSend: () => assert.fail("must not send"),
+              onStop: () => assert.fail("must not stop"),
+              onModeChange: async () => {},
+            }),
+            createElement("input", { "aria-label": "After send control" }),
+          ),
+        ),
+      );
+      await act(async () => openSendOptions());
+      const buttons = [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          ".composer-send-popover button:not(:disabled)",
+        ),
+      ];
+      const edge = shiftKey ? buttons[0]! : buttons.at(-1)!;
+      await act(async () => {
+        edge.focus();
+        edge.dispatchEvent(
+          new window.KeyboardEvent("keydown", {
+            key: "Tab",
+            shiftKey,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      });
+      assert.equal(
+        document.activeElement?.getAttribute("aria-label"),
+        shiftKey ? "Steer now" : "After send control",
+      );
+      assert.equal(document.querySelector(".composer-send-popover"), null);
+    });
+  });
