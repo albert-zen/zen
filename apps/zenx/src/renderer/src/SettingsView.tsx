@@ -1690,12 +1690,14 @@ function ModelsPanel({
         <div className="form-grid">
           <ModelReferenceSelect
             label={t("settingsView.defaultModel")}
+            showUnavailableIdentity
             profiles={settings.profile.providerProfiles}
             value={draft.defaultModel}
             onChange={(defaultModel) => setDraft({ ...draft, defaultModel })}
           />
           <ModelReferenceSelect
             label={t("settingsView.titleModel")}
+            showUnavailableIdentity
             profiles={settings.profile.providerProfiles}
             value={draft.titleModel}
             onChange={(titleModel) => setDraft({ ...draft, titleModel })}
@@ -3562,6 +3564,7 @@ function ModelReferenceSelect({
   onChangeValue,
   placeholder,
   profiles,
+  showUnavailableIdentity = false,
   value,
 }: {
   autoFocus?: boolean;
@@ -3570,10 +3573,28 @@ function ModelReferenceSelect({
   onChangeValue?(value: string): void;
   placeholder?: string;
   profiles: readonly ZenXProviderProfile[];
+  showUnavailableIdentity?: boolean;
   value: ZenXModelReference | string;
 }) {
+  const { t } = useTranslation("panels");
+  const unavailableDescriptionId = useId();
   const serialized =
     typeof value === "string" ? value : modelReferenceValue(value);
+  const unavailableValueLabel = showUnavailableIdentity
+    ? profiles
+        .flatMap((profile) =>
+          profile.models
+            .filter((model) => !isRunnableModel(model))
+            .map((model) => ({
+              value: modelReferenceValue({
+                providerProfileId: profile.providerProfileId,
+                modelId: model.id,
+              }),
+              label: `${profile.displayName} · ${model.displayName}`,
+            })),
+        )
+        .find((option) => option.value === serialized)?.label
+    : undefined;
   return (
     <label className="field model-reference-field">
       <span>{label}</span>
@@ -3581,6 +3602,10 @@ function ModelReferenceSelect({
         autoFocus={autoFocus}
         label={label}
         value={serialized}
+        unavailableValueLabel={unavailableValueLabel}
+        descriptionId={
+          unavailableValueLabel ? unavailableDescriptionId : undefined
+        }
         onValueChange={(value) => {
           if (onChangeValue !== undefined) {
             onChangeValue(value);
@@ -3610,6 +3635,9 @@ function ModelReferenceSelect({
           }),
         )}
       </Combobox>
+      {unavailableValueLabel ? (
+        <small id={unavailableDescriptionId}>{t("unavailableSelection")}</small>
+      ) : null}
     </label>
   );
 }
