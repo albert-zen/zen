@@ -528,6 +528,12 @@ export function observeQueueSteerFocus() {
   )
     scrollport = scrollport.parentElement;
   const messages = document.querySelector(".messages");
+  const dock = row?.closest(".bottom-zone");
+  const answerBodies = messages?.querySelectorAll(".agent-copy .markdown-body");
+  const answerTail = answerBodies?.[answerBodies.length - 1]?.lastElementChild;
+  const tailRect = rect(answerTail),
+    messageRect = rect(messages),
+    dockRect = rect(dock);
   const editor = composer?.querySelector('textarea,[contenteditable="true"]');
   return {
     rowRect: rect(row),
@@ -542,11 +548,26 @@ export function observeQueueSteerFocus() {
       scrollWidth: scrollport.scrollWidth,
       scrollHeight: scrollport.scrollHeight,
     },
-    dock: rect(row?.closest(".bottom-zone")),
+    dock: dockRect,
     viewport: [innerWidth, innerHeight],
     outsideScroll: {
       page: [window.scrollX, window.scrollY],
       messages: messages ? [messages.scrollLeft, messages.scrollTop] : null,
+    },
+    transcript: messages && {
+      rect: rect(messages),
+      clientHeight: messages.clientHeight,
+      scrollHeight: messages.scrollHeight,
+      tail: {
+        text: answerTail?.textContent?.trim() ?? null,
+        rect: tailRect,
+        visible:
+          !!tailRect &&
+          !!dockRect &&
+          tailRect.y >= messageRect.y &&
+          tailRect.bottom <= Math.min(messageRect.bottom, dockRect.y),
+        hit: painted(answerTail),
+      },
     },
     sourceRect: rect(source),
     bodyRect: rect(row?.querySelector(".user-bubble")),
@@ -634,7 +655,7 @@ export function verifyQueueSteerFocusGeometry(state, before) {
     state.dock && before.dock && state.outsideScroll && before.outsideScroll,
     "The dock and outer scroll are actually observed",
   );
-  for (const key of ["dock", "viewport", "outsideScroll"])
+  for (const key of ["dock", "viewport", "outsideScroll", "transcript"])
     assert.deepEqual(
       state[key],
       before[key],
@@ -734,6 +755,67 @@ export function verifyQueueSteerFocusCandidate(state, before) {
   );
 }
 
+/** Observe normal initial auto-tail/expanded-dock settling before any Tab input. */
+export async function settleQueueSteerFocus({ observe, pause, trip }) {
+  const readiness = (trip.preKeyboardReadiness = {
+    status: "running",
+    sampleIntervalMs: 100,
+    requiredStableSamples: 11,
+    limit: 30,
+    samples: [],
+  });
+  let previous = null,
+    stable = 0;
+  try {
+    for (let index = 0; index < readiness.limit; index++) {
+      if (index) await pause();
+      const state = await observe();
+      readiness.samples.push(state);
+      const first = readiness.samples[0];
+      for (const key of ["text", "source", "order", "draft", "running"])
+        assert.deepEqual(
+          state[key],
+          first[key],
+          "Pre-keyboard settling cannot change " + key,
+        );
+      const transcript = state.transcript;
+      const top = state.outsideScroll?.messages?.[1];
+      const atEnd =
+        transcript &&
+        Number.isFinite(top) &&
+        Math.abs(
+          Math.max(0, transcript.scrollHeight - transcript.clientHeight) - top,
+        ) <= 1;
+      const ready =
+        state.running &&
+        state.scrollport?.isQueueTray &&
+        state.text === syntheticSteerFocusText &&
+        state.source &&
+        !state.button.focused &&
+        !state.hint?.visible &&
+        atEnd &&
+        transcript.tail?.text &&
+        transcript.tail.visible &&
+        transcript.tail.hit;
+      const signature = JSON.stringify(state);
+      stable = ready ? (signature === previous ? stable + 1 : 1) : 0;
+      previous = signature;
+      if (stable >= readiness.requiredStableSamples) {
+        readiness.status = "passed";
+        readiness.stableSamples = stable;
+        return state;
+      }
+    }
+    throw Error(
+      "Expanded queue and actual transcript end did not settle before keyboard input",
+    );
+  } catch (error) {
+    readiness.status = "failed";
+    readiness.error = String(error);
+    throw error;
+  }
+}
+
 /** Separate synthetic scene appended after existing queue evidence; no Steer activation. */
 export async function captureQueueSteerFocus({
   send,
@@ -771,7 +853,14 @@ export async function captureQueueSteerFocus({
       x: 700,
       y: 180,
     });
-    const before = (trip.before = await observe());
+    await evaluate(
+      "document.fonts.ready.then(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))",
+    );
+    const before = (trip.before = await settleQueueSteerFocus({
+      observe,
+      pause: () => evaluate("new Promise(resolve => setTimeout(resolve, 100))"),
+      trip,
+    }));
     assert.equal(
       before.text,
       syntheticSteerFocusText,

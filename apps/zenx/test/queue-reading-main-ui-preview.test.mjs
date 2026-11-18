@@ -8,6 +8,7 @@ import {
   verifyQueueSteerFocusCandidate,
   verifyQueueSteerFocusGeometry,
   captureQueueSteerFocus,
+  settleQueueSteerFocus,
   verifyQueueReading,
   observeQueueReading,
   verifyQueueReturn,
@@ -540,6 +541,17 @@ const steerFocusState = () => ({
   dock: { x: 350, y: 300, right: 1150, bottom: 884, width: 800, height: 584 },
   viewport: [1280, 900],
   outsideScroll: { page: [0, 0], messages: [0, 150] },
+  transcript: {
+    rect: { x: 264, y: 44, width: 1016, height: 856, right: 1280, bottom: 900 },
+    clientHeight: 856,
+    scrollHeight: 1006,
+    tail: {
+      text: "Synthetic answer tail",
+      rect: { x: 350, y: 240, right: 650, bottom: 260, width: 300, height: 20 },
+      visible: true,
+      hit: true,
+    },
+  },
   rowCount: 1,
   text: syntheticSteerFocusText,
   source: "From Planning assistant",
@@ -838,4 +850,101 @@ test("failed candidate geometry retains the actual screenshot and before/after d
   assert.equal(trip.held.sourceRect.y - trip.before.sourceRect.y, -3);
   assert.equal(trip.afterScreenshot.sourceRect.y, trip.held.sourceRect.y);
   assert.equal(trip.afterBlur, undefined);
+});
+
+test("pre-keyboard readiness records initial auto-tail movement then requires a sustained stable real end", async () => {
+  const trip = {};
+  let samples = 0,
+    waits = 0;
+  const settled = await settleQueueSteerFocus({
+    trip,
+    pause: async () => {
+      waits++;
+    },
+    observe: async () => {
+      const state = steerFocusState();
+      state.button.focused = false;
+      state.hint.visible = false;
+      state.transcript.scrollHeight = 1023;
+      state.outsideScroll.messages[1] = samples++ < 3 ? 0 : 167;
+      return state;
+    },
+  });
+  assert.equal(trip.preKeyboardReadiness.status, "passed");
+  assert.equal(trip.preKeyboardReadiness.samples.length, 14);
+  assert.equal(waits, 13);
+  assert.equal(
+    trip.preKeyboardReadiness.samples[0].outsideScroll.messages[1],
+    0,
+  );
+  assert.equal(settled.outsideScroll.messages[1], 167);
+  assert.equal(trip.preKeyboardReadiness.stableSamples, 11);
+});
+
+test("readiness cannot bless an unsettled initial frame, persistent drift, or content mutation", async () => {
+  for (const fault of ["not-at-end", "drift", "draft", "tail-covered"]) {
+    const trip = {};
+    let index = 0;
+    await assert.rejects(
+      settleQueueSteerFocus({
+        trip,
+        pause: async () => {},
+        observe: async () => {
+          const state = steerFocusState();
+          state.button.focused = false;
+          state.hint.visible = false;
+          if (fault === "not-at-end") state.outsideScroll.messages[1] = 0;
+          if (fault === "drift") state.sourceRect.y = 420 + (index % 2);
+          if (fault === "draft" && index > 0) state.draft = "changed";
+          if (fault === "tail-covered") state.transcript.tail.hit = false;
+          index++;
+          return state;
+        },
+      }),
+    );
+    assert.equal(trip.preKeyboardReadiness.status, "failed");
+    assert(trip.preKeyboardReadiness.samples.length <= 30);
+  }
+});
+
+test("unsettled initial transcript retains all measurements and dispatches no Tab or candidate screenshot", async () => {
+  const evidence = {},
+    inputs = [],
+    frames = [];
+  await assert.rejects(
+    captureQueueSteerFocus({
+      options: {
+        width: 1280,
+        height: 900,
+        theme: "light",
+        name: "desktop-light",
+      },
+      evidence,
+      send: async (method, args) => inputs.push([method, args]),
+      wait: async () => {},
+      click: async (selector) =>
+        assert.equal(selector, ".queue-reading-toggle"),
+      evaluate: async (expression) => {
+        if (expression === "location.href")
+          return "http://localhost/pending.html?many=";
+        const state = steerFocusState();
+        state.button.focused = false;
+        state.hint.visible = false;
+        state.outsideScroll.messages[1] = 0;
+        return state;
+      },
+      capture: async (name) => frames.push(name),
+    }),
+    /did not settle before keyboard input/,
+  );
+  const trip = evidence.queueSteerFocusTrips[0];
+  assert.equal(trip.status, "failed");
+  assert.equal(trip.preKeyboardReadiness.status, "failed");
+  assert.equal(trip.preKeyboardReadiness.samples.length, 30);
+  assert.equal(evidence.queueReadingTabAttempts, undefined);
+  assert.equal(
+    inputs.filter(([method]) => method === "Input.dispatchKeyEvent").length,
+    0,
+  );
+  assert.deepEqual(frames, []);
 });
