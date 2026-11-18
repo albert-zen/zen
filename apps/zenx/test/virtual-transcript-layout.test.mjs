@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import postcss from "postcss";
 const css = readFileSync(
   new URL("../src/renderer/src/styles.css", import.meta.url),
   "utf8",
@@ -60,7 +61,7 @@ test("empty virtual footer compensates only the final row gap at each breakpoint
   );
   // The rendered DOM decides emptiness, including a Fragment whose pending
   // component returns []; pending/progress footer children keep their own gap.
-  assert.doesNotMatch(wide + narrow, /:has\(/);
+  assertFooterSelectorsAvoidHas(css);
   for (const [gap, minimum] of [
     [24, 38],
     [20, 28],
@@ -107,4 +108,47 @@ test("fullscreen tab changes retain hidden conversation geometry", () => {
   assert.ok(selected);
   assert.match(selected, /visibility:\s*visible;/);
   assert.doesNotMatch(selected, /display:|width:|padding-top:/);
+});
+
+// Inspect every CSS rule, including earlier/nested rules, not unrelated later CSS.
+function assertFooterSelectorsAvoidHas(source) {
+  postcss.parse(source).walkRules((rule) => {
+    let selectors = [""];
+    for (let context = rule; context; context = context.parent) {
+      if (context.type !== "rule") continue;
+      selectors = selectors.flatMap((child) =>
+        postcss.list
+          .comma(context.selector)
+          .map((parent) => parent + " " + child),
+      );
+    }
+    for (const selector of selectors) {
+      // Strings/comments are not class or pseudo-class tokens.
+      const tokens = selector.replace(
+        /\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g,
+        "",
+      );
+      if (/\.virtual-transcript-footer(?![\w-])/.test(tokens))
+        assert.doesNotMatch(
+          tokens,
+          /:has\(/i,
+          "footer uses rendered emptiness, not :has",
+        );
+    }
+  });
+}
+test("footer guard ignores unrelated selectors but rejects footer and ancestor :has rules anywhere", () => {
+  assertFooterSelectorsAvoidHas(
+    '.virtual-transcript-footer, .information-popover:has(.content) {color:red} [data-example=".virtual-transcript-footer:has(.x)"] {color:red}',
+  );
+  for (const rule of [
+    ".virtual-transcript-footer:has(.pending) {padding:0}",
+    ".thread:has(.pending) .virtual-transcript-footer {padding:0}",
+    ".thread:has(.pending) { & .virtual-transcript-footer {padding:0} }",
+  ])
+    for (const source of [rule + css, css + rule])
+      assert.throws(
+        () => assertFooterSelectorsAvoidHas(source),
+        /footer uses rendered emptiness/,
+      );
 });

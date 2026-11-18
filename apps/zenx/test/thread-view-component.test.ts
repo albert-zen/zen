@@ -5559,3 +5559,43 @@ for (const shiftKey of [false, true])
       assert.equal(document.querySelector(".composer-send-popover"), null);
     });
   });
+
+test("inline shell invocation stays Completed while expanded details retain exact nonzero result", async () => {
+  await withDom(async (root) => {
+    const base = commandItem("shell-detail-outcome", "grep absent file");
+    assert.equal(base.type, "commandExecution");
+    if (base.type !== "commandExecution") return;
+    const item = {
+      ...base,
+      toolName: "shell",
+      status: "failed" as const,
+      exitCode: 1,
+      aggregatedOutput: "Synthetic exact nonzero output",
+    };
+    const before = structuredClone(item);
+    await renderInteractive(root, turnWithItems("inProgress", [item]));
+    assert.equal(
+      requiredElement(".tool-status.completed").textContent,
+      "Completed",
+    );
+    assert.equal(document.querySelector(".trace-detail"), null);
+    await act(async () => requiredButton(".trace-item-toggle").click());
+    assert.equal(
+      requiredElement(".tool-status.completed").textContent,
+      "Completed",
+    );
+    assert.match(
+      requiredElement(".trace-detail").textContent ?? "",
+      /Exit code:? 1/,
+    );
+    assert.match(
+      requiredElement(".trace-detail").textContent ?? "",
+      /Synthetic exact nonzero output/,
+    );
+    assert.deepEqual(
+      item,
+      before,
+      "presentation never rewrites returned facts",
+    );
+  });
+});
