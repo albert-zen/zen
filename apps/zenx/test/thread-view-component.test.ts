@@ -5239,7 +5239,7 @@ test("ordinary send shows an honest local row and clears input before admission 
 test("checking an old thread cannot disable or report a delivery error in the new thread", async () => {
   await withDom(async (root) => {
     let rejectOld!: (error: Error) => void;
-    const oldRead = new Promise<void>((_resolve, reject) => {
+    const oldRead = new Promise<"checked">((_resolve, reject) => {
       rejectOld = reject;
     });
     const pending = (id: string) =>
@@ -5265,7 +5265,7 @@ test("checking an old thread cannot disable or report a delivery error in the ne
           onRespondToApproval: noop,
           onSubmit: noop,
           onCheckPendingSends: () =>
-            id === "thread-a" ? oldRead : Promise.resolve(),
+            id === "thread-a" ? oldRead : Promise.resolve("checked" as const),
         }),
       );
     await act(async () => renderView("thread-a"));

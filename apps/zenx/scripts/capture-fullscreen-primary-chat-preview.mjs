@@ -18,6 +18,8 @@ const report = {
 };
 const panel = "#thread-workspace-panel";
 const primaryTab = "#aux-tab-primary-conversation";
+const desktopBackToLive =
+  "#primary-conversation-content .conversation-reading-position button";
 const expand = `${panel} > .auxiliary-heading > button[aria-pressed]`;
 const measure = `(() => {
   const root = document.querySelector('#primary-conversation-content');
@@ -48,7 +50,7 @@ const measure = `(() => {
         .sort((a,b)=>a.getBoundingClientRect().top-b.getBoundingClientRect().top)[0];
       return row ? {key:row.dataset.transcriptRowKey,offset:row.getBoundingClientRect().top-top} : null;
     })(),
-    paused:!!root?.querySelector('.back-live'),
+    paused:!!document.querySelector(${JSON.stringify(desktopBackToLive)})?.getClientRects().length,
     bottom:read('#primary-conversation-content .bottom-zone'), heading:read('.auxiliary-heading'),
     panel:read('#thread-workspace-panel'), overview:read('.fixture-overview'),
     selected:document.querySelector('[role="tab"][aria-selected="true"]')?.id,
@@ -482,7 +484,7 @@ try {
               deltaY,
             });
             await until(
-              `!!document.querySelector('#primary-conversation-content .back-live') && document.querySelector('#primary-conversation-content .messages').scrollTop < ${m.messages.scrollTop - 2}`,
+              `!!document.querySelector(${JSON.stringify(desktopBackToLive)})?.getClientRects().length && document.querySelector('#primary-conversation-content .messages').scrollTop < ${m.messages.scrollTop - 2}`,
               "real upward wheel pauses live follow",
             );
             await delay(300);
@@ -619,7 +621,7 @@ try {
           checkReading(fromOverview, reading, "nonbrowser return");
           // Explicit Back to live owns the position again, and the next native
           // upward wheel must still release following after another tab round trip.
-          await click("#primary-conversation-content .back-live");
+          await click(desktopBackToLive);
           await click(browserTab);
           await click(primaryTab);
           const live = await capture("live-return");
