@@ -14,7 +14,7 @@ import {
 import { conversationKey, type BoardConversation } from "./board-ui-state.js";
 import { Icon } from "./icons.js";
 import { InformationOverflowCue } from "./InformationOverflowCue.js";
-import { Popover, PopoverContent, PopoverTrigger } from "./ui/controls.js";
+import { Popover, PopoverAnchor, PopoverContent } from "./ui/controls.js";
 import {
   consumeInformationReveal,
   readInformationOpen,
@@ -93,9 +93,10 @@ export function PluginInformationHost({
   const [layout, setLayout] = useState({
     headerBottom: 0,
     triggerBottom: undefined as number | undefined,
-    top: 12,
+    width: 340,
+    anchorX: 0,
+    anchorY: 0,
     right: 12,
-    dock: false,
     available: true,
   });
   useLayoutEffect(() => {
@@ -137,21 +138,12 @@ export function PluginInformationHost({
         // Render must not synchronously flush the transcript's dirty layout,
         // including when Radix keeps the information popover closed.
         triggerBottom,
-        // The measured entry can extend beyond a short/absent title row.
-        // Keep the dock's close control below it, as the popover already does.
-        top:
-          Math.max(0, Math.max(headerBottom, triggerBottom ?? 0) - bounds.top) +
-          12,
+        // Same floating card in closed and split workspaces, entirely on the
+        // conversation side of the divider. Never allocate a third column.
+        width: Math.max(0, Math.min(340, bounds.width - resourceWidth - 24)),
+        anchorX: bounds.right - resourceWidth - 12,
+        anchorY: Math.max(headerBottom, triggerBottom ?? bounds.top),
         right: resourceWidth + 12,
-        // Our responsive allocation, not a value copied from a reference app:
-        // a 340px card, 24px gutters and at least 556px for the conversation.
-        dock:
-          bounds.width - resourceWidth >= 920 &&
-          !(
-            resourceOpen &&
-            panel?.dataset.expanded === "true" &&
-            !primaryActive
-          ),
       };
       if (
         hasMeasuredLayout.current &&
@@ -241,24 +233,6 @@ export function PluginInformationHost({
     };
   }, [resourcePanelWidth, contributions.length, !!contextContent, setOpen]);
   useEffect(() => {
-    if (!open || !layout.dock) return;
-    const escape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing)
-        return;
-      const target = event.target as Node | null;
-      if (
-        !document.getElementById(contentId)?.contains(target) &&
-        target !== trigger.current
-      )
-        return;
-      event.preventDefault();
-      setOpen(false);
-      trigger.current?.focus({ preventScroll: true });
-    };
-    document.addEventListener("keydown", escape);
-    return () => document.removeEventListener("keydown", escape);
-  }, [open, layout.dock, contentId, setOpen]);
-  useEffect(() => {
     if (contributions.length === 0 && !contextContent) setOpen(false);
   }, [contributions.length, !!contextContent, setOpen]);
   const active =
@@ -268,28 +242,6 @@ export function PluginInformationHost({
   const admissionId = snapshot.plugins.find(
     (plugin) => plugin.id === active?.pluginId,
   )?.admissionId;
-  const closeControl = (
-    <div className="information-dismiss-toolbar">
-      {/* layout.right is resourceWidth + 12: only an open, non-primary
-          resource split contributes width. This toolbar is overlay-only,
-          so this is not another viewport breakpoint or dock policy. */}
-      {layout.right > 12 && (
-        <InformationOverflowCue label={t("informationMoreBelow")} />
-      )}
-      <button
-        type="button"
-        className="quiet-button"
-        aria-label={t("informationClose")}
-        onClick={() => {
-          setOpen(false);
-          trigger.current?.focus({ preventScroll: true });
-        }}
-      >
-        <Icon name="x" size={14} />
-        {t("informationClose")}
-      </button>
-    </div>
-  );
   const surface = (
     <div className="information-content">
       {contextContent}
@@ -338,67 +290,91 @@ export function PluginInformationHost({
         hidden={!layout.available}
       >
         <Popover
-          open={presentedOpen && !layout.dock}
+          modal={false}
+          open={presentedOpen}
           onOpenChange={(next) => {
             focusOnOpen.current = next;
-            setOpen((current) => (layout.dock ? !current : next));
+            setOpen(next);
           }}
         >
-          <PopoverTrigger asChild>
-            <button
-              ref={trigger}
-              type="button"
-              className="icon-button"
-              aria-label={t("boardTitle")}
-              title={t("boardTitle")}
-              aria-pressed={presentedOpen}
-              aria-expanded={presentedOpen}
-              aria-controls={contentId}
-            >
-              <Icon name="list-detail" />
-            </button>
-          </PopoverTrigger>
-          {!layout.dock && (
-            <PopoverContent
-              id={contentId}
-              onOpenAutoFocus={(event) => {
-                if (!focusOnOpen.current) event.preventDefault();
-                focusOnOpen.current = false;
-              }}
-              side="bottom"
-              align="end"
-              className="information-popover"
+          <button
+            ref={trigger}
+            onClick={(event) => {
+              if (open) event.currentTarget.focus({ preventScroll: true });
+              focusOnOpen.current = !open;
+              setOpen(!open);
+            }}
+            type="button"
+            className="icon-button"
+            aria-label={t("boardTitle")}
+            title={t("boardTitle")}
+            aria-pressed={presentedOpen}
+            aria-expanded={presentedOpen}
+            aria-haspopup="dialog"
+            aria-controls={presentedOpen ? contentId : undefined}
+          >
+            <Icon name="list-detail" />
+          </button>
+          <PopoverAnchor asChild>
+            <span
+              aria-hidden="true"
               style={{
-                maxHeight: `min(720px, calc(100vh - ${Math.max(layout.headerBottom, layout.triggerBottom ?? 44) + 16}px))`,
+                position: "fixed",
+                left: layout.anchorX - 1,
+                top: layout.anchorY - 1,
+                width: 1,
+                height: 1,
+                pointerEvents: "none",
               }}
-              sideOffset={Math.max(
-                8,
-                layout.headerBottom - (layout.triggerBottom ?? 0) + 8,
-              )}
-              aria-label={active?.title ?? t("boardTitle")}
-            >
-              {closeControl}
-              {tabs}
-              {surface}
-            </PopoverContent>
-          )}
+            />
+          </PopoverAnchor>
+          <PopoverContent
+            id={contentId}
+            onInteractOutside={(event) => {
+              const target = event.target as Element | null;
+              // Navigation swaps owners; it must not first record that the
+              // outgoing owner's card was explicitly dismissed.
+              if (
+                trigger.current?.contains(target) ||
+                target?.closest?.(".sidebar")
+              )
+                event.preventDefault();
+            }}
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              const focused = document.activeElement;
+              if (
+                !focused ||
+                focused === document.body ||
+                document.getElementById(contentId)?.contains(focused)
+              )
+                trigger.current?.focus({ preventScroll: true });
+            }}
+            onOpenAutoFocus={(event) => {
+              if (!focusOnOpen.current) event.preventDefault();
+              focusOnOpen.current = false;
+            }}
+            avoidCollisions={false}
+            side="bottom"
+            align="end"
+            className="information-popover"
+            style={{
+              width: layout.width,
+              maxHeight: `min(720px, calc(100vh - ${Math.max(layout.headerBottom, layout.triggerBottom ?? 44) + 16}px))`,
+            }}
+            sideOffset={8}
+            aria-label={active?.title ?? t("boardTitle")}
+          >
+            {layout.right > 12 && (
+              <div className="information-dismiss-toolbar">
+                <InformationOverflowCue label={t("informationMoreBelow")} />
+              </div>
+            )}
+            {tabs}
+            {surface}
+          </PopoverContent>
         </Popover>
       </div>
-      {presentedOpen && layout.dock ? (
-        <aside
-          id={contentId}
-          className="information-dock"
-          aria-label={active?.title ?? t("boardTitle")}
-          style={{
-            top: layout.top,
-            right: layout.right,
-            maxHeight: `calc(100% - ${layout.top + 12}px)`,
-          }}
-        >
-          {tabs}
-          {surface}
-        </aside>
-      ) : null}
     </>
   );
 }

@@ -95,10 +95,7 @@ test("fullscreen tab changes retain hidden conversation geometry", () => {
   )?.[1];
   assert.ok(geometry, "geometry must apply to every fullscreen tab");
   assert.match(geometry, /display:\s*grid;/);
-  assert.match(
-    geometry,
-    /width:\s*calc\(100% - var\(--information-dock-reserved-width, 0px\)\);/,
-  );
+  assert.match(geometry, /width:\s*100%;/);
   assert.match(
     geometry,
     /padding-top:\s*var\(--native-titlebar-height, 44px\);/,

@@ -12349,27 +12349,8 @@ button:disabled {
   display: flex;
   flex-direction: column;
 }
-/* Docking reserves a column without moving/remounting the conversation. */
-.information-dock {
-  position: absolute;
-  z-index: 4;
-  width: 340px;
-  max-height: calc(100% - 24px);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: 16px;
-  background: var(--color-surface);
-}
-.workspace:has(> .information-dock)
-  > :is(.agent-surface, .plugin-product-page) {
-  width: calc(100% - var(--workspace-panel-width, 0px) - 364px);
-}
-.workspace:has(> .information-dock) {
-  --information-dock-reserved-width: 364px;
-}
 .information-content {
+  overscroll-behavior: contain;
   min-height: 0;
   overflow: auto;
   flex: 1;
@@ -12743,7 +12724,7 @@ button:disabled {
 .workspace:has(> .auxiliary-panel[data-open="true"][data-expanded="true"])
   > :is(.agent-surface, .plugin-product-page) {
   display: grid;
-  width: calc(100% - var(--information-dock-reserved-width, 0px));
+  width: 100%;
   padding-top: var(--native-titlebar-height, 44px);
 }
 .workspace:has(
@@ -12845,7 +12826,6 @@ button:disabled {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.information-dismiss-toolbar button,
 .information-customize {
   display: inline-flex;
   align-items: center;
@@ -13481,13 +13461,13 @@ button:disabled {
     padding-block: 2px;
     line-height: 1.5;
   }
-  /* Information is part of the conversation canvas, not a second sidebar. */
-  .information-dock {
+  /* One floating card, not a width-reserving sidebar. */
+  .information-popover {
     background: var(--color-surface-main);
-    border: 0;
-    border-radius: 0;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 16px;
   }
-  .information-dock .editable-information-panel {
+  .information-popover .editable-information-panel {
     padding: 0 12px 12px;
     position: relative;
   }
@@ -13496,48 +13476,48 @@ button:disabled {
     min-height: 28px;
     border: 0;
   }
-  .information-dock .information-settings-toolbar {
+  .information-popover .information-settings-toolbar {
     position: absolute;
     top: 8px;
     right: 12px;
     z-index: 1;
   }
-  .information-dock .information-widget > header {
+  .information-popover .information-widget > header {
     padding-right: 30px;
   }
   /* The floating Customize button shares only the first visible header.
      Earlier widgets can stay mounted with the hidden attribute. */
-  .information-dock
+  .information-popover
     .information-widget-list
     > .information-widget:not([hidden])
     ~ .information-widget
     > header,
-  .information-dock
+  .information-popover
     .editable-information-panel:has(> .information-attention:not(:empty))
     .information-widget
     > header {
     padding-right: 0;
   }
-  .information-dock
+  .information-popover
     .editable-information-panel:has(> .information-attention:not(:empty))
     .information-settings-toolbar {
     position: static;
   }
-  .information-dock .information-add-controls,
-  .information-dock .information-empty {
+  .information-popover .information-add-controls,
+  .information-popover .information-empty {
     padding-top: 36px;
   }
-  .information-dock .information-widget {
+  .information-popover .information-widget {
     margin: 0;
     padding: 8px 0;
     border: 0;
     border-radius: 0;
     background: transparent;
   }
-  .information-dock .information-widget + .information-widget {
+  .information-popover .information-widget + .information-widget {
     border-top: 1px solid var(--color-border-subtle);
   }
-  .information-dock .information-widget-disclosure h3 {
+  .information-popover .information-widget-disclosure h3 {
     color: var(--color-text-primary);
     font-size: 13px;
     font-weight: 500;
@@ -13592,7 +13572,7 @@ button:disabled {
 }
 @media (min-width: 961px) {
   /* Name the row switches' destination, distinct from the card's Hide action. */
-  .information-dock .subagent-sidebar-heading.sr-only {
+  .information-popover .subagent-sidebar-heading.sr-only {
     position: static;
     width: auto;
     height: auto;
@@ -13602,16 +13582,16 @@ button:disabled {
     clip: auto;
     white-space: normal;
   }
-  .information-dock .subagent-tree-row {
+  .information-popover .subagent-tree-row {
     display: grid;
     grid-template-columns: 16px minmax(0, 1fr);
     column-gap: 8px;
     align-items: start;
   }
-  .information-dock .subagent-tree-row > svg {
+  .information-popover .subagent-tree-row > svg {
     margin-top: 2px;
   }
-  .information-dock .subagent-tree-identity {
+  .information-popover .subagent-tree-identity {
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
@@ -13620,13 +13600,13 @@ button:disabled {
     row-gap: 3px;
     min-width: 0;
   }
-  .information-dock .subagent-tree-title {
+  .information-popover .subagent-tree-title {
     flex: 0 1 auto;
     width: max-content;
     max-width: 100%;
     line-height: 1.5;
   }
-  .information-dock .subagent-tree-status {
+  .information-popover .subagent-tree-status {
     white-space: normal;
     overflow-wrap: anywhere;
     max-width: 100%;

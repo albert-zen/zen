@@ -51,7 +51,7 @@ const snapshot: ZenXPluginSnapshot = {
   ],
 };
 
-test("Board uses one toggle and explicit close, measures Browser coexistence and retires hidden owners", async () => {
+test("Board uses one toggle, measures Browser coexistence and retires hidden owners", async () => {
   const dom = new JSDOM(
     '<div class="app-shell"><header class="window-titlebar"><div class="window-titlebar-session"></div></header><main class="workspace"><aside class="auxiliary-panel" data-open="true"><header class="auxiliary-heading"></header></aside><div id="root"></div></main></div>',
     { url: "https://zenx.local" },
@@ -89,7 +89,12 @@ test("Board uses one toggle and explicit close, measures Browser coexistence and
   titlebar.getBoundingClientRect = () =>
     ({ bottom: titlebarBottom }) as DOMRect;
   workspace.getBoundingClientRect = () =>
-    ({ top: 44, width: workspaceWidth }) as DOMRect;
+    ({
+      top: 44,
+      left: 200,
+      right: 200 + workspaceWidth,
+      width: workspaceWidth,
+    }) as DOMRect;
   heading.getBoundingClientRect = () => ({ bottom: headerBottom }) as DOMRect;
   const registry = createPluginUiRegistry();
   registry.registerTrusted("fixture", {
@@ -98,6 +103,10 @@ test("Board uses one toggle and explicit close, measures Browser coexistence and
         "p",
         { "data-theme-receipt": sdk.theme },
         "Fixture content",
+        React.createElement("input", {
+          "aria-label": "Fixture draft",
+          defaultValue: "initial",
+        }),
       ),
   });
   let current: ZenXPluginSnapshot = { ...snapshot, information: [] };
@@ -178,7 +187,7 @@ test("Board uses one toggle and explicit close, measures Browser coexistence and
         ?.getAttribute("aria-label"),
       "Fixture",
     );
-    await click(".information-popover .information-dismiss-toolbar button");
+    await click(".information-toolbar button");
     await act(async () => waitForFocus(trigger));
     assert.equal(document.querySelector(".information-popover"), null);
     assert.equal(document.activeElement, trigger);
@@ -252,7 +261,7 @@ test("Board uses one toggle and explicit close, measures Browser coexistence and
       document.activeElement === trigger,
       "Escape returns focus to the sole toggle",
     );
-    // Resizing the real conversation allocation switches presentation without
+    // Resizing the real conversation allocation keeps one presentation without
     // changing the owner or inventing a persistent pin mode.
     workspaceWidth = 1600;
     await act(async () => {
@@ -260,33 +269,69 @@ test("Board uses one toggle and explicit close, measures Browser coexistence and
     });
     await click(".information-toolbar button");
     assert.ok(
-      document.querySelector(".information-dock"),
-      "wide chat reserves a docked card",
+      document.querySelector(".information-popover"),
+      "wide chat uses the same floating card",
     );
-    await click(".information-dock .information-dismiss-toolbar button");
-    assert.equal(document.querySelector(".information-dock"), null);
+    const wideCard = document.querySelector<HTMLElement>(
+      ".information-popover",
+    )!;
+    const draft = wideCard.querySelector<HTMLInputElement>("input")!;
+    draft.value = "unsent fixture";
+    const anchorElement = document.querySelector<HTMLElement>(
+      '.information-toolbar span[style*="position: fixed"]',
+    )!;
+    const oldAnchorLeft = anchorElement.style.left;
+    await act(async () => {
+      resourcePanelWidth = 520;
+      flushSync(() => root.render(React.createElement(Harness)));
+      wideCard.dispatchEvent(
+        new dom.window.MouseEvent("pointerover", { bubbles: true }),
+      );
+    });
+    assert.equal(wideCard.style.width, "340px");
+    assert.notEqual(
+      anchorElement.style.left,
+      oldAnchorLeft,
+      "same-width card follows the actual divider anchor",
+    );
+    assert.equal(document.querySelector(".information-popover"), wideCard);
+    assert.equal(wideCard.querySelector("input"), draft);
+    assert.equal(
+      draft.value,
+      "unsent fixture",
+      "resize/hover retains the existing provider draft",
+    );
+    await click(".information-toolbar button");
+    assert.equal(document.querySelector(".information-popover"), null);
     assert.equal(document.activeElement, trigger);
     await click(".information-toolbar button");
     assert.match(document.body.textContent!, /Fixture content/);
+    assert.equal(
+      document.querySelector(".information-dismiss-toolbar button"),
+      null,
+      "no duplicate close action",
+    );
     const panel = document.querySelector<HTMLElement>(".auxiliary-panel")!;
     await act(async () => {
       panel.dataset.open = "false";
       resourcePanelWidth = 0;
       flushSync(() => root.render(React.createElement(Harness)));
     });
-    assert.equal(
-      document.querySelector<HTMLElement>(".information-dock")!.style.top,
-      "56px",
-      "ordinary dock clears the visible Windows/Linux conversation title row",
+    assert.match(
+      document.querySelector<HTMLElement>(".information-popover")!.style
+        .maxHeight,
+      /104px/,
+      "floating card clears the visible Windows/Linux conversation title row",
     );
     assert.ok(observed.has(titlebar), "title row resizing is observed");
     titlebarBottom = 132;
     await act(async () => {
       for (const callback of callbacks) callback([]);
     });
-    assert.equal(
-      document.querySelector<HTMLElement>(".information-dock")!.style.top,
-      "100px",
+    assert.match(
+      document.querySelector<HTMLElement>(".information-popover")!.style
+        .maxHeight,
+      /148px/,
     );
     titlebarBottom = 88;
     await act(async () => {
@@ -301,7 +346,7 @@ test("Board uses one toggle and explicit close, measures Browser coexistence and
       "false",
       "opening the workspace hides information even when its width synchronously rebinds measurement",
     );
-    workspaceWidth = 1000;
+    workspaceWidth = 780;
     await act(async () => {
       for (const callback of callbacks) callback([]);
     });
@@ -309,6 +354,13 @@ test("Board uses one toggle and explicit close, measures Browser coexistence and
     assert.ok(
       document.querySelector(".information-popover"),
       "manual reopen beside workspace uses an overlay",
+    );
+    const sameCard = document.querySelector(".information-popover");
+    const sameProvider = document.querySelector("[data-theme-receipt]");
+    assert.equal(
+      (sameCard as HTMLElement).style.width,
+      "276px",
+      "card cannot cross the conversation divider",
     );
     await act(async () => {
       resourcePanelWidth = 520;
@@ -319,14 +371,51 @@ test("Board uses one toggle and explicit close, measures Browser coexistence and
       "true",
       "later width changes do not close manually reopened information",
     );
+    assert.equal(
+      document.querySelector(".information-popover"),
+      sameCard,
+      "resize does not replace the floating shell",
+    );
+    assert.equal(
+      document.querySelector("[data-theme-receipt]"),
+      sameProvider,
+      "resize does not remount provider drafts",
+    );
+    assert.equal((sameCard as HTMLElement).style.width, "236px");
+    assert.notEqual(
+      document.body.style.pointerEvents,
+      "none",
+      "nonmodal card does not disable the workspace",
+    );
+    let resourceClicks = 0;
+    heading.addEventListener("click", () => {
+      resourceClicks += 1;
+    });
+    await act(async () => {
+      heading.dispatchEvent(
+        new dom.window.MouseEvent("pointerdown", { bubbles: true }),
+      );
+      heading.click();
+    });
+    assert.equal(
+      resourceClicks,
+      1,
+      "outside resource action is not consumed by dismissal",
+    );
+    assert.equal(
+      trigger.getAttribute("aria-expanded"),
+      "false",
+      "outside click dismisses the card",
+    );
+    await click(".information-toolbar button");
     panel.dataset.expanded = "true";
     panel.dataset.primaryActive = "true";
     await act(async () => {
       for (const callback of callbacks) callback([]);
     });
     assert.ok(
-      document.querySelector(".information-dock"),
-      "maximized main-conversation tab uses the whole available width",
+      document.querySelector(".information-popover"),
+      "maximized main-conversation tab uses the same floating card",
     );
     await act(async () => {
       panel.dataset.primaryActive = "false";
@@ -336,7 +425,7 @@ test("Board uses one toggle and explicit close, measures Browser coexistence and
     assert.equal(
       trigger.getAttribute("aria-pressed"),
       "false",
-      "switching from main conversation to a resource closes its dock",
+      "switching from main conversation to a resource closes its floating card",
     );
     assert.equal(
       document.querySelector<HTMLElement>(".information-toolbar")!.hidden,
@@ -363,8 +452,25 @@ test("Board uses one toggle and explicit close, measures Browser coexistence and
     );
     await click(".information-toolbar button");
     await click(".information-toolbar button");
-    threadId = "another-owner";
-    await act(async () => root.render(React.createElement(Harness)));
+    const sidebar = document.createElement("aside");
+    sidebar.className = "sidebar";
+    const ownerButton = document.createElement("button");
+    sidebar.append(ownerButton);
+    document.querySelector(".app-shell")!.prepend(sidebar);
+    await act(async () => {
+      ownerButton.dispatchEvent(
+        new dom.window.MouseEvent("pointerdown", { bubbles: true }),
+      );
+      ownerButton.focus();
+    });
+    assert.ok(
+      document.querySelector(".information-popover"),
+      "navigation input leaves the outgoing owner's recorded visibility open",
+    );
+    await act(async () => {
+      threadId = "another-owner";
+      flushSync(() => root.render(React.createElement(Harness)));
+    });
     assert.ok(
       document.querySelector(".information-popover") === null,
       "owner changes close presentation without auto-opening the next owner",
@@ -451,7 +557,21 @@ test("information reserves its slot, uses neutral pressed state and keeps primar
     css,
     /\.information-toolbar > \.icon-button\[aria-pressed="true"\],\s*\.auxiliary-heading > \.auxiliary-close-button\s*\{\s*color: var\(--color-text-primary\);\s*background: var\(--color-surface-active\);\s*\}/,
   );
-  assert.doesNotMatch(css, /\.information-(?:header|rail)/);
+  assert.doesNotMatch(css, /\.information-(?:header|rail|dock)/);
+  assert.doesNotMatch(css, /information-dock-reserved-width/);
+  const host = await readFile(
+    new URL("../src/renderer/src/plugin-information-host.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(host, /modal=\{false\}/);
+  assert.doesNotMatch(host, /layout\.dock|>= 920/);
+  assert.match(host, /bounds\.right - resourceWidth - 12/);
+  assert.match(host, /Math\.min\(340, bounds\.width - resourceWidth - 24\)/);
+  const thread = await readFile(
+    new URL("../src/renderer/src/ThreadView.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(thread, /informationConversationGutter|information-dock/);
   assert.match(app, /const appearance = useAppearance\(\)/);
   assert.match(app, /theme=\{appearance\}/);
   assert.doesNotMatch(app, /document\.documentElement\.dataset\.theme/);
@@ -566,18 +686,23 @@ test("information follows late and replaced workspace panels without a width cha
     IS_REACT_ACT_ENVIRONMENT: true,
   });
   const workspace = document.querySelector<HTMLElement>(".workspace")!;
-  workspace.getBoundingClientRect = () => ({ top: 0, width: 1400 }) as DOMRect;
+  workspace.getBoundingClientRect = () =>
+    ({ top: 0, left: 0, right: 1400, width: 1400 }) as DOMRect;
   const observed = new Set<Element>();
   const previous = globalThis.ResizeObserver;
   globalThis.ResizeObserver = class {
+    owned = new Set<Element>();
     observe(element: Element) {
+      this.owned.add(element);
       observed.add(element);
     }
     unobserve(element: Element) {
+      this.owned.delete(element);
       observed.delete(element);
     }
     disconnect() {
-      observed.clear();
+      for (const element of this.owned) observed.delete(element);
+      this.owned.clear();
     }
   } as unknown as typeof ResizeObserver;
   const root = createRoot(document.getElementById("root")!);
@@ -628,7 +753,7 @@ test("information follows late and replaced workspace panels without a width cha
       "late panel's main tab restores the entry",
     );
     await toggle();
-    assert.ok(document.querySelector(".information-dock"));
+    assert.ok(document.querySelector(".information-popover"));
     const second = panel();
     await act(async () => first.replaceWith(second));
     assert.equal(

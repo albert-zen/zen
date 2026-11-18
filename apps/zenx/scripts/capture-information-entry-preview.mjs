@@ -39,7 +39,7 @@ await withPreviewBrowser(
     const measure = async () =>
       evaluate(`(() => {
     const box=s=>{const e=document.querySelector(s);if(!e)return null;const r=e.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom,width:r.width,height:r.height,region:getComputedStyle(e).webkitAppRegion}};
-    return {heading:box('.auxiliary-heading'), slot:box('.auxiliary-information-slot'), button:box('.information-toolbar button'), titlebar:box('.window-titlebar-session'), toolbarHidden:document.querySelector('.information-toolbar').hidden, chat:box('.agent-surface'), dock:box('.information-dock'), overlay:box('.information-popover'), draft:document.querySelector('#synthetic-composer').value, identity:window.__entryComposer===document.querySelector('#synthetic-composer'), order:!!(document.querySelector('.information-toolbar').compareDocumentPosition(document.querySelector('.auxiliary-panel')) & Node.DOCUMENT_POSITION_FOLLOWING)};
+    return {heading:box('.auxiliary-heading'), slot:box('.auxiliary-information-slot'), button:box('.information-toolbar button'), titlebar:box('.window-titlebar-session'), toolbarHidden:document.querySelector('.information-toolbar').hidden, chat:box('.agent-surface'), composer:box('#synthetic-composer'), overlay:box('.information-popover'), draft:document.querySelector('#synthetic-composer').value, identity:window.__entryComposer===document.querySelector('#synthetic-composer'), order:!!(document.querySelector('.information-toolbar').compareDocumentPosition(document.querySelector('.auxiliary-panel')) & Node.DOCUMENT_POSITION_FOLLOWING)};
   })()`);
     const verifySlot = (geometry, mode) => {
       assert.equal(
@@ -86,6 +86,34 @@ await withPreviewBrowser(
         "Keep this unsent draft through all panel states.",
       );
     };
+    const verifyFloating = (open, closed, mode) => {
+      assert.deepEqual(open.chat, closed.chat, "card does not resize chat");
+      assert.deepEqual(
+        open.composer,
+        closed.composer,
+        "card does not resize Composer",
+      );
+      const { overlay, chat, button, titlebar, heading } = open;
+      assert.ok(
+        overlay.width > 0 && overlay.height > 0,
+        "visible floating card",
+      );
+      assert.ok(
+        overlay.x >= chat.x - 1 && overlay.right <= chat.right + 1,
+        "card stays entirely on the conversation side",
+      );
+      assert.ok(
+        overlay.y >= Math.max(button.bottom, titlebar.bottom) - 1,
+        "floating card stays below conversation controls",
+      );
+      if (mode === "split")
+        assert.ok(
+          overlay.right <= heading.x + 1,
+          "card leaves workspace unobstructed",
+        );
+      assert.equal(open.identity, true);
+      assert.equal(open.draft, closed.draft, "draft survives opening the card");
+    };
     for (const platform of ["darwin", "win32", "linux"]) {
       await send("Emulation.setDeviceMetricsOverride", {
         width: 1440,
@@ -101,20 +129,25 @@ await withPreviewBrowser(
       await evaluate(
         "window.__entryComposer=document.querySelector('#synthetic-composer');true",
       );
+      const normalClosed = await measure();
       await click(".information-toolbar button");
-      await wait("!!document.querySelector('.information-dock')");
+      await wait("!!document.querySelector('.information-popover')");
       const normal = await measure();
-      assert.ok(normal.chat.right <= normal.dock.x);
+      verifyFloating(normal, normalClosed, "workspace-closed");
+      evidence.cases.push({ platform, mode: "workspace-closed", ...normal });
+      await screenshot(`information-entry-${platform}-workspace-closed.png`);
       await evaluate("window.__titlebarPreview.setOpen(true)");
       await wait(
         "document.querySelector('.auxiliary-panel').dataset.open==='true' && document.querySelector('.information-toolbar button').getAttribute('aria-pressed')==='false'",
       );
       await delay(250);
+      const splitClosed = await measure();
       for (let repeat = 0; repeat < 2; repeat++) {
         await click(".information-toolbar button");
         await wait("!!document.querySelector('.information-popover')");
         const split = await measure();
         verifySlot(split, "split");
+        verifyFloating(split, splitClosed, "split");
         evidence.cases.push({ platform, mode: "split", repeat, ...split });
         if (repeat === 0)
           await screenshot(`information-entry-${platform}-split.png`);
@@ -125,15 +158,13 @@ await withPreviewBrowser(
       await wait("document.querySelector('.information-toolbar').hidden");
       await click('[data-tab-id="primary-conversation"] [role="tab"]');
       await wait("!document.querySelector('.information-toolbar').hidden");
+      const fullClosed = await measure();
       for (let repeat = 0; repeat < 2; repeat++) {
         await click(".information-toolbar button");
-        await wait("!!document.querySelector('.information-dock')");
+        await wait("!!document.querySelector('.information-popover')");
         const full = await measure();
         verifySlot(full, "maximized-main");
-        assert.ok(
-          full.chat.right <= full.dock.x,
-          "full main docks without covering conversation",
-        );
+        verifyFloating(full, fullClosed, "maximized-main");
         evidence.cases.push({
           platform,
           mode: "maximized-main",
@@ -143,7 +174,7 @@ await withPreviewBrowser(
         if (repeat === 0)
           await screenshot(`information-entry-${platform}-main.png`);
         await click(".information-toolbar button");
-        await wait("!document.querySelector('.information-dock')");
+        await wait("!document.querySelector('.information-popover')");
       }
       await click('[data-tab-id="custom:synthetic-0"] [role="tab"]');
       await wait("document.querySelector('.information-toolbar').hidden");

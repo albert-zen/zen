@@ -139,7 +139,7 @@ async function verifyInformationOsInput() {
       "Open maximized main information with actual OS pointer",
       true,
     );
-    await capture(`16-${repeat}-os-main-information`, "dock");
+    await capture(`16-${repeat}-os-main-information`, "overlay");
     await click(
       ".information-toolbar button",
       "Close maximized main information with actual OS pointer",
@@ -272,47 +272,91 @@ async function screenshot(name) {
     (await window.webContents.capturePage()).toPNG(),
   );
 }
+// Check the known title without changing the screenshot's current reading position.
+// Earlier interactions may intentionally have scrolled it above the card viewport.
+async function inspectInformationHeading(selector) {
+  return evaluate(`(()=>{
+    const e=document.querySelector(${JSON.stringify(selector)});
+    if(!e)throw Error('Missing information heading');
+    const ancestors=[];
+    for(let p=e.parentElement;p;p=p.parentElement) ancestors.push({node:p,top:p.scrollTop,left:p.scrollLeft});
+    const before=e.getBoundingClientRect();
+    let observation;
+    try {
+      e.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});
+      const r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);
+      observation={text:e.textContent,top:r.top,bottom:r.bottom,originalTop:before.top,hitClass:hit?.className,unoccluded:e.contains(hit)};
+    } finally {
+      for(const {node,top,left} of ancestors) node.scrollTo({top,left,behavior:'instant'});
+    }
+    observation.scrollRestored=ancestors.every(({node,top,left})=>node.scrollTop===top&&node.scrollLeft===left);
+    return observation;
+  })()`);
+}
 async function capture(name, mode) {
   await until(
     () =>
       evaluate(
-        `Boolean(document.querySelector(${JSON.stringify(mode === "dock" ? ".information-dock" : mode === "overlay" ? ".information-popover" : ".information-toolbar button[aria-pressed=false]")}))`,
+        `Boolean(document.querySelector(${JSON.stringify(mode === "overlay" ? ".information-popover" : ".information-toolbar button[aria-pressed=false]")}))`,
       ),
     name + " presentation",
   );
   await pause(250);
   const geometry = await evaluate(
-    `(()=>{const rect=s=>{const e=document.querySelector(s);if(!e)return null;const r=e.getBoundingClientRect(),c=getComputedStyle(e);return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height,display:c.display,visibility:c.visibility,color:c.color,background:c.backgroundColor}};return {chat:rect('.agent-surface'),composer:rect('#thread-composer'),card:rect('.information-dock'),popover:rect('.information-popover'),workspace:rect('.workspace'),resource:rect('.auxiliary-panel'),titlebar:rect('.window-titlebar-session'),resourceHeading:document.querySelector('.auxiliary-panel')?.dataset.open==='true'?rect('.auxiliary-heading'):null,resourceExpanded:document.querySelector('.auxiliary-panel')?.dataset.expanded,primaryActive:document.querySelector('.auxiliary-panel')?.dataset.primaryActive,informationSlot:rect('.auxiliary-information-slot'),informationEntryHidden:document.querySelector('.information-toolbar')?.hidden,informationToggle:rect('.information-toolbar button'),workspaceToggle:rect('.auxiliary-close-button'),expanded:document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded'),overflow:document.documentElement.scrollWidth>innerWidth,composerIdentity:window.__informationComposer===document.querySelector('#thread-composer'),draft:document.querySelector('#thread-composer')?.value}})()`,
+    `(()=>{const rect=s=>{const e=document.querySelector(s);if(!e)return null;const r=e.getBoundingClientRect(),c=getComputedStyle(e);return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height,display:c.display,visibility:c.visibility,color:c.color,background:c.backgroundColor}};return {chat:rect('.agent-surface'),composer:rect('#thread-composer'),card:rect('.information-popover'),popoverCount:document.querySelectorAll('.information-popover').length,legacyDockCount:document.querySelectorAll('.information-dock').length,popover:rect('.information-popover'),workspace:rect('.workspace'),resource:rect('.auxiliary-panel'),titlebar:rect('.window-titlebar-session'),resourceHeading:document.querySelector('.auxiliary-panel')?.dataset.open==='true'?rect('.auxiliary-heading'):null,resourceExpanded:document.querySelector('.auxiliary-panel')?.dataset.expanded,primaryActive:document.querySelector('.auxiliary-panel')?.dataset.primaryActive,informationSlot:rect('.auxiliary-information-slot'),informationEntryHidden:document.querySelector('.information-toolbar')?.hidden,informationToggle:rect('.information-toolbar button'),workspaceToggle:rect('.auxiliary-close-button'),expanded:document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded'),overflow:document.documentElement.scrollWidth>innerWidth,composerIdentity:window.__informationComposer===document.querySelector('#thread-composer'),draft:document.querySelector('#thread-composer')?.value}})()`,
   );
-  if (mode === "dock") {
+  if (mode === "overlay") {
+    assert.equal(
+      geometry.popoverCount,
+      1,
+      "exactly one floating Information card",
+    );
+    assert.equal(geometry.legacyDockCount, 0, "no reserved information dock");
     assert.ok(
-      geometry.chat.right <= geometry.card.left,
-      "docked card cannot overlap the main conversation",
+      geometry.card.width > 0 && geometry.card.width <= 341,
+      "floating card is bounded to 340px",
     );
     assert.ok(
-      geometry.composer.right <= geometry.card.left,
-      "docked card cannot overlap Composer",
+      geometry.card.left >= geometry.chat.left + 11,
+      "card stays inside conversation leading clearance",
     );
     assert.ok(
-      geometry.chat.width >= 550,
-      "conversation retains a usable allocation",
+      Math.abs(geometry.card.right - (geometry.chat.right - 12)) <= 1,
+      "card follows conversation trailing edge",
     );
     assert.ok(
       geometry.card.bottom <= geometry.workspace.bottom + 1,
       "card remains within workspace height",
     );
-    const visibleHeaders = [geometry.titlebar, geometry.resourceHeading].filter(
-      (rect) => rect && rect.visibility !== "hidden" && rect.display !== "none",
-    );
     assert.ok(
-      visibleHeaders.every((rect) => geometry.card.top >= rect.bottom + 11),
-      "card clears actual visible conversation/workspace headings on every platform",
+      geometry.card.top >= geometry.informationToggle.bottom,
+      "card sits below chat controls",
     );
+    if (geometry.resourceHeading && geometry.resourceExpanded === "false") {
+      assert.ok(
+        geometry.card.right <= geometry.resource.left,
+        "split resource remains outside the card",
+      );
+      assert.ok(
+        Math.abs(geometry.chat.right - geometry.resource.left) <= 1,
+        "no third column beside split conversation",
+      );
+    } else {
+      assert.ok(
+        Math.abs(geometry.chat.right - geometry.workspace.right) <= 1,
+        "floating information reserves no conversation width",
+      );
+    }
     // Accepted questions are above component settings. With multiple questions,
     // the settings toolbar is legitimately below the fold, not occluded.
     // Check the first real heading in DOM order and retain the hit-test evidence.
-    geometry.firstCardHeading = await evaluate(
-      "(()=>{const e=document.querySelector('.information-dock .user-question-attention > header, .information-dock .room-question-attention > header, .information-dock .information-settings-toolbar');if(!e)throw Error('Missing information heading');const r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return {text:e.textContent,top:r.top,bottom:r.bottom,hitClass:hit?.className,unoccluded:e.contains(hit)}})()",
+    geometry.firstCardHeading = await inspectInformationHeading(
+      ".information-popover .user-question-attention > header, .information-popover .room-question-attention > header, .information-popover .information-settings-toolbar",
+    );
+    assert.equal(
+      geometry.firstCardHeading.scrollRestored,
+      true,
+      "heading check restores every scroll position",
     );
     assert.equal(
       geometry.firstCardHeading.unoccluded,
@@ -342,6 +386,23 @@ async function capture(name, mode) {
     );
     assert.equal(resizeState.focusUnchanged, true);
     result.fullscreenSplitResizer = resizeState;
+  }
+  if (mode === "closed") {
+    assert.equal(
+      geometry.popoverCount,
+      0,
+      "closed information has no floating card",
+    );
+    assert.equal(geometry.legacyDockCount, 0);
+    if (
+      geometry.resourceExpanded === "true" &&
+      geometry.primaryActive !== "true"
+    )
+      assert.equal(
+        geometry.informationEntryHidden,
+        true,
+        "resource-only fullscreen has no Information entry",
+      );
   }
   assert.equal(geometry.overflow, false, "no page-level horizontal overflow");
   if (mode !== "closed") {
@@ -393,6 +454,19 @@ async function capture(name, mode) {
       geometry.workspaceToggle.color,
       "shared active foreground",
     );
+  }
+  if (name.startsWith("01-")) {
+    const baseline = await evaluate("window.__informationLayoutBaseline");
+    for (const key of ["chat", "composer"])
+      for (const edge of ["left", "right", "top", "bottom", "width", "height"])
+        assert.equal(
+          geometry[key][edge],
+          baseline[key][edge],
+          `opening floating card preserves ${key}.${edge}`,
+        );
+    assert.equal(geometry.draft, baseline.draft);
+    assert.equal(geometry.composerIdentity, true);
+    geometry.closedBaseline = baseline;
   }
   await screenshot(name + ".png");
   result.cases.push({ name, mode, geometry });
@@ -544,6 +618,9 @@ async function run() {
   await evaluate(
     "(()=>{window.__informationComposer=document.querySelector('#thread-composer');return true})()",
   );
+  await evaluate(
+    "(()=>{if(document.querySelector('.information-popover, .information-dock'))throw Error('Opening baseline requires closed information');const rect=s=>{const r=document.querySelector(s).getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}};window.__informationLayoutBaseline={chat:rect('.agent-surface'),composer:rect('#thread-composer'),draft:document.querySelector('#thread-composer').value};return true})()",
+  );
   await click(".information-toolbar button", "Open wide information card");
   await until(
     () =>
@@ -552,7 +629,7 @@ async function run() {
       ),
     "real trigger, lineage and command cards",
   );
-  await capture("01-wide-light", "dock");
+  await capture("01-wide-light", "overlay");
   await until(
     () =>
       evaluate(
@@ -1021,7 +1098,7 @@ async function run() {
     ".information-toolbar button",
     "Open information in maximized main conversation",
   );
-  await capture("04-maximized-main-dock", "dock");
+  await capture("04-maximized-main-overlay", "overlay");
   assert.equal(result.cases.at(-1).geometry.composerIdentity, true);
   assert.equal(
     result.cases.at(-1).geometry.draft,
@@ -1032,7 +1109,7 @@ async function run() {
     () => evaluate("document.documentElement.dataset.appearance==='dark'"),
     "actual app dark appearance",
   );
-  await capture("05-maximized-main-dark", "dock");
+  await capture("05-maximized-main-dark", "overlay");
   await click(
     '[data-tab-id="file:fixture.txt"] [role="tab"]',
     "Switch maximized workspace to its file resource",
@@ -1058,15 +1135,15 @@ async function run() {
   );
   await capture("08-narrow-reopened", "overlay");
   await resizeWindow(1600, 1000);
-  await capture("08a-open-overlay-to-dock", "dock");
+  await capture("08a-open-overlay-resize-wide", "overlay");
   assert.equal(result.cases.at(-1).geometry.composerIdentity, true);
   await resizeWindow(1000, 820);
-  await capture("08b-open-dock-to-overlay", "overlay");
-  // Native layout at our exact responsive boundary, not only a spacious window.
+  await capture("08b-open-overlay-resize-narrow", "overlay");
+  // Both sides of the former dock breakpoint retain full conversation width.
   await resizeWindow(1184, 820);
-  await capture("08c-920px-allocation-dock", "dock");
+  await capture("08c-920px-allocation-overlay", "overlay");
   assert.equal(result.cases.at(-1).geometry.workspace.width, 920);
-  assert.equal(result.cases.at(-1).geometry.chat.width, 556);
+  assert.equal(result.cases.at(-1).geometry.chat.width, 920);
   assert.ok(result.cases.at(-1).geometry.composer.width >= 480);
   await resizeWindow(1183, 820);
   await capture("08d-919px-allocation-overlay", "overlay");
@@ -1107,7 +1184,7 @@ async function run() {
     ".information-toolbar button",
     "Open second conversation information",
   );
-  await capture("10-second-owner", "dock");
+  await capture("10-second-owner", "overlay");
   assert.ok(
     !(await evaluate(
       "document.querySelector('.information-content')?.textContent.includes('Daily synthetic review')",
@@ -1129,12 +1206,8 @@ async function run() {
       ),
     "original owner's remembered open state is restored",
   );
-  // A restored resource Tab uses an overlay; the main Tab uses the dock.
-  // Owner visibility must survive either independently restored workspace view.
-  const restoredMode = await evaluate(
-    "(()=>{const p=document.querySelector('.auxiliary-panel');return p?.dataset.open==='true' && p.dataset.expanded==='true' && p.dataset.primaryActive!=='true' ? 'overlay' : 'dock'})()",
-  );
-  await capture("10a-original-owner-restored", restoredMode);
+  // The selected main conversation restores the same floating presentation.
+  await capture("10a-original-owner-restored", "overlay");
   assert.equal(
     await evaluate(
       "document.querySelector('.information-toolbar button').getAttribute('aria-expanded')",
@@ -1655,7 +1728,7 @@ async function run() {
   const captureInformationCrop = async (name) => {
     await settleScreenshotFrame();
     const rectangle = await evaluate(
-      "(()=>{const e=document.querySelector('.information-dock,.information-popover'),r=e.getBoundingClientRect();return {x:Math.ceil(r.x),y:Math.ceil(r.y),width:Math.floor(r.width),height:Math.floor(r.height)}})()",
+      "(()=>{const e=document.querySelector('.information-popover'),r=e.getBoundingClientRect();return {x:Math.ceil(r.x),y:Math.ceil(r.y),width:Math.floor(r.width),height:Math.floor(r.height)}})()",
     );
     await fs.writeFile(
       path.join(directory, name),

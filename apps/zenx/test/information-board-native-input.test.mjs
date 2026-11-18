@@ -479,9 +479,9 @@ test("information regression traverses OS hit testing in split and maximized mai
   assert.deepEqual(
     calls.filter((call) => call.mode).map((call) => call.mode),
     [
-      "dock",
+      "overlay",
       "closed",
-      "dock",
+      "overlay",
       "closed",
       "overlay",
       "closed",
