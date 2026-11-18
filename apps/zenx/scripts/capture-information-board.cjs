@@ -293,6 +293,99 @@ async function inspectInformationHeading(selector) {
     return observation;
   })()`);
 }
+// Read a stable user-authored anchor, not the active Turn's changing timer/body.
+async function informationReadingSnapshot() {
+  return evaluate(`(()=>{
+    const scroll=document.querySelector('.thread-view .messages');
+    const anchor=window.__informationReadingAnchor;
+    if(!scroll || !anchor?.isConnected) throw Error('Missing controlled reading anchor');
+    const rect=e=>{const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}};
+    return {scrollTop:scroll.scrollTop,maxTop:scroll.scrollHeight-scroll.clientHeight,
+      viewport:rect(scroll),anchor:rect(anchor),
+      id:anchor.closest('[data-sent-message-id]').dataset.sentMessageId,
+      text:anchor.textContent,window:{width:innerWidth,height:innerHeight}};
+  })()`);
+}
+async function prepareInformationReadingCamera() {
+  const prepared = await evaluate(`(()=>{
+    const scroll=document.querySelector('.thread-view .messages');
+    const r=scroll.getBoundingClientRect();
+    window.__informationReadingWheel=null;
+    scroll.addEventListener('wheel',e=>{window.__informationReadingWheel={trusted:e.isTrusted,deltaY:e.deltaY}}, {once:true});
+    return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/3),scrollTop:scroll.scrollTop};
+  })()`);
+  window.webContents.sendInputEvent({
+    type: "mouseWheel",
+    x: prepared.x,
+    y: prepared.y,
+    deltaX: 0,
+    deltaY: 320,
+    canScroll: true,
+    hasPreciseScrollingDeltas: true,
+  });
+  await until(
+    () =>
+      evaluate(
+        `(()=>{const s=document.querySelector('.thread-view .messages'),w=window.__informationReadingWheel;return w?.trusted&&w.deltaY<0&&s.scrollTop<${prepared.scrollTop}&&s.scrollHeight-s.clientHeight-s.scrollTop>100})()`,
+      ),
+    "native wheel pauses tail following and moves to earlier reading",
+  );
+  await evaluate(`(()=>{
+    const scroll=document.querySelector('.thread-view .messages'),r=scroll.getBoundingClientRect();
+    const bottom=document.querySelector('.bottom-zone').getBoundingClientRect().top;
+    window.__informationReadingAnchor=[...scroll.querySelectorAll('[data-sent-message-id] .user-bubble')].find(e=>{const a=e.getBoundingClientRect();return a.bottom>r.top+40&&a.top<bottom-40});
+    if(!window.__informationReadingAnchor) throw Error('No visible named user message for controlled camera');
+    return true;
+  })()`);
+  let previous;
+  let stable = 0;
+  result.readingCamera = {
+    input: "trusted Electron native wheel; no DOM scroll assignment",
+    wheel: await evaluate("window.__informationReadingWheel"),
+    samples: [],
+  };
+  await until(async () => {
+    const sample = await informationReadingSnapshot();
+    result.readingCamera.samples.push(sample);
+    // This is an observed non-tail anchor barrier, not an assumed sleep. New
+    // rows may arrive below it; maxTop is therefore diagnostic, not frozen.
+    const signature = JSON.stringify({ ...sample, maxTop: undefined });
+    stable = signature === previous ? stable + 1 : 0;
+    previous = signature;
+    return stable >= 2 && sample.maxTop - sample.scrollTop > 100;
+  }, "same visible reading anchor and viewport across consecutive observations");
+  result.readingCamera.before = await informationReadingSnapshot();
+}
+function assertInformationReadingUnchanged(before, after, shift) {
+  assert.deepEqual(
+    after.window,
+    before.window,
+    "opening Information preserves viewport dimensions",
+  );
+  assert.deepEqual(
+    after.viewport,
+    before.viewport,
+    "opening Information preserves transcript scrollport",
+  );
+  assert.equal(
+    after.scrollTop,
+    before.scrollTop,
+    "opening Information preserves explicit non-tail scrollTop",
+  );
+  assert.equal(after.id, before.id, "same named visible message");
+  assert.equal(after.text, before.text, "same immutable user message contents");
+  for (const edge of ["top", "bottom", "width", "height"])
+    assert.equal(
+      after.anchor[edge],
+      before.anchor[edge],
+      `opening Information preserves anchor.${edge}`,
+    );
+  for (const edge of ["left", "right"])
+    assert.ok(
+      Math.abs(before.anchor[edge] - after.anchor[edge] - shift) <= 0.5,
+      `anchor.${edge} follows measured lane`,
+    );
+}
 async function capture(name, mode) {
   await until(
     () =>
@@ -303,7 +396,7 @@ async function capture(name, mode) {
   );
   await pause(250);
   const geometry = await evaluate(
-    `(()=>{const rect=s=>{const e=document.querySelector(s);if(!e)return null;const r=e.getBoundingClientRect(),c=getComputedStyle(e);return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height,display:c.display,visibility:c.visibility,color:c.color,background:c.backgroundColor}};return {reading:rect('.thread-view .virtual-transcript-header, .thread-view .messages-inner'),lane:document.querySelector('.thread-view')?.dataset.informationLane==='true',shift:parseFloat(document.querySelector('.thread-view')?.style.getPropertyValue('--information-reading-shift')||'0'),resourceOpen:document.querySelector('.auxiliary-panel')?.dataset.open==='true',chat:rect('.agent-surface'),composer:rect('#thread-composer'),card:rect('.information-popover'),popoverCount:document.querySelectorAll('.information-popover').length,legacyDockCount:document.querySelectorAll('.information-dock').length,popover:rect('.information-popover'),workspace:rect('.workspace'),resource:rect('.auxiliary-panel'),titlebar:rect('.window-titlebar-session'),resourceHeading:document.querySelector('.auxiliary-panel')?.dataset.open==='true'?rect('.auxiliary-heading'):null,resourceExpanded:document.querySelector('.auxiliary-panel')?.dataset.expanded,primaryActive:document.querySelector('.auxiliary-panel')?.dataset.primaryActive,informationSlot:rect('.auxiliary-information-slot'),informationEntryHidden:document.querySelector('.information-toolbar')?.hidden,informationToggle:rect('.information-toolbar button'),workspaceToggle:rect('.auxiliary-close-button'),expanded:document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded'),overflow:document.documentElement.scrollWidth>innerWidth,composerIdentity:window.__informationComposer===document.querySelector('#thread-composer'),draft:document.querySelector('#thread-composer')?.value}})()`,
+    `(()=>{const rect=s=>{const e=document.querySelector(s);if(!e)return null;const r=e.getBoundingClientRect(),c=getComputedStyle(e);return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height,display:c.display,visibility:c.visibility,color:c.color,background:c.backgroundColor}};return {reading:rect('.thread-view .virtual-transcript-header, .thread-view .messages-inner'),lane:document.querySelector('.thread-view')?.dataset.informationLane==='true',shift:parseFloat(document.querySelector('.thread-view')?.style.getPropertyValue('--information-reading-shift')||'0'),resourceOpen:document.querySelector('.auxiliary-panel')?.dataset.open==='true',chat:rect('.agent-surface'),composer:rect('#thread-composer'),composerShell:rect('.bottom-zone > .composer'),commandStrip:rect('.bottom-zone > .background-shell-status'),card:rect('.information-popover'),popoverCount:document.querySelectorAll('.information-popover').length,legacyDockCount:document.querySelectorAll('.information-dock').length,popover:rect('.information-popover'),workspace:rect('.workspace'),resource:rect('.auxiliary-panel'),titlebar:rect('.window-titlebar-session'),resourceHeading:document.querySelector('.auxiliary-panel')?.dataset.open==='true'?rect('.auxiliary-heading'):null,resourceExpanded:document.querySelector('.auxiliary-panel')?.dataset.expanded,primaryActive:document.querySelector('.auxiliary-panel')?.dataset.primaryActive,informationSlot:rect('.auxiliary-information-slot'),informationEntryHidden:document.querySelector('.information-toolbar')?.hidden,informationToggle:rect('.information-toolbar button'),workspaceToggle:rect('.auxiliary-close-button'),expanded:document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded'),overflow:document.documentElement.scrollWidth>innerWidth,composerIdentity:window.__informationComposer===document.querySelector('#thread-composer'),draft:document.querySelector('#thread-composer')?.value}})()`,
   );
   if (mode === "overlay") {
     assert.equal(
@@ -479,6 +572,23 @@ async function capture(name, mode) {
     );
   }
   if (name.startsWith("01-")) {
+    assert.ok(
+      geometry.composerShell && geometry.commandStrip,
+      "wide camera includes the active background command strip",
+    );
+    for (const edge of ["left", "right"])
+      assert.ok(
+        Math.abs(geometry.commandStrip[edge] - geometry.composerShell[edge]) <=
+          0.5,
+        `background command strip shares Composer.${edge}`,
+      );
+    const after = await informationReadingSnapshot();
+    result.readingCamera.after = after;
+    assertInformationReadingUnchanged(
+      result.readingCamera.before,
+      after,
+      geometry.shift,
+    );
     const baseline = await evaluate("window.__informationLayoutBaseline");
     for (const edge of ["left", "right", "top", "bottom", "width", "height"])
       assert.equal(
@@ -670,6 +780,8 @@ async function run() {
   await evaluate(
     "(()=>{window.__informationComposer=document.querySelector('#thread-composer');return true})()",
   );
+  await screenshot("00-live-before-controlled-reading.png");
+  await prepareInformationReadingCamera();
   await evaluate(
     "(()=>{if(document.querySelector('.information-popover, .information-dock'))throw Error('Opening baseline requires closed information');const rect=s=>{const r=document.querySelector(s).getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}};window.__informationLayoutBaseline={reading:rect('.thread-view .virtual-transcript-header, .thread-view .messages-inner'),chat:rect('.agent-surface'),composer:rect('#thread-composer'),draft:document.querySelector('#thread-composer').value};return true})()",
   );

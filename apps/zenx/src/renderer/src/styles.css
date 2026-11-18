@@ -13416,6 +13416,7 @@ button:disabled {
    Use its actual box for the desktop Composer, including split-pane layouts. */
 @media (min-width: 961px) {
   .thread-view .bottom-zone > .composer,
+  .thread-view .bottom-zone > .background-shell-status,
   .thread-view .bottom-zone > .approval-request-card {
     position: relative;
     margin-inline: 0;

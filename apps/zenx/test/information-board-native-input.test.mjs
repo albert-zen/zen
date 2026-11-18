@@ -490,3 +490,90 @@ test("information regression traverses OS hit testing in split and maximized mai
     ],
   );
 });
+
+test("controlled Information camera rejects scrolling, reflow, changed text and viewport", async () => {
+  const source = await readFile(
+    new URL("../scripts/capture-information-board.cjs", import.meta.url),
+    "utf8",
+  );
+  const ast = ts.createSourceFile(
+    "capture.cjs",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.JS,
+  );
+  const helper = ast.statements.find(
+    (node) =>
+      ts.isFunctionDeclaration(node) &&
+      node.name?.text === "assertInformationReadingUnchanged",
+  );
+  assert.ok(helper);
+  const verify = runInNewContext(
+    helper.getText(ast) + ";assertInformationReadingUnchanged;",
+    { assert },
+  );
+  const before = {
+    window: { width: 1600, height: 970 },
+    viewport: {
+      left: 264,
+      right: 1600,
+      top: 44,
+      bottom: 970,
+      width: 1336,
+      height: 926,
+    },
+    scrollTop: 300,
+    maxTop: 650,
+    id: "synthetic-message-1",
+    text: "Synthetic immutable request",
+    anchor: {
+      left: 526,
+      right: 1326,
+      top: 120,
+      bottom: 250,
+      width: 800,
+      height: 130,
+    },
+  };
+  const after = structuredClone(before);
+  after.anchor.left -= 74;
+  after.anchor.right -= 74;
+  after.maxTop += 40; // New content below a paused reader is allowed, not scroll movement.
+  verify(before, after, 74);
+  for (const mutate of [
+    (x) => {
+      x.scrollTop += 40;
+      x.anchor.top -= 40;
+      x.anchor.bottom -= 40;
+    },
+    (x) => {
+      x.anchor.height += 1;
+    },
+    (x) => {
+      x.text += "changed";
+    },
+    (x) => {
+      x.id = "other-message";
+    },
+    (x) => {
+      x.viewport.width -= 1;
+    },
+    (x) => {
+      x.window.height -= 1;
+    },
+    (x) => {
+      x.anchor.left += 2;
+    },
+  ]) {
+    const broken = structuredClone(after);
+    mutate(broken);
+    assert.throws(() => verify(before, broken, 74));
+  }
+  assert.match(source, /type: "mouseWheel"/);
+  assert.match(source, /w\?\.trusted/);
+  assert.ok(
+    source.indexOf("await prepareInformationReadingCamera()") <
+      source.indexOf('await screenshot("00-wide-closed-baseline.png")'),
+  );
+});

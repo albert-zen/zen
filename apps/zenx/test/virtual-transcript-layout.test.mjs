@@ -152,3 +152,29 @@ test("footer guard ignores unrelated selectors but rejects footer and ancestor :
         /footer uses rendered emptiness/,
       );
 });
+
+test("desktop background commands share the measured Composer lane, not Information card styling", () => {
+  const tree = postcss.parse(css);
+  const selectors = [
+    ".thread-view .bottom-zone > .composer",
+    ".thread-view .bottom-zone > .background-shell-status",
+    ".thread-view .bottom-zone > .approval-request-card",
+  ];
+  let matched = 0;
+  tree.walkRules((rule) => {
+    if (!postcss.list.comma(rule.selector).includes(selectors[1])) return;
+    matched++;
+    assert.deepEqual(postcss.list.comma(rule.selector), selectors);
+    assert.equal(rule.parent.type, "atrule");
+    assert.equal(rule.parent.params, "(min-width: 961px)");
+    const declarations = Object.fromEntries(
+      rule.nodes.map(({ prop, value }) => [prop, value]),
+    );
+    assert.equal(declarations.position, "relative");
+    assert.equal(declarations.left, "var(--composer-column-left, 0px)");
+    assert.equal(declarations.width, "var(--composer-column-width, 100%)");
+    assert.equal(declarations["margin-inline"], "0");
+    assert.equal(declarations["max-width"], "var(--conversation-width)");
+  });
+  assert.equal(matched, 1);
+});
