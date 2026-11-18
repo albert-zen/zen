@@ -489,3 +489,183 @@ test("late approval success also preserves selection in queued text outside the 
     assert.equal(window.getSelection()?.toString(), text);
   });
 });
+
+test("explicit reading mode preserves pending identity and cannot approve from its summary", async () => {
+  await withRuntimeDom(async (h) => {
+    const approvals = [request("reading-request")];
+    const options = {
+      approvals,
+      onRespondToApproval: async () =>
+        assert.fail("layout change must not decide"),
+    };
+    await h.render(runtimeThread(), options);
+    const fullCode = document.querySelector(
+      ".approval-request-preview code",
+    )!.textContent;
+    const toggle = await press(".approval-reading-toggle");
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+    assert.equal(document.activeElement, toggle);
+    assert.equal(document.querySelector(".approval-request-allow"), null);
+    assert.equal(document.querySelector(".approval-request-deny"), null);
+    assert.match(
+      document.querySelector(".approval-reading-summary")!.textContent!,
+      /Waiting for your review.*No decision/u,
+    );
+    assert.ok(document.querySelector(card("reading-request")));
+    await press(".approval-reading-toggle");
+    assert.equal(document.activeElement, toggle);
+    assert.equal(toggle.getAttribute("aria-expanded"), "true");
+    assert.equal(
+      document.querySelector(".approval-request-preview code")!.textContent,
+      fullCode,
+    );
+    assert.ok(document.querySelector(".approval-request-allow"));
+    await press(".approval-reading-toggle");
+    await h.render(runtimeThread(), {
+      ...options,
+      approvals: [request("new-request")],
+    });
+    assert.equal(
+      document.querySelector(".approval-reading-summary"),
+      null,
+      "new request must open for review rather than inherit a collapsed summary",
+    );
+    assert.ok(document.querySelector(".approval-request-preview"));
+  });
+});
+
+test("responding approval cannot be collapsed into reading mode", async () => {
+  await withRuntimeDom(async (h) => {
+    await h.render(runtimeThread(), {
+      approvals: [{ ...request("responding"), status: "responding" }],
+    });
+    assert.equal(button(".approval-reading-toggle").disabled, true);
+    assert.ok(document.querySelector(".approval-request-preview"));
+  });
+});
+
+test("reading disclosure keeps a stable controlled region and explicit duration alongside target", async () => {
+  await withRuntimeDom(async (h) => {
+    for (const once of [false, true]) {
+      await h.render(runtimeThread(), {
+        approvals: [
+          {
+            ...request(`scope-${once}`),
+            params: {
+              ...runtimeApproval.params,
+              approvalScope: once
+                ? "once"
+                : runtimeApproval.params.approvalScope,
+              approvalTarget: {
+                key: "browser-instance:a",
+                label: "Edge abcd1234",
+              },
+            },
+          },
+        ],
+      });
+      const toggle = button(".approval-reading-toggle");
+      const controlledId = toggle.getAttribute("aria-controls");
+      assert.ok(controlledId);
+      const region = document.getElementById(controlledId);
+      assert.ok(region?.querySelector(".approval-request-preview"));
+      await press(".approval-reading-toggle");
+      assert.equal(document.getElementById(controlledId), region);
+      assert.match(
+        region!.textContent!,
+        once ? /Request: this call only/ : /Request to remember permission/,
+      );
+      assert.match(region!.textContent!, /Edge abcd1234/);
+      assert.equal(region!.querySelector(".approval-request-allow"), null);
+      await press(".approval-reading-toggle");
+      assert.equal(document.getElementById(controlledId), region);
+      assert.ok(region!.querySelector(".approval-request-allow"));
+    }
+  });
+});
+
+test("approval reading labels describe requests, not granted access, in English and Chinese", async () => {
+  const { i18n } = await import("../src/renderer/src/i18n.js");
+  const previous = i18n.language;
+  try {
+    for (const [language, onceText, rememberedText] of [
+      ["en", "Request: this call only", "Request to remember permission"],
+      ["zh", "请求仅本次授权", "请求持续授权"],
+    ]) {
+      await i18n.changeLanguage(language);
+      await withRuntimeDom(async (h) => {
+        for (const once of [true, false]) {
+          await h.render(runtimeThread(), {
+            approvals: [
+              {
+                ...request(`locale-${language}-${once}`),
+                params: {
+                  ...runtimeApproval.params,
+                  approvalScope: once
+                    ? "once"
+                    : runtimeApproval.params.approvalScope,
+                },
+              },
+            ],
+          });
+          await press(".approval-reading-toggle");
+          assert.ok(
+            document
+              .querySelector(".approval-reading-summary")!
+              .textContent!.includes(once ? onceText! : rememberedText!),
+          );
+          assert.equal(document.querySelector(".approval-request-allow"), null);
+        }
+      });
+    }
+  } finally {
+    await i18n.changeLanguage(previous);
+  }
+});
+
+test("reading mode cannot conceal a failed mock response and new requests reset error and disclosure", async () => {
+  await withRuntimeDom(async (h) => {
+    const attempt = deferred();
+    let calls = 0;
+    const options = {
+      approvals: [request("reading-error")],
+      onRespondToApproval: async () => {
+        calls++;
+        await attempt.promise;
+      },
+    };
+    await h.render(runtimeThread(), options);
+    await press(".approval-reading-toggle");
+    await press(".approval-reading-toggle");
+    await press(".approval-request-allow");
+    assert.equal(calls, 1);
+    assert.equal(button(".approval-reading-toggle").disabled, true);
+    assert.ok(document.querySelector(".approval-request-preview"));
+    await act(async () =>
+      attempt.reject(new Error("Synthetic response failed")),
+    );
+    assert.match(
+      document.querySelector(".approval-request-error")!.textContent!,
+      /Synthetic response failed/,
+    );
+    assert.equal(button(".approval-reading-toggle").disabled, true);
+    assert.equal(document.querySelector(".approval-reading-summary"), null);
+    const editor = document.querySelector<HTMLTextAreaElement>("textarea")!;
+    assert.equal(editor.disabled, false);
+    await act(async () => editor.focus());
+    assert.equal(document.activeElement, editor);
+    assert.equal(editor.value, draft.draft.text);
+    await h.render(runtimeThread(), {
+      ...options,
+      approvals: [request("fresh-after-error")],
+    });
+    assert.equal(document.querySelector(".approval-request-error"), null);
+    assert.equal(button(".approval-reading-toggle").disabled, false);
+    assert.equal(
+      button(".approval-reading-toggle").getAttribute("aria-expanded"),
+      "true",
+    );
+    assert.ok(document.querySelector(".approval-request-preview"));
+    assert.equal(calls, 1);
+  });
+});

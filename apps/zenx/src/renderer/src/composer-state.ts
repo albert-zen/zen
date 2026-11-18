@@ -255,7 +255,7 @@ function queuedAdmissionMatchesIntent(
 }
 
 /** A read/event confirms exact identities only; absence does not prove rejection. */
-function reconcilePendingSendPresentations(
+export function reconcilePendingSendPresentations(
   state: ComposerState,
   items: readonly CanonicalItem[],
 ): ComposerState {

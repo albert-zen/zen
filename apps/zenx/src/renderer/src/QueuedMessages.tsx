@@ -1,10 +1,19 @@
+import { revealQueueFocusContext } from "./queue-focus-context.js";
 import type { QueueMutationPhase } from "./queue-mutation-state.js";
 import { UserMessageContent } from "./UserMessageContent.js";
 import { parseSentReferenceContent } from "./reference-draft.js";
 import type { AnsweredQuestionPresentation } from "./answered-question-presentation.js";
 import { MessageSourceLink } from "./message-source-navigation.js";
 import { HostMessageContent } from "./HostMessageContent.js";
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import {
+  Fragment,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { QueuedCancellationTarget } from "../../../../../src/app-server.js";
 import type { AttachmentRef } from "../../../../../src/attachment.js";
@@ -65,6 +74,8 @@ export interface QueuedMessagesProps {
   compact?: boolean;
   /** Share the Composer tray's one scrolling surface. */
   integrated?: boolean;
+  viewportId?: string;
+  readingBridgeHost?: HTMLElement | null;
   editableIds?: ReadonlySet<string>;
   /** Saving rows may reopen their existing read-only edit session. */
   editingIds?: ReadonlySet<string>;
@@ -113,6 +124,8 @@ function QueueShelf({
   resumeError = null,
   compact = false,
   integrated = false,
+  viewportId,
+  readingBridgeHost,
   editableIds,
   editingIds,
   onEdit,
@@ -130,6 +143,8 @@ function QueueShelf({
   const revealFailure = useRef<string | null>(null);
   const [open, setOpen] = useState<boolean | null>(null);
   const [showAll, setShowAll] = useState(false);
+  const [readingExpanded, setReadingExpanded] = useState(false);
+  const [viewportOverflow, setViewportOverflow] = useState(false);
   const [reading, setReading] = useState<ReadonlySet<string>>(new Set());
   const hasMessages = messages.length > 0;
   const root = rootRef.current;
@@ -142,6 +157,33 @@ function QueueShelf({
   );
   const detailsOpen =
     open ?? (!compact || showAll || readingCurrentMessage || interacting);
+  useLayoutEffect(() => {
+    const shelf = rootRef.current;
+    const tray = integrated
+      ? shelf?.closest<HTMLElement>(".pending-tray")
+      : null;
+    if (!tray || !shelf) return;
+    const measure = () =>
+      // Once offered, keep the control stable even if expansion or delivery
+      // makes the contents fit. Removing a focused control would lose focus.
+      setViewportOverflow(
+        (previous) =>
+          previous ||
+          (tray.clientHeight > 0 && tray.scrollHeight > tray.clientHeight + 1),
+      );
+    measure();
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? undefined
+        : new ResizeObserver(measure);
+    observer?.observe(tray);
+    observer?.observe(shelf);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [integrated, hasMessages, detailsOpen, messages]);
   const visibleMessages =
     integrated || showAll ? messages : messages.slice(0, 2);
   const failureHidden =
@@ -236,9 +278,11 @@ function QueueShelf({
       ref={rootRef}
       className={`queue-shelf${detailsOpen ? " is-open" : " is-collapsed"}${compact ? " is-compact" : ""}`}
       aria-label={t("messageQueue")}
+      data-reading-expanded={readingExpanded ? "true" : undefined}
       onFocusCapture={(event) => {
         const target = event.target;
         if (!(target instanceof HTMLElement)) return;
+        revealQueueFocusContext(target);
         focusedControl.current = target;
         const index =
           target.closest<HTMLElement>("[data-queue-index]")?.dataset.queueIndex;
@@ -283,6 +327,31 @@ function QueueShelf({
           <Icon name="chevron-down" size={12} className="queue-shelf-chevron" />
         </button>
         <div className="queue-shelf-actions">
+          {integrated && (viewportOverflow || readingExpanded) ? (
+            <button
+              type="button"
+              className="queue-header-action queue-reading-toggle"
+              data-queue-control="reading-space"
+              aria-expanded={readingExpanded}
+              aria-controls={viewportId}
+              aria-label={t(
+                readingExpanded
+                  ? "queueReduceReadingArea"
+                  : "queueExpandReadingArea",
+              )}
+              title={t(
+                readingExpanded
+                  ? "queueReduceReadingArea"
+                  : "queueExpandReadingArea",
+              )}
+              onClick={() => {
+                setReadingExpanded(!readingExpanded);
+                if (readingExpanded) focusComposer?.();
+              }}
+            >
+              <Icon name={readingExpanded ? "compress" : "expand"} size={14} />
+            </button>
+          ) : null}
           {onCancelAll !== undefined && messages.length > 1 ? (
             <button
               type="button"
@@ -346,6 +415,7 @@ function QueueShelf({
         tabIndex={0}
         role="group"
         aria-label={t("messageQueue")}
+        data-reading-expanded={readingExpanded ? "true" : undefined}
         onPointerDown={() => {
           if (open === null) setOpen(true);
         }}
@@ -415,6 +485,31 @@ function QueueShelf({
           </button>
         ) : null}
       </div>
+      {integrated && readingExpanded && readingBridgeHost
+        ? createPortal(
+            <button
+              type="button"
+              className="queue-reading-bridge"
+              data-queue-control="reading-bridge"
+              aria-controls={viewportId}
+              aria-expanded={true}
+              onClick={() => {
+                setReadingExpanded(false);
+                focusComposer?.();
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Escape") return;
+                event.preventDefault();
+                event.stopPropagation();
+                focusComposer?.();
+              }}
+            >
+              <Icon name="compress" size={14} />
+              {t("queueReduceReadingArea")}
+            </button>,
+            readingBridgeHost,
+          )
+        : null}
     </section>
   );
 }
@@ -492,6 +587,34 @@ function QueuedMessageRow({
   const imagesId = useId();
   const [expanded, setExpanded] = useState(false);
   const [overflow, setOverflow] = useState(false);
+  const groupSender =
+    rich && message.sender !== undefined && message.hostSource === undefined;
+  const MessageGroup = groupSender ? "div" : Fragment;
+  const source =
+    message.sender === undefined ? null : (
+      <MessageSourceLink
+        active={imagesVisible}
+        target={{
+          kind: "thread",
+          id: message.sender.threadId,
+          ...(message.sender.deviceId === undefined
+            ? {}
+            : {
+                deviceId: message.sender.deviceId,
+                itemId: message.id,
+                returnBound: message.sender.returnRoute !== undefined,
+              }),
+        }}
+        label={t(
+          message.sender.deviceId === undefined
+            ? "threadMessageFrom"
+            : "remoteThreadMessageFrom",
+          {
+            name: message.sender.threadName ?? t("threadMessageUnnamed"),
+          },
+        )}
+      />
+    );
   const hasText = message.text.trim().length > 0;
   const expandable = hasText && (expanded || overflow);
   const availableImages =
@@ -538,73 +661,62 @@ function QueuedMessageRow({
         <div
           className={`queue-row-content${message.imageCount > 0 ? " has-images" : ""}`}
         >
-          {message.sender === undefined ? null : (
-            <MessageSourceLink
-              active={imagesVisible}
-              target={{
-                kind: "thread",
-                id: message.sender.threadId,
-                ...(message.sender.deviceId === undefined
-                  ? {}
-                  : {
-                      deviceId: message.sender.deviceId,
-                      itemId: message.id,
-                      returnBound: message.sender.returnRoute !== undefined,
-                    }),
-              }}
-              label={t(
-                message.sender.deviceId === undefined
-                  ? "threadMessageFrom"
-                  : "remoteThreadMessageFrom",
-                {
-                  name: message.sender.threadName ?? t("threadMessageUnnamed"),
-                },
-              )}
-            />
-          )}
+          {groupSender ? null : source}
           {rich && message.hostSource === undefined ? (
-            <div className="queue-message-body user-row">
-              {message.imageCount > 0 ? (
-                <span
-                  className={
-                    unavailableImages > 0
-                      ? "queue-image-unavailable"
-                      : "sr-only"
-                  }
-                >
-                  {t("imageCount", { count: message.imageCount })}
-                  {unavailableImages > 0
-                    ? ` · ${t("queueUnavailablePreviews", { count: unavailableImages })}`
-                    : ""}
+            <MessageGroup
+              {...(groupSender
+                ? { className: "queue-message-group has-sender" }
+                : {})}
+            >
+              {groupSender ? source : null}
+              {groupSender && running && !steering && onSteer ? (
+                <span className="queue-steer-keyboard-hint" aria-hidden="true">
+                  {t("steerNow")}
                 </span>
               ) : null}
-              {message.imageCount > 0 ? (
-                <QueuedImageStrip
-                  message={message}
-                  attachments={attachments}
-                  visible={imagesVisible}
-                  compact={compact}
-                  hasText={hasText}
-                  onReadAttachment={onReadAttachment}
-                  onOpenImage={onOpenImage}
-                />
-              ) : null}
-              {hasText || message.answer ? (
-                <div className="user-bubble">
-                  <UserMessageContent
-                    parts={[
-                      message.sender
-                        ? { text: message.text, references: [] }
-                        : parseSentReferenceContent(
-                            message.text,
-                            message.clientId,
-                          ),
-                    ]}
-                    answer={message.answer}
+              <div className="queue-message-body user-row">
+                {message.imageCount > 0 ? (
+                  <span
+                    className={
+                      unavailableImages > 0
+                        ? "queue-image-unavailable"
+                        : "sr-only"
+                    }
+                  >
+                    {t("imageCount", { count: message.imageCount })}
+                    {unavailableImages > 0
+                      ? ` · ${t("queueUnavailablePreviews", { count: unavailableImages })}`
+                      : ""}
+                  </span>
+                ) : null}
+                {message.imageCount > 0 ? (
+                  <QueuedImageStrip
+                    message={message}
+                    attachments={attachments}
+                    visible={imagesVisible}
+                    compact={compact}
+                    hasText={hasText}
+                    onReadAttachment={onReadAttachment}
+                    onOpenImage={onOpenImage}
                   />
-                </div>
-              ) : null}
-            </div>
+                ) : null}
+                {hasText || message.answer ? (
+                  <div className="user-bubble">
+                    <UserMessageContent
+                      parts={[
+                        message.sender
+                          ? { text: message.text, references: [] }
+                          : parseSentReferenceContent(
+                              message.text,
+                              message.clientId,
+                            ),
+                      ]}
+                      answer={message.answer}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            </MessageGroup>
           ) : message.hostSource !== undefined ? (
             <HostMessageContent
               sourceNavigation
@@ -766,7 +878,7 @@ function QueuedMessageRow({
                 steering
                   ? steeringStatus
                   : running
-                    ? "queueSteerHint"
+                    ? "steerNow"
                     : "queueSendNow",
               )}
               onClick={() => onSteer(message)}
@@ -774,7 +886,7 @@ function QueuedMessageRow({
               {steering ? (
                 <span role="status">{t(steeringStatus)}</span>
               ) : (
-                <Icon name="send" size={15} />
+                <Icon name="send" size={14} />
               )}
             </button>
           )}

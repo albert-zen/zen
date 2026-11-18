@@ -1,0 +1,78 @@
+{
+  "commit": "d7f93b83f54ba873b61f19bd72ac3a6f6010aa4a",
+  "source": "native Electron 43.2.0, actual built app; isolated fake-provider QA data created through public APIs",
+  "viewport": [1188, 848],
+  "capturedAt": "2026-11-09T15:51:29.701848+00:00",
+  "files": [
+    {
+      "file": "01-welcome.png",
+      "sha256": "0de8fd6fcccd359f2bd27ecd17b08ae90058ff8eeabcbad361d685ed7d0b8850",
+      "theme": "light",
+      "encoding": "JPEG",
+      "dimensions": [1188, 848]
+    },
+    {
+      "file": "02-thread.png",
+      "sha256": "f9744043f97a068e71b1272ed213637649bedbe565291a7aa0840eefc6e89178",
+      "theme": "light",
+      "encoding": "JPEG",
+      "dimensions": [1188, 848]
+    },
+    {
+      "file": "03-settings-account.png",
+      "sha256": "680c03492314b29dd0e4e80ab6baef2503fdc0f6da0268eb86e099ae80704a47",
+      "theme": "light",
+      "encoding": "JPEG",
+      "dimensions": [1188, 848]
+    },
+    {
+      "file": "04-settings-models.png",
+      "sha256": "d7cf847cf42c2d1e210f09781cb42a6fa65af6469d941c632b0c11d0efe17578",
+      "theme": "light",
+      "encoding": "JPEG",
+      "dimensions": [1188, 848]
+    },
+    {
+      "file": "05-settings-appearance.png",
+      "sha256": "74e5c4093a78f40a20b29a364c39db8eef6affba7620a5eb21ff40ba09bf8aac",
+      "theme": "light",
+      "encoding": "JPEG",
+      "dimensions": [1188, 848]
+    },
+    {
+      "file": "06-settings-general.png",
+      "sha256": "ddf55f4c4025c165c5ee3a3fb32a204384d6329808cbdfbf72a0a15f8616cd6c",
+      "theme": "light",
+      "encoding": "JPEG",
+      "dimensions": [1188, 848]
+    },
+    {
+      "file": "07-appearance-dark.png",
+      "sha256": "b379e4d3115de0430ed1b53d23fc63316bdb2df3db08629691c43adf9d07c670",
+      "theme": "dark",
+      "encoding": "JPEG",
+      "dimensions": [1188, 848]
+    },
+    {
+      "file": "08-thread-dark.png",
+      "sha256": "e899ce5d8ea58f9dc292a96a217dbb477615a917208afe1935779ca8c46d7a01",
+      "theme": "dark",
+      "encoding": "JPEG",
+      "dimensions": [1188, 848]
+    },
+    {
+      "file": "09-information.png",
+      "sha256": "44d696296a79ed3154b6fe2742f634f2b5f8c800d4f14dcd88371824610dcd7a",
+      "theme": "dark",
+      "encoding": "JPEG",
+      "dimensions": [1188, 848]
+    }
+  ],
+  "limits": [
+    "Synthetic echo transcript, not live model quality",
+    "No real credentials or external calls",
+    "Only visible settings, navigation, light/dark and informational state covered so far",
+    "Pending/Fork/streaming and narrow coverage in separate later pack"
+  ],
+  "fileExtensionNote": "Capture API returned JPEG bytes. Existing .png filenames are preserved as review IDs; files are not lossless PNG."
+}

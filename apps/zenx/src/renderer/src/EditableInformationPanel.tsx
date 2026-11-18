@@ -1,3 +1,4 @@
+import type { InformationCommunications } from "./information-communications.js";
 import React, {
   memo,
   useCallback,
@@ -39,6 +40,7 @@ export interface InformationReceipt {
   resourceThreadId?: string;
 }
 type Props = {
+  communications?: InformationCommunications;
   owner: BoardConversation;
   threads: readonly NativeThreadSummary[];
   snapshot: ZenXPluginSnapshot;
@@ -90,6 +92,7 @@ export function EditableInformationPanel(props: Props) {
 }
 function InformationPanel({
   owner,
+  communications,
   threads,
   snapshot,
   registry,
@@ -113,7 +116,10 @@ function InformationPanel({
     new Map<string, (visible: boolean) => void>(),
   );
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  // Null records a missing Host, translated at render time rather than owning reads.
+  const [errorDetail, setError] = useState<string | null>("");
+  const error =
+    errorDetail === null ? t("informationHostUnavailable") : errorDetail;
   const [pending, setPending] = useState<Pending | null>(
     () => retainedEdits.get(ownerKey) ?? null,
   );
@@ -152,7 +158,7 @@ function InformationPanel({
   const refresh = useCallback(async () => {
     const api = window.zenx.information;
     if (!api) {
-      setError(t("informationHostUnavailable"));
+      setError(null);
       return;
     }
     const sequence = ++readSequence.current;
@@ -182,7 +188,7 @@ function InformationPanel({
       )
         setError(String(reason));
     }
-  }, [ownerKey, owner.kind, ownerId, t]);
+  }, [ownerKey, owner.kind, ownerId]);
   useEffect(() => {
     mounted.current = true;
     setReceipt(null);
@@ -225,7 +231,7 @@ function InformationPanel({
     };
   }, [ownerKey, refresh]);
   useEffect(() => {
-    if (!error || busy) return;
+    if (errorDetail === "" || busy) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     const retry = async () => {
@@ -237,7 +243,7 @@ function InformationPanel({
       active = false;
       clearTimeout(timer);
     };
-  }, [error, busy, refresh]);
+  }, [errorDetail, busy, refresh]);
   useEffect(() => {
     if (previousRoster.current === rosterFingerprint) return;
     previousRoster.current = rosterFingerprint;
@@ -488,6 +494,13 @@ function InformationPanel({
       <ConversationInformationCards
         key={contentKey(widget)}
         threadId={threadId!}
+        communications={
+          owner.kind === "thread" &&
+          owner.threadId === threadId &&
+          communications?.ownerThreadId === owner.threadId
+            ? communications
+            : undefined
+        }
         threads={threads}
         snapshot={snapshot}
         registry={registry}
@@ -521,19 +534,15 @@ function InformationPanel({
         </div>
       ) : null}
       <div className="information-settings-toolbar">
-        <span>
-          {editing || hasVisibleContent ? t("informationComponents") : null}
-        </span>
         <button
           type="button"
-          className="quiet-button information-customize"
+          className="icon-button information-customize"
           aria-label={t(editing ? "informationDone" : "informationCustomize")}
           title={t(editing ? "informationDone" : "informationCustomize")}
           aria-pressed={editing}
           onClick={() => setEditing((value) => !value)}
         >
           <Icon name={editing ? "check" : "compose"} size={14} />
-          {t(editing ? "informationDone" : "informationManage")}
         </button>
       </div>
       {error ? (
@@ -597,6 +606,14 @@ function InformationPanel({
             </button>
           </div>
         </div>
+      ) : null}
+      {!editing &&
+      receipt?.owner.kind === owner.kind &&
+      receipt.owner.id === ownerId &&
+      !error &&
+      !pending &&
+      !hasVisibleContent ? (
+        <p className="information-empty">{t("informationEmptyHint")}</p>
       ) : null}
       {!receipt ? (
         editing ? (
@@ -751,6 +768,7 @@ function InformationPanel({
                     />
                     <h3>{title(widget)}</h3>
                   </button>
+                  <span className="information-widget-inline-actions" />
                   {editing ? (
                     <div className="information-widget-actions">
                       <button

@@ -383,6 +383,155 @@ test("every preset, accent, and contrast combination preserves readable semantic
   dom.window.close();
 });
 
+test("Appearance separates choice labels from supporting copy while preserving selected and focus cues", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  for (const selector of [
+    ".appearance-preset-options label > span",
+    ".appearance-accent-options label > span",
+    ".appearance-inline-options label > span",
+    ".appearance-mode-options label > span",
+  ]) {
+    const block = styles
+      .slice(styles.indexOf(selector + " {"))
+      .split("}", 1)[0]!;
+    assert.match(block, /color:\s*var\(--color-text-secondary\)/u, selector);
+  }
+  for (const selector of [
+    ".appearance-preset-options strong",
+    ".appearance-accent-options strong",
+  ]) {
+    const block = styles
+      .slice(styles.indexOf(selector + " {"))
+      .split("}", 1)[0]!;
+    assert.match(block, /font-size:\s*var\(--font-size-label\)/u, selector);
+  }
+  assert.match(
+    styles,
+    /\.appearance-preset-options input:checked \+ span,\s*\.appearance-accent-options input:checked \+ span,\s*\.appearance-inline-options input:checked \+ span\s*\{[^}]*border-color:\s*var\(--color-border-accent\);[^}]*background:\s*var\(--color-accent-soft\);[^}]*color:\s*var\(--color-text-primary\)/u,
+  );
+  assert.match(
+    styles,
+    /\.appearance-options input:checked \+ span\s*\{[^}]*border-color:\s*var\(--border-accent\)/u,
+  );
+  assert.match(
+    styles,
+    /\.appearance-choice-check\s*\{[^}]*color:\s*var\(--color-text-primary\)/u,
+  );
+  assert.match(
+    styles,
+    /\.appearance-inline-options input:focus-visible \+ span\s*\{[^}]*outline:\s*1px solid var\(--color-focus-ring\)/u,
+  );
+});
+
+test("selected Appearance copy and tinted error copy retain contrast across all themes", async () => {
+  const theme = await readFile(
+    new URL("../src/renderer/src/theme.css", import.meta.url),
+    "utf8",
+  );
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  // Pin the component-to-token relationship as well as the numerical pairs.
+  // JSDOM resolves root declarations, not the complete browser CSS cascade.
+  assert.match(
+    styles,
+    /\.appearance-preset-options input:checked \+ span small,\s*\.appearance-accent-options input:checked \+ span small\s*\{[^}]*color:\s*var\(--color-text-secondary\)/u,
+  );
+  assert.match(
+    styles,
+    /\.settings-error\s*\{[^}]*background:\s*var\(--status-danger-soft\);[^}]*color:\s*var\(--color-text-on-danger-soft\)/u,
+  );
+  const dom = new JSDOM("<!doctype html><html><head></head></html>");
+  try {
+    const style = dom.window.document.createElement("style");
+    style.textContent = theme;
+    dom.window.document.head.append(style);
+    const root = dom.window.document.documentElement;
+    for (const mode of ["light", "dark"]) {
+      root.dataset.appearance = mode;
+      for (const preset of ["graphite", "cobalt", "ember"]) {
+        root.dataset.themePreset = preset;
+        for (const accent of ["azure", "iris", "jade"]) {
+          root.dataset.accent = accent;
+          for (const contrast of ["standard", "high"]) {
+            root.dataset.contrast = contrast;
+            const computed = dom.window.getComputedStyle(root);
+            const value = (name: string): string => {
+              const raw = computed.getPropertyValue(name).trim();
+              const alias = raw.match(/^var\((--[\w-]+)\)$/u);
+              return alias ? value(alias[1]!) : raw;
+            };
+            const state = `${mode}/${preset}/${accent}/${contrast}`;
+            assert.ok(
+              contrastRatio(
+                value("--color-text-secondary"),
+                value("--color-surface-inset"),
+              ) >= 4.5,
+              `${state} unselected Appearance labels`,
+            );
+            assert.ok(
+              tintedBackgroundContrast(
+                value("--color-text-secondary"),
+                value("--color-accent-soft"),
+                value("--color-surface"),
+              ) >= 4.5,
+              `${state} selected Appearance descriptions`,
+            );
+            for (const surface of ["--color-surface", "--color-surface-main"]) {
+              assert.ok(
+                tintedBackgroundContrast(
+                  value("--color-text-on-danger-soft"),
+                  value("--color-status-danger-soft"),
+                  value(surface),
+                ) >= 4.5,
+                `${state} tinted error copy on ${surface}`,
+              );
+            }
+          }
+        }
+      }
+    }
+  } finally {
+    dom.window.close();
+  }
+});
+
+function tintedBackgroundContrast(
+  text: string,
+  tint: string,
+  background: string,
+): number {
+  const match = tint.match(/^rgb\((\d+)\s+(\d+)\s+(\d+)\s*\/\s*([\d.]+)%\)$/u);
+  assert.ok(match, `Unsupported tint: ${tint}`);
+  const alpha = Number(match[4]) / 100;
+  const channels = hexChannels(background).map(
+    (channel, index) =>
+      Number(match[index + 1]) * alpha + channel * (1 - alpha),
+  );
+  const luminance = (values: number[]) =>
+    values
+      .map((value) => {
+        const channel = value / 255;
+        return channel <= 0.04045
+          ? channel / 12.92
+          : ((channel + 0.055) / 1.055) ** 2.4;
+      })
+      .reduce(
+        (sum, channel, index) =>
+          sum + channel * [0.2126, 0.7152, 0.0722][index]!,
+        0,
+      );
+  const [low, high] = [luminance(hexChannels(text)), luminance(channels)].sort(
+    (a, b) => a - b,
+  );
+  // Do not round the alpha-composited RGB channels before calculating contrast.
+  return (high! + 0.05) / (low! + 0.05);
+}
+
 class FakeSystemPreference {
   matches: boolean;
   readonly #listeners = new Set<() => void>();

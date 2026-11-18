@@ -1,0 +1,100 @@
+[
+  {
+    "stage": "app-delivery",
+    "command": [
+      "node",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-reporter=tap",
+      "--test-concurrency=1",
+      "--test-name-pattern=late canonical queue ID settles only|delivery check|unconfirmed Send keeps|send presentation shows honest pending|real App (dock|popover) pending Send keeps historical rows",
+      "apps/zenx/test/app-project-picker-interaction.test.ts"
+    ],
+    "startedAt": "2026-11-09T20:18:04.581801+00:00",
+    "finishedAt": "2026-11-09T20:18:20.763903+00:00",
+    "durationSeconds": 16.182,
+    "exitCode": 0,
+    "log": "/workspace/shared/ui-quality-evidence/round-six-integration-app-delivery.log"
+  },
+  {
+    "stage": "app-navigation",
+    "command": [
+      "node",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-reporter=tap",
+      "--test-concurrency=1",
+      "--test-name-pattern=^(Settings and thread navigation are mutually exclusive, including return to the same thread|same-title side conversations retain identity, drafts and reading positions through rename, close, reopen and main navigation|App persists per-child visibility independently of Pin and preserves open conversation tabs|real App draft, Send and ACK never measure the closed information trigger|a page shift caused by cancelling old questions must not reveal hidden information)$",
+      "apps/zenx/test/app-project-picker-interaction.test.ts"
+    ],
+    "startedAt": "2026-11-09T20:18:20.764534+00:00",
+    "finishedAt": "2026-11-09T20:18:47.687289+00:00",
+    "durationSeconds": 26.923,
+    "exitCode": 0,
+    "log": "/workspace/shared/ui-quality-evidence/round-six-integration-app-navigation.log"
+  },
+  {
+    "stage": "prettier",
+    "command": [
+      "node",
+      "node_modules/prettier/bin/prettier.cjs",
+      "--check",
+      "apps/zenx/src/renderer/src/ConversationInformationCards.tsx",
+      "apps/zenx/src/renderer/src/SettingsView.tsx",
+      "apps/zenx/src/renderer/src/Sidebar.tsx",
+      "apps/zenx/src/renderer/src/bundled-automation-ui.tsx",
+      "apps/zenx/src/renderer/src/i18n/panels.ts",
+      "apps/zenx/src/renderer/src/i18n/settings.ts",
+      "apps/zenx/src/renderer/src/room-conversations.css",
+      "apps/zenx/src/renderer/src/room-conversations.tsx",
+      "apps/zenx/src/renderer/src/styles.css",
+      "apps/zenx/src/renderer/src/subagents-ui.tsx",
+      "apps/zenx/test/conversation-information-cards.test.ts",
+      "apps/zenx/test/project-row-actions.test.ts",
+      "apps/zenx/test/room-conversations.test.ts",
+      "apps/zenx/test/room-primary-navigation.test.ts",
+      "apps/zenx/test/settings-interaction.test.ts",
+      "apps/zenx/test/subagents-ui.test.ts"
+    ],
+    "startedAt": "2026-11-09T20:18:47.688413+00:00",
+    "finishedAt": "2026-11-09T20:18:52.345095+00:00",
+    "durationSeconds": 4.657,
+    "exitCode": 0,
+    "log": "/workspace/shared/ui-quality-evidence/round-six-integration-prettier.log"
+  },
+  {
+    "stage": "whitespace",
+    "command": [
+      "git",
+      "diff",
+      "--check",
+      "bebe9276ac303f0d2f85cbf7008c3d8711e7b80c",
+      "HEAD"
+    ],
+    "startedAt": "2026-11-09T20:18:52.345558+00:00",
+    "finishedAt": "2026-11-09T20:18:52.443885+00:00",
+    "durationSeconds": 0.098,
+    "exitCode": 0,
+    "log": "/workspace/shared/ui-quality-evidence/round-six-integration-whitespace.log"
+  },
+  {
+    "stage": "types",
+    "command": ["npm", "run", "typecheck:prepared", "--workspace", "@zen/zenx"],
+    "startedAt": "2026-11-09T20:18:52.444420+00:00",
+    "finishedAt": "2026-11-09T20:20:33.458066+00:00",
+    "durationSeconds": 101.014,
+    "exitCode": 0,
+    "log": "/workspace/shared/ui-quality-evidence/round-six-integration-types.log"
+  },
+  {
+    "stage": "build",
+    "command": ["npm", "run", "build:prepared", "--workspace", "@zen/zenx"],
+    "startedAt": "2026-11-09T20:20:33.463494+00:00",
+    "finishedAt": "2026-11-09T20:20:55.282538+00:00",
+    "durationSeconds": 21.819,
+    "exitCode": 0,
+    "log": "/workspace/shared/ui-quality-evidence/round-six-integration-build.log"
+  }
+]

@@ -784,3 +784,40 @@ test("an HTTP body after its 2s deadline is discarded within the 10s target phas
   assert.equal(h.lifecycle.receipt.readyElapsedMs, 2_101);
   assert.deepEqual(h.child.signals, []);
 });
+
+test("capture caller inherits the bounded shared startup budget", async () => {
+  const source = await readFile(
+    new URL("../scripts/capture-main-ui-preview.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /observePreviewChrome\(child, profile\)/);
+  assert.equal(PREVIEW_STARTUP_TIMEOUT_MS, 45_000);
+});
+
+test("16 second cold port leaves a full target readiness window without relaunch", async (t) => {
+  let polls = 0;
+  const h = harness({
+    readPort: async () => {
+      h.advance(16_000);
+      return "9222\n";
+    },
+    fetchTargets: async () => ({
+      ok: true,
+      json: async () => {
+        h.advance(1_000);
+        return ++polls < 5
+          ? []
+          : [
+              {
+                type: "page",
+                webSocketDebuggerUrl: "ws://127.0.0.1:9222/page",
+              },
+            ];
+      },
+    }),
+  });
+  assert.equal(await h.lifecycle.connect(), h.socket);
+  assert.ok(h.lifecycle.receipt.readyElapsedMs > 20_000);
+  assert.deepEqual(h.child.signals, []);
+  await receipt(t, h.lifecycle);
+});

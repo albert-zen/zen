@@ -14,8 +14,23 @@ const report = {
     await readFile(path.join(directory, "source.json"), "utf8"),
   ),
   scenes: [],
+  liveControls: [],
   status: "running",
 };
+const measureLiveControl = `(() => {
+  const root = document.querySelector('#primary-conversation-content');
+  const desktop = matchMedia('(min-width: 961px)').matches;
+  const localSelector = desktop ? '.conversation-reading-position button' : '.thread-view > .back-live';
+  const selector = '#primary-conversation-content ' + localSelector;
+  const controls = root?.querySelectorAll(localSelector) ?? [];
+  const e = controls.length === 1 ? controls[0] : null;
+  const r = e?.getBoundingClientRect(), style = e && getComputedStyle(e);
+  const hit = r && document.elementFromPoint(r.x+r.width/2, r.y+r.height/2);
+  return { viewportWidth: innerWidth, desktop, selector, count: controls.length,
+    x: r?.x ?? null, y: r?.y ?? null, width: r?.width ?? 0, height: r?.height ?? 0,
+    display: style?.display ?? null, visibility: style?.visibility ?? null,
+    disabled: e?.disabled ?? null, hit: !!e && !!hit && (hit === e || e.contains(hit)) };
+})()`;
 const panel = "#thread-workspace-panel";
 const primaryTab = "#aux-tab-primary-conversation";
 const expand = `${panel} > .auxiliary-heading > button[aria-pressed]`;
@@ -170,6 +185,26 @@ try {
         throw Error(`Timed out: ${label}`);
       }
       async function click(selector) {
+        // Remap only the owned legacy live action; never search for a fallback.
+        if (selector === "#primary-conversation-content .back-live") {
+          const control = await evaluate(measureLiveControl);
+          report.liveControls.push(control);
+          assert.equal(
+            control.count,
+            1,
+            "exact primary live control exists once",
+          );
+          assert.ok(
+            control.width > 0 &&
+              control.height > 0 &&
+              control.display !== "none" &&
+              control.visibility === "visible" &&
+              control.disabled === false &&
+              control.hit,
+            "declared primary live control is visible, enabled and unobstructed",
+          );
+          selector = control.selector;
+        }
         const point = await evaluate(`(() => {
         const e=document.querySelector(${JSON.stringify(selector)});
         if(!e) throw Error('Missing click target: '+${JSON.stringify(selector)});

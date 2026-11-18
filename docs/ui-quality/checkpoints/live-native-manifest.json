@@ -1,0 +1,190 @@
+{
+  "sourceCommit": "aa09f69ebedfa917f6d21cd6568ce1aeeb968b51",
+  "productionCodeCommit": "00efffddbfd492dbc16f51487eaacf36b5952d88",
+  "type": "Actual native Electron app, isolated canonical synthetic histories and QA-only FakeModel/send latency injection",
+  "qaGuide": "LIVE-NATIVE-QA.md",
+  "sourceDisclosure": "Normal built renderer, production admission/queue/steer/persistence/scroll and native WebSocket. QA adapter emits controlled text deltas; public send entry delay/rejection is injected before admission. No real provider or credentials.",
+  "observations": [
+    "01-02: durable interrupted thread retains two steer + three queued inputs; one unified internally scrollable tray exposes all queue controls.",
+    "03-04: synthetic terminal provider failure retains one steer; Details reveals actual injected error.",
+    "05: navigate away and back, exact pending contents retained.",
+    "06-07: bottom follows live checkpoint5 then25 while output grows.",
+    "08-09: native wheel selects old Reading checkpoint29; same visible anchor stays fixed while adapter receipts advance30 to50.",
+    "10-11: switch to failure thread and back, then collapse sidebar; Reading29 remains in view while streaming continues.",
+    "12: Back to live jumps to105-110; subsequent visible output advances to119 while following.",
+    "13-15: keyboard focus opens real send action panel; Return uses configured Next turn, then Control+Return sends Steer; one Queue and one Steer are shown simultaneously.",
+    "16-17: Stop retains both pending inputs; partial response is folded in Activity and remains available when expanded.",
+    "18-19: QA_ADMIT shows Sending in local pending area during injected15s pre-admission wait, then one canonical user bubble and response.",
+    "20-22: injected uncommitted error is surfaced conservatively as Delivery not confirmed through native IPC; error details and Check delivery are available. Absence from current canonical read is not presented as proof of non-delivery.",
+    "23: Add back to draft, replace text with Recovered local input, then send. New input completes once; original uncertain recovery copy remains until explicit dismissal."
+  ],
+  "limits": [
+    "Synthetic provider timing/errors, not live external service quality or network conditions.",
+    "QA_REJECT is a definite pre-admission injection, but the native IPC surface treats it as uncertain; no claim that a definitive rejected label was shown.",
+    "Live stream was stopped by actual UI; no unfinished QA background generation remains.",
+    "This capture build excludes #748 and later pending-only Fork label slice; combined #748 native captures are separate."
+  ],
+  "files": [
+    {
+      "file": "01-persisted-pending-tray.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "capturedAtUTC": "2026-11-09T16:52:53.363176+00:00",
+      "sha256": "804a9772556cf11387566ce4acc3ea8058f3ea9667dd88cbcf798be05eb839da"
+    },
+    {
+      "file": "02-pending-tray-lower-queue.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "capturedAtUTC": "2026-11-09T16:53:21.878672+00:00",
+      "sha256": "604d31af26fcf6e59f9e8b10ebb5ded8bb58c1caa3ce202a0a8c177cbea590a3"
+    },
+    {
+      "file": "03-provider-failure-held-steer.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "capturedAtUTC": "2026-11-09T16:53:28.202559+00:00",
+      "sha256": "e8e3108a58bc11836e74bd6963dbae846718b45cc63a0970e1aa1ae91d31aef7"
+    },
+    {
+      "file": "04-provider-failure-details.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "capturedAtUTC": "2026-11-09T16:53:42.006315+00:00",
+      "sha256": "d794195b7e15e8f164ea1b0ffda46b3072d2fabe195ae1998517e75b085d0e4a"
+    },
+    {
+      "file": "05-pending-return-preserved.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "capturedAtUTC": "2026-11-09T16:53:49.310186+00:00",
+      "sha256": "a126bffef9f9a283fd619649a2e81af088cacb03bd962ec3a1ea2bb20c3b430b"
+    },
+    {
+      "file": "06-stream-initial-follow.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "capturedAtUTC": "2026-11-09T16:54:07.373865+00:00",
+      "sha256": "a2223862de419bb9ca316945240bd183bbe9f7c74ab5485aa2e279db1c817328"
+    },
+    {
+      "file": "07-stream-follow-advanced.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "capturedAtUTC": "2026-11-09T16:54:28.397492+00:00",
+      "sha256": "77b9e41cfaf70a8b59aaf70b2fe403c2c2e7102b246600d897ebd58cf73b6dab"
+    },
+    {
+      "file": "08-stream-held-reading-position.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "capturedAtUTC": "2026-11-09T16:54:38.525313+00:00",
+      "sha256": "29beb5599c93626dcfb5dbc39e686a69b3dca8053d12a2b5265607f2b2eaeaff"
+    },
+    {
+      "file": "09-stream-held-after-progress.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "capturedAtUTC": "2026-11-09T16:54:56.720989+00:00",
+      "sha256": "0ab458e10f5b0c4fbd1179abe50690f3435050f7fcdd307d26010a065165b427"
+    },
+    {
+      "file": "10-stream-return-reading-position.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "capturedAtUTC": "2026-11-09T16:55:32.868345+00:00",
+      "sha256": "e806872cdf04d31df9adb469acdd78ebb012e4c7060800a9fff8d6a9094d71d3"
+    },
+    {
+      "file": "11-stream-held-sidebar-collapsed.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "capturedAtUTC": "2026-11-09T16:55:49.824043+00:00",
+      "sha256": "42eff73c910df61ffd59b054c24f41c17575af4e75139ca4ba44036a9940defa"
+    },
+    {
+      "file": "12-stream-resumed-follow.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "capturedAtUTC": "2026-11-09T16:56:03.531798+00:00",
+      "sha256": "975783dcb96ade82c23df9c565d8fcf35546e2164c7011aa8a7c60cf919ff274"
+    },
+    {
+      "file": "13-running-send-action-panel.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "capturedAtUTC": "2026-11-09T16:56:58.014809+00:00",
+      "sha256": "bfe7bcecdb1d9e2fc1462f1c7ca637351309d3d60c71811a66a907b7549ee538"
+    },
+    {
+      "file": "14-stream-native-queue.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "capturedAtUTC": "2026-11-09T16:57:12.846545+00:00",
+      "sha256": "b64c7691142a900c59d73e890419bd24830e62f37d188d3b97d6c6c49ffe3ba3"
+    },
+    {
+      "file": "15-stream-native-steer-and-queue.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "capturedAtUTC": "2026-11-09T16:57:22.330375+00:00",
+      "sha256": "37412033a617c8e80484ccc3cc0e57490ee31954205e99e59eb312816b94ba09"
+    },
+    {
+      "file": "16-stream-stopped-pending-preserved.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "capturedAtUTC": "2026-11-09T16:57:39.474069+00:00",
+      "sha256": "7bfa355eb70b145c1f5668405ce935f723d2f00355c72e9855cf7c460b2f7332"
+    },
+    {
+      "file": "17-interrupted-activity-expanded.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "capturedAtUTC": "2026-11-09T16:58:23.277287+00:00",
+      "sha256": "150eefdf5444530153fe6cb9a1fc634325f0a18677c1113ecf3f994fd137047e"
+    },
+    {
+      "file": "18-admitting-local-pending.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "capturedAtUTC": "2026-11-09T16:58:51.172790+00:00",
+      "sha256": "4aab03f640a3a021a00ac60fa86d138c441176f119a47d6699e4e8057400ed3c"
+    },
+    {
+      "file": "19-admitted-completed-once.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "capturedAtUTC": "2026-11-09T16:59:23.092220+00:00",
+      "sha256": "f314ff0db0779f9d8e84c409a253525004f5e273279777077d2196b3bdb9ec53"
+    },
+    {
+      "file": "20-delivery-uncertain.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "capturedAtUTC": "2026-11-09T16:59:31.144077+00:00",
+      "sha256": "fe42927a04fc02a82d32774901666aeddf7104cc6a369f5142c7568ca76dcae6"
+    },
+    {
+      "file": "21-delivery-error-details.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "capturedAtUTC": "2026-11-09T16:59:50.743727+00:00",
+      "sha256": "d8146aba0d09446839d9ca4026891c8ecc7c4ff1809d672ba891e320d36f20e2"
+    },
+    {
+      "file": "22-delivery-read-reconciliation.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "capturedAtUTC": "2026-11-09T17:00:15.319288+00:00",
+      "sha256": "d8146aba0d09446839d9ca4026891c8ecc7c4ff1809d672ba891e320d36f20e2"
+    },
+    {
+      "file": "23-edited-recovery-completed.jpg",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "capturedAtUTC": "2026-11-09T17:01:26.386019+00:00",
+      "sha256": "b67952a291f37713d28c119d64229670828cb94553997b8eeb4a039628db77e7"
+    }
+  ]
+}

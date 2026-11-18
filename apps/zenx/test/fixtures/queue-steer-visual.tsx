@@ -102,12 +102,31 @@ initial = applyQueueItem(initial, {
   input: [
     {
       type: "text",
-      text: zh
-        ? "再检查窄屏布局和键盘焦点。保留检查结果，暂时不要发布。"
-        : "Check the narrow layout and keyboard focus too. Keep the findings; don’t publish yet.",
+      text: params.has("steerFocus")
+        ? "Compare the synthetic desktop notes, keep each queued instruction readable, and verify keyboard actions without sending messages or changing the saved draft."
+        : zh
+          ? "再检查窄屏布局和键盘焦点。保留检查结果，暂时不要发布。"
+          : "Check the narrow layout and keyboard focus too. Keep the findings; don’t publish yet.",
     },
   ],
 });
+if (params.has("hostQueue")) {
+  const text = zh ? "计划检查已排队。" : "Scheduled checks are queued.";
+  initial = applyQueueItem(initial, {
+    type: "host_message_queued",
+    id: "synthetic-trigger-message",
+    clientId: "synthetic-trigger-client",
+    threadId: initial.id,
+    createdAt: "2026-10-14T06:00:01.000Z",
+    sender: "host",
+    source: "trigger",
+    sourceId: "synthetic-trigger",
+    intent: "queue",
+    deliveryMode: "batch-next",
+    input: [{ type: "text", text }],
+    text,
+  });
+}
 initial = applyQueueItem(initial, {
   ...queueItem(7, [
     {

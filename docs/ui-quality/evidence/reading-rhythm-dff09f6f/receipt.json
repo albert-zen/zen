@@ -1,0 +1,37 @@
+{
+  "decision": "REJECTED / revert candidate product changes",
+  "candidate": "dff09f6f04b90fd3a7a5948d4a5373c34424366b",
+  "baseline": "7f951c2ac5af5691645d55379e33859898018fa6",
+  "restoredProductFrom": "745389d3938e969b3d54592fc098a956a9bbd529",
+  "blindMapping": {
+    "X": "dff09f6f04b90fd3a7a5948d4a5373c34424366b",
+    "Y": "7f951c2ac5af5691645d55379e33859898018fa6"
+  },
+  "runId": 43201004493,
+  "artifactId": 13935426556,
+  "buildMs": 6298,
+  "captureMs": 50259,
+  "scope": "Fast production-component rendering only. All content and services are synthetic. Not native Electron, OS capture, live Host, end-to-end acceptance or a full regression run.",
+  "rendererErrors": [],
+  "externalRequests": [],
+  "candidateImages": {
+    "reading-desktop-light-prose-top.png": "a2af80246c0e9dbaed236f49ef7e8b605f5fdd211b7d2595467ae61a3d8c9d1e",
+    "reading-desktop-light-heading-list.png": "ea4787f7cb75205da8d7193df884909acf4cfaeb6d95819b381ad982d34dc8c3",
+    "reading-desktop-light-table-code.png": "eac286e4a1885db5dd32b14d8cb72fd253dd3842e496ca57a5b1e97aa009acb3",
+    "reading-desktop-light-information-reading.png": "5bd45fe8a2818a662a9fc350721cc7ec69328412fb25a267826f9bd4c32e5005",
+    "reading-desktop-dark-prose-top.png": "5f2c675f51daf8b65108933c801283acd95dead0f3573abaaf36a8f3f8c22e8a",
+    "reading-desktop-dark-heading-list.png": "a7381b1f77ccbeabd676486fa0d495ad0c8eafbc8b4eb37712f8a56d781bbdeb",
+    "reading-desktop-dark-table-code.png": "5c5fade121237a204fe96f92a0ed8de66484babf9135c9f9c7eadaa41a58ac32",
+    "reading-desktop-dark-information-reading.png": "7dafd8b3541e06c35dc8eacb98de3ceaf097325033d4428b19da5c82b114fe29"
+  },
+  "baselineImages": {
+    "reading-desktop-light-prose-top.png": "da800b24b947d39ab8cbda1a05b47cc19c5d33baad6f985b44e93986b06c28fe",
+    "reading-desktop-light-heading-list.png": "2b23266e05dd6a437ba086d98e427af94646a63cda3b2e5b628ce70fb7ca7d1f",
+    "reading-desktop-light-table-code.png": "639bbaff8a0af99dd5f299c78a3834b67456ca6eb99fc495710d1e578db12bd6",
+    "reading-desktop-light-information-reading.png": "f73e7c4b7230918e23eb3fc8481488d69a8160c6d83b6ec2ca3921aed6a7d07f",
+    "reading-desktop-dark-prose-top.png": "7b7f9d03e2c65cd6db64a5cabb7c50ff0a07ddfa25ed8158b91b9d9f71f0db9d",
+    "reading-desktop-dark-heading-list.png": "54685950f180b856ad985ae32ea33f29a5d73dd56c252265c7c47416a10f7e10",
+    "reading-desktop-dark-table-code.png": "742acdb07c9b59ea05676b323e416cf98161978647197c993ad0654607037d6f",
+    "reading-desktop-dark-information-reading.png": "ec1d9fa8ab872a332f01fec0ddbd078d7a1335bcaae9d37fb6f4bdb73198bef1"
+  }
+}

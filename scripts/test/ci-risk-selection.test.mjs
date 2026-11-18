@@ -69,6 +69,107 @@ function fixture(t) {
   };
 }
 const runs = (r) => lanes.filter((l) => r.modes[l] === "run");
+const roomFileTests = [
+  "apps/zenx/test/room-file-owner-labels.test.ts",
+  "apps/zenx/test/room-file-owner-tabs.test.ts",
+];
+test("Room renderer sources select both owner-label and mounted-routing units", (t) => {
+  for (const source of [
+    "apps/zenx/src/renderer/src/room-file-owner-labels.ts",
+    "apps/zenx/src/renderer/src/auxiliary-panel.tsx",
+    "apps/zenx/src/renderer/src/styles.css",
+  ]) {
+    const f = fixture(t);
+    f.put(source);
+    const report = f.select(f.commit());
+    for (const file of roomFileTests)
+      assert.equal(
+        report.quickTests.filter((path) => path === file).length,
+        1,
+        source,
+      );
+    assert.deepEqual(runs(report), ["quick", ...classifyRisk(source).lanes]);
+    assert.equal(report.modes.aggregate, "omit-pr-risk");
+  }
+});
+
+test("different integration tree retains both Room units in the conservative fallback", (t) => {
+  const f = fixture(t);
+  f.put("apps/zenx/src/renderer/src/room-file-owner-labels.ts");
+  const head = f.commit();
+  f.put("integration-only.txt");
+  const checkout = f.commit();
+  const report = f.select(head, { checkout });
+  assert.match(
+    report.reasons.join("\n"),
+    /Integration tree differs from selected head/,
+  );
+  for (const file of [
+    ...baselineTests,
+    ...roomFileTests,
+    "apps/zenx/test/shell-panel-renderer.test.ts",
+    "apps/zenx/test/browser-targeted-input.test.ts",
+    "apps/mobile/test/session.test.mjs",
+  ])
+    assert.ok(report.quickTests.includes(file), file);
+  assert.deepEqual(
+    runs(report),
+    lanes.filter((lane) => lane !== "aggregate"),
+  );
+});
+
+test("unrelated mobile/browser and docs plans do not gain Room units or different lanes", (t) => {
+  for (const source of [
+    "apps/mobile/src/session.mjs",
+    "apps/zenx/src/main/capabilities/user-browser-provider.ts",
+    "docs/a.md",
+  ]) {
+    const f = fixture(t);
+    f.put(source, "// edit\n");
+    const report = f.select(f.commit());
+    for (const file of roomFileTests)
+      assert.ok(!report.quickTests.includes(file), source);
+    assert.deepEqual(
+      runs(report),
+      source.startsWith("docs/")
+        ? []
+        : ["quick", ...classifyRisk(source).lanes],
+    );
+  }
+});
+
+test("the bound quick runner dispatches both Room units without filters and preserves failure", (t) => {
+  const f = fixture(t);
+  f.put("apps/zenx/src/renderer/src/room-file-owner-labels.ts");
+  const head = f.commit();
+  const report = f.select(head);
+  // The runner's existence check is real; child execution is injected solely
+  // to inspect its exact argv, not to claim these product tests executed here.
+  for (const file of report.quickTests) f.put(file);
+  const destination = join(f.cwd, "receipt.json");
+  let argv;
+  const status = runQuickTests(destination, {
+    cwd: f.cwd,
+    env: {
+      GITHUB_EVENT_NAME: "pull_request",
+      CI_BASE_SHA: f.base,
+      CI_HEAD_SHA: head,
+      CI_CHECKOUT_SHA: head,
+      GITHUB_RUN_ID: "123",
+      GITHUB_RUN_ATTEMPT: "2",
+      CI_PLAN_DIGEST: planDigest(report),
+    },
+    spawn: (_command, args) => {
+      argv = args;
+      return { status: 1 };
+    },
+  });
+  assert.equal(status, 1);
+  assert.deepEqual(argv, ["--import", "tsx", "--test", ...report.quickTests]);
+  for (const file of roomFileTests) assert.ok(argv.includes(file));
+  assert.equal(JSON.parse(readFileSync(destination)).exitCode, 1);
+});
+
 test("risk policy covers ordinary ready and draft PRs identically, not by draft status", (t) => {
   const f = fixture(t);
   f.put("apps/mobile/src/session.mjs", "// edit\n");

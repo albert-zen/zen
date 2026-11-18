@@ -97,37 +97,103 @@ for (const scene of [
         "Promise.all(document.querySelector('.reference-details-popover').getAnimations({ subtree: true }).map(animation => animation.finished.catch(() => {}))).then(() => true)",
       );
       await screenshot(`quote-hover-${scene.theme}-${scene.width}.png`);
-      await send("Input.dispatchMouseEvent", {
-        type: "mousePressed",
-        button: "left",
-        clickCount: 1,
-        ...bounds,
-      });
-      await send("Input.dispatchMouseEvent", {
-        type: "mouseReleased",
-        button: "left",
-        clickCount: 1,
-        ...bounds,
-      });
-      await delay(150);
-      assert.equal(
-        await evaluate(
-          "!!document.querySelector('.reference-details-popover')",
-        ),
-        false,
-      );
-      const target = await evaluate(
-        `(() => { const ranges = [...CSS.highlights.get('zenx-quote-source') ?? []]; const range = ranges[0]; const rect = range?.getBoundingClientRect(); const viewport = document.querySelector('.messages'); const bounds = viewport.getBoundingClientRect(); return { excerpt: range?.toString(), item: document.activeElement?.dataset.quoteItemId, centerDelta: rect ? Math.abs(rect.top + rect.height / 2 - (bounds.top + viewport.clientHeight / 2)) : null, atBoundary: viewport.scrollTop < 1 || viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 1 }; })()`,
-      );
-      assert.equal(target.excerpt, excerpt);
-      assert.equal(target.item, "synthetic-answer");
-      assert.ok(target.centerDelta < 3, JSON.stringify(target));
-      await screenshot(`quote-source-${scene.theme}-${scene.width}.png`);
-      await delay(1700);
-      assert.equal(
-        await evaluate("CSS.highlights.has('zenx-quote-source')"),
-        false,
-      );
+      // Read-only diagnostics retain the original click coordinates and dispatch count.
+      const readClickState = () =>
+        evaluate(`(() => {
+        const point = ${JSON.stringify(bounds)};
+        const token = document.querySelector('.user-bubble .reference-token-details');
+        const popover = document.querySelector('.reference-details-popover');
+        const describe = e => {
+          if (!e) return null;
+          const r=e.getBoundingClientRect(), style=getComputedStyle(e);
+          return { tag:e.tagName, id:e.id, className:e.className,
+            quoteItemId:e.dataset?.quoteItemId ?? null,
+            rect:{x:r.x,y:r.y,width:r.width,height:r.height},
+            display:style.display, visibility:style.visibility,
+            expanded:e.getAttribute('aria-expanded'), state:e.getAttribute('data-state') };
+        };
+        const hit=document.elementFromPoint(point.x,point.y);
+        const range=[...CSS.highlights.get('zenx-quote-source') ?? []][0];
+        const r=range?.getBoundingClientRect(), viewport=document.querySelector('.messages');
+        return { point, token:describe(token), hit:describe(hit),
+          tokenOwnsHit:!!token && !!hit && (token===hit || token.contains(hit)),
+          activeElement:describe(document.activeElement), popover:describe(popover),
+          animations:popover?.getAnimations({subtree:true}).map(a=>({playState:a.playState,currentTime:a.currentTime})) ?? [],
+          sourceHighlight:range ? {excerpt:range.toString(),rect:{x:r.x,y:r.y,width:r.width,height:r.height}} : null,
+          scroll:viewport ? {top:viewport.scrollTop,height:viewport.scrollHeight,clientHeight:viewport.clientHeight} : null };
+      })()`);
+      let beforeClick;
+      let target;
+      try {
+        beforeClick = await readClickState();
+      } catch (error) {
+        beforeClick = { diagnosticError: String(error) };
+      }
+      try {
+        await send("Input.dispatchMouseEvent", {
+          type: "mousePressed",
+          button: "left",
+          clickCount: 1,
+          ...bounds,
+        });
+        await send("Input.dispatchMouseEvent", {
+          type: "mouseReleased",
+          button: "left",
+          clickCount: 1,
+          ...bounds,
+        });
+        await delay(150);
+        assert.equal(
+          await evaluate(
+            "!!document.querySelector('.reference-details-popover')",
+          ),
+          false,
+        );
+        target = await evaluate(
+          `(() => { const ranges = [...CSS.highlights.get('zenx-quote-source') ?? []]; const range = ranges[0]; const rect = range?.getBoundingClientRect(); const viewport = document.querySelector('.messages'); const bounds = viewport.getBoundingClientRect(); return { excerpt: range?.toString(), item: document.activeElement?.dataset.quoteItemId, centerDelta: rect ? Math.abs(rect.top + rect.height / 2 - (bounds.top + viewport.clientHeight / 2)) : null, atBoundary: viewport.scrollTop < 1 || viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 1 }; })()`,
+        );
+        assert.equal(target.excerpt, excerpt);
+        assert.equal(target.item, "synthetic-answer");
+        assert.ok(target.centerDelta < 3, JSON.stringify(target));
+        await screenshot(`quote-source-${scene.theme}-${scene.width}.png`);
+        await delay(1700);
+        assert.equal(
+          await evaluate("CSS.highlights.has('zenx-quote-source')"),
+          false,
+        );
+      } catch (error) {
+        const failure = {
+          ...scene,
+          beforeClick,
+          error: String(error.stack ?? error),
+        };
+        try {
+          failure.afterClick = await readClickState();
+        } catch (diagnosticError) {
+          failure.snapshotError = String(diagnosticError);
+        }
+        const prefix = `quote-click-failed-${scene.theme}-${scene.width}`;
+        try {
+          await writeFile(
+            path.join(directory, `${prefix}-evidence.json`),
+            JSON.stringify(failure, null, 2) + "\n",
+          );
+        } catch (diagnosticError) {
+          console.error(
+            "Quote failure diagnostics could not be saved",
+            diagnosticError,
+          );
+        }
+        try {
+          await screenshot(`${prefix}.png`);
+        } catch (diagnosticError) {
+          console.error(
+            "Quote failure screenshot could not be saved",
+            diagnosticError,
+          );
+        }
+        throw error;
+      }
       evidence.scenes.push({ ...scene, ...target, highlightCleared: true });
     },
   );

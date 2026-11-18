@@ -1084,7 +1084,7 @@ try {
       ),
     );
     await clickSelector(
-      "[data-local-path-preview] .markdown-code-actions button",
+      "[data-local-path-preview] .markdown-code-actions button:not(.markdown-code-copy):not(.markdown-code-wrap)",
     );
     await waitFor(
       `document.querySelector('.auxiliary-content:not([hidden])')?.id.includes('long-source')`,
@@ -1100,7 +1100,7 @@ try {
       receipt,
       "text-path-copy-remains-separate",
       await evaluate(
-        `document.querySelectorAll('[data-local-path-preview] .markdown-code-actions button').length===2 && document.querySelector('[data-local-path-preview] pre code').textContent==='/synthetic/file-sidebar-preview/src/long-source.ts'`,
+        `(() => { const root=document.querySelector('[data-local-path-preview]'); const actions=root.querySelector('.markdown-code-actions'); const open=actions.querySelector('button:not(.markdown-code-copy):not(.markdown-code-wrap)'); const copy=actions.querySelector('.markdown-code-copy'); const wrap=actions.querySelector('.markdown-code-wrap'); return open?.textContent===${JSON.stringify(lang === "en" ? "Open file" : "打开文件")} && copy?.textContent===${JSON.stringify(lang === "en" ? "Copy" : "复制")} && wrap?.textContent===${JSON.stringify(lang === "en" ? "Wrap lines" : "代码换行")} && new Set([open,copy,wrap]).size===3 && [open,copy,wrap].every(b=>b?.type==='button' && !b.disabled) && wrap.getAttribute('aria-pressed')==='false' && root.querySelector('pre code').textContent==='/synthetic/file-sidebar-preview/src/long-source.ts'; })()`,
       ),
     );
     await screenshot(`local-paths-${lang}-text-block-opened.png`);

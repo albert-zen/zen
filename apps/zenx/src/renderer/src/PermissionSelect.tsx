@@ -23,6 +23,7 @@ export function PermissionSelect({
   errorId = "composer-permission-error",
   value,
   disabled,
+  displayOnly = false,
   switching,
   error,
   legacyApproval = false,
@@ -32,6 +33,8 @@ export function PermissionSelect({
   value: FilePermissionMode;
   legacyApproval?: boolean;
   disabled: boolean;
+  /** Display a fixed inherited value, not a temporarily unavailable editor. */
+  displayOnly?: boolean;
   switching?: boolean;
   error?: string | null;
   onChange?(mode: FilePermissionMode): void;
@@ -44,7 +47,8 @@ export function PermissionSelect({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const restoreFocusRef = useRef(false);
-  const unavailable = disabled || switching || onChange === undefined;
+  const unavailable =
+    displayOnly || disabled || switching || onChange === undefined;
   const close = (restoreFocus = true) => {
     restoreFocusRef.current = restoreFocus;
     setOpen(false);
@@ -71,15 +75,15 @@ export function PermissionSelect({
         <PopoverTrigger asChild>
           <button
             ref={triggerRef}
-            className="composer-model-trigger permission-trigger"
+            className={`composer-model-trigger permission-trigger${displayOnly ? " permission-readonly" : ""}`}
             type="button"
             aria-label={i18n.t("shell:filePermissions")}
-            aria-haspopup="menu"
-            aria-expanded={open}
+            aria-haspopup={displayOnly ? undefined : "menu"}
+            aria-expanded={displayOnly ? undefined : open}
             aria-describedby={error ? errorId : undefined}
             disabled={unavailable}
             title={
-              disabled
+              disabled && !displayOnly
                 ? i18n.t(
                     "shell:waitForTheCurrentOperationToFinishBeforeChangingPermissions",
                   )
@@ -99,7 +103,7 @@ export function PermissionSelect({
                   ? i18n.t("shell:approvalRequired")
                   : labels[value]}
             </span>
-            <Icon name="chevron-down" size={12} />
+            {displayOnly ? null : <Icon name="chevron-down" size={12} />}
           </button>
         </PopoverTrigger>
         <PopoverContent

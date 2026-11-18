@@ -33,14 +33,20 @@ test("directory picker navigates folders and keyboard focus, selects, and restor
   });
   try {
     await waitFor(() => findButton("Alpha"));
-    assert.equal(harness.dom.window.document.activeElement, button("Alpha"));
+    assert.ok(
+      harness.dom.window.document.activeElement === button("Alpha"),
+      "Alpha receives focus",
+    );
 
     await pressKey(
       harness.dom,
       document.querySelector(".directory-picker-list")!,
       "ArrowDown",
     );
-    assert.equal(harness.dom.window.document.activeElement, button("Broken"));
+    assert.ok(
+      harness.dom.window.document.activeElement === button("Broken"),
+      "Broken receives focus",
+    );
 
     await click(button("Alpha"));
     await waitFor(() => findButton("Child"));
@@ -61,9 +67,9 @@ test("directory picker navigates folders and keyboard focus, selects, and restor
     const close = ariaButton("Close folder picker");
     close.focus();
     await pressKey(harness.dom, close, "Tab", { shiftKey: true });
-    assert.equal(
-      harness.dom.window.document.activeElement,
-      button("Add folder"),
+    assert.ok(
+      harness.dom.window.document.activeElement === button("Add folder"),
+      "Add folder receives focus",
     );
 
     await click(button("Alpha"));
@@ -153,9 +159,226 @@ test("directory picker ignores Backspace before a root listing is available", as
   }
 });
 
+test("directory picker retries an initial browser failure without dismissal", async () => {
+  let attempts = 0;
+  const harness = await mountPicker(
+    async () => listing("/docs", "/", []),
+    async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("locations unavailable");
+      return { locations: [], initialPath: "/docs" };
+    },
+  );
+  try {
+    await waitFor(() => document.querySelector('[role="alert"]'));
+    assert.equal(button("Add folder").disabled, true);
+    assert.equal(document.querySelector(".directory-picker-body > nav"), null);
+    assert.equal(document.querySelector(".directory-picker-breadcrumbs"), null);
+    await click(button("Try again"));
+    await waitFor(() => currentSelection() === "/docs");
+    assert.equal(attempts, 2);
+    assert.equal(button("Add folder").disabled, false);
+    assert.equal(document.querySelector(".directory-picker-body > nav"), null);
+  } finally {
+    await unmountPicker(harness);
+    harness.dom.window.close();
+  }
+});
+
+test("focused children are navigation actions, while Add uses the current folder", async () => {
+  const harness = await mountPicker(async () =>
+    listing("/docs", "/", ["Alpha", "Beta"]),
+  );
+  try {
+    await waitFor(() => findButton("Alpha"));
+    assert.equal(ariaButton("Open folder Alpha"), button("Alpha"));
+    assert.equal(button("Alpha").hasAttribute("aria-selected"), false);
+    assert.equal(button("Alpha").hasAttribute("data-active"), false);
+    assert.equal(
+      document.querySelector('[aria-current="location"]')?.textContent,
+      "docs",
+    );
+    await pressKey(harness.dom, button("Alpha"), "ArrowDown");
+    assert.equal(document.activeElement, button("Beta"));
+    assert.equal(currentSelection(), "/docs");
+    const description = button("Add folder").getAttribute("aria-describedby");
+    assert.ok(description);
+    assert.equal(document.getElementById(description)?.textContent, "/docs");
+    await click(button("Add folder"));
+    assert.deepEqual(harness.selected(), ["/docs"]);
+  } finally {
+    await unmountPicker(harness);
+    harness.dom.window.close();
+  }
+});
+
+test("long paths remain complete and cannot be added during navigation", async () => {
+  const path = `/docs/${"long-project-name-".repeat(20)}`;
+  const pending = deferred<DirectoryListing>();
+  const harness = await mountPicker(
+    async (directory) =>
+      directory === path
+        ? listing(path, "/docs", ["Child"])
+        : await pending.promise,
+    { locations: [], initialPath: path },
+  );
+  try {
+    await waitFor(() => findButton("Child"));
+    assert.equal(currentSelection(), path);
+    const pathPreview = document.getElementById("directory-picker-selection");
+    assert.ok(pathPreview);
+    assert.equal(pathPreview.tabIndex, 0);
+    await act(async () => pathPreview.focus());
+    assert.equal(document.activeElement, pathPreview);
+    assert.equal(pathPreview.textContent, path);
+    assert.equal(
+      document.querySelector("footer strong")?.getAttribute("title"),
+      path,
+    );
+    assert.equal(
+      ariaButton("Open folder Child").getAttribute("title"),
+      `${path}/Child`,
+    );
+    await click(button("Child"));
+    assert.equal(button("Add folder").disabled, true);
+    assert.equal(ariaButton("Open parent folder").disabled, true);
+    assert.equal(
+      document
+        .querySelector(".directory-picker-list")
+        ?.getAttribute("aria-busy"),
+      "true",
+    );
+    await click(button("Add folder"));
+    assert.deepEqual(harness.selected(), []);
+    await act(async () => pending.resolve(listing(`${path}/Child`, path, [])));
+    await waitFor(() => currentSelection() === `${path}/Child`);
+    assert.equal(button("Add folder").disabled, false);
+  } finally {
+    await unmountPicker(harness);
+    harness.dom.window.close();
+  }
+});
+
+test("empty folders retain actual keyboard focus for Backspace return", async () => {
+  const harness = await mountPicker(async (path) =>
+    path === "/docs"
+      ? listing(path, "/", ["Empty"])
+      : listing(path, "/docs", []),
+  );
+  try {
+    await click(button("Empty"));
+    await waitFor(() => currentSelection() === "/docs/Empty");
+    assert.equal(document.activeElement?.className, "directory-picker-list");
+    await pressKey(harness.dom, document.activeElement!, "Backspace");
+    await waitFor(() => currentSelection() === "/docs");
+    assert.ok(
+      document.activeElement === button("Empty"),
+      "Empty receives focus",
+    );
+  } finally {
+    await unmountPicker(harness);
+    harness.dom.window.close();
+  }
+});
+
+test("late navigation does not steal focus from Cancel", async () => {
+  const pending = deferred<DirectoryListing>();
+  const harness = await mountPicker(async (path) =>
+    path === "/docs" ? listing(path, "/", ["Slow"]) : await pending.promise,
+  );
+  try {
+    await click(button("Slow"));
+    await act(async () => button("Cancel").focus());
+    await act(async () =>
+      pending.resolve(listing("/docs/Slow", "/docs", ["Result"])),
+    );
+    await waitFor(() => findButton("Result"));
+    assert.ok(document.activeElement === button("Cancel"));
+  } finally {
+    await unmountPicker(harness);
+    harness.dom.window.close();
+  }
+});
+
+for (const outcome of ["success", "failure"] as const) {
+  test(`initial listing ${outcome} preserves newer Cancel focus`, async () => {
+    const pending = deferred<DirectoryListing>();
+    const harness = await mountPicker(async () => await pending.promise);
+    try {
+      await waitFor(() => harness.listCalls.length === 1);
+      await act(async () => button("Cancel").focus());
+      assert.ok(document.activeElement === button("Cancel"));
+      await act(async () => {
+        if (outcome === "success") {
+          pending.resolve(listing("/docs", "/", ["Ready"]));
+        } else {
+          pending.reject(new Error("initial listing unavailable"));
+        }
+      });
+      await waitFor(() =>
+        findButton(outcome === "success" ? "Ready" : "Try again"),
+      );
+      assert.ok(document.activeElement === button("Cancel"));
+      assert.equal(harness.cancelCount(), 0);
+      assert.equal(button("Add folder").disabled, outcome === "failure");
+    } finally {
+      await unmountPicker(harness);
+      harness.dom.window.close();
+    }
+  });
+}
+
+test("cancel retires initial discovery before it can start listing", async () => {
+  const pending = deferred<DirectoryBrowserSnapshot>();
+  const harness = await mountPicker(
+    async () => listing("/docs", "/", []),
+    () => pending.promise,
+  );
+  try {
+    await click(button("Cancel"));
+    assert.equal(harness.cancelCount(), 1);
+    await act(async () =>
+      pending.resolve({ locations: [], initialPath: "/docs" }),
+    );
+    assert.deepEqual(harness.listCalls, []);
+  } finally {
+    await unmountPicker(harness);
+    harness.dom.window.close();
+  }
+});
+
+test("latest navigation wins over an older success and failure", async () => {
+  const older = deferred<DirectoryListing>();
+  const failed = deferred<DirectoryListing>();
+  const harness = await mountPicker(async (path) => {
+    if (path === "/docs") return listing(path, "/", ["Slow"]);
+    if (path === "/docs/Slow") return await older.promise;
+    if (path === "/home") return await failed.promise;
+    return listing("/", null, ["Latest"]);
+  });
+  try {
+    await click(button("Slow"));
+    await click(button("Home"));
+    await click(button("Root"));
+    await waitFor(() => findButton("Latest"));
+    await act(async () => {
+      older.resolve(listing("/docs/Slow", "/docs", ["Obsolete"]));
+      failed.reject(new Error("obsolete failure"));
+    });
+    assert.equal(currentSelection(), "/");
+    assert.equal(findButton("Obsolete"), undefined);
+    assert.equal(document.querySelector('[role="alert"]'), null);
+    assert.ok(document.activeElement === button("Latest"));
+  } finally {
+    await unmountPicker(harness);
+    harness.dom.window.close();
+  }
+});
+
 async function mountPicker(
   listDirectory: (directory: string) => Promise<DirectoryListing>,
-  snapshot: DirectoryBrowserSnapshot = {
+  snapshot:
+    DirectoryBrowserSnapshot | (() => Promise<DirectoryBrowserSnapshot>) = {
     locations: [
       { label: "Home", path: "/home" },
       { label: "Documents", path: "/docs" },
@@ -185,7 +408,8 @@ async function mountPicker(
   Object.assign(dom.window, {
     zenx: {
       settings: {
-        getDirectoryBrowser: async () => snapshot,
+        getDirectoryBrowser: async () =>
+          typeof snapshot === "function" ? await snapshot() : snapshot,
         listDirectory: async (directory: string) => {
           listCalls.push(directory);
           return await listDirectory(directory);
@@ -317,10 +541,13 @@ async function waitFor<T>(read: () => T | null | undefined): Promise<T> {
 function deferred<T>(): {
   promise: Promise<T>;
   resolve(value: T): void;
+  reject(reason: Error): void;
 } {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((finish) => {
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((finish, fail) => {
     resolve = finish;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }

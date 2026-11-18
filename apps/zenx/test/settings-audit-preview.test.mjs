@@ -310,3 +310,324 @@ test("Metadata preview changes existing input only and preserves unknown/manual 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("General guidance and production directory portal use synthetic read-only journeys in both locales", async () => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "zenx-settings-journeys-"),
+  );
+  let dom;
+  try {
+    await execute(
+      process.execPath,
+      [
+        new URL("../scripts/build-settings-audit-preview.mjs", import.meta.url)
+          .pathname,
+        directory,
+      ],
+      { maxBuffer: 2 * 1024 * 1024 },
+    );
+    const html = await readFile(
+      path.join(directory, "settings-audit.html"),
+      "utf8",
+    );
+    for (const lang of ["en", "zh-CN"]) {
+      const errors = [];
+      const virtualConsole = new VirtualConsole();
+      virtualConsole.on("jsdomError", (error) => {
+        if (
+          error.type !== "css-parsing" &&
+          !error.message.includes("Could not parse CSS stylesheet")
+        )
+          errors.push(String(error));
+      });
+      const boot = (suffix) =>
+        new JSDOM(html, {
+          url: `http://localhost/settings-audit.html?lang=${lang}&${suffix}`,
+          runScripts: "dangerously",
+          pretendToBeVisual: true,
+          virtualConsole,
+          beforeParse(window) {
+            window.structuredClone = structuredClone;
+            window.matchMedia = () => ({
+              matches: false,
+              addEventListener() {},
+              removeEventListener() {},
+            });
+            window.HTMLElement.prototype.scrollIntoView = () => undefined;
+            window.ResizeObserver = class {
+              observe() {}
+              unobserve() {}
+              disconnect() {}
+            };
+          },
+        });
+      dom = boot("");
+      let document = dom.window.document;
+      await waitFor(() => document.querySelector("#settings-tab-general"));
+      document.querySelector("#settings-tab-general").click();
+      await waitFor(() =>
+        document.querySelector("details.settings-send-shortcuts"),
+      );
+      const details = document.querySelector("details.settings-send-shortcuts");
+      assert.equal(details.open, false);
+      details.querySelector("summary").click();
+      assert.equal(details.open, true);
+      assert.ok(
+        document.querySelector("#foreground-control-help").textContent.trim(),
+      );
+      const foreground = document.querySelector(".settings-foreground-control");
+      assert.equal(
+        foreground
+          .querySelector("[role=switch]")
+          .getAttribute("aria-describedby"),
+        "foreground-control-risk foreground-control-help",
+      );
+      assert.ok(
+        foreground.contains(document.querySelector("#foreground-control-risk")),
+      );
+      assert.ok(
+        foreground.contains(document.querySelector("#foreground-control-help")),
+      );
+      dom.window.close();
+      dom = boot("scene=directory&directoryFailure=1");
+      document = dom.window.document;
+      await waitFor(() => document.querySelector("#directory-audit-open"));
+      const launch = document.querySelector("#directory-audit-open");
+      launch.focus();
+      launch.click();
+      await waitFor(() =>
+        document.querySelector(".directory-picker-error button"),
+      );
+      assert.ok(
+        document.querySelector('[role="dialog"].directory-picker-shell'),
+      );
+      assert.equal(
+        document
+          .querySelector("#root")
+          .contains(document.querySelector(".directory-picker-shell")),
+        false,
+      );
+      assert.equal(
+        document.querySelector(
+          ".directory-picker-dialog footer .primary-button",
+        ).disabled,
+        true,
+      );
+      assert.equal(document.querySelector(".directory-picker-body nav"), null);
+      assert.equal(
+        document.querySelector(".directory-picker-breadcrumbs"),
+        null,
+      );
+      document.querySelector(".directory-picker-error button").click();
+      await waitFor(() =>
+        document.querySelector('.directory-picker-list [data-index="0"]'),
+      );
+      assert.ok(
+        document.querySelector(
+          '.directory-picker-breadcrumbs [aria-current="location"]',
+        ),
+      );
+      assert.equal(
+        document
+          .querySelector(".directory-picker-dialog footer .primary-button")
+          .getAttribute("aria-describedby"),
+        "directory-picker-selection",
+      );
+      assert.equal(
+        document.querySelector('.directory-picker-list [data-active="true"]'),
+        null,
+      );
+      document.querySelector('.directory-picker-list [data-index="0"]').click();
+      await waitFor(
+        () =>
+          document.querySelector(".directory-picker-dialog footer strong")
+            ?.textContent === "/synthetic/empty",
+      );
+      assert.equal(
+        document.querySelectorAll(".directory-picker-list [data-index]").length,
+        0,
+      );
+      document.querySelector(".directory-picker-breadcrumbs button").click();
+      await waitFor(() =>
+        document.querySelector('.directory-picker-list [data-index="0"]'),
+      );
+      document.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+        }),
+      );
+      await waitFor(() => !document.querySelector(".directory-picker-shell"));
+      await waitFor(() => document.activeElement === launch);
+      launch.click();
+      await waitFor(() =>
+        document.querySelector('.directory-picker-list [data-index="0"]'),
+      );
+      document
+        .querySelector(".directory-picker-dialog footer .secondary-button")
+        .click();
+      await waitFor(() => !document.querySelector(".directory-picker-shell"));
+      assert.deepEqual(
+        [...dom.window.__directoryAudit.calls],
+        [
+          "snapshot",
+          "snapshot",
+          "list:/synthetic",
+          "list:/synthetic/empty",
+          "list:/synthetic",
+          "snapshot",
+          "list:/synthetic",
+        ],
+      );
+      assert.deepEqual(errors, []);
+      dom.window.close();
+      dom = undefined;
+    }
+  } finally {
+    dom?.window.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Directory density uses ten synthetic folders and production keyboard navigation without filesystem access", async () => {
+  const longPath = `/synthetic/${"long-project-name-".repeat(20)}`;
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "zenx-directory-density-"),
+  );
+  let dom;
+  try {
+    await execute(
+      process.execPath,
+      [
+        new URL("../scripts/build-settings-audit-preview.mjs", import.meta.url)
+          .pathname,
+        directory,
+      ],
+      { maxBuffer: 2 * 1024 * 1024 },
+    );
+    const html = await readFile(
+      path.join(directory, "settings-audit.html"),
+      "utf8",
+    );
+    for (const lang of ["en", "zh-CN"]) {
+      const errors = [];
+      const virtualConsole = new VirtualConsole();
+      virtualConsole.on("jsdomError", (error) => {
+        if (
+          error.type !== "css-parsing" &&
+          !error.message.includes("Could not parse CSS stylesheet")
+        )
+          errors.push(String(error));
+      });
+      dom = new JSDOM(html, {
+        url: `http://localhost/settings-audit.html?scene=directory&directoryDensity=1&lang=${lang}`,
+        runScripts: "dangerously",
+        pretendToBeVisual: true,
+        virtualConsole,
+        beforeParse(window) {
+          window.structuredClone = structuredClone;
+          window.matchMedia = () => ({
+            matches: false,
+            addEventListener() {},
+            removeEventListener() {},
+          });
+          window.HTMLElement.prototype.scrollIntoView = () => undefined;
+          window.ResizeObserver = class {
+            observe() {}
+            unobserve() {}
+            disconnect() {}
+          };
+        },
+      });
+      const document = dom.window.document;
+      await waitFor(() => document.querySelector("#directory-audit-open"));
+      const launch = document.querySelector("#directory-audit-open");
+      launch.focus();
+      launch.click();
+      const rows = () => [
+        ...document.querySelectorAll(".directory-picker-list [data-index]"),
+      ];
+      await waitFor(() => rows().length === 10);
+      assert.equal(new Set(rows().map((row) => row.title)).size, 10);
+      assert.ok(rows().some((row) => row.textContent.length > 55));
+      assert.ok(rows().some((row) => row.textContent.length < 5));
+      assert.equal(
+        document.querySelector("#directory-picker-selection").textContent,
+        "/synthetic",
+      );
+      assert.equal(
+        document
+          .querySelector(".directory-picker-dialog footer .primary-button")
+          .getAttribute("aria-describedby"),
+        "directory-picker-selection",
+      );
+      const press = (key) =>
+        document.activeElement.dispatchEvent(
+          new dom.window.KeyboardEvent("keydown", {
+            key,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      await waitFor(() => document.activeElement === rows()[0]);
+      press("End");
+      await waitFor(() => document.activeElement === rows()[9]);
+      press("Home");
+      await waitFor(() => document.activeElement === rows()[0]);
+      // JSDOM lacks native Enter activation. CI uses real CDP Enter instead.
+      document.activeElement.click();
+      await waitFor(
+        () =>
+          document.querySelector("#directory-picker-selection").textContent ===
+          longPath,
+      );
+      await waitFor(
+        () =>
+          document.activeElement ===
+          document.querySelector(".directory-picker-list"),
+      );
+      assert.equal(rows().length, 0);
+      const selection = document.querySelector("#directory-picker-selection");
+      assert.equal(selection.textContent, longPath);
+      assert.equal(selection.title, longPath);
+      assert.equal(
+        selection.tabIndex,
+        0,
+        "Full path remains keyboard inspectable",
+      );
+      assert.equal(
+        document
+          .querySelector(".directory-picker-dialog footer .primary-button")
+          .getAttribute("aria-describedby"),
+        selection.id,
+      );
+      // Native Tab/End/Home scrolling is deliberately proven only in CI Chrome.
+      press("Backspace");
+      await waitFor(
+        () => rows().length === 10 && document.activeElement === rows()[0],
+      );
+      press("Backspace");
+      assert.deepEqual(
+        [...dom.window.__directoryAudit.calls],
+        ["snapshot", "list:/synthetic", `list:${longPath}`, "list:/synthetic"],
+      );
+      await assert.rejects(
+        dom.window.zenx.settings.listDirectory("/outside-fixture"),
+        /outside synthetic fixture/u,
+      );
+      await assert.rejects(
+        dom.window.zenx.settings.listDirectory("/synthetic/empty"),
+        /outside synthetic fixture/u,
+      );
+      press("Escape");
+      await waitFor(() => !document.querySelector(".directory-picker-shell"));
+      await waitFor(() => document.activeElement === launch);
+      assert.deepEqual(errors, []);
+      dom.window.close();
+      dom = undefined;
+    }
+  } finally {
+    dom?.window.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

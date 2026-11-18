@@ -19,7 +19,15 @@ import "../src/renderer/src/theme.css";
 import "../src/renderer/src/styles.css";
 const values = new Map<string, ThreadSidebarState>();
 const listeners = new Set<(state: ThreadSidebarState) => void>();
-const calls: Array<{ method: string; threadId?: string }> = [];
+const calls: Array<{ method: string; threadId?: string; path?: string }> = [];
+const parameters = new URLSearchParams(location.search);
+const ownerTitles =
+  parameters.get("owners") === "shared-prefix"
+    ? [
+        "Release readiness and documentation review Alpha",
+        "Release readiness and documentation review Beta",
+      ]
+    : ["成员 A", "成员 B"];
 const api: ThreadSidebarApi = {
   read: async (owner) =>
     structuredClone(
@@ -50,7 +58,7 @@ Object.assign(window, {
       // The catalog is synthetic and empty; no native application is launched.
       applications: async () => ({ platform: "linux", applications: {} }),
       read: async (threadId: string, path: string) => {
-        calls.push({ method: "read", threadId });
+        calls.push({ method: "read", threadId, path });
         return {
           path,
           revision: "synthetic-v1",
@@ -76,9 +84,10 @@ Object.assign(window, {
     plugins: { executeCommand: async () => null, readHandle: async () => null },
   },
 });
-document.documentElement.dataset.appearance = "dark";
+document.documentElement.dataset.appearance =
+  parameters.get("theme") === "light" ? "light" : "dark";
 document.documentElement.dataset.themePreset = "graphite";
-void i18n.changeLanguage("zh-CN");
+void i18n.changeLanguage(parameters.get("lang") === "en" ? "en" : "zh-CN");
 const drafts = new WorkspaceFileDrafts();
 let activeOwner: SidebarOwner = { kind: "thread", id: "thread-b" };
 function Preview() {
@@ -164,12 +173,12 @@ function Preview() {
                   resourceThreads: [
                     {
                       threadId: "thread-a",
-                      title: "成员 A",
+                      title: ownerTitles[0]!,
                       workspacePath: "/synthetic/a",
                     },
                     {
                       threadId: "thread-b",
-                      title: "成员 B",
+                      title: ownerTitles[1]!,
                       workspacePath: "/synthetic/b",
                     },
                   ],
@@ -219,6 +228,70 @@ Object.assign(window, {
       owner: activeOwner,
       states: [...values.values()],
       calls: [...calls],
+      selectedDocument:
+        document.querySelector('[role="tabpanel"]:not([hidden]) .cm-content')
+          ?.textContent ?? null,
+      activeId: document.activeElement?.id ?? null,
+      labels: [
+        ...document.querySelectorAll<HTMLElement>(".workspace-content-tab"),
+      ].map((tab) => {
+        const button = tab.querySelector<HTMLButtonElement>('[role="tab"]')!;
+        const owner = button.querySelector<HTMLElement>(
+          ".workspace-tab-label-box > .workspace-tab-title",
+        );
+        const filename = button.querySelector<HTMLElement>(
+          ".workspace-room-file-label > .workspace-tab-title",
+        );
+        const close = tab.querySelector<HTMLButtonElement>(
+          ".workspace-tab-close",
+        )!;
+        const rect = (element: Element) => {
+          const r = element.getBoundingClientRect();
+          return {
+            left: r.left,
+            top: r.top,
+            right: r.right,
+            bottom: r.bottom,
+            width: r.width,
+            height: r.height,
+          };
+        };
+        const closeRect = rect(close);
+        const hit = document.elementFromPoint(
+          closeRect.left + closeRect.width / 2,
+          closeRect.top + closeRect.height / 2,
+        );
+        return {
+          id: tab.dataset.tabId,
+          label: button.getAttribute("aria-label"),
+          title: button.title,
+          selected: button.getAttribute("aria-selected"),
+          tab: rect(tab),
+          button: rect(button),
+          close: closeRect,
+          closeLabel: close.getAttribute("aria-label"),
+          closeHit: !!hit && close.contains(hit),
+          closeOpacity: Number(getComputedStyle(close).opacity),
+          filename: filename
+            ? {
+                text: filename.textContent,
+                rect: rect(filename),
+                fontSize: getComputedStyle(filename).fontSize,
+                clientWidth: filename.clientWidth,
+                scrollWidth: filename.scrollWidth,
+              }
+            : null,
+          owner: owner
+            ? {
+                text: owner.textContent,
+                mode: owner.dataset.labelMode,
+                rect: rect(owner),
+                clientWidth: owner.clientWidth,
+                scrollWidth: owner.scrollWidth,
+              }
+            : null,
+        };
+      }),
     }),
   },
 });

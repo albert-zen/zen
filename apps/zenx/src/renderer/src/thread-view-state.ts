@@ -357,7 +357,9 @@ export function applyNativeThreadEvent(
         status: event.status,
         error: existing?.error ?? null,
         startedAt: existing?.startedAt ?? null,
-        completedAt: nowSeconds,
+        // Completion is a durable fact, not the renderer receipt wall clock.
+        completedAt:
+          canonicalEnd === undefined ? null : seconds(canonicalEnd.createdAt),
         durationMs:
           canonicalStart === undefined || canonicalEnd === undefined
             ? null

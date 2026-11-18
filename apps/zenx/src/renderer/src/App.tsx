@@ -1,3 +1,4 @@
+import { projectInformationCommunications } from "./information-communications.js";
 import { withAppShotContext } from "./app-shot-draft.js";
 import { UserQuestionCards } from "./UserQuestionCards.js";
 import { createUserQuestionStore } from "./user-question-state.js";
@@ -23,7 +24,10 @@ import {
 } from "./compaction-feedback.js";
 import { EditableInformationPanel } from "./EditableInformationPanel.js";
 import { PluginInformationHost } from "./plugin-information-host.js";
-import { resolveDeliveredMessage } from "./tool-action-targets.js";
+import {
+  resolveDeliveredMessage,
+  resolveSourceTool,
+} from "./tool-action-targets.js";
 import type { MessageTargetRequest } from "./message-target-navigation.js";
 import { unwrapCompactionIpcReply } from "../../preload/compaction-ipc.js";
 import type { ClientSendObservation } from "../../../../../src/client-observation.js";
@@ -169,6 +173,7 @@ import {
   dismissCompactionFeedback,
   failComposerSubmission,
   reconcileCanonicalAdmission,
+  reconcilePendingSendPresentations,
   removeComposerImage,
   type ComposerIntent,
   type ComposerState,
@@ -184,6 +189,7 @@ import {
   canChangeThreadModel,
   modelChangeRequest,
   permissionModeFromPolicy,
+  permissionPresentation,
   imageCapabilityMessage,
   imageCapabilityNotice,
   reasoningChangeRequest,
@@ -237,6 +243,7 @@ import {
 } from "./queue-edit-state.js";
 import {
   ChildThreadSidebarContext,
+  ChildThreadApprovalContext,
   PluginThreadHeaders,
   ThreadBreadcrumbAncestors,
   SubagentCreationModelsContext,
@@ -2106,6 +2113,25 @@ function AppContent() {
   const selectedRoom = roomConversations.rooms.find(
     (room) => room.id === selectedRoomId,
   );
+  const informationCommunicationsKey = JSON.stringify(
+    projectInformationCommunications(
+      page === "agent" && !selectedRoomId && newThreadDraft === null
+        ? selectedThreadId
+        : null,
+      threadDetail?.id,
+      threadLoading || !!threadError,
+      threadDetail?.canonicalItems,
+    ),
+  );
+  const informationCommunications = useMemo(
+    () =>
+      informationCommunicationsKey
+        ? (JSON.parse(informationCommunicationsKey) as ReturnType<
+            typeof projectInformationCommunications
+          >)
+        : undefined,
+    [informationCommunicationsKey],
+  );
   const informationOwnerKey = selectedRoomId
     ? `room:${selectedRoomId}`
     : selectedThreadId
@@ -2356,9 +2382,11 @@ function AppContent() {
     );
   };
 
-  const checkPendingDelivery = async (threadId: string) => {
+  const checkPendingDelivery = async (
+    threadId: string,
+  ): Promise<"checked" | "unavailable"> => {
     const before = threadProjectionCacheRef.current.get(threadId);
-    if (before === undefined) return;
+    if (before === undefined) return "unavailable";
     // Native resume reads/subscribes; unlike the navigation wrapper it does not
     // discard drafts or change selection. It never dispatches model/tool work.
     const recovery = await window.zenx.protocol.request("zen/thread/resume", {
@@ -2370,18 +2398,19 @@ function AppContent() {
       recovery.threadId !== threadId ||
       recovery.thread.id !== threadId
     )
-      return;
+      return "unavailable";
     if (
       current.processEpoch !== before.processEpoch &&
       current.processEpoch !== recovery.processEpoch
     )
-      return;
+      return "unavailable";
+    const recovered = projectNativeRecovery(recovery);
     const projected =
       current.processEpoch === recovery.processEpoch &&
       current.watermark >= recovery.watermark
         ? current
         : replayThreadProjection(
-            projectNativeRecovery(recovery),
+            recovered,
             settingsFromSnapshot(
               threadId,
               nativeSettingsSnapshot(recovery.thread),
@@ -2397,10 +2426,20 @@ function AppContent() {
       setThreadDetail(projected.thread);
       setSelectedSettings(projected.settings);
     }
-    if (projected.thread.canonicalItems !== undefined)
-      updateComposer(threadId, (state) =>
-        reconcileCanonicalAdmission(state, projected.thread.canonicalItems!),
-      );
+    if (projected.thread.canonicalItems === undefined) return "unavailable";
+    updateComposer(threadId, (state) =>
+      reconcileCanonicalAdmission(
+        // A newer bounded window can omit an older exact receipt from this
+        // full read. Use it only for pending-copy identity reconciliation;
+        // never concatenate snapshots or infer compaction order from them.
+        reconcilePendingSendPresentations(
+          state,
+          recovered.canonicalItems ?? [],
+        ),
+        projected.thread.canonicalItems!,
+      ),
+    );
+    return "checked";
   };
 
   const deliverComposerSubmission = async (
@@ -3383,15 +3422,21 @@ function AppContent() {
       throw new Error(i18n.t("shell:sourceThreadUnavailable"));
     if (result.thread.archived)
       throw new Error(i18n.t("shell:sourceThreadArchived"));
-    const message = target.itemId
-      ? target.excerpt !== undefined
-        ? result.thread.items.some(
-            (item) => item.id === target.itemId && item.threadId === target.id,
-          )
-          ? { itemId: target.itemId }
-          : "missing"
-        : resolveDeliveredMessage(result.thread.items, target.itemId)
+    const sourceTool = target.sourceTool
+      ? resolveSourceTool(result.thread.items, target.id, target.sourceTool)
       : undefined;
+    const message = target.sourceTool
+      ? sourceTool
+      : target.itemId
+        ? target.excerpt !== undefined
+          ? result.thread.items.some(
+              (item) =>
+                item.id === target.itemId && item.threadId === target.id,
+            )
+            ? { itemId: target.itemId }
+            : "missing"
+          : resolveDeliveredMessage(result.thread.items, target.itemId)
+        : undefined;
     if (message === "missing")
       throw new Error(i18n.t("shell:toolMessageMissing"));
     if (message === "cancelled")
@@ -3409,6 +3454,7 @@ function AppContent() {
         threadId: target.id,
         itemId: message.itemId,
         requestId: intent,
+        ...(sourceTool ? { sourceTool: true } : {}),
         ...(target.excerpt !== undefined ? { excerpt: target.excerpt } : {}),
       });
   };
@@ -3717,6 +3763,12 @@ function AppContent() {
         ...input,
         ...(roomId ? { roomId } : {}),
         contextPreview: projectNativeThread(thread),
+        // The same read fixes both the fork boundary and its displayed permissions.
+        // Never substitute later live-parent settings for this opening snapshot.
+        inheritedPermissions: {
+          permissionMode: thread.sandbox,
+          approvalPolicy: nativeSettingsSnapshot(thread).approvalPolicy,
+        },
         inheritedModel: encodeModelKey(thread),
         inheritedEffort: thread.reasoningEffort,
       },
@@ -3946,6 +3998,8 @@ function AppContent() {
         composerId={`side-chat-draft-${id}`}
         thread={null}
         contextPreview={draft.contextPreview}
+        {...permissionPresentation(draft.inheritedPermissions)}
+        permissionDisplayOnly
         emptyContent={
           <div className="thread-empty">
             <h2>{i18n.t("panels:sideChat")}</h2>
@@ -4752,9 +4806,7 @@ function AppContent() {
                     dismissPendingSend(state, clientId),
                   )
                 }
-                onCheckPendingSends={async (threadId) => {
-                  await checkPendingDelivery(threadId);
-                }}
+                onCheckPendingSends={checkPendingDelivery}
                 onSubmit={submitComposer}
                 onSubmitNewThread={submitNewThreadDraft}
                 selectedSettings={selectedSettings}
@@ -4801,6 +4853,7 @@ function AppContent() {
                       attention={
                         !selectedRoomId ? questionAttention : undefined
                       }
+                      communications={informationCommunications}
                       threads={informationThreads}
                       roomMembers={selectedRoom?.members}
                       snapshot={pluginSnapshot}
@@ -5218,14 +5271,16 @@ function AppContent() {
     </AppConversationProviders>
   );
   return (
-    <ChildThreadSidebarContext.Provider
-      value={{
-        visibleSubagentThreadIds,
-        setVisible: setSubagentThreadSidebarVisible,
-      }}
-    >
-      {shell}
-    </ChildThreadSidebarContext.Provider>
+    <ChildThreadApprovalContext.Provider value={pendingThreadIds}>
+      <ChildThreadSidebarContext.Provider
+        value={{
+          visibleSubagentThreadIds,
+          setVisible: setSubagentThreadSidebarVisible,
+        }}
+      >
+        {shell}
+      </ChildThreadSidebarContext.Provider>
+    </ChildThreadApprovalContext.Provider>
   );
 }
 
@@ -5355,32 +5410,43 @@ function ConversationTitleBar({
               title={threadTitle(selectedSummary)}
             />
           </div>
-          <span>
-            {selectedSummary.status === "systemError"
-              ? i18n.t("shell:unavailableJournal")
-              : selectedSummary.currentMetadata.cwd}
+          <div className="thread-heading-metadata">
+            <span
+              className="thread-heading-cwd"
+              title={
+                selectedSummary.status === "systemError"
+                  ? i18n.t("shell:unavailableJournal")
+                  : selectedSummary.currentMetadata.cwd
+              }
+            >
+              {selectedSummary.status === "systemError"
+                ? i18n.t("shell:unavailableJournal")
+                : selectedSummary.currentMetadata.cwd}
+            </span>
             {threadDetail?.forkedFromId === null ||
             threadDetail?.forkedFromId === undefined ? null : sourceSummary ===
               undefined ? (
-              <>
-                {" · "}
+              <span
+                className="thread-heading-source"
+                title={i18n.t("shell:copiedFromUnavailableSource")}
+              >
                 {i18n.t("shell:copiedFromUnavailableSource")}
-              </>
+              </span>
             ) : (
-              <>
-                {" · "}
-                <button
-                  className="thread-source-link"
-                  type="button"
-                  onClick={() => onOpenSource(sourceSummary.threadId)}
-                >
-                  {i18n.t("shell:copiedFrom", {
-                    name: threadTitle(sourceSummary),
-                  })}
-                </button>
-              </>
+              <button
+                className="thread-heading-source thread-source-link"
+                type="button"
+                title={i18n.t("shell:copiedFrom", {
+                  name: threadTitle(sourceSummary),
+                })}
+                onClick={() => onOpenSource(sourceSummary.threadId)}
+              >
+                {i18n.t("shell:copiedFrom", {
+                  name: threadTitle(sourceSummary),
+                })}
+              </button>
             )}
-          </span>
+          </div>
         </div>
       </div>
     </div>
@@ -5568,7 +5634,7 @@ function AgentSurface({
   onDismissCompaction(threadId: string): void;
   onRecoverPendingSend(threadId: string, clientId: string): void;
   onDismissPendingSend(threadId: string, clientId: string): void;
-  onCheckPendingSends(threadId: string): Promise<void>;
+  onCheckPendingSends(threadId: string): Promise<"checked" | "unavailable">;
   onSubmit(
     intent: ComposerIntent,
     expectedTurnId: string | null,
@@ -5864,17 +5930,7 @@ function AgentSurface({
             }
             models={models}
             providerProfiles={providerProfiles}
-            permissionLabel={
-              selectedSettings === null
-                ? null
-                : selectedSettings.permissionMode === "danger-full-access" &&
-                    selectedSettings.approvalPolicy === "on-request"
-                  ? i18n.t("shell:approvalRequired")
-                  : i18n.t("shell:filePermissions")
-            }
-            permissionMode={
-              selectedSettings?.permissionMode ?? "danger-full-access"
-            }
+            {...permissionPresentation(selectedSettings)}
             permissionError={permissionError}
             switchingPermission={switchingPermission}
             onPermissionChange={onPermissionChange}

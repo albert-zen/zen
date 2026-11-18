@@ -1,0 +1,97 @@
+name: Main UI preview (fast visual feedback)
+on:
+  pull_request:
+    paths:
+      - .github/workflows/main-ui-preview.yml
+      - apps/zenx/src/renderer/**
+      - apps/zenx/scripts/*main-ui-preview.mjs
+      - apps/zenx/scripts/information-layout-preview.tsx
+      - apps/zenx/scripts/preview-browser-lifecycle.mjs
+      - apps/zenx/test/fixtures/ui-polish-visual*
+      - apps/zenx/test/fixtures/queue-steer-visual.tsx
+      - apps/zenx/test/*main-ui-preview.test.mjs
+      - package-lock.json
+  workflow_dispatch:
+    inputs:
+      scene:
+        description: Render only the changed surface, or all three
+        type: choice
+        options: [all, main, navigation, pending, information]
+        default: all
+permissions:
+  contents: read
+concurrency:
+  group: main-ui-preview-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  preview:
+    name: Production main, pending and information screenshots
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Dependencies only, no native installers or application packaging
+        timeout-minutes: 3
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Apply pinned renderer-only dependency fix
+        run: node apps/zenx/scripts/prepare-legend-list.mjs
+      - name: Use existing CJK fonts or install official Ubuntu fonts
+        timeout-minutes: 2
+        run: |
+          if [ -z "$(fc-list :lang=zh family)" ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+          fi
+      - name: Validate fast preview contracts
+        run: node --test apps/zenx/test/main-ui-preview.test.mjs apps/zenx/test/navigation-main-ui-preview.test.mjs
+      - name: Bundle only selected production renderer fixtures
+        id: bundle
+        timeout-minutes: 2
+        env:
+          SCENE: ${{ inputs.scene || 'all' }}
+        run: node apps/zenx/scripts/build-main-ui-preview.mjs "${{ runner.temp }}/main-ui-preview" "$SCENE"
+      - name: Capture without waiting for static or full acceptance
+        timeout-minutes: 2
+        run: node apps/zenx/scripts/capture-main-ui-preview.mjs "${{ runner.temp }}/main-ui-preview" fine
+      - name: Capture coarse input and short Composer reachability
+        if: ${{ !cancelled() && steps.bundle.outcome == 'success' && (inputs.scene == '' || inputs.scene == 'all' || inputs.scene == 'pending') }}
+        timeout-minutes: 2
+        run: node apps/zenx/scripts/capture-main-ui-preview.mjs "${{ runner.temp }}/main-ui-preview" coarse
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: main-ui-preview-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}/main-ui-preview/*.png
+            ${{ runner.temp }}/main-ui-preview/*.json
+            ${{ runner.temp }}/main-ui-preview/*.html
+            ${{ runner.temp }}/main-ui-preview/*.log
+            ${{ runner.temp }}/main-ui-preview/coarse/*.json
+            ${{ runner.temp }}/main-ui-preview/coarse/*.log
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Report rendering time and evidence boundary
+        if: always()
+        run: |
+          node --input-type=module <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          import { readFile } from 'node:fs/promises';
+          const dir = process.env.RUNNER_TEMP + '/main-ui-preview/';
+          try {
+            const source = JSON.parse(await readFile(dir + 'source.json'));
+            console.log(`Source: ${source.commit}; tree: ${source.tree}; build: ${(source.buildMs/1000).toFixed(1)}s`);
+            for (const name of ['evidence.json', ...(source.scenes.pending ? ['evidence-coarse.json'] : [])]) {
+              try {
+                const evidence = JSON.parse(await readFile(dir + name));
+                console.log(`${evidence.pointer}: capture ${(evidence.captureMs/1000).toFixed(1)}s; screenshots ${Object.keys(evidence.screenshots).length}; status ${evidence.status}.`);
+              } catch { console.log(`${name}: capture not completed; inspect diagnostics.`); }
+            }
+          } catch { console.log('Preview incomplete; inspect retained diagnostics.'); }
+          console.log('Synthetic data in production renderers. Browser sandbox enabled. Does not establish native Electron, real Host, complete application or regression acceptance. No dependency on aggregate CI.');
+          NODE

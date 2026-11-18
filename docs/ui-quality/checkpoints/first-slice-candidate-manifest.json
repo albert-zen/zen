@@ -1,0 +1,80 @@
+{
+  "commit": "5ebb6e83fa0f421357575b7a0a24f8ef401e1301",
+  "source": "Native Electron 43.2.0 actual built app, isolated existing fake-provider QA profile",
+  "viewport": [1188, 848],
+  "capturedAt": "2026-11-09T16:10:15.506935+00:00",
+  "rendering": "Hardware acceleration disabled in QA-only launch wrapper after cloud desktop produced corrupt surfaces; no product renderer setting changed. Corrupt images excluded.",
+  "limits": [
+    "Synthetic echo data, not live agent quality",
+    "No real credentials or external calls",
+    "Same profile/thread/source content as baseline",
+    "Keyboard focus is covered by behavior test; screenshot-only claims do not establish full accessibility",
+    "Hover and live spinner phase may differ between paired captures"
+  ],
+  "files": [
+    {
+      "file": "01-welcome.png",
+      "sha256": "5e081287589c1d7f82a1257984d1370d5267a5dc6081758f6cb0f5a904893f79",
+      "theme": "light",
+      "encoding": "JPEG",
+      "dimensions": [1188, 848]
+    },
+    {
+      "file": "02-thread.png",
+      "sha256": "83f9375142b3a11fdcec31052950e5edd7fad175daa18fc75165105ce56e79cd",
+      "theme": "light",
+      "encoding": "JPEG",
+      "dimensions": [1188, 848]
+    },
+    {
+      "file": "03-settings-account.png",
+      "sha256": "372594a6393f08c2ff442f862832b40ef016b04feeca900d33af0eb24e68df32",
+      "theme": "light",
+      "encoding": "JPEG",
+      "dimensions": [1188, 848]
+    },
+    {
+      "file": "04-settings-models.png",
+      "sha256": "664fed20d44a6893344530603c9d7a1c7978010d4464595cd3ef44e7c8b4fd10",
+      "theme": "light",
+      "encoding": "JPEG",
+      "dimensions": [1188, 848]
+    },
+    {
+      "file": "05-settings-appearance.png",
+      "sha256": "845f152027f8eb6c63051d63c708e99494378b6c2255fae463ec57cb4ffbe837",
+      "theme": "light",
+      "encoding": "JPEG",
+      "dimensions": [1188, 848]
+    },
+    {
+      "file": "06-settings-general.png",
+      "sha256": "4e5ddc998edbff7545cc4a8100e962f9fe3367f2771f78295e4d0746e131b92e",
+      "theme": "light",
+      "encoding": "JPEG",
+      "dimensions": [1188, 848]
+    },
+    {
+      "file": "07-appearance-dark.png",
+      "sha256": "56044e6938e96653dbdafc9a70ae60d53a6ee4977aabbd7f9583cdc66af4250a",
+      "theme": "dark",
+      "encoding": "JPEG",
+      "dimensions": [1188, 848]
+    },
+    {
+      "file": "08-thread-dark.png",
+      "sha256": "377181edcc7cffdfdbef8ba253233aeb697603cfa721d1bf390ca89733cf9c9e",
+      "theme": "dark",
+      "encoding": "JPEG",
+      "dimensions": [1188, 848]
+    },
+    {
+      "file": "09-information.png",
+      "sha256": "8b67982b839b6fb593209817e11e4424d27d8dd5cee256a594e2e05dabc52923",
+      "theme": "dark",
+      "encoding": "JPEG",
+      "dimensions": [1188, 848]
+    }
+  ],
+  "fileExtensionNote": "Capture API returned JPEG bytes. Existing .png filenames are preserved as review IDs; files are not lossless PNG."
+}

@@ -2,7 +2,7 @@ import "./dom-primitives.js";
 /// <reference path="../src/renderer/src/env.d.ts" />
 
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -506,7 +506,7 @@ test("A save completed after leaving its section does not show a stale toast", a
     await changeControl(control, control.options[1]!.value);
     await click(exactButtonRequired("Apply"));
     await click(exactButtonRequired("General"));
-    await click(exactButtonRequired("Models & provider"));
+    await click(exactButtonRequired("Models & providers"));
     await act(async () => finish(settings));
     assert.equal(document.querySelector(".settings-toast"), null);
   } finally {
@@ -611,6 +611,37 @@ test("Models lists every profile and keeps duplicate model IDs distinguishable a
       assert.ok(control);
       assert.equal(control.tabIndex, 0);
     }
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Models gives decision guidance its own readable tier without elevating status metadata", async () => {
+  const harness = await mountSettings("models", {
+    initialSettings: multiProviderSettings,
+  });
+  try {
+    await waitFor(() => exactButton("Add provider"));
+    const guidance = [...document.querySelectorAll(".settings-guidance")];
+    assert.equal(guidance.length, 3);
+    assert.ok(guidance.every((node) => node.tagName === "P"));
+    assert.match(
+      guidance.map((node) => node.textContent).join("\n"),
+      /new conversations/u,
+    );
+    assert.match(
+      guidance.map((node) => node.textContent).join("\n"),
+      /Existing conversations keep their model/u,
+    );
+    assert.match(
+      guidance.map((node) => node.textContent).join("\n"),
+      /Manage each connection/u,
+    );
+    assert.equal(
+      document.querySelector(".status-muted.settings-guidance"),
+      null,
+    );
+    assert.equal(document.querySelector("button.settings-guidance"), null);
   } finally {
     await unmount(harness);
   }
@@ -1663,8 +1694,13 @@ test("Delete displays a saved but unconfirmed server result", async () => {
 
 test("Validation and mutation failures keep the provider editor recoverable", async () => {
   let attempts = 0;
+  let generalSaves = 0;
   const harness = await mountSettings("models", {
     initialSettings: settings,
+    save: async () => {
+      generalSaves++;
+      return settings;
+    },
     addProvider: async (provider) => {
       attempts += 1;
       if (attempts === 1) throw new Error("Host restart failed");
@@ -1678,6 +1714,11 @@ test("Validation and mutation failures keep the provider editor recoverable", as
     },
   });
   try {
+    await click(exactButtonRequired("General"));
+    const mode = await labeledSelect("Send while a reply is running");
+    assert.ok(mode);
+    await changeControl(mode, "batch");
+    await click(exactButtonRequired("Models & providers"));
     await waitFor(() => exactButton("Add custom provider"));
     await click(exactButtonRequired("Add custom provider"));
     await click(exactButtonRequired("Add provider"));
@@ -1709,7 +1750,14 @@ test("Validation and mutation failures keep the provider editor recoverable", as
     assert.equal(requiredInput("Display name").value, "Recoverable");
     await click(exactButtonRequired("Add provider"));
     await waitFor(() => attempts === 2);
-    assert.match(document.body.textContent ?? "", /Settings saved/u);
+    assert.match(document.body.textContent ?? "", /Provider added/u);
+    assert.equal(generalSaves, 0);
+    await click(exactButtonRequired("General"));
+    assert.equal(
+      (await labeledSelect("Send while a reply is running"))?.value,
+      "batch",
+    );
+    assert.equal(exactButtonRequired("Apply").disabled, false);
   } finally {
     await unmount(harness);
   }
@@ -1764,6 +1812,35 @@ test("Appearance is an independent Settings section and persists the complete pr
     assert.equal(system.name, "appearance-mode");
     assert.equal(light.name, system.name);
     assert.equal(dark.name, system.name);
+    const assertSelectedMarkers = () => {
+      for (const name of [
+        "appearance-mode",
+        "light-preset",
+        "dark-preset",
+        "appearance-accent",
+        "appearance-contrast",
+      ]) {
+        const choices = document.querySelectorAll<HTMLInputElement>(
+          `input[name="${name}"]`,
+        );
+        assert.equal(
+          Array.from(choices).filter((choice) => choice.checked).length,
+          1,
+        );
+        for (const choice of choices) {
+          assert.equal(
+            Boolean(
+              choice
+                .closest("label")
+                ?.querySelector(".appearance-choice-check"),
+            ),
+            choice.checked,
+            `${name} ${choice.value} has a visible marker only when checked`,
+          );
+        }
+      }
+    };
+    assertSelectedMarkers();
     assert.ok(exactButton("Appearance"));
     assert.match(document.body.textContent ?? "", /Soft violet/u);
     assert.match(document.body.textContent ?? "", /Fresh green/u);
@@ -1786,8 +1863,15 @@ test("Appearance is an independent Settings section and persists the complete pr
     assert.equal(light.checked, true);
     assert.equal(system.checked, false);
     assert.equal(dark.checked, false);
+    assertSelectedMarkers();
     assert.equal(saved.length, 0);
     assert.equal(exactButton("Apply"), undefined);
+
+    await act(async () => dark.click());
+    assert.equal(dark.checked, true);
+    assertSelectedMarkers();
+    await act(async () => light.click());
+    assertSelectedMarkers();
 
     const cobaltLight = appearanceChoice("light-preset", "cobalt");
     const emberDark = appearanceChoice("dark-preset", "ember");
@@ -1801,6 +1885,19 @@ test("Appearance is an independent Settings section and persists the complete pr
     await act(async () => emberDark.click());
     await act(async () => jade.click());
     await act(async () => highContrast.click());
+    for (const choice of [cobaltLight, emberDark, jade]) {
+      assert.ok(
+        choice.closest("label")?.querySelector(".appearance-choice-check"),
+        "selected color choices have a visible non-color check marker",
+      );
+    }
+    assert.equal(
+      appearanceChoice("appearance-accent", "azure")
+        ?.closest("label")
+        ?.querySelector(".appearance-choice-check"),
+      null,
+    );
+    assertSelectedMarkers();
     assert.equal(document.documentElement.dataset.themePreset, "cobalt");
     assert.equal(document.documentElement.dataset.accent, "jade");
     assert.equal(document.documentElement.dataset.contrast, "high");
@@ -1829,6 +1926,10 @@ test("Appearance is an independent Settings section and persists the complete pr
     assert.equal(document.documentElement.dataset.accent, "azure");
     assert.equal(document.documentElement.dataset.contrast, "standard");
     assert.equal(appearanceModeRadio("system")?.checked, true);
+    assertSelectedMarkers();
+    // Reuse this controller's document: the renderer owns one appearance controller.
+    await assertLocalizedAppearanceControls();
+    assert.equal(saved.length, 0);
   } finally {
     await unmount(harness);
   }
@@ -1861,7 +1962,7 @@ test("every Settings tab remains keyboard reachable after narrow-screen reflow",
       tabs.map((tab) => tab.textContent?.trim()),
       [
         "Account",
-        "Models & provider",
+        "Models & providers",
         "Plugins",
         "Appearance",
         "General",
@@ -2260,6 +2361,70 @@ test("General explicitly enables and disables native cross-device tools through 
   }
 });
 
+test("General keeps send guidance concise and exposes current keyboard behavior on demand", async () => {
+  const { i18n } = await import("../src/renderer/src/i18n.js");
+  const saved: ZenXSettingsUpdate[] = [];
+  const harness = await mountSettings("general", {
+    save: async (update) => {
+      saved.push(update);
+      return { ...settings, profile: { ...settings.profile, ...update } };
+    },
+  });
+  try {
+    const control = await labeledSelect("Send while a reply is running");
+    assert.ok(control);
+    const help = document.getElementById("composer-send-help");
+    assert.ok(help);
+    assert.ok(help.classList.contains("settings-guidance"));
+    assert.match(
+      help.textContent ?? "",
+      /Messages already queued stay unchanged/u,
+    );
+    const disclosure = document.querySelector<HTMLDetailsElement>(
+      ".settings-send-shortcuts",
+    );
+    assert.ok(disclosure);
+    assert.equal(disclosure.open, false);
+    const summary = disclosure.querySelector("summary");
+    assert.ok(summary);
+    summary.focus();
+    await click(summary);
+    assert.equal(disclosure.open, true);
+    assert.equal(document.activeElement === summary, true);
+    assert.deepEqual(
+      [...disclosure.querySelectorAll("dt")].map((node) => node.textContent),
+      ["Cmd/Ctrl+Enter", "Shift+Enter"],
+    );
+    for (const mode of ["batch", "queue", "soft", "hard"] as const) {
+      await changeControl(control, mode);
+      assert.equal(
+        disclosure.querySelector("dd")?.textContent?.trim(),
+        mode === "batch" || mode === "queue"
+          ? "Guide the current reply"
+          : "Queue messages together",
+      );
+    }
+    assert.equal(saved.length, 0);
+    await act(async () => {
+      await i18n.changeLanguage("zh-CN");
+    });
+    assert.equal(summary.textContent, "键盘快捷键");
+    assert.match(help.textContent ?? "", /已排队的消息保持不变/u);
+    assert.equal(
+      disclosure.querySelector("dd")?.textContent?.trim(),
+      "将消息一起排队",
+    );
+    await click(summary);
+    assert.equal(disclosure.open, false);
+    assert.equal(saved.length, 0);
+  } finally {
+    await act(async () => {
+      await i18n.changeLanguage("en");
+    });
+    await unmount(harness);
+  }
+});
+
 test("General requires an explicit risk-labeled opt-in for foreground computer takeover", async () => {
   const saved: ZenXSettingsUpdate[] = [];
   const harness = await mountSettings("general", {
@@ -2275,6 +2440,37 @@ test("General requires an explicit risk-labeled opt-in for foreground computer t
       ),
     );
     assert.equal(control.getAttribute("aria-checked"), "false");
+    assert.equal(
+      control.getAttribute("aria-describedby"),
+      "foreground-control-risk foreground-control-help",
+    );
+    const card = control.closest(".settings-foreground-control");
+    const actionRow = control.closest(".settings-row");
+    assert.ok(card);
+    assert.ok(actionRow);
+    assert.equal(card.querySelector(".status-muted")?.textContent, "Off");
+    assert.equal(
+      card.getAttribute("aria-labelledby"),
+      "foreground-control-title",
+    );
+    assert.match(actionRow.textContent ?? "", /Allow foreground takeover/u);
+    assert.equal(card.querySelectorAll('[role="switch"]').length, 1);
+    for (const id of ["foreground-control-risk", "foreground-control-help"]) {
+      const description = document.getElementById(id);
+      assert.ok(description);
+      assert.ok(description.classList.contains("settings-guidance"));
+      assert.equal(description.closest("details"), null);
+      assert.equal(
+        description.closest(".settings-foreground-control") === card,
+        true,
+      );
+      assert.equal(actionRow.contains(description), false);
+      assert.equal(
+        description.closest(".settings-foreground-control-body") ===
+          card.querySelector(".settings-foreground-control-body"),
+        true,
+      );
+    }
     assert.match(
       document.body.textContent ?? "",
       /move the pointer, type keys, change focus, or scroll the app you are currently using/u,
@@ -2286,6 +2482,8 @@ test("General requires an explicit risk-labeled opt-in for foreground computer t
 
     await click(control);
     assert.equal(control.getAttribute("aria-checked"), "true");
+    assert.equal(card.querySelector(".status-muted")?.textContent, "On");
+    assert.equal(saved.length, 0);
     await click(exactButtonRequired("Apply"));
     assert.equal(saved[0]?.computerForegroundControlEnabled, true);
 
@@ -3468,7 +3666,7 @@ for (const navigation of [
       if (navigation === "activity")
         await click(exactButtonRequired("Toggle settings visibility"));
       if (navigation === "page") {
-        const tab = exactButtonRequired("Models & provider");
+        const tab = exactButtonRequired("Models & providers");
         tab.focus();
         await click(tab);
         assert.ok(
@@ -3828,7 +4026,7 @@ for (const completeAfterNavigation of [false, true]) {
       await click(exactButtonRequired("Install from source…"));
       await click(exactButtonRequired("Choose tarball…"));
       if (completeAfterNavigation) {
-        await click(exactButtonRequired("Models & provider"));
+        await click(exactButtonRequired("Models & providers"));
         await click(exactButtonRequired("Apply"));
         await act(async () => finish(result));
         assert.match(
@@ -4001,6 +4199,831 @@ test("settings retain unsaved edits across hidden Activity and saves do not over
   }
 });
 
+for (const outcome of ["success", "committed-error"] as const) {
+  test(`provider ${outcome} preserves unrelated latest General drafts until Apply`, async () => {
+    const initial: PublicHostSettings = {
+      ...settings,
+      profile: {
+        ...settings.profile,
+        revision: 1,
+        composerSendMode: "soft",
+        composerSendModeExplicit: false,
+        maxToolRounds: 4,
+      },
+    };
+    let authoritative = initial;
+    let finish!: () => void;
+    const saved: ZenXSettingsUpdate[] = [];
+    const harness = await mountSettings("general", {
+      initialSettings: initial,
+      get: async () => authoritative,
+      editProvider: async (_id, provider, options, attemptId) => {
+        assert.equal(options?.baseRevision, 1);
+        await new Promise<void>((resolve) => {
+          finish = resolve;
+        });
+        authoritative = {
+          ...initial,
+          profile: {
+            ...initial.profile,
+            revision: 2,
+            providerProfiles: [provider],
+          },
+        };
+        return outcome === "success"
+          ? authoritative
+          : {
+              ok: false,
+              outcome: "committed-error",
+              code: "save-finalization-failed",
+              attemptId: attemptId!,
+            };
+      },
+      save: async (update) => {
+        saved.push(update);
+        authoritative = {
+          ...authoritative,
+          profile: { ...authoritative.profile, ...update, revision: 3 },
+        };
+        return authoritative;
+      },
+    });
+    try {
+      await changeControl(
+        (await labeledSelect("Send while a reply is running"))!,
+        "queue",
+      );
+      await changeControl(requiredInput("Maximum tool rounds"), "12");
+      await click(exactButtonRequired("Models & providers"));
+      await click(labeledButtonRequired("Edit Local demo"));
+      await changeControl(requiredInput("Display name"), "Renamed local demo");
+      await click(exactButtonRequired("Save provider"));
+      await click(exactButtonRequired("General"));
+      // Changes made while the provider request is pending must also survive.
+      await changeControl(requiredInput("Maximum tool rounds"), "18");
+      await changeControl(
+        (await labeledSelect("Send while a reply is running"))!,
+        "batch",
+      );
+      await act(async () => finish());
+      assert.equal(requiredInput("Maximum tool rounds").value, "18");
+      assert.equal(
+        (await labeledSelect("Send while a reply is running"))!.value,
+        "batch",
+      );
+      assert.equal(exactButtonRequired("Apply").disabled, false);
+      assert.equal(authoritative.profile.maxToolRounds, 4);
+      assert.equal(authoritative.profile.composerSendMode, "soft");
+      assert.equal(
+        saved.length,
+        0,
+        "Saving a provider must not save General drafts",
+      );
+      await click(exactButtonRequired("Models & providers"));
+      assert.ok(labeledButtonRequired("Edit Renamed local demo"));
+      await click(exactButtonRequired("Apply"));
+      assert.equal(saved.length, 1);
+      assert.equal(saved[0]!.baseRevision, 2);
+      assert.equal(saved[0]!.maxToolRounds, 18);
+      assert.equal(saved[0]!.composerSendMode, "batch");
+      assert.equal(saved[0]!.composerSendModeExplicit, true);
+      assert.equal(
+        saved[0]!.providerProfiles![0]!.displayName,
+        "Renamed local demo",
+      );
+      assert.equal(exactButtonRequired("Apply").disabled, true);
+    } finally {
+      await unmount(harness);
+    }
+  });
+}
+
+test("invalid General maximum blocks Apply when another setting is dirty, including after navigation", async () => {
+  const saved: ZenXSettingsUpdate[] = [];
+  const harness = await mountSettings("general", {
+    save: async (update) => {
+      saved.push(update);
+      return { ...settings, profile: { ...settings.profile, ...update } };
+    },
+  });
+  try {
+    await changeControl(
+      (await labeledSelect("Send while a reply is running"))!,
+      "queue",
+    );
+    await changeControl(requiredInput("Maximum tool rounds"), "0");
+    assert.equal(exactButtonRequired("Apply").disabled, true);
+    await click(exactButtonRequired("Models & providers"));
+    assert.equal(exactButtonRequired("Apply").disabled, true);
+    assert.match(
+      document.body.textContent ?? "",
+      /Maximum tool rounds: Enter a whole number of 1 or more/,
+    );
+    await click(exactButtonRequired("Apply"));
+    assert.equal(saved.length, 0);
+    await click(exactButtonRequired("General"));
+    assert.equal(requiredInput("Maximum tool rounds").value, "0");
+    await changeControl(requiredInput("Maximum tool rounds"), "12");
+    assert.equal(exactButtonRequired("Apply").disabled, false);
+    await click(exactButtonRequired("Apply"));
+    assert.equal(saved[0]!.maxToolRounds, 12);
+    assert.equal(saved[0]!.composerSendMode, "queue");
+  } finally {
+    await unmount(harness);
+  }
+});
+
+for (const correction of ["", "18"] as const) {
+  test(`General native bad input recovers through input events to ${correction === "" ? "Unlimited" : "a valid number"}`, async () => {
+    const saved: ZenXSettingsUpdate[] = [];
+    const harness = await mountSettings("general", {
+      save: async (update) => {
+        saved.push(update);
+        return { ...settings, profile: { ...settings.profile, ...update } };
+      },
+    });
+    try {
+      await changeControl(
+        (await labeledSelect("Send while a reply is running"))!,
+        "queue",
+      );
+      const maximum = requiredInput("Maximum tool rounds");
+      await changeControl(maximum, "12");
+      // Chromium exposes both an unfinished '-' and a truly empty number
+      // input as value ''. This models its validity change, not native typing.
+      let badInput = true;
+      Object.defineProperty(maximum, "validity", {
+        configurable: true,
+        get: () => ({ badInput }),
+      });
+      await changeControl(maximum, "");
+      await act(async () => {
+        maximum.dispatchEvent(new window.Event("focusout", { bubbles: true }));
+      });
+      assert.equal(maximum.getAttribute("aria-invalid"), "true");
+      assert.equal(exactButtonRequired("Apply").disabled, true);
+      badInput = false;
+      if (correction === "") {
+        // No value/tracker change: clearing partial input is still an input
+        // event even though React's synthetic change event is deduplicated.
+        await act(async () => {
+          maximum.dispatchEvent(new window.Event("input", { bubbles: true }));
+          maximum.dispatchEvent(
+            new window.Event("focusout", { bubbles: true }),
+          );
+        });
+      } else {
+        await changeControl(maximum, correction);
+      }
+      assert.equal(maximum.hasAttribute("aria-invalid"), false);
+      assert.equal(exactButtonRequired("Apply").disabled, false);
+      await click(exactButtonRequired("Apply"));
+      assert.equal(saved.length, 1);
+      assert.equal(saved[0]!.composerSendMode, "queue");
+      assert.equal(saved[0]!.maxToolRounds, correction === "" ? undefined : 18);
+    } finally {
+      await unmount(harness);
+    }
+  });
+}
+
+for (const mutation of ["add", "delete", "delete-finalization"] as const) {
+  test(`provider ${mutation} keeps unrelated drafts and the new Host revision`, async () => {
+    let authoritative = structuredClone(multiProviderSettings);
+    const saved: ZenXSettingsUpdate[] = [];
+    const harness = await mountSettings("general", {
+      initialSettings: authoritative,
+      get: async () => authoritative,
+      addProvider: async (provider) => {
+        authoritative = {
+          ...authoritative,
+          profile: {
+            ...authoritative.profile,
+            revision: 1,
+            providerProfiles: [
+              ...authoritative.profile.providerProfiles,
+              provider,
+            ],
+          },
+        };
+        return authoritative;
+      },
+      deleteProvider: async (id) => {
+        authoritative = {
+          ...authoritative,
+          profile: {
+            ...authoritative.profile,
+            revision: 1,
+            providerProfiles: authoritative.profile.providerProfiles.filter(
+              (p) => p.providerProfileId !== id,
+            ),
+          },
+          configuration: { status: "applied", revision: 1, pendingRestart: [] },
+        };
+        if (mutation === "delete-finalization")
+          throw new Error("Synthetic finalization failure");
+        return authoritative;
+      },
+      save: async (update) => {
+        saved.push(update);
+        return {
+          ...authoritative,
+          profile: { ...authoritative.profile, ...update },
+        };
+      },
+    });
+    try {
+      await changeControl(requiredInput("Maximum tool rounds"), "12");
+      await click(exactButtonRequired("Models & providers"));
+      if (mutation === "add") {
+        await click(exactButtonRequired("Add provider"));
+        await click(labeledButtonRequired("Add Local demo"));
+        await changeControl(requiredInput("Display name"), "Second local demo");
+        await click(exactButtonRequired("Add provider"));
+        assert.ok(labeledButtonRequired("Edit Second local demo"));
+      } else {
+        await click(labeledButtonRequired("Delete Local demo"));
+        await click(exactButtonRequired("Delete provider"));
+        assert.equal(labeledButton("Edit Local demo"), undefined);
+      }
+      assert.equal(saved.length, 0);
+      assert.equal(authoritative.profile.maxToolRounds, undefined);
+      await click(exactButtonRequired("General"));
+      assert.equal(requiredInput("Maximum tool rounds").value, "12");
+      await click(exactButtonRequired("Apply"));
+      assert.equal(saved[0]!.baseRevision, 1);
+      assert.equal(saved[0]!.maxToolRounds, 12);
+      assert.deepEqual(
+        saved[0]!.providerProfiles,
+        authoritative.profile.providerProfiles,
+      );
+    } finally {
+      await unmount(harness);
+    }
+  });
+}
+
+test("provider readback adopts untouched Host preferences and valid model replacements without creating a dirty draft", async () => {
+  const authoritative: PublicHostSettings = {
+    ...settings,
+    profile: {
+      ...settings.profile,
+      revision: 2,
+      maxToolRounds: 24,
+      defaultModel: settings.profile.titleModel,
+      titleModel: settings.profile.defaultModel,
+    },
+  };
+  const harness = await mountSettings("models", {
+    editProvider: async () => authoritative,
+  });
+  try {
+    await click(labeledButtonRequired("Edit Local demo"));
+    await click(exactButtonRequired("Save provider"));
+    assert.equal(
+      (await labeledSelect("Default model"))!.value,
+      JSON.stringify([
+        authoritative.profile.defaultModel.providerProfileId,
+        authoritative.profile.defaultModel.modelId,
+      ]),
+    );
+    assert.equal(
+      (await labeledSelect("Title model"))!.value,
+      JSON.stringify([
+        authoritative.profile.titleModel.providerProfileId,
+        authoritative.profile.titleModel.modelId,
+      ]),
+    );
+    assert.equal(exactButtonRequired("Apply").disabled, true);
+    await click(exactButtonRequired("General"));
+    assert.equal(requiredInput("Maximum tool rounds").value, "24");
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("provider readback keeps locally edited model references only while they remain available", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  const beta = { providerProfileId: "profile-beta", modelId: "shared-model" };
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    editProvider: async () => ({
+      ...initial,
+      profile: {
+        ...initial.profile,
+        revision: 1,
+        providerProfiles: initial.profile.providerProfiles.map((profile) =>
+          profile.providerProfileId === "profile-local"
+            ? { ...profile, models: [] }
+            : profile,
+        ),
+      },
+    }),
+  });
+  try {
+    await changeControl(
+      (await labeledSelect("Default model"))!,
+      JSON.stringify([beta.providerProfileId, beta.modelId]),
+    );
+    await changeControl(
+      (await labeledSelect("Title model"))!,
+      JSON.stringify(["profile-local", "fake"]),
+    );
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Save provider"));
+    assert.equal(
+      (await labeledSelect("Default model"))!.value,
+      JSON.stringify([beta.providerProfileId, beta.modelId]),
+    );
+    assert.equal(
+      (await labeledSelect("Title model"))!.value,
+      JSON.stringify([
+        initial.profile.titleModel.providerProfileId,
+        initial.profile.titleModel.modelId,
+      ]),
+    );
+    assert.equal(exactButtonRequired("Apply").disabled, false);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("invalid General raw input survives a newer Host maximum returned by a pending provider save", async () => {
+  const initial = {
+    ...settings,
+    profile: { ...settings.profile, maxToolRounds: 4 },
+  };
+  let finish!: (value: PublicHostSettings) => void;
+  const harness = await mountSettings("general", {
+    initialSettings: initial,
+    editProvider: async () =>
+      await new Promise((resolve) => {
+        finish = resolve;
+      }),
+  });
+  try {
+    await changeControl(
+      (await labeledSelect("Send while a reply is running"))!,
+      "queue",
+    );
+    await click(exactButtonRequired("Models & providers"));
+    await click(labeledButtonRequired("Edit Local demo"));
+    await click(exactButtonRequired("Save provider"));
+    await click(exactButtonRequired("General"));
+    await changeControl(requiredInput("Maximum tool rounds"), "0");
+    await act(async () =>
+      finish({
+        ...initial,
+        profile: { ...initial.profile, revision: 1, maxToolRounds: 8 },
+      }),
+    );
+    assert.equal(requiredInput("Maximum tool rounds").value, "0");
+    assert.equal(exactButtonRequired("Apply").disabled, true);
+    await click(exactButtonRequired("Models & providers"));
+    await click(exactButtonRequired("General"));
+    assert.equal(requiredInput("Maximum tool rounds").value, "0");
+    assert.equal(exactButtonRequired("Apply").disabled, true);
+    await changeControl(requiredInput("Maximum tool rounds"), "9");
+    assert.equal(exactButtonRequired("Apply").disabled, false);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("late provider reply cannot roll back newer settings observed after reopening", async () => {
+  const initial = {
+    ...settings,
+    profile: { ...settings.profile, revision: 1, maxToolRounds: 4 },
+  };
+  const newer: PublicHostSettings = {
+    ...initial,
+    profile: {
+      ...initial.profile,
+      revision: 3,
+      maxToolRounds: 8,
+      providerProfiles: initial.profile.providerProfiles.map((provider) => ({
+        ...provider,
+        displayName: "New authority",
+      })),
+    },
+  };
+  let reads = 0;
+  let finish!: (value: PublicHostSettings) => void;
+  const saved: ZenXSettingsUpdate[] = [];
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    get: async () => (++reads === 1 ? initial : newer),
+    editProvider: async () =>
+      await new Promise((resolve) => {
+        finish = resolve;
+      }),
+    save: async (update) => {
+      saved.push(update);
+      return { ...newer, profile: { ...newer.profile, ...update } };
+    },
+  });
+  try {
+    await click(labeledButtonRequired("Edit Local demo"));
+    await click(exactButtonRequired("Save provider"));
+    await click(exactButtonRequired("Toggle settings visibility"));
+    await click(exactButtonRequired("Toggle settings visibility"));
+    assert.equal(reads, 2);
+    assert.ok(labeledButtonRequired("Edit New authority"));
+    await click(exactButtonRequired("General"));
+    assert.equal(requiredInput("Maximum tool rounds").value, "8");
+    await changeControl(requiredInput("Maximum tool rounds"), "12");
+    await act(async () =>
+      finish({ ...initial, profile: { ...initial.profile, revision: 2 } }),
+    );
+    assert.equal(requiredInput("Maximum tool rounds").value, "12");
+    await click(exactButtonRequired("Models & providers"));
+    assert.ok(labeledButtonRequired("Edit New authority"));
+    await click(exactButtonRequired("Apply"));
+    assert.equal(saved[0]!.baseRevision, 3);
+    assert.equal(saved[0]!.maxToolRounds, 12);
+    assert.equal(saved[0]!.providerProfiles![0]!.displayName, "New authority");
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("late activation read cannot roll back a newer provider result", async () => {
+  const initial = {
+    ...settings,
+    profile: { ...settings.profile, revision: 1 },
+  };
+  const newer = {
+    ...initial,
+    profile: {
+      ...initial.profile,
+      revision: 2,
+      providerProfiles: initial.profile.providerProfiles.map((provider) => ({
+        ...provider,
+        displayName: "Committed provider",
+      })),
+    },
+  };
+  let reads = 0;
+  let finishRead!: (value: PublicHostSettings) => void;
+  let finishProvider!: (value: PublicHostSettings) => void;
+  const saved: ZenXSettingsUpdate[] = [];
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    get: async () =>
+      ++reads === 1
+        ? initial
+        : await new Promise((resolve) => {
+            finishRead = resolve;
+          }),
+    editProvider: async () =>
+      await new Promise((resolve) => {
+        finishProvider = resolve;
+      }),
+    save: async (update) => {
+      saved.push(update);
+      return { ...newer, profile: { ...newer.profile, ...update } };
+    },
+  });
+  try {
+    await click(labeledButtonRequired("Edit Local demo"));
+    await click(exactButtonRequired("Save provider"));
+    await click(exactButtonRequired("Toggle settings visibility"));
+    await click(exactButtonRequired("Toggle settings visibility"));
+    await act(async () => finishProvider(newer));
+    assert.ok(labeledButtonRequired("Edit Committed provider"));
+    await act(async () => finishRead(initial));
+    assert.ok(labeledButtonRequired("Edit Committed provider"));
+    await click(exactButtonRequired("General"));
+    await changeControl(requiredInput("Maximum tool rounds"), "12");
+    await click(exactButtonRequired("Apply"));
+    assert.equal(saved[0]!.baseRevision, 2);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("activation read rebases only edits made while pending before the next provider save", async () => {
+  const initial = {
+    ...settings,
+    profile: { ...settings.profile, revision: 1, maxToolRounds: 4 },
+  };
+  const newer = {
+    ...initial,
+    profile: { ...initial.profile, revision: 2, maxToolRounds: 8 },
+  };
+  let reads = 0;
+  let finishRead!: (value: PublicHostSettings) => void;
+  const saved: ZenXSettingsUpdate[] = [];
+  const harness = await mountSettings("general", {
+    initialSettings: initial,
+    get: async () =>
+      ++reads === 1
+        ? initial
+        : await new Promise((resolve) => {
+            finishRead = resolve;
+          }),
+    editProvider: async () => ({
+      ...newer,
+      profile: { ...newer.profile, revision: 3 },
+    }),
+    save: async (update) => {
+      saved.push(update);
+      return { ...newer, profile: { ...newer.profile, ...update } };
+    },
+  });
+  try {
+    await click(exactButtonRequired("Toggle settings visibility"));
+    await click(exactButtonRequired("Toggle settings visibility"));
+    await changeControl(
+      (await labeledSelect("Send while a reply is running"))!,
+      "queue",
+    );
+    await act(async () => finishRead(newer));
+    assert.equal(requiredInput("Maximum tool rounds").value, "8");
+    assert.equal(
+      (await labeledSelect("Send while a reply is running"))!.value,
+      "queue",
+    );
+    await click(exactButtonRequired("Models & providers"));
+    await click(labeledButtonRequired("Edit Local demo"));
+    await click(exactButtonRequired("Save provider"));
+    await click(exactButtonRequired("Apply"));
+    assert.equal(saved[0]!.baseRevision, 3);
+    assert.equal(saved[0]!.maxToolRounds, 8);
+    assert.equal(saved[0]!.composerSendMode, "queue");
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("late Apply keeps the newest Host revision and only edits newer than its submission", async () => {
+  const initial = {
+    ...settings,
+    profile: {
+      ...settings.profile,
+      revision: 1,
+      maxToolRounds: 4,
+      composerSendMode: "soft" as const,
+    },
+  };
+  let reads = 0;
+  let finishRead!: (value: PublicHostSettings) => void;
+  let finishSave!: (value: PublicHostSettings) => void;
+  const saved: ZenXSettingsUpdate[] = [];
+  const harness = await mountSettings("general", {
+    initialSettings: initial,
+    get: async () =>
+      ++reads === 1
+        ? initial
+        : await new Promise((resolve) => {
+            finishRead = resolve;
+          }),
+    save: async (update) => {
+      saved.push(update);
+      if (saved.length === 1)
+        return await new Promise((resolve) => {
+          finishSave = resolve;
+        });
+      return {
+        ...initial,
+        profile: { ...initial.profile, ...update, revision: 4 },
+      };
+    },
+  });
+  try {
+    await click(exactButtonRequired("Toggle settings visibility"));
+    await click(exactButtonRequired("Toggle settings visibility"));
+    await changeControl(requiredInput("Maximum tool rounds"), "12");
+    await click(exactButtonRequired("Apply"));
+    await changeControl(
+      (await labeledSelect("Send while a reply is running"))!,
+      "queue",
+    );
+    const newer: PublicHostSettings = {
+      ...initial,
+      profile: {
+        ...initial.profile,
+        revision: 3,
+        maxToolRounds: 18,
+        providerProfiles: initial.profile.providerProfiles.map((provider) => ({
+          ...provider,
+          displayName: "Newest authority",
+        })),
+      },
+    };
+    await act(async () => finishRead(newer));
+    await act(async () =>
+      finishSave({
+        ...initial,
+        profile: { ...initial.profile, ...saved[0], revision: 2 },
+      }),
+    );
+    // The submitted 12 is confirmed, so it is no longer an unsaved local edit.
+    // The newer Host's 18 wins; queue, typed after submission, stays pending.
+    assert.equal(requiredInput("Maximum tool rounds").value, "18");
+    assert.equal(
+      (await labeledSelect("Send while a reply is running"))!.value,
+      "queue",
+    );
+    await click(exactButtonRequired("Models & providers"));
+    assert.ok(labeledButtonRequired("Edit Newest authority"));
+    await click(exactButtonRequired("Apply"));
+    assert.equal(saved[1]!.baseRevision, 3);
+    assert.equal(saved[1]!.maxToolRounds, 18);
+    assert.equal(saved[1]!.composerSendMode, "queue");
+    assert.equal(
+      saved[1]!.providerProfiles![0]!.displayName,
+      "Newest authority",
+    );
+  } finally {
+    await unmount(harness);
+  }
+});
+
+for (const reverted of [4, 12]) {
+  test(`a post-submit revert to ${reverted} survives independent Host readback`, async () => {
+    const initial = {
+      ...settings,
+      profile: { ...settings.profile, revision: 1, maxToolRounds: 4 },
+    };
+    let reads = 0;
+    let finishRead!: (value: PublicHostSettings) => void;
+    let finishSave!: (value: PublicHostSettings) => void;
+    const saved: ZenXSettingsUpdate[] = [];
+    const harness = await mountSettings("general", {
+      initialSettings: initial,
+      get: async () =>
+        ++reads === 1
+          ? initial
+          : await new Promise((resolve) => {
+              finishRead = resolve;
+            }),
+      save: async (update) => {
+        saved.push(update);
+        if (saved.length === 1)
+          return await new Promise((resolve) => {
+            finishSave = resolve;
+          });
+        return {
+          ...initial,
+          profile: { ...initial.profile, ...update, revision: 4 },
+        };
+      },
+    });
+    try {
+      await click(exactButtonRequired("Toggle settings visibility"));
+      await click(exactButtonRequired("Toggle settings visibility"));
+      await changeControl(requiredInput("Maximum tool rounds"), "12");
+      await click(exactButtonRequired("Apply"));
+      if (reverted === 12)
+        await changeControl(requiredInput("Maximum tool rounds"), "20");
+      await changeControl(
+        requiredInput("Maximum tool rounds"),
+        String(reverted),
+      );
+      await act(async () =>
+        finishRead({
+          ...initial,
+          profile: { ...initial.profile, revision: 3, maxToolRounds: 18 },
+        }),
+      );
+      assert.equal(
+        requiredInput("Maximum tool rounds").value,
+        String(reverted),
+      );
+      await act(async () =>
+        finishSave({
+          ...initial,
+          profile: { ...initial.profile, ...saved[0], revision: 2 },
+        }),
+      );
+      assert.equal(
+        requiredInput("Maximum tool rounds").value,
+        String(reverted),
+      );
+      assert.equal(exactButtonRequired("Apply").disabled, false);
+      await click(exactButtonRequired("Apply"));
+      assert.equal(saved[1]!.baseRevision, 3);
+      assert.equal(saved[1]!.maxToolRounds, reverted);
+    } finally {
+      await unmount(harness);
+    }
+  });
+}
+
+test("failed Apply retires edit tracking before later reads and the next save", async () => {
+  const initial = {
+    ...settings,
+    profile: { ...settings.profile, revision: 1, maxToolRounds: 4 },
+  };
+  let reads = 0;
+  let fail!: (error: Error) => void;
+  const saved: ZenXSettingsUpdate[] = [];
+  const harness = await mountSettings("general", {
+    initialSettings: initial,
+    get: async () =>
+      ++reads === 1
+        ? initial
+        : {
+            ...initial,
+            profile: { ...initial.profile, revision: 2, maxToolRounds: 8 },
+          },
+    save: async (update) => {
+      saved.push(update);
+      if (saved.length === 1)
+        return await new Promise((_resolve, reject) => {
+          fail = reject;
+        });
+      return {
+        ...initial,
+        profile: { ...initial.profile, ...update, revision: 3 },
+      };
+    },
+  });
+  try {
+    await changeControl(requiredInput("Maximum tool rounds"), "12");
+    await click(exactButtonRequired("Apply"));
+    await changeControl(requiredInput("Maximum tool rounds"), "4");
+    await act(async () => fail(new Error("Synthetic save rejection")));
+    await click(exactButtonRequired("Toggle settings visibility"));
+    await click(exactButtonRequired("Toggle settings visibility"));
+    assert.equal(requiredInput("Maximum tool rounds").value, "8");
+    await changeControl(requiredInput("Maximum tool rounds"), "9");
+    await click(exactButtonRequired("Apply"));
+    assert.equal(saved[1]!.baseRevision, 2);
+    assert.equal(saved[1]!.maxToolRounds, 9);
+    assert.equal(exactButtonRequired("Apply").disabled, true);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+for (const action of [
+  "Safe restart",
+  "Check application status",
+  "Retry applying saved settings",
+] as const) {
+  test(`${action} readback preserves drafts and updates untouched Host fields`, async () => {
+    const initial: PublicHostSettings = {
+      ...settings,
+      profile: { ...settings.profile, revision: 1, maxToolRounds: 4 },
+      configuration: {
+        status: action === "Safe restart" ? "pending-restart" : "unconfirmed",
+        revision: 1,
+        pendingRestart: action === "Safe restart" ? ["maxToolRounds"] : [],
+      },
+    };
+    let finish!: (value: PublicHostSettings) => void;
+    const pending = async () =>
+      await new Promise<PublicHostSettings>((resolve) => {
+        finish = resolve;
+      });
+    const saved: ZenXSettingsUpdate[] = [];
+    const harness = await mountSettings("general", {
+      initialSettings: initial,
+      safeRestart: pending,
+      reconcile: pending,
+      save: async (update) => {
+        saved.push(update);
+        return { ...initial, profile: { ...initial.profile, ...update } };
+      },
+    });
+    try {
+      await changeControl(requiredInput("Maximum tool rounds"), "12");
+      await click(exactButtonRequired(action));
+      await changeControl(requiredInput("Maximum tool rounds"), "18");
+      await act(async () =>
+        finish({
+          ...initial,
+          profile: {
+            ...initial.profile,
+            revision: 2,
+            maxToolRounds: 8,
+            defaultModel: initial.profile.titleModel,
+          },
+          configuration: { status: "applied", revision: 2, pendingRestart: [] },
+        }),
+      );
+      assert.equal(requiredInput("Maximum tool rounds").value, "18");
+      await click(exactButtonRequired("Models & providers"));
+      assert.equal(
+        (await labeledSelect("Default model"))!.value,
+        JSON.stringify([
+          initial.profile.titleModel.providerProfileId,
+          initial.profile.titleModel.modelId,
+        ]),
+      );
+      assert.equal(saved.length, 0);
+      await click(exactButtonRequired("Apply"));
+      assert.equal(saved[0]!.baseRevision, 2);
+      assert.equal(saved[0]!.maxToolRounds, 18);
+      assert.deepEqual(saved[0]!.defaultModel, initial.profile.titleModel);
+    } finally {
+      await unmount(harness);
+    }
+  });
+}
+
 test("changing Settings tabs starts the new panel at its heading", async () => {
   const harness = await mountSettings("general");
   try {
@@ -4078,7 +5101,7 @@ test("provider editing protects the in-memory draft from other card actions and 
         : undefined,
     );
     await click(exactButtonRequired("General"));
-    await click(exactButtonRequired("Models & provider"));
+    await click(exactButtonRequired("Models & providers"));
     await click(exactButtonRequired("Toggle settings visibility"));
     await click(exactButtonRequired("Toggle settings visibility"));
     for (const label of [
@@ -4227,10 +5250,12 @@ test("late provider save does not steal focus from another Settings tab or resto
     destination.focus();
     await act(async () => finish(multiProviderSettings));
     assert.equal(document.activeElement === destination, true);
-    const tab = exactButtonRequired("Models & provider");
+    assert.equal(document.querySelector(".settings-toast"), null);
+    const tab = exactButtonRequired("Models & providers");
     tab.focus();
     await click(tab);
     assert.equal(document.activeElement === tab, true);
+    assert.equal(document.querySelector(".settings-toast"), null);
     assert.equal(!!document.querySelector(".provider-editor"), false);
   } finally {
     await unmount(harness);
@@ -4691,6 +5716,712 @@ test("committed Provider save failure keeps local diagnostic after editor closes
     assert.equal(detail.open, false);
     assert.match(detail.textContent ?? "", /worker unavailable after save/);
     assert.match(document.body.textContent ?? "", /saved.*finalization/iu);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("unconfigured Account offers a focused route to provider setup without signing in", async () => {
+  const harness = await mountSettings("account", {
+    initialSettings: { ...settings, subscriptionProviderProfileId: null },
+  });
+  try {
+    await waitFor(() => exactButton("Open model settings"));
+    await click(exactButtonRequired("Open model settings"));
+    const modelsTab = document.getElementById("settings-tab-models");
+    assert.equal(modelsTab?.getAttribute("aria-selected"), "true");
+    assert.equal(document.activeElement, modelsTab);
+    assert.ok(exactButton("Add provider"));
+    await click(document.getElementById("settings-tab-account")!);
+    assert.ok(exactButton("Open model settings"));
+    assert.equal(document.querySelector(".provider-editor"), null);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+for (const mutation of ["add", "edit", "delete"] as const) {
+  for (const outcome of [
+    "legacy-success",
+    "applied",
+    "pending-restart",
+    "unconfirmed",
+    "committed-error",
+  ] as const) {
+    test(`provider ${mutation} ${outcome} reports only its save scope while General remains dirty`, async () => {
+      let authoritative = structuredClone(multiProviderSettings);
+      const saved: ZenXSettingsUpdate[] = [];
+      const commit = (profiles: ZenXProviderProfile[]) => {
+        authoritative = {
+          ...authoritative,
+          profile: {
+            ...authoritative.profile,
+            revision: 1,
+            providerProfiles: profiles,
+          },
+          ...(outcome === "legacy-success"
+            ? {}
+            : {
+                configuration: {
+                  status:
+                    outcome === "committed-error"
+                      ? ("applied" as const)
+                      : outcome,
+                  revision: 1,
+                  pendingRestart:
+                    outcome === "pending-restart" ? ["maxToolRounds"] : [],
+                },
+              }),
+        };
+      };
+      const providerResult = (): PublicHostSettings | ProviderReply =>
+        outcome === "committed-error"
+          ? {
+              ok: false,
+              outcome: "committed-error",
+              code: "save-finalization-failed",
+              attemptId: "synthetic-scope-save",
+            }
+          : authoritative;
+      const harness = await mountSettings("general", {
+        initialSettings: authoritative,
+        get: async () => authoritative,
+        addProvider: async (provider) => {
+          commit([...authoritative.profile.providerProfiles, provider]);
+          return providerResult();
+        },
+        editProvider: async (id, provider) => {
+          commit(
+            authoritative.profile.providerProfiles.map((entry) =>
+              entry.providerProfileId === id ? provider : entry,
+            ),
+          );
+          return providerResult();
+        },
+        deleteProvider: async (id) => {
+          commit(
+            authoritative.profile.providerProfiles.filter(
+              (entry) => entry.providerProfileId !== id,
+            ),
+          );
+          if (outcome === "committed-error")
+            throw new Error("Synthetic finalization failure");
+          return authoritative;
+        },
+        save: async (update) => {
+          saved.push(update);
+          return {
+            ...authoritative,
+            profile: { ...authoritative.profile, ...update },
+          };
+        },
+      });
+      try {
+        await changeControl(requiredInput("Maximum tool rounds"), "12");
+        await click(document.getElementById("settings-tab-models")!);
+        if (mutation === "add") {
+          await click(exactButtonRequired("Add provider"));
+          await click(labeledButtonRequired("Add Local demo"));
+          await changeControl(
+            requiredInput("Display name"),
+            "Another local demo",
+          );
+          await click(exactButtonRequired("Add provider"));
+          assert.ok(labeledButton("Edit Another local demo"));
+        } else if (mutation === "edit") {
+          await click(labeledButtonRequired("Edit Local demo"));
+          await changeControl(
+            requiredInput("Display name"),
+            "Renamed local demo",
+          );
+          await click(exactButtonRequired("Save provider"));
+          assert.ok(labeledButton("Edit Renamed local demo"));
+        } else {
+          await click(labeledButtonRequired("Delete Local demo"));
+          await click(exactButtonRequired("Delete provider"));
+          assert.equal(labeledButton("Edit Local demo"), undefined);
+        }
+        const toast = document.querySelector(".settings-toast");
+        if (outcome === "legacy-success" || outcome === "applied") {
+          assert.equal(
+            toast?.textContent,
+            {
+              add: "Provider added",
+              edit: "Provider saved",
+              delete: "Provider deleted",
+            }[mutation],
+          );
+        } else {
+          assert.equal(toast, null);
+          if (outcome === "pending-restart")
+            assert.ok(exactButton("Safe restart"));
+          if (outcome === "unconfirmed")
+            assert.ok(exactButton("Check application status"));
+          if (outcome === "committed-error")
+            assert.match(
+              document.body.textContent ?? "",
+              /saved.*finalization/iu,
+            );
+        }
+        assert.equal(saved.length, 0);
+        assert.equal(authoritative.profile.maxToolRounds, undefined);
+        assert.equal(
+          exactButtonRequired("Apply").disabled,
+          outcome === "unconfirmed",
+        );
+        assert.ok(document.querySelector(".settings-apply-bar.dirty"));
+        await click(exactButtonRequired("General"));
+        assert.equal(requiredInput("Maximum tool rounds").value, "12");
+        if (outcome !== "unconfirmed") {
+          await click(exactButtonRequired("Apply"));
+          assert.equal(saved[0]?.baseRevision, 1);
+          assert.equal(saved[0]?.maxToolRounds, 12);
+        }
+      } finally {
+        await unmount(harness);
+      }
+    });
+  }
+}
+
+test("Models navigation and Account setup guidance use the same plural label", async () => {
+  const harness = await mountSettings("account");
+  try {
+    await waitFor(() => exactButton("Open model settings"));
+    assert.equal(
+      document.getElementById("settings-tab-models")?.textContent,
+      "Models & providers",
+    );
+    assert.match(
+      document.body.textContent ?? "",
+      /Add an OpenAI subscription in Models & providers to get started\./u,
+    );
+    await click(exactButtonRequired("Open model settings"));
+    assert.equal(
+      document
+        .getElementById("settings-tab-models")
+        ?.getAttribute("aria-selected"),
+      "true",
+    );
+    assert.ok(
+      [...document.querySelectorAll(".settings-panel header h2")].some(
+        (heading) => heading.textContent === "Models & providers",
+      ),
+    );
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("provider cards expose full same-prefix identities through a bounded read-only model disclosure", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  const prefix = "Local synthetic provider with a very long shared prefix · ";
+  initial.profile.providerProfiles[0]!.displayName = `${prefix}Alpha`;
+  initial.profile.providerProfiles[1]!.displayName = `${prefix}Beta`;
+  initial.profile.providerProfiles[0]!.models = Array.from(
+    { length: 250 },
+    (_, index) =>
+      model(
+        `synthetic-model-with-a-very-long-shared-prefix-${index === 0 ? "alpha" : index === 1 ? "beta" : index}`,
+      ),
+  );
+  const harness = await mountSettings("general", { initialSettings: initial });
+  try {
+    await changeControl(requiredInput("Maximum tool rounds"), "12");
+    await click(document.getElementById("settings-tab-models")!);
+    const cards = [
+      ...document.querySelectorAll<HTMLElement>(".provider-profile-card"),
+    ];
+    assert.equal(
+      cards[0]?.querySelector(".provider-profile-name strong")?.textContent,
+      `${prefix}Alpha`,
+    );
+    assert.equal(
+      cards[1]?.querySelector(".provider-profile-name strong")?.textContent,
+      `${prefix}Beta`,
+    );
+    const disclosure = cards[0]?.querySelector<HTMLDetailsElement>(
+      "details.provider-model-summary",
+    );
+    assert.ok(
+      disclosure,
+      "Full models must be inspectable without entering Edit",
+    );
+    assert.equal(disclosure.open, false);
+    const summary = disclosure.querySelector("summary")!;
+    assert.match(summary.textContent ?? "", /250 models/u);
+    assert.equal(
+      summary.getAttribute("aria-label"),
+      `250 models for ${prefix}Alpha`,
+    );
+    const preview = [...summary.querySelectorAll(".provider-model-preview-id")];
+    assert.deepEqual(
+      preview.map((element) => element.textContent),
+      initial.profile.providerProfiles[0]!.models.slice(0, 2).map(
+        (entry) => entry.id,
+      ),
+    );
+    assert.match(summary.textContent ?? "", /248 more/u);
+    summary.focus();
+    await click(summary);
+    assert.equal(disclosure.open, true);
+    const region = disclosure.querySelector<HTMLElement>('[role="region"]')!;
+    assert.ok(region);
+    assert.equal(region.tabIndex, 0);
+    region.focus();
+    assert.equal(document.activeElement, region);
+    const rows = [...region.querySelectorAll("li")];
+    assert.equal(rows.length, 250);
+    assert.equal(
+      rows[249]?.textContent,
+      initial.profile.providerProfiles[0]!.models[249]!.id,
+    );
+    assert.equal(document.querySelector(".provider-editor"), null);
+    assert.equal(exactButtonRequired("Apply").disabled, false);
+    summary.focus();
+    await click(summary);
+    assert.equal(disclosure.open, false);
+    assert.equal(document.activeElement, summary);
+    await click(labeledButtonRequired(`Edit ${prefix}Alpha`));
+    await changeControl(requiredInput("Display name"), "Discard this name");
+    await click(exactButtonRequired("Cancel"));
+    assert.equal(
+      cards[0]?.querySelector(".provider-profile-name strong")?.textContent,
+      `${prefix}Alpha`,
+    );
+    assert.ok(labeledButton(`Edit ${prefix}Alpha`));
+    await click(exactButtonRequired("General"));
+    assert.equal(requiredInput("Maximum tool rounds").value, "12");
+  } finally {
+    await unmount(harness);
+  }
+});
+
+async function assertLocalizedAppearanceControls() {
+  const { i18n } = await import("../src/renderer/src/i18n.js");
+  try {
+    await waitFor(() => appearanceModeRadio("light"));
+    await click(appearanceModeRadio("dark")!);
+    for (const language of ["en", "zh-CN"] as const) {
+      await act(async () => {
+        await i18n.changeLanguage(language);
+      });
+      const labels =
+        language === "en"
+          ? ["System", "Light", "Dark", "Standard", "High"]
+          : ["跟随系统", "浅色", "深色", "标准", "高"];
+      for (const [index, token] of (
+        ["system", "light", "dark"] as const
+      ).entries()) {
+        const radio = appearanceModeRadio(token)!;
+        assert.equal(
+          radio.closest("label")?.textContent?.trim(),
+          labels[index],
+        );
+        await click(radio);
+        assert.equal(radio.checked, true);
+        assert.equal(
+          document.documentElement.dataset.appearance,
+          token === "system" ? "light" : token,
+        );
+        assert.equal(
+          JSON.parse(localStorage.getItem("zenx.appearance")!).mode,
+          token,
+        );
+      }
+      for (const [index, token] of ["standard", "high"].entries()) {
+        const radio = appearanceChoice("appearance-contrast", token)!;
+        assert.equal(
+          radio.closest("label")?.textContent?.trim(),
+          labels[index + 3],
+        );
+        await click(radio);
+        assert.equal(radio.checked, true);
+        assert.equal(document.documentElement.dataset.contrast, token);
+        assert.equal(
+          JSON.parse(localStorage.getItem("zenx.appearance")!).contrast,
+          token,
+        );
+      }
+      for (const name of [
+        "Graphite",
+        "Cobalt",
+        "Ember",
+        "Azure",
+        "Iris",
+        "Jade",
+      ]) {
+        assert.ok(document.body.textContent?.includes(name));
+      }
+    }
+  } finally {
+    await act(async () => {
+      await i18n.changeLanguage("en");
+    });
+  }
+}
+
+for (const count of [0, 1, 2]) {
+  test(`provider model inspection keeps ${count} exact models and localized counts without Host writes`, async () => {
+    const { i18n } = await import("../src/renderer/src/i18n.js");
+    const initial = structuredClone(multiProviderSettings);
+    initial.profile.providerProfiles[0]!.models = Array.from(
+      { length: count },
+      (_, index) => model(`${"x".repeat(500)}-${index}`),
+    );
+    let writes = 0;
+    const harness = await mountSettings("models", {
+      initialSettings: initial,
+      save: async () => {
+        writes++;
+        return initial;
+      },
+    });
+    try {
+      await waitFor(() => exactButton("Add provider"));
+      const details = document.querySelector<HTMLDetailsElement>(
+        "details.provider-model-summary",
+      )!;
+      const summary = details.querySelector("summary")!;
+      for (const language of ["en", "zh-CN"] as const) {
+        await act(async () => {
+          await i18n.changeLanguage(language);
+        });
+        assert.equal(
+          summary.querySelector(".provider-model-count")?.textContent,
+          language === "en"
+            ? `${count} ${count === 1 ? "model" : "models"}`
+            : `${count} 个模型`,
+        );
+        assert.equal(
+          details.querySelectorAll(".provider-model-preview-id").length,
+          count,
+        );
+        assert.equal(details.querySelector(".provider-model-more"), null);
+        await click(summary);
+        assert.equal(details.open, true);
+        const ids = [
+          ...details.querySelectorAll(".provider-model-list li"),
+        ].map((entry) => entry.textContent);
+        assert.deepEqual(
+          ids,
+          initial.profile.providerProfiles[0]!.models.map((entry) => entry.id),
+        );
+        if (count === 0)
+          assert.equal(
+            details.querySelector(".provider-model-list p")?.textContent,
+            language === "en" ? "No models configured" : "尚未配置模型",
+          );
+        await click(summary);
+        assert.equal(details.open, false);
+      }
+      assert.equal(writes, 0);
+      assert.equal(document.querySelector(".provider-editor"), null);
+      assert.equal(exactButtonRequired("应用").disabled, true);
+    } finally {
+      await act(async () => {
+        await i18n.changeLanguage("en");
+      });
+      await unmount(harness);
+    }
+  });
+}
+
+test("provider identity styles wrap readable text and bound expanded model scrolling", async () => {
+  const css = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  const rule = (selector: string) =>
+    css.slice(css.indexOf(`\n${selector} {`) + 1).split("}")[0]!;
+  assert.match(
+    rule(".provider-profile-name strong"),
+    /overflow-wrap: anywhere/u,
+  );
+  assert.doesNotMatch(
+    rule(".provider-profile-name strong"),
+    /ellipsis|nowrap/u,
+  );
+  assert.match(
+    rule(".provider-model-preview-id,\n.provider-model-list li"),
+    /font-size: var\(--font-size-caption\)/u,
+  );
+  assert.match(
+    rule(".provider-model-preview-id,\n.provider-model-list li"),
+    /overflow-wrap: anywhere/u,
+  );
+  assert.match(rule(".provider-model-list"), /max-height: 12rem/u);
+  assert.match(rule(".provider-model-list"), /overflow: auto/u);
+  assert.match(
+    rule(".provider-model-summary[open] .provider-model-preview"),
+    /display: none/u,
+  );
+});
+
+// Account actions use synthetic, explicitly settled replies only. No Host,
+// credentials, browser login, or remote subscription service participates.
+function accountFixture(authenticated = true): PublicHostSettings {
+  return {
+    ...settings,
+    subscriptionProviderProfileId: "synthetic-subscription",
+    subscription: { authenticated, expired: false },
+  };
+}
+function deferredAccountReply() {
+  let resolve!: (value: PublicHostSettings) => void;
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<PublicHostSettings>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
+
+test("Account action blocks same-turn duplicates and unlocks only for explicit retry", async () => {
+  const harness = await mountSettings("account", {
+    initialSettings: accountFixture(),
+  });
+  let reply = deferredAccountReply();
+  let calls = 0;
+  window.zenx.settings.logoutSubscription = () => {
+    calls++;
+    return reply.promise;
+  };
+  try {
+    const button = exactButtonRequired("Sign out");
+    await act(async () => {
+      button.click();
+      button.click();
+    });
+    assert.equal(calls, 1);
+    assert.equal(exactButtonRequired("Signing out…").disabled, true);
+    assert.equal(button.getAttribute("aria-busy"), "true");
+    await act(async () =>
+      reply.reject(new Error("Synthetic sign-out failure")),
+    );
+    assert.match(
+      document.body.textContent ?? "",
+      /Synthetic sign-out failure/u,
+    );
+    assert.equal(exactButtonRequired("Sign out").disabled, false);
+    assert.equal(calls, 1);
+    reply = deferredAccountReply();
+    await click(exactButtonRequired("Sign out"));
+    assert.equal(calls, 2);
+    assert.doesNotMatch(
+      document.body.textContent ?? "",
+      /Synthetic sign-out failure/u,
+    );
+    await act(async () => reply.resolve(accountFixture(false)));
+    assert.equal(exactButtonRequired("Sign in with OpenAI").disabled, false);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Account action excludes duplicate sign-in and new sign-out until reply", async () => {
+  const harness = await mountSettings("account", {
+    initialSettings: accountFixture(false),
+  });
+  const reply = deferredAccountReply();
+  let loginCalls = 0;
+  let logoutCalls = 0;
+  window.zenx.settings.loginSubscription = () => {
+    loginCalls++;
+    return reply.promise;
+  };
+  window.zenx.settings.logoutSubscription = async () => {
+    logoutCalls++;
+    return accountFixture(false);
+  };
+  try {
+    const button = exactButtonRequired("Sign in with OpenAI");
+    await act(async () => {
+      button.click();
+      button.click();
+    });
+    assert.equal(loginCalls, 1);
+    assert.equal(exactButtonRequired("Waiting for browser…").disabled, true);
+    await click(exactButtonRequired("General"));
+    await click(exactButtonRequired("Account"));
+    assert.equal(exactButtonRequired("Waiting for browser…").disabled, true);
+    assert.equal(logoutCalls, 0);
+    await act(async () => reply.resolve(accountFixture()));
+    await click(exactButtonRequired("Sign out"));
+    assert.equal(logoutCalls, 1);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Account action success across navigation preserves General draft and focus", async () => {
+  const harness = await mountSettings("account", {
+    initialSettings: accountFixture(),
+  });
+  const reply = deferredAccountReply();
+  window.zenx.settings.logoutSubscription = () => reply.promise;
+  try {
+    await click(exactButtonRequired("Sign out"));
+    await click(exactButtonRequired("General"));
+    const control = await labeledSelect("Send while a reply is running");
+    assert.ok(control);
+    await changeControl(control, "batch");
+    control.focus();
+    await act(async () => reply.resolve(accountFixture(false)));
+    assert.equal(document.activeElement, control);
+    assert.equal(
+      document
+        .querySelector('[data-tab="general"]')
+        ?.getAttribute("aria-selected"),
+      "true",
+    );
+    assert.equal(control.dataset.value, "batch");
+    await click(exactButtonRequired("Account"));
+    assert.equal(exactButtonRequired("Sign in with OpenAI").disabled, false);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Account action failure stays on its account and returns without focus theft", async () => {
+  const harness = await mountSettings("account", {
+    initialSettings: accountFixture(),
+  });
+  const reply = deferredAccountReply();
+  window.zenx.settings.logoutSubscription = () => reply.promise;
+  try {
+    await click(exactButtonRequired("Sign out"));
+    const general = exactButtonRequired("General");
+    await click(general);
+    general.focus();
+    await act(async () =>
+      reply.reject(new Error("Synthetic account-only error")),
+    );
+    assert.equal(document.activeElement, general);
+    const error = [
+      ...document.querySelectorAll<HTMLElement>('[role="alert"]'),
+    ].find((node) => node.textContent === "Synthetic account-only error");
+    assert.ok(error);
+    assert.ok(
+      error.closest('[style*="display: none"]'),
+      "Account Activity hides its own error on General",
+    );
+    await click(exactButtonRequired("Account"));
+    assert.equal(error.closest('[style*="display: none"]'), null);
+    assert.equal(exactButtonRequired("Sign out").disabled, false);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Account action cannot replace a new provider owner or show its stale failure", async () => {
+  for (const fails of [false, true]) {
+    let current = accountFixture();
+    const harness = await mountSettings("account", {
+      get: async () => current,
+    });
+    const reply = deferredAccountReply();
+    window.zenx.settings.logoutSubscription = () => reply.promise;
+    try {
+      await click(exactButtonRequired("Sign out"));
+      await click(exactButtonRequired("Toggle settings visibility"));
+      current = {
+        ...accountFixture(),
+        subscriptionProviderProfileId: "replacement-subscription",
+      };
+      await click(exactButtonRequired("Toggle settings visibility"));
+      assert.equal(exactButtonRequired("Sign out").disabled, false);
+      await act(async () =>
+        fails
+          ? reply.reject(new Error("Stale owner failure"))
+          : reply.resolve(accountFixture(false)),
+      );
+      assert.equal(exactButtonRequired("Sign out").disabled, false);
+      assert.doesNotMatch(
+        document.body.textContent ?? "",
+        /Stale owner failure/u,
+      );
+    } finally {
+      await unmount(harness);
+    }
+  }
+});
+
+test("Account action retires API replacement and unmounted replies", async () => {
+  const harness = await mountSettings("account", {
+    initialSettings: accountFixture(),
+  });
+  const reply = deferredAccountReply();
+  window.zenx.settings.logoutSubscription = () => reply.promise;
+  try {
+    await click(exactButtonRequired("Sign out"));
+    window.zenx.settings = { ...window.zenx.settings };
+    await click(exactButtonRequired("General"));
+    await act(async () => reply.reject(new Error("Old API failure")));
+    await click(exactButtonRequired("Account"));
+    assert.equal(exactButtonRequired("Sign out").disabled, false);
+    assert.doesNotMatch(document.body.textContent ?? "", /Old API failure/u);
+    const afterUnmount = deferredAccountReply();
+    window.zenx.settings.logoutSubscription = () => afterUnmount.promise;
+    await click(exactButtonRequired("Sign out"));
+    await act(async () => harness.root.unmount());
+    await act(async () => afterUnmount.reject(new Error("Unmounted failure")));
+    assert.equal(document.getElementById("root")?.childElementCount, 0);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Account action fences retained handlers and late replies after account identity changes", async () => {
+  let current = accountFixture();
+  const harness = await mountSettings("account", { get: async () => current });
+  const reply = deferredAccountReply();
+  let calls = 0;
+  window.zenx.settings.logoutSubscription = () => {
+    calls++;
+    return reply.promise;
+  };
+  window.zenx.settings.readSubscriptionUsage = async () => {
+    throw new Error("Synthetic usage unavailable");
+  };
+  try {
+    const button = exactButtonRequired("Sign out");
+    const key = Object.keys(button).find((key) =>
+      key.startsWith("__reactProps$"),
+    );
+    assert.ok(key);
+    const retained = (button as unknown as Record<string, { onClick(): void }>)[
+      key
+    ]!.onClick;
+    await click(button);
+    await click(exactButtonRequired("Toggle settings visibility"));
+    current = {
+      ...accountFixture(),
+      subscription: {
+        authenticated: true,
+        expired: true,
+        accountId: "replacement-account",
+      },
+    };
+    await click(exactButtonRequired("Toggle settings visibility"));
+    // Expired access tokens do not imply absent refresh credentials.
+    assert.equal(exactButtonRequired("Sign out").disabled, false);
+    await act(async () => retained());
+    assert.equal(calls, 1);
+    await act(async () => reply.resolve(accountFixture(false)));
+    assert.equal(exactButtonRequired("Sign out").disabled, false);
+    await click(exactButtonRequired("Toggle settings visibility"));
+    current = accountFixture();
+    await click(exactButtonRequired("Toggle settings visibility"));
+    await act(async () => retained());
+    assert.equal(
+      calls,
+      1,
+      "Returning to the same account does not revive an old handler",
+    );
+    await act(async () => harness.root.unmount());
+    await act(async () => retained());
+    assert.equal(calls, 1);
   } finally {
     await unmount(harness);
   }

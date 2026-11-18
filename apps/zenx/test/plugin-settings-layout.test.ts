@@ -131,6 +131,8 @@ test("plugin lifecycle confirmation spans the card instead of its icon column", 
       await Promise.resolve();
     });
     assert.deepEqual(calls, ["disable", "uninstall"]);
+    assert.equal(button("Reinstall").className, "secondary-button");
+    assert.equal(button("Reinstall").disabled, false);
     assert.equal(dom.window.document.querySelector(".plugin-confirm"), null);
     assert.equal(
       dom.window.document
@@ -177,5 +179,25 @@ test("advanced source controls reflow before their desktop columns exceed availa
   assert.match(
     compact,
     /\.plugin-source-install,[\s\S]*grid-template-columns: minmax\(0, 1fr\);/u,
+  );
+});
+
+// Declaration checks complement mounted action tests, not native visual proof.
+test("plugin metadata uses caption tokens and titles can wrap without changing status colors", () => {
+  for (const selector of [".plugin-source-badge", ".plugin-status"]) {
+    assert.match(rule(selector), /font-size: var\(--font-size-caption\);/u);
+    assert.doesNotMatch(
+      rule(selector),
+      /font-size: 8px|overflow: hidden|text-overflow/u,
+    );
+  }
+  assert.match(styles, /\n\.plugin-title-line \{\s*flex-wrap: wrap;/u);
+  assert.match(
+    rule(".plugin-status.status-enabled"),
+    /color: var\(--text-accent\)/u,
+  );
+  assert.match(
+    rule(".plugin-status.status-unavailable"),
+    /color: var\(--warn\)/u,
   );
 });

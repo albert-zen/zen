@@ -187,6 +187,24 @@ test("details retain focus, title directly renames, and late save cannot close a
       "leaving both surfaces dismisses details",
     );
     await act(async () => row.focus());
+    await act(async () => row.dispatchEvent(event("ArrowRight")));
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 40)));
+    const firstDetails = document.querySelector<HTMLElement>(
+      ".thread-information",
+    )!;
+    await act(async () =>
+      firstDetails.querySelector<HTMLButtonElement>("button")!.focus(),
+    );
+    await act(async () => firstDetails.dispatchEvent(event("Escape")));
+    assert.equal(
+      document.activeElement,
+      row,
+      "First keyboard details visit returns to the row, not the unused more trigger",
+    );
+    await act(async () => {
+      row.blur();
+      row.focus();
+    });
     assert.ok(
       document.activeElement === row,
       "opening information does not steal focus",
@@ -617,6 +635,284 @@ test("pinned and hidden child rows preserve unseen ends while running and approv
     assert.ok(dot("b"), "a later successful end uses the ordinary marker");
   } finally {
     await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
+
+test("Project/Recent child context keeps names, models and activation, with distinct descriptions", async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: "http://localhost" });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const { i18n } = await import("../src/renderer/src/i18n.js");
+  const previousLanguage = i18n.language;
+  const root = createRoot(document.getElementById("root")!);
+  const parent = {
+    ...summary("parent"),
+    name: "Shared project · implementation",
+  };
+  const child = { ...summary("child"), parentThreadId: "parent" };
+  const noModel = {
+    ...summary("no-model"),
+    parentThreadId: "missing-parent",
+    currentMetadata: { ...summary("no-model").currentMetadata, model: "" },
+  };
+  const plain = {
+    ...summary("plain"),
+    currentMetadata: { ...summary("plain").currentMetadata, model: "" },
+  };
+  const selected: string[] = [];
+  const props: React.ComponentProps<typeof Sidebar> = {
+    mode: "projects",
+    open: true,
+    onClose: noop,
+    onChangeThreadLifecycle: async () => {},
+    onChangeThreadPinned: async () => {},
+    onNewThread: noop,
+    onAddProject: noop,
+    onRemoveProject: noop,
+    onSetDefaultProject: noop,
+    onOpenContribution: noop,
+    onOpenSettings: noop,
+    onRetryThreads: noop,
+    onRenameThread: async () => {},
+    onSelectThread: (id) => selected.push(id),
+    pendingApprovalThreadIds: new Set(),
+    pluginContributions: [],
+    selectedPage: "agent",
+    selectedThreadId: "parent",
+    serverStatus: { type: "ready", reconnected: false },
+    liveThread: null,
+    threadError: null,
+    threadLoading: false,
+    projects: {
+      projects: [
+        {
+          key: "/work/zen",
+          workspace: "/work/zen",
+          configured: true,
+          isDefault: true,
+          threadIds: ["parent", "child", "no-model", "plain"],
+        },
+      ],
+      unavailableThreadIds: [],
+      lastUsedWorkspace: "/work/zen",
+    },
+    threads: [parent, child, noModel, plain] as React.ComponentProps<
+      typeof Sidebar
+    >["threads"],
+    pinnedThreads: [],
+    visibleSubagentThreadIds: ["child", "no-model"],
+  };
+  const render = async () => {
+    await act(async () => root.render(React.createElement(Sidebar, props)));
+  };
+  const rows = (id: string) => [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      `[data-thread-id="${id}"] > .thread-row`,
+    ),
+  ];
+  const descriptions = (id: string) =>
+    rows(id).map(
+      (row) =>
+        document.getElementById(row.getAttribute("aria-describedby")!)
+          ?.textContent,
+    );
+  try {
+    await render();
+    assert.equal(rows("child").length, 2, "Project and Recent aliases remain");
+    assert.equal(
+      new Set(rows("child").map((row) => row.getAttribute("aria-describedby")))
+        .size,
+      2,
+      "Mounted aliases never share description IDs",
+    );
+    for (const row of rows("child")) {
+      const label = row.querySelector<HTMLElement>(".thread-child-label")!;
+      assert.equal(label.textContent, "Child");
+      assert.equal(
+        label.getAttribute("aria-hidden"),
+        "true",
+        "Additional visual copy is not part of the existing accessible name",
+      );
+      assert.equal(label.title, "Child of Shared project · implementation");
+      assert.equal(label.tagName, "SPAN");
+      assert.equal(label.getAttribute("tabindex"), null);
+      assert.equal(
+        row.querySelector(".thread-title > span")?.textContent,
+        child.name,
+      );
+      assert.equal(
+        row.querySelector(".thread-model-name")?.textContent,
+        "Local demo",
+      );
+      assert.equal(
+        row.querySelector(".thread-model-name")?.getAttribute("title"),
+        "Local demo",
+      );
+      assert.equal(
+        document.getElementById(row.getAttribute("aria-describedby")!)
+          ?.textContent,
+        label.title,
+      );
+      assert.equal(
+        row.contains(
+          document.getElementById(row.getAttribute("aria-describedby")!),
+        ),
+        false,
+        "Description is outside the naming subtree",
+      );
+      await act(async () => row.click());
+    }
+    assert.deepEqual(selected, ["child", "child"]);
+    assert(
+      rows("parent").every(
+        (row) =>
+          !row.querySelector(".thread-child-label") &&
+          !row.hasAttribute("aria-describedby"),
+      ),
+    );
+    assert(
+      rows("plain").every((row) => !row.querySelector(".thread-model")),
+      "Unrelated no-model root gets no new metadata line",
+    );
+    assert(
+      rows("no-model").every(
+        (row) =>
+          row.querySelector(".thread-child-label") &&
+          !row.querySelector(".thread-model-name"),
+      ),
+    );
+    assert.deepEqual(descriptions("no-model"), [
+      "Child conversation",
+      "Child conversation",
+    ]);
+    const fullModel = "Local demonstration model · extended reasoning preview";
+    child.currentMetadata.model = fullModel;
+    props.threads = [...props.threads];
+    props.pendingApprovalThreadIds = new Set(["child"]);
+    await render();
+    assert(
+      rows("child").every((row) => !!row.querySelector(".thread-state-inline")),
+      "Approval text is retained alongside context",
+    );
+    const fact = (kind: string, part = "dd") =>
+      document.querySelector(
+        `.thread-information [data-thread-fact="${kind}"] ${part}`,
+      );
+    const childRows = rows("child");
+    for (const [index, row] of childRows.entries()) {
+      await act(async () => row.focus());
+      assert.equal(
+        document.activeElement,
+        row,
+        "Opening details keeps row focus",
+      );
+      assert.equal(fact("pending-approval", "dt")?.textContent, "Status");
+      assert.equal(
+        fact("pending-approval")?.textContent,
+        "Needs your approval",
+      );
+      assert.equal(fact("model")?.textContent, fullModel);
+      assert.equal(
+        document.querySelectorAll(
+          "[data-thread-fact] button, [data-thread-fact] [tabindex]",
+        ).length,
+        0,
+      );
+      if (index < childRows.length - 1) {
+        await act(async () => {
+          row.dispatchEvent(
+            new dom.window.KeyboardEvent("keydown", {
+              key: "Escape",
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
+        });
+        assert.equal(
+          fact("pending-approval"),
+          null,
+          "Close the first alias before measuring the next",
+        );
+      }
+    }
+    child.currentMetadata.model = "";
+    props.threads = [...props.threads];
+    await render();
+    assert.equal(fact("model"), null, "Missing model is omitted, not invented");
+    child.currentMetadata.model = fullModel;
+    props.threads = [...props.threads];
+    props.pendingApprovalThreadIds = new Set();
+    await render();
+    assert.equal(
+      document.querySelectorAll("[data-thread-fact]").length,
+      0,
+      "Resolved approval removes added facts",
+    );
+    props.pendingApprovalThreadIds = new Set(["child"]);
+    await render();
+    await act(async () => {
+      await i18n.changeLanguage("zh-CN");
+    });
+    assert.equal(fact("pending-approval", "dt")?.textContent, "状态");
+    assert.equal(fact("pending-approval")?.textContent, "需要你的审批");
+    assert.equal(fact("model", "dt")?.textContent, "模型");
+    assert.deepEqual(descriptions("child"), [
+      "“Shared project · implementation”的子会话",
+      "“Shared project · implementation”的子会话",
+    ]);
+    assert(
+      rows("child").every(
+        (row) =>
+          row.querySelector(".thread-child-label")?.getAttribute("title") ===
+          "“Shared project · implementation”的子会话",
+      ),
+    );
+    await act(async () => {
+      await i18n.changeLanguage("en");
+    });
+    props.threads = [
+      ...props.threads,
+      { ...summary("duplicate"), name: parent.name },
+    ] as typeof props.threads;
+    await render();
+    assert.deepEqual(
+      descriptions("child"),
+      ["Child conversation", "Child conversation"],
+      "Identical parent display titles are not presented as unique",
+    );
+    await act(async () => {
+      await i18n.changeLanguage("zh-CN");
+    });
+    assert(
+      rows("child").every(
+        (row) =>
+          row.querySelector(".thread-child-label")?.textContent === "子会话",
+      ),
+    );
+    assert.deepEqual(descriptions("child"), ["子会话", "子会话"]);
+    props.pinnedThreads = [child] as typeof props.pinnedThreads;
+    await render();
+    assert.equal(
+      document.querySelector(".pinned-thread-group .thread-child-label"),
+      null,
+      "Pinned is not part of this presentation experiment",
+    );
+    props.mode = "inbox";
+    await render();
+    assert.equal(
+      document.querySelector(".inbox-group .thread-child-label"),
+      null,
+      "Inbox keeps its existing metadata",
+    );
+  } finally {
+    await act(async () => {
+      await i18n.changeLanguage(previousLanguage);
+      root.unmount();
+    });
     dom.window.close();
   }
 });

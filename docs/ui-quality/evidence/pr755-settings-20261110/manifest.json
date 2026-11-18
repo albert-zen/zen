@@ -1,0 +1,188 @@
+{
+  "publicationScope": "9 unchanged synthetic screenshots plus full original text reviews and score rows. No Information screenshot, runtime manifest, or new candidate code included.",
+  "files": [
+    {
+      "path": "docs/ui-quality/evidence/pr755-settings-20261110/models/S-light-models.jpg",
+      "sha256": "c6f12006c76c55875035646f8d7fe841c32c92e5416484a162580d49f3d7c92c",
+      "kind": "visually inspected unchanged synthetic screenshot",
+      "sourceSha256": "c6f12006c76c55875035646f8d7fe841c32c92e5416484a162580d49f3d7c92c"
+    },
+    {
+      "path": "docs/ui-quality/evidence/pr755-settings-20261110/models/R-light-models.jpg",
+      "sha256": "d9028d4479376f218fc02d79b2c42ebfa676b509e5ef596ecead35a86911e2ba",
+      "kind": "visually inspected unchanged synthetic screenshot",
+      "sourceSha256": "d9028d4479376f218fc02d79b2c42ebfa676b509e5ef596ecead35a86911e2ba"
+    },
+    {
+      "path": "docs/ui-quality/evidence/pr755-settings-20261110/plugins/U-light-all.jpg",
+      "sha256": "0466e18e26373cf0e5b0e81a3e41202439b7a13fccaed2068e4fb325faa7a035",
+      "kind": "visually inspected unchanged synthetic screenshot",
+      "sourceSha256": "0466e18e26373cf0e5b0e81a3e41202439b7a13fccaed2068e4fb325faa7a035"
+    },
+    {
+      "path": "docs/ui-quality/evidence/pr755-settings-20261110/plugins/V-light-all.jpg",
+      "sha256": "bf8ea5c3fbbb7657ad14f73fe2ab95a36159b0b0f1ce66301230b628e30067ec",
+      "kind": "visually inspected unchanged synthetic screenshot",
+      "sourceSha256": "bf8ea5c3fbbb7657ad14f73fe2ab95a36159b0b0f1ce66301230b628e30067ec"
+    },
+    {
+      "path": "docs/ui-quality/evidence/pr755-settings-20261110/plugins/U-dark-lower-all.jpg",
+      "sha256": "8df2b610b7df24ea302206b21f0112cd1e361282a300bc754433a0468d6dde1c",
+      "kind": "visually inspected unchanged synthetic screenshot",
+      "sourceSha256": "8df2b610b7df24ea302206b21f0112cd1e361282a300bc754433a0468d6dde1c"
+    },
+    {
+      "path": "docs/ui-quality/evidence/pr755-settings-20261110/plugins/V-dark-lower-all.jpg",
+      "sha256": "e323e10a06358af4455a94dd5ca46202c1dcab7d8c9d8e0ed67c88810f76156b",
+      "kind": "visually inspected unchanged synthetic screenshot",
+      "sourceSha256": "e323e10a06358af4455a94dd5ca46202c1dcab7d8c9d8e0ed67c88810f76156b"
+    },
+    {
+      "path": "docs/ui-quality/evidence/pr755-settings-20261110/context/context-upper.jpg",
+      "sha256": "798ff7b2e5913f0afe243c2a96ebda9e253faf212687a2293bef258080354115",
+      "kind": "visually inspected unchanged synthetic screenshot",
+      "sourceSha256": "798ff7b2e5913f0afe243c2a96ebda9e253faf212687a2293bef258080354115"
+    },
+    {
+      "path": "docs/ui-quality/evidence/pr755-settings-20261110/context/context-lower.jpg",
+      "sha256": "ba5336fe1578045d259b208b20f2d69b6bdac9f5ce6b9f61b3decbc7914d88c5",
+      "kind": "visually inspected unchanged synthetic screenshot",
+      "sourceSha256": "ba5336fe1578045d259b208b20f2d69b6bdac9f5ce6b9f61b3decbc7914d88c5"
+    },
+    {
+      "path": "docs/ui-quality/evidence/pr755-settings-20261110/context/context-explanation.jpg",
+      "sha256": "fc560bb4aeb79671ebca9d4ea847f8663f0a1f365f711aa8fd3b9fa9ac3b1d5f",
+      "kind": "visually inspected unchanged synthetic screenshot",
+      "sourceSha256": "fc560bb4aeb79671ebca9d4ea847f8663f0a1f365f711aa8fd3b9fa9ac3b1d5f"
+    },
+    {
+      "path": "docs/ui-quality/reviews/pr755-settings-20261110/context-sol-review-20261110.md",
+      "sha256": "c59ac1a102532f741cd369e87af3cffd9189bc41101d0aaf8a27bfbaaa0de7d4",
+      "sourceSha256": "adaf1ce93fa4b392d6a35fe3b67474b978c4c5e07ab5d11bc054f362478d6713",
+      "localPathsRemoved": false,
+      "kind": "complete original review with publication provenance header"
+    },
+    {
+      "path": "docs/ui-quality/reviews/pr755-settings-20261110/context-terra-review-20261110.md",
+      "sha256": "5732a26bd1958d65099c34c58a9ae43f0f630a44d7e47f6b7d5ee7a4250acfbf",
+      "sourceSha256": "093186ef77505d9f38fa1281cd717e2a6733789b567c5c41acb40637a3cd38af",
+      "localPathsRemoved": false,
+      "kind": "complete original review with publication provenance header"
+    },
+    {
+      "path": "docs/ui-quality/reviews/pr755-settings-20261110/models-sol-review-20261110.md",
+      "sha256": "bc44650f7bf1ee93896bcff4f1a0d2957c72fd45737f88bed47c25520870f035",
+      "sourceSha256": "83725fca6db64eba17a86359bfb2dbcabeb0a2323ff98986742da14dfdb75d3d",
+      "localPathsRemoved": false,
+      "kind": "complete original review with publication provenance header"
+    },
+    {
+      "path": "docs/ui-quality/reviews/pr755-settings-20261110/models-sol-review-v2-20261110.md",
+      "sha256": "b2d8d000140422b000eb9a18a67d5a7ebfa52c0740a7a51ede33c57afce8ba07",
+      "sourceSha256": "9a40ebe0c1b63cd64ed2db08fa40a508d670622f610b56fd40b09d1b7caceced",
+      "localPathsRemoved": false,
+      "kind": "complete original review with publication provenance header"
+    },
+    {
+      "path": "docs/ui-quality/reviews/pr755-settings-20261110/models-terra-review-20261110.md",
+      "sha256": "a9fd70cc1e8611f97d92487e819bf323869f463a600e077126c551522784fc0f",
+      "sourceSha256": "a33c5c5687a7cd6d146751312b46aba3b6f4a2f6f19a85a729ba07079e131770",
+      "localPathsRemoved": false,
+      "kind": "complete original review with publication provenance header"
+    },
+    {
+      "path": "docs/ui-quality/reviews/pr755-settings-20261110/models-terra-v2-review-20261110.md",
+      "sha256": "27e0538f56221c30a439886d421a9526110dd4d2c4c7834c26052f4f1d741d5d",
+      "sourceSha256": "2ee43ae3c26ce22aa33d818ec4dbfbf38b019f9c1f2d055350c4b3296065a483",
+      "localPathsRemoved": false,
+      "kind": "complete original review with publication provenance header"
+    },
+    {
+      "path": "docs/ui-quality/reviews/pr755-settings-20261110/plugins-sol-review-20261110.md",
+      "sha256": "1b0f1f168e9e460aabd2cdb088466f2f05c8d0bc80161a3b3fa17a7ab2b0a507",
+      "sourceSha256": "2f1b14c7c42059d5b9e38d0cd26a307a38627ce42a7452d8a29aefdfa3d16c8b",
+      "localPathsRemoved": false,
+      "kind": "complete original review with publication provenance header"
+    },
+    {
+      "path": "docs/ui-quality/reviews/pr755-settings-20261110/plugins-terra-review-20261110.md",
+      "sha256": "c835236056f4fb2cd5b031f3681d977955721c935e13f70046546331c4b7c320",
+      "sourceSha256": "ffab9843c2ad495a0b26a9f7cca34619e5a375157a9fa74264fd0cf5738d8132",
+      "localPathsRemoved": false,
+      "kind": "complete original review with publication provenance header"
+    },
+    {
+      "path": "docs/ui-quality/reviews/pr755-settings-20261110/ui-information-baseline-terra-review-20261110.md",
+      "sha256": "5457b8152c936dd905a3bc248ea9b842543ed6e55f4f1f01f4b2da3af81c42f3",
+      "sourceSha256": "d2fce51f99663d6e16c44b78b5ec4e4db110262cbd9446ee4d801caaaab5e680",
+      "localPathsRemoved": false,
+      "kind": "complete original review with publication provenance header"
+    },
+    {
+      "path": "docs/ui-quality/reviews/pr755-settings-20261110/ui-information-native-sol-review-20261110-addendum.md",
+      "sha256": "0b385425914dd28f074ad5b29f4d058012e15f3b34c68c41ee7da6ddffc31476",
+      "sourceSha256": "4208dd41fe4415818df5b9a5c256a7b87bff69bfbf7739422a6d61f3241a38b1",
+      "localPathsRemoved": false,
+      "kind": "complete original review with publication provenance header"
+    },
+    {
+      "path": "docs/ui-quality/reviews/pr755-settings-20261110/ui-information-native-sol-review-20261110.md",
+      "sha256": "9b2e2ae968cd65239d9bcf9fa2cbabc972f3e0c4f3fabd254fd54f9b7c9bb606",
+      "sourceSha256": "0eb5db0a76979bd6a38da95419394f59f57cc44cb8218eeb88332c3d1f58686e",
+      "localPathsRemoved": false,
+      "kind": "complete original review with publication provenance header"
+    },
+    {
+      "path": "docs/ui-quality/reviews/pr755-settings-20261110/ui-information-native-terra-review-20261110.md",
+      "sha256": "2e2ccae1919dc5b60de8ae5220c0549c1472fcca059d2bdd6ac01276c3609ee2",
+      "sourceSha256": "d42c5e06ec55b5d103d968cd3a1706a6bb174b089afc049aa7aee06765a546a8",
+      "localPathsRemoved": false,
+      "kind": "complete original review with publication provenance header"
+    },
+    {
+      "path": "docs/ui-quality/reviews/pr755-settings-20261110/ui-information-neutral-pair-sol-review-20261110.md",
+      "sha256": "8cf2ea2d18b21dda1974ec0685c16d0418af83d96de1ca22ef08eef1b52dd22a",
+      "sourceSha256": "aed110d623cc5e1db2d071fe999ef04013d716f22434f0194b2e2cef29b1f240",
+      "localPathsRemoved": false,
+      "kind": "complete original review with publication provenance header"
+    },
+    {
+      "path": "docs/ui-quality/reviews/pr755-settings-20261110/ui-information-neutral-pair-terra-review-20261110.md",
+      "sha256": "57388cc23a81a22f920298d6e93f18651d8deb572023d206303b074b79cc4f94",
+      "sourceSha256": "4aad673fa76fb507c9fb21a82039f324e6ba51a226ebf893fc5c0c4790f07f1d",
+      "localPathsRemoved": false,
+      "kind": "complete original review with publication provenance header"
+    },
+    {
+      "path": "docs/ui-quality/reviews/pr755-settings-20261110/ui-native-settings-preview-sol-review-20261110.md",
+      "sha256": "ef2fb241c54977b13a226436df4ed43224bd1024dafcf2cf8c32dc49b5797712",
+      "sourceSha256": "089e673fd459fe2e51c85ad0f3c9c319fc970511343e5816f572406c0e5fdc32",
+      "localPathsRemoved": false,
+      "kind": "complete original review with publication provenance header"
+    },
+    {
+      "path": "docs/ui-quality/reviews/pr755-settings-20261110/ui-native-settings-preview-terra-review-20261110.md",
+      "sha256": "f0a7bcc15962e8ced87c555b130f5c2f48af7d555aa1258ec568dba439b435d7",
+      "sourceSha256": "8bb609ce576f898d7452c28bd2a7735814b24948d96e91ae90cb1bd27a5a941f",
+      "localPathsRemoved": false,
+      "kind": "complete original review with publication provenance header"
+    },
+    {
+      "path": "docs/ui-quality/reviews/pr755-settings-20261110/ui-settings-baseline-sol-review-20261110.md",
+      "sha256": "5fb500e78ff623679c959fc88a0bef080a665ce517fab872d4f31e8677e7611b",
+      "sourceSha256": "475eb0963bb40a131d37606169649408d553bbe3e04a7b2f03d341d8c20918c6",
+      "localPathsRemoved": false,
+      "kind": "complete original review with publication provenance header"
+    },
+    {
+      "path": "docs/ui-quality/evidence/pr755-settings-20261110/scores.json",
+      "sha256": "75e5f7b6d97fd1b28b697eb4cd3696852d302ab993d0f1f9ace9d2993f0be255",
+      "kind": "transcribed original score rows and explicit comparability limits"
+    },
+    {
+      "path": "docs/ui-quality/evidence/pr755-settings-20261110/SCORES.md",
+      "sha256": "fbe152acf0107e4e0d705b5d2a475cf56c62c2d069ed63dee5eb04622a64a4a0",
+      "kind": "transcribed original score rows and explicit comparability limits"
+    }
+  ]
+}

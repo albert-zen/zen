@@ -42,3 +42,19 @@ for (const scrollbar of [0, 10, 16]) {
     assert.ok(parentContentLeft + geometry.left + geometry.width <= 390);
   });
 }
+
+for (const column of [
+  { left: 366.5, width: 800, origin: 371.5 },
+  { left: 392, width: 736, origin: 392 },
+  { left: 952.5, width: 318, origin: 960.5 },
+]) {
+  test(`Composer border box follows measured transcript at ${column.left}/${column.width}`, () => {
+    const geometry = steerPreviewColumn(column, column.origin, 0);
+    assert.equal(column.origin + geometry.left, column.left);
+    assert.equal(geometry.width, column.width);
+    // Queue border/gutter compensation remains separate from the Composer box.
+    const tray = steerPreviewColumn(column, column.origin + 1, 12);
+    assert.equal(column.origin + 1 + tray.left, column.left);
+    assert.equal(tray.width - 12, geometry.width);
+  });
+}

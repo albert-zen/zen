@@ -1,0 +1,156 @@
+{
+  "scope": "Fast production-component rendering only. All content and services are synthetic. Not native Electron, OS capture, live Host, end-to-end acceptance or a full regression run.",
+  "status": "passed",
+  "chromeVersion": "Google Chrome 156.0.8078.79",
+  "externalRequests": [],
+  "rendererErrors": [],
+  "captureMs": 58523,
+  "sidebarNameCases": [
+    {
+      "step": "long-name-hover",
+      "theme": "light",
+      "text": "Review the complete desktop conversation, sidebar and information cards without losing the current draft",
+      "visible": true,
+      "clipped": false,
+      "focusVisible": false,
+      "focusedClass": "icon-button",
+      "rect": {
+        "x": 267,
+        "y": 189,
+        "width": 272,
+        "height": 60.890625
+      },
+      "selected": "thread-1"
+    },
+    {
+      "step": "long-name-keyboard",
+      "theme": "light",
+      "text": "Review the complete desktop conversation, sidebar and information cards without losing the current draft",
+      "visible": true,
+      "clipped": false,
+      "focusVisible": true,
+      "focusedClass": "thread-row selected",
+      "rect": {
+        "x": 267,
+        "y": 189,
+        "width": 272,
+        "height": 60.890625
+      },
+      "selected": "thread-1"
+    },
+    {
+      "step": "long-name-details-focus",
+      "theme": "light",
+      "text": "Review the complete desktop conversation, sidebar and information cards without losing the current draft",
+      "visible": true,
+      "clipped": false,
+      "focusVisible": true,
+      "focusedClass": "thread-information-title",
+      "rect": {
+        "x": 267,
+        "y": 189,
+        "width": 272,
+        "height": 60.890625
+      },
+      "selected": "thread-1"
+    },
+    {
+      "step": "long-project-keyboard",
+      "theme": "light",
+      "text": "Community reading room — multilingual research and accessibility planning",
+      "visible": true,
+      "clipped": false,
+      "focusVisible": true,
+      "focusedClass": "project-more-trigger",
+      "rect": {
+        "x": 263,
+        "y": 155,
+        "width": 511.109375,
+        "height": 16
+      },
+      "selected": "thread-1"
+    },
+    {
+      "step": "long-name-hover",
+      "theme": "dark",
+      "text": "Review the complete desktop conversation, sidebar and information cards without losing the current draft",
+      "visible": true,
+      "clipped": false,
+      "focusVisible": false,
+      "focusedClass": "icon-button",
+      "rect": {
+        "x": 267,
+        "y": 189,
+        "width": 272,
+        "height": 60.890625
+      },
+      "selected": "thread-1"
+    },
+    {
+      "step": "long-name-keyboard",
+      "theme": "dark",
+      "text": "Review the complete desktop conversation, sidebar and information cards without losing the current draft",
+      "visible": true,
+      "clipped": false,
+      "focusVisible": true,
+      "focusedClass": "thread-row selected",
+      "rect": {
+        "x": 267,
+        "y": 189,
+        "width": 272,
+        "height": 60.890625
+      },
+      "selected": "thread-1"
+    },
+    {
+      "step": "long-name-details-focus",
+      "theme": "dark",
+      "text": "Review the complete desktop conversation, sidebar and information cards without losing the current draft",
+      "visible": true,
+      "clipped": false,
+      "focusVisible": true,
+      "focusedClass": "thread-information-title",
+      "rect": {
+        "x": 267,
+        "y": 189,
+        "width": 272,
+        "height": 60.890625
+      },
+      "selected": "thread-1"
+    },
+    {
+      "step": "long-project-keyboard",
+      "theme": "dark",
+      "text": "Community reading room — multilingual research and accessibility planning",
+      "visible": true,
+      "clipped": false,
+      "focusVisible": true,
+      "focusedClass": "project-more-trigger",
+      "rect": {
+        "x": 263,
+        "y": 155,
+        "width": 511.109375,
+        "height": 16
+      },
+      "selected": "thread-1"
+    }
+  ],
+  "commit": "ea3fcca62600b3edeb74561e34c59af1548c3205",
+  "tree": "5a350db6228e3aef79c695376e98c3b3f7f065d5",
+  "dirtyFiles": [],
+  "run": "https://github.com/albert-zen/zen/actions/runs/43183615712",
+  "artifactId": 13927083128,
+  "screenshots": {
+    "reading-desktop-dark-long-name-details-focus.png": "763fe6edbf7437ddab086bedacd38f30acb13df764fcc04db3d2d49864e714b3",
+    "reading-desktop-dark-long-name-hover.png": "d94c1ea6aadb8bc2cdeddde4761a8e188ccb1022df3aa1b2d1f1ed4099906750",
+    "reading-desktop-dark-long-name-keyboard.png": "97443bb7ab66da7205ff805374645e302139b9c7ee6d7016b86132148eb4dec3",
+    "reading-desktop-light-long-name-details-focus.png": "a5330fadf07d7dc5391b3fa78a6f178d3fdef8dcb3163d4a4ab700757e9f3231",
+    "reading-desktop-light-long-name-hover.png": "8ac31553709b396f9a3a780c3d05207170ea15af91b359d4f16d5613f9aed373",
+    "reading-desktop-light-long-name-keyboard.png": "eb4ee980227e98c0ae240f96c07ebc7ff9a74ccfdbc6d6785b00ba6ca8dce6b2",
+    "reading-desktop-dark-long-project-keyboard.png": "dac7b4f1f8bf65a515adbcfa9c1fcb458d5384594b9ceda1192e8c4d05a6327e",
+    "reading-desktop-light-long-project-keyboard.png": "ded967eaaeb967734a5c88d4ab54fc7fdf42701f64d6b3e731893381f68ab5b1"
+  },
+  "readingHtmlSha256": "eb675d11d555fde27c994310b199262803349e3ca968275ef643a157f6876fcc",
+  "evidenceSha256": "5e34ea9242bc7b7edb004d23c78f1473c1ae9283b287da383a22822a5efb6546",
+  "sourceSha256": "18bc92b9d7aee299ee26aca1d549ee5da0b0a53b78fc3bc1141df0de37eb296a"
+}

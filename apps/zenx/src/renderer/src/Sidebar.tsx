@@ -5,6 +5,7 @@ import {
   type ReactNode,
   createContext,
   useContext,
+  useId,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -63,6 +64,13 @@ import {
   type RoomConversationState,
 } from "./room-conversations.js";
 
+import { uniqueSidebarParentTitles } from "./sidebar-child-context.js";
+import { sidebarChildTitlePlans } from "./sidebar-title-labels.js";
+import {
+  restingLabelFitMode,
+  type RestingLabelPlan,
+} from "./workspace-resting-labels.js";
+
 const THREAD_DENSITY_STORAGE_KEY = "zenx.sidebar.thread-density";
 type ThreadDensity = "compact" | "detailed";
 const SidebarSettingsContext = createContext<{
@@ -72,6 +80,8 @@ const SidebarSettingsContext = createContext<{
   refreshTriggers(): Promise<void>;
   unreadThreadIds: ReadonlySet<string>;
   selectionKey: string;
+  parentTitles: ReadonlyMap<string, string>;
+  childTitlePlans: ReadonlyMap<string, RestingLabelPlan>;
 } | null>(null);
 
 interface SidebarProps {
@@ -206,6 +216,22 @@ export function Sidebar({
   const visibleThreads = useMemo(
     () => deriveSidebarThreads(threads, visibleSubagentThreadIds),
     [threads, visibleSubagentThreadIds],
+  );
+  const parentTitles = useMemo(
+    () => uniqueSidebarParentTitles(threads),
+    [threads],
+  );
+  const childTitlePlans = useMemo(
+    () =>
+      sidebarChildTitlePlans(
+        visibleThreads.map((thread) => ({
+          id: thread.threadId,
+          title: threadTitle(thread),
+          parentId:
+            thread.status !== "systemError" ? thread.parentThreadId : null,
+        })),
+      ),
+    [visibleThreads],
   );
   const [recentLimit, setRecentLimit] = useState(30);
   const recentRevealFocus = useRef<{
@@ -537,6 +563,8 @@ export function Sidebar({
       value={{
         settings,
         projects,
+        parentTitles,
+        childTitlePlans,
         triggers: triggers.state,
         refreshTriggers: triggers.refresh,
         unreadThreadIds,
@@ -834,6 +862,7 @@ export function Sidebar({
                         <ThreadRow
                           key={thread.threadId}
                           rowScope="recent"
+                          showChildContext
                           thread={thread}
                           hasActiveTurn={threadHasActiveTurn(
                             thread,
@@ -1751,6 +1780,15 @@ function ProjectRows({
           onClick={toggleOpen}
           onKeyDown={projectReorder?.onKeyDown}
         >
+          <Icon
+            className="project-disclosure-icon"
+            name={
+              open && !projectReorder?.dragging
+                ? "chevron-down"
+                : "chevron-right"
+            }
+            size={10}
+          />
           <Icon name="folder" size={14} />
           <span>{group.label}</span>
           {pinnedProject ? (
@@ -1945,6 +1983,7 @@ function ProjectRows({
                 selected={thread.threadId === selectedThreadId}
                 thread={thread}
                 projectWorkspace={group.workspace}
+                showChildContext
                 watching={watchingThreadIds.has(thread.threadId)}
                 reorder={
                   threadReorder === undefined
@@ -1996,6 +2035,84 @@ interface ThreadRowReorderHandlers {
   onKeyDown(event: ReactKeyboardEvent<HTMLElement>): void;
 }
 
+function SidebarCollisionTitle({
+  title,
+  plan,
+}: {
+  title: string;
+  plan: RestingLabelPlan;
+}) {
+  const wrapper = useRef<HTMLSpanElement>(null);
+  const [mode, setMode] = useState<"canonical" | "marked" | "bare">(
+    "canonical",
+  );
+  useLayoutEffect(() => {
+    const element = wrapper.current;
+    const query = window.matchMedia?.("(min-width: 961px)");
+    if (!element || !query || typeof ResizeObserver !== "function") return;
+    const full = element.querySelector<HTMLElement>(
+      ".sidebar-title-full-probe",
+    )!;
+    const marked = element.querySelector<HTMLElement>(
+      ".sidebar-title-marked-probe",
+    )!;
+    const bare = element.querySelector<HTMLElement>(
+      ".sidebar-title-bare-probe",
+    );
+    let disposed = false;
+    const measure = () => {
+      if (disposed) return;
+      setMode(
+        restingLabelFitMode({
+          desktop: query.matches,
+          available: element.clientWidth,
+          full: full.getBoundingClientRect().width,
+          marked: marked.getBoundingClientRect().width,
+          bare: bare?.getBoundingClientRect().width,
+        }),
+      );
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    [element, full, marked, bare].forEach((node) => {
+      if (node) observer.observe(node);
+    });
+    query.addEventListener("change", measure);
+    document.fonts?.ready.then(measure);
+    document.fonts?.addEventListener("loadingdone", measure);
+    return () => {
+      disposed = true;
+      observer.disconnect();
+      query.removeEventListener("change", measure);
+      document.fonts?.removeEventListener("loadingdone", measure);
+    };
+  }, [title, plan.marked, plan.bare]);
+  return (
+    <span
+      className="sidebar-collision-title"
+      ref={wrapper}
+      data-label-mode={mode}
+      data-canonical-title={title}
+    >
+      <span className="sidebar-title-canonical">{title}</span>
+      <span className="sidebar-title-display" aria-hidden="true">
+        {mode === "marked" ? plan.marked : mode === "bare" ? plan.bare : title}
+      </span>
+      <span className="sidebar-title-full-probe" aria-hidden="true">
+        {title}
+      </span>
+      <span className="sidebar-title-marked-probe" aria-hidden="true">
+        {plan.marked}
+      </span>
+      {plan.bare && (
+        <span className="sidebar-title-bare-probe" aria-hidden="true">
+          {plan.bare}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function ThreadRow({
   thread,
   projectWorkspace,
@@ -2011,6 +2128,7 @@ function ThreadRow({
   watching,
   inbox = false,
   rowScope = "",
+  showChildContext = false,
   reorder,
 }: {
   thread: NativeThreadSummary;
@@ -2030,11 +2148,26 @@ function ThreadRow({
   watching: boolean;
   inbox?: boolean;
   rowScope?: string;
+  showChildContext?: boolean;
   reorder?: ThreadRowReorderHandlers;
 }) {
   const rowIdentity = `${rowScope ? `${rowScope}-` : ""}${thread.threadId}`;
   const rowRef = useRef<HTMLDivElement>(null);
   const information = useContext(SidebarSettingsContext);
+  const childDescriptionId = useId();
+  const isChild =
+    showChildContext &&
+    thread.status !== "systemError" &&
+    !!thread.parentThreadId;
+  const parentTitle =
+    thread.parentThreadId !== thread.threadId
+      ? information?.parentTitles.get(thread.parentThreadId ?? "")
+      : undefined;
+  const childDescription = isChild
+    ? parentTitle
+      ? i18n.t("shell:sidebarChildOf", { parent: parentTitle })
+      : i18n.t("shell:sidebarChildConversation")
+    : null;
   const debugMenu = useContext(ThreadDebugMenuContext);
   const detailsRef = useRef<HTMLDivElement>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -2052,6 +2185,7 @@ function ThreadRow({
     clearDetailsTimer();
     if (menuOpen) return;
     const open = () => {
+      menuFocusOrigin.current = "row";
       setDetailsOpen(true);
       void information?.refreshTriggers();
     };
@@ -2244,6 +2378,7 @@ function ThreadRow({
   const detailsContents = (titleEditor: ReactNode) => (
     <ThreadInformation
       titleEditor={titleEditor}
+      pendingChildApproval={isChild && pendingApproval && !menuOpen}
       thread={thread}
       projectName={project?.name ?? threadProject(thread)}
       projectPath={
@@ -2304,7 +2439,14 @@ function ThreadRow({
         </span>
       ) : null}
       <span className="thread-title">
-        <span>{threadTitle(thread)}</span>
+        {isChild && information?.childTitlePlans.has(thread.threadId) ? (
+          <SidebarCollisionTitle
+            title={threadTitle(thread)}
+            plan={information.childTitlePlans.get(thread.threadId)!}
+          />
+        ) : (
+          <span>{threadTitle(thread)}</span>
+        )}
         {openQuestionCount > 0 ? (
           <span
             className="thread-asking-badge"
@@ -2318,8 +2460,18 @@ function ThreadRow({
       </span>
       {(identity === null || modelProvider === null) &&
       !pendingApproval &&
-      !hasActiveTurn ? null : (
+      !hasActiveTurn &&
+      !childDescription ? null : (
         <span className="thread-model">
+          {childDescription ? (
+            <span
+              className="thread-child-label"
+              aria-hidden="true"
+              title={childDescription}
+            >
+              {i18n.t("shell:sidebarChild")}
+            </span>
+          ) : null}
           {identity === null || modelProvider === null ? null : (
             <>
               <ProviderLogo
@@ -2333,7 +2485,14 @@ function ThreadRow({
           )}
           {pendingApproval ? (
             <span className="thread-state-inline">
-              {i18n.t("shell:needsYourApproval")}
+              <span className="thread-approval-full">
+                {i18n.t("shell:needsYourApproval")}
+              </span>
+              {childDescription ? (
+                <span className="thread-approval-compact" aria-hidden="true">
+                  {i18n.t("shell:sidebarApprovalCompact")}
+                </span>
+              ) : null}
             </span>
           ) : null}
         </span>
@@ -2376,6 +2535,7 @@ function ThreadRow({
       ref={rowRef}
       className={`thread-row-shell${reorder === undefined ? "" : " reorderable"}`}
       data-thread-id={thread.threadId}
+      data-child-thread={isChild || undefined}
       data-selected={selected || undefined}
       data-menu-open={menuOpen || undefined}
       data-unread={unread || undefined}
@@ -2452,6 +2612,7 @@ function ThreadRow({
           type="button"
           id={reorder?.controlId}
           aria-current={selected ? "page" : undefined}
+          aria-describedby={childDescription ? childDescriptionId : undefined}
           aria-keyshortcuts={
             reorder === undefined ? undefined : "Alt+ArrowUp Alt+ArrowDown"
           }
@@ -2464,6 +2625,11 @@ function ThreadRow({
           {contents}
         </button>
       )}
+      {childDescription ? (
+        <span id={childDescriptionId} className="sr-only">
+          {childDescription}
+        </span>
+      ) : null}
       <span className="thread-status-rail">
         {boundTriggers.length > 0 ? (
           <span className="thread-status-slot">
@@ -2656,6 +2822,7 @@ function ThreadRow({
 
 function ThreadInformation({
   titleEditor,
+  pendingChildApproval = false,
   thread,
   projectName,
   projectPath,
@@ -2664,6 +2831,7 @@ function ThreadInformation({
   onRename,
 }: {
   titleEditor?: ReactNode;
+  pendingChildApproval?: boolean;
   thread: NativeThreadSummary;
   projectName: string;
   projectPath: string | null;
@@ -2671,6 +2839,9 @@ function ThreadInformation({
   triggerStatus: SidebarTriggerState["status"];
   onRename(origin: HTMLButtonElement): void;
 }) {
+  const model = pendingChildApproval
+    ? threadModelIdentity(thread)?.label
+    : null;
   const [now, setNow] = useState(Date.now);
   const next = nextSidebarTrigger(triggers, now);
   useEffect(() => {
@@ -2725,6 +2896,18 @@ function ThreadInformation({
         {titleEditor}
       </div>
       <dl className="thread-information-facts">
+        {pendingChildApproval ? (
+          <div data-thread-fact="pending-approval">
+            <dt>{i18n.t("shell:threadStatusLabel")}</dt>
+            <dd>{i18n.t("shell:needsYourApproval")}</dd>
+          </div>
+        ) : null}
+        {model ? (
+          <div data-thread-fact="model">
+            <dt>{i18n.t("shell:model")}</dt>
+            <dd>{model}</dd>
+          </div>
+        ) : null}
         <div>
           <dt>{i18n.t("shell:threadProjectLabel")}</dt>
           <dd>
@@ -3138,13 +3321,72 @@ function SidebarMenuPopover({
     ) {
       return;
     }
+    let composer: HTMLElement | null = null;
+    let observer: ResizeObserver | null = null;
     const update = () => {
+      const anchorRect = anchor.getBoundingClientRect();
+      const menuRect = menu.getBoundingClientRect();
       const next = sidebarMenuLayout(
-        anchor.getBoundingClientRect(),
-        menu.getBoundingClientRect(),
+        anchorRect,
+        menuRect,
         window.innerWidth,
         window.innerHeight,
       );
+      // Child detail previews opt into this measured bound, with or without approval.
+      // Preserve the ordinary algorithm and the hover bridge to the actual row.
+      const scopedDetail =
+        menu.matches(".thread-information") &&
+        (!!menu.querySelector('[data-thread-fact="pending-approval"]') ||
+          anchor.matches('.thread-row-shell[data-child-thread="true"]'));
+      // An explicitly opened child action menu may prefer the same draft clearance.
+      // Rename stays size-locked; ordinary/project menus retain viewport placement.
+      const scopedChildMenu =
+        !lockSize &&
+        menu.matches(".thread-item-menu") &&
+        anchor.matches(".thread-menu-trigger") &&
+        !!anchor.closest('.thread-row-shell[data-child-thread="true"]');
+      const nextComposer =
+        scopedDetail || scopedChildMenu
+          ? (anchor
+              .closest(".app-shell")
+              ?.querySelector<HTMLElement>(
+                ":scope > main.workspace #primary-conversation-content .composer",
+              ) ?? null)
+          : null;
+      if (nextComposer !== composer) {
+        if (composer) observer?.unobserve(composer);
+        composer = nextComposer;
+        if (composer) observer?.observe(composer);
+      }
+      const composerRect = composer?.getBoundingClientRect();
+      const composerStyle = composer ? getComputedStyle(composer) : null;
+      if (
+        anchorRect.width > 0 &&
+        anchorRect.height > 0 &&
+        menuRect.width > 0 &&
+        menuRect.height > 0 &&
+        composerRect &&
+        composerRect.width > 0 &&
+        composerRect.height > 0 &&
+        composerStyle?.visibility === "visible" &&
+        Number(composerStyle.opacity) > 0 &&
+        next.left < composerRect.right &&
+        next.left + menuRect.width > composerRect.left &&
+        next.top < composerRect.bottom &&
+        next.top + menuRect.height >
+          composerRect.top - SIDEBAR_MENU_VIEWPORT_MARGIN
+      ) {
+        const boundedTop = Math.floor(
+          composerRect.top - SIDEBAR_MENU_VIEWPORT_MARGIN - menuRect.height,
+        );
+        if (
+          boundedTop >= SIDEBAR_MENU_VIEWPORT_MARGIN &&
+          boundedTop + menuRect.height > anchorRect.top
+        )
+          next.top = Math.min(next.top, boundedTop);
+        // If it cannot fit while touching the row's vertical band, keep the
+        // original placement; do not hide content or invent a different owner.
+      }
       setLayout((current) =>
         current?.left === next.left &&
         current.top === next.top &&
@@ -3156,16 +3398,17 @@ function SidebarMenuPopover({
     update();
     window.addEventListener("resize", update);
     window.addEventListener("scroll", update, true);
-    const observer =
+    observer =
       typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
     observer?.observe(anchor);
     observer?.observe(menu);
+    if (composer) observer?.observe(composer);
     return () => {
       window.removeEventListener("resize", update);
       window.removeEventListener("scroll", update, true);
       observer?.disconnect();
     };
-  }, [anchorRef, menuRef]);
+  }, [anchorRef, menuRef, lockSize]);
 
   const element = (
     <div

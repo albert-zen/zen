@@ -1,5 +1,6 @@
 /** Uses the existing Ubuntu CI Chrome, never a user profile or downloaded browser. */
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -16,12 +17,14 @@ assert.equal(
 );
 assert.equal(process.platform, "linux", "This fixture targets Ubuntu CI.");
 const directory = path.resolve(process.argv[2] ?? ".settings-audit-preview");
+const densityLongPath = `/synthetic/${"long-project-name-".repeat(20)}`;
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const evidence = {
   scope:
-    "Actual production SettingsView; synthetic providers/catalog only. No Host, credentials, private settings, live provider, Host mutations or persistence. Deferred Save uses a synthetic Promise only. Settings scaffold, not full App/onboarding/native Electron. Observations are not desired-UX assertions.",
+    "Actual production SettingsView and separately launched production DirectoryPicker; synthetic providers/catalog/directory responses only. No Host, credentials, private settings, live provider, Host mutations or persistence. Deferred Save uses a synthetic Promise only. Settings and QA-only directory launcher scaffolds, not full App navigation/onboarding/native Electron or filesystem integration. Observations are not desired-UX assertions.",
   browserSandboxDisabled: false,
   cases: [],
+  screenshots: {},
   rendererErrors: [],
   externalRequests: [],
 };
@@ -29,8 +32,15 @@ const evidence = {
 const measure = `(() => {
   const rect = e => { if (!e) return null; const r=e.getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom}; };
   const editor=document.querySelector('.provider-editor');
-  const scroll=document.querySelector('.page-scroll');
+  const scroll=document.querySelector('#root[hidden] ~ div .page-scroll') ?? document.querySelector('.page-scroll');
   const active=document.activeElement;
+  const list=document.querySelector('.directory-picker-list');
+  const selection=document.querySelector('#directory-picker-selection');
+  const listRect=rect(list);
+  const rows=[...document.querySelectorAll('.directory-picker-list [data-index]')];
+  const visibleIn=(outer, inner) => !!outer && !!inner && inner.width > 0 && inner.height > 0 && inner.x >= outer.x - 1 && inner.right <= outer.right + 1 && inner.y >= outer.y - 1 && inner.bottom <= outer.bottom + 1;
+  const viewportRect={x:0,y:0,width:innerWidth,height:innerHeight,right:innerWidth,bottom:innerHeight};
+
   return {viewport:{width:innerWidth,height:innerHeight}, editor:rect(editor), editorRole:editor?.getAttribute('role'), focusInEditor:!!editor?.contains(active), focus:{tag:active?.tagName,text:active?.textContent?.slice(0,120),label:active?.getAttribute('aria-label'),id:active?.id},
     scroll:{top:scroll?.scrollTop,height:scroll?.clientHeight,total:scroll?.scrollHeight},
     providerCards:document.querySelectorAll('.provider-profile-card').length, modelRows:document.querySelectorAll('.provider-model-row').length,
@@ -41,6 +51,30 @@ const measure = `(() => {
     dialogs:document.querySelectorAll('[role="dialog"]').length,
     overflow:document.documentElement.scrollWidth>innerWidth,
     calls:window.__settingsAudit.calls,
+    responsive: Object.fromEntries(Object.entries({
+      foregroundCard: '.settings-foreground-control', foregroundLabel: '.settings-foreground-control-body strong',
+      foregroundSwitch: '.settings-foreground-control [role=switch]', risk: '#foreground-control-risk', help: '#foreground-control-help',
+      directoryBody: '.directory-picker-body', browser: '.directory-picker-browser', locations: '.directory-picker-body nav',
+      current: '.directory-picker-breadcrumbs [aria-current=location]', selection: '#directory-picker-selection'
+    }).map(([key, selector]) => [key, rect(document.querySelector(selector))])),
+    breadcrumbsOverflow: (() => { const e = document.querySelector(".directory-picker-breadcrumbs"); return !!e && e.scrollWidth > e.clientWidth; })(),
+    directoryGeometry: {
+      platform:document.documentElement.dataset.platform,
+      path:{scrollTop:selection?.scrollTop,clientHeight:selection?.clientHeight,scrollHeight:selection?.scrollHeight,focused:active===selection,text:selection?.textContent,title:selection?.title},
+      viewport: viewportRect, list: listRect, clientHeight:list?.clientHeight, scrollHeight:list?.scrollHeight, scrollTop:list?.scrollTop,
+      fullyVisibleRows:rows.filter(row => visibleIn(listRect,rect(row)) && visibleIn(viewportRect,rect(row))).map(row => Number(row.dataset.index)),
+      rowRects:rows.map(rect), focusedIndex:active?.getAttribute('data-index'),
+      focusRect:rect(active), focusVisible:!!active?.matches(':focus-visible'),
+      focusInsideList:!!list?.contains(active), focusFullyVisible:visibleIn(listRect,rect(active)) && visibleIn(viewportRect,rect(active)),
+      focusOutline:active ? getComputedStyle(active).outline : null, focusBoxShadow:active ? getComputedStyle(active).boxShadow : null,
+      footer:rect(document.querySelector('.directory-picker-dialog footer')),
+      cancel:rect(document.querySelector('.directory-picker-dialog footer .secondary-button')),
+      add:rect(document.querySelector('.directory-picker-dialog footer .primary-button')),
+      addDisabled:document.querySelector('.directory-picker-dialog footer .primary-button')?.disabled,
+      addDescription:document.querySelector('.directory-picker-dialog footer .primary-button')?.getAttribute('aria-describedby'),
+      pageScrollTop:document.scrollingElement?.scrollTop,
+    },
+    directory:{dialog:rect(document.querySelector(".directory-picker-shell")),path:document.querySelector(".directory-picker-dialog footer strong")?.textContent,rows:document.querySelectorAll(".directory-picker-list [data-index]").length,error:document.querySelector(".directory-picker-error")?.textContent,focusInside:!!document.querySelector(".directory-picker-shell")?.contains(active),calls:window.__directoryAudit?.calls},
   };
 })()`;
 
@@ -83,6 +117,14 @@ try {
     .filter(Boolean);
 
   const html = await readFile(path.join(directory, "settings-audit.html"));
+  evidence.source = JSON.parse(
+    await readFile(path.join(directory, "source.json"), "utf8"),
+  );
+  assert.equal(
+    createHash("sha256").update(html).digest("hex"),
+    evidence.source.bundleSha256,
+    "Capture matches built bundle",
+  );
   server = createServer((req, res) => {
     if (
       new URL(req.url, "http://localhost").pathname !== "/settings-audit.html"
@@ -155,10 +197,11 @@ try {
       format: "png",
       captureBeyondViewport: false,
     });
-    await writeFile(
-      path.join(directory, name),
-      Buffer.from(result.data, "base64"),
-    );
+    const bytes = Buffer.from(result.data, "base64");
+    await writeFile(path.join(directory, name), bytes);
+    evidence.screenshots[name] = createHash("sha256")
+      .update(bytes)
+      .digest("hex");
   };
   const waitFor = async (expression) => {
     for (let attempt = 0; attempt < 200; attempt++) {
@@ -223,11 +266,214 @@ try {
     const capture = async (name) => {
       await delay(150);
       const filename = `${options.name}-${name}.png`;
-      receipt.states.push({
-        name,
-        filename,
-        observation: await evaluate(measure),
-      });
+      const observation = await evaluate(measure);
+      const r = observation.responsive;
+      const contains = (outer, inner) =>
+        outer &&
+        inner &&
+        inner.width > 0 &&
+        inner.x >= outer.x - 1 &&
+        inner.right <= outer.right + 1 &&
+        inner.y >= outer.y - 1 &&
+        inner.bottom <= outer.bottom + 1;
+      if (name === "16-general-foreground-description") {
+        assert.ok(r.foregroundLabel && r.foregroundSwitch);
+        assert.ok(
+          Math.min(r.foregroundLabel.bottom, r.foregroundSwitch.bottom) >
+            Math.max(r.foregroundLabel.y, r.foregroundSwitch.y),
+          "Label and switch share a row",
+        );
+        assert.ok(
+          contains(r.foregroundCard, r.risk),
+          "Risk stays inside permission card",
+        );
+        assert.ok(
+          contains(r.foregroundCard, r.help),
+          "Help stays inside permission card",
+        );
+      }
+      if (/^1[789]-directory/u.test(name)) {
+        assert.ok(
+          contains(r.directoryBody, r.browser),
+          "Directory browser stays in body",
+        );
+        if (options.width <= 640) {
+          assert.ok(
+            r.browser.width >= r.directoryBody.width - 2,
+            "Narrow directory browser uses body width",
+          );
+        }
+        if (name === "17-directory-initial-failure") {
+          assert.equal(
+            r.locations,
+            null,
+            "Failed initial snapshot has no empty location rail",
+          );
+          assert.equal(
+            r.current,
+            null,
+            "Failed initial snapshot claims no current directory",
+          );
+        } else {
+          assert.ok(r.current, "Current directory is identified");
+          if (!observation.breadcrumbsOverflow) {
+            assert.ok(
+              contains(r.browser, r.current),
+              "Current directory cue remains visible in browser",
+            );
+          }
+          assert.equal(
+            observation.directory.path,
+            name === "19-directory-empty" ? "/synthetic/empty" : "/synthetic",
+            "Footer identifies the actual folder to add",
+          );
+          assert.ok(
+            r.selection && r.selection.bottom <= options.height,
+            "Folder to add remains within viewport",
+          );
+        }
+      }
+      if (/^2[4-9]-directory-density/u.test(name)) {
+        const geometry = observation.directoryGeometry;
+        const viewport = geometry.viewport;
+        assert.ok(
+          contains(viewport, observation.directory.dialog),
+          "Dialog stays in viewport",
+        );
+        assert.ok(
+          contains(viewport, geometry.footer),
+          "Footer stays in viewport",
+        );
+        assert.ok(
+          contains(viewport, geometry.cancel),
+          "Cancel remains visible",
+        );
+        assert.ok(contains(viewport, geometry.add), "Add remains visible");
+        assert.ok(
+          contains(viewport, r.selection),
+          "Current add path remains visible",
+        );
+        assert.ok(
+          contains(r.browser, geometry.list),
+          "Directory list stays inside browser",
+        );
+        assert.equal(
+          observation.overflow,
+          false,
+          "No horizontal page overflow",
+        );
+        assert.equal(geometry.addDisabled, false);
+        assert.equal(geometry.addDescription, "directory-picker-selection");
+        if (viewport.width <= 640) {
+          for (const target of [
+            geometry.cancel,
+            geometry.add,
+            ...geometry.rowRects,
+          ]) {
+            assert.ok(
+              target.width >= 44 && target.height >= 44,
+              "Narrow directory action is at least 44px",
+            );
+          }
+        }
+        if (["linux", "win32"].includes(geometry.platform)) {
+          assert.ok(
+            observation.directory.dialog.y >= 44,
+            "Native-platform dialog avoids the 44px titlebar",
+          );
+        }
+        if (name.includes("long-path")) {
+          assert.equal(
+            geometry.path.focused,
+            true,
+            "Tab reaches the full path",
+          );
+          assert.ok(
+            geometry.path.scrollHeight > geometry.path.clientHeight,
+            "Long path has internal overflow",
+          );
+          assert.ok(
+            geometry.path.scrollTop > 0,
+            "End actually scrolls the full path",
+          );
+          assert.ok(
+            geometry.path.scrollTop + geometry.path.clientHeight >=
+              geometry.path.scrollHeight - 1,
+            "End reveals the tail of the full path",
+          );
+          assert.equal(
+            geometry.path.text,
+            densityLongPath,
+            "Path text is complete",
+          );
+          assert.equal(geometry.path.title, densityLongPath);
+          assert.ok(
+            contains(viewport, geometry.list),
+            "Empty list stays visible",
+          );
+        } else {
+          assert.ok(
+            geometry.focusInsideList && geometry.focusFullyVisible,
+            "Keyboard focus stays visible inside list",
+          );
+        }
+        assert.equal(
+          geometry.focusVisible,
+          true,
+          "Keyboard navigation retains focus-visible",
+        );
+        assert.equal(
+          observation.directory.path,
+          name.includes("child") || name.includes("long-path")
+            ? densityLongPath
+            : "/synthetic",
+        );
+        if (!name.includes("child") && !name.includes("long-path")) {
+          assert.equal(observation.directory.rows, 10);
+          assert.ok(
+            geometry.fullyVisibleRows.length > 0,
+            "List exposes complete rows",
+          );
+          assert.equal(
+            geometry.focusedIndex,
+            name.includes("-end") ? "9" : "0",
+          );
+          if (viewport.bottom === 480) {
+            assert.ok(
+              geometry.scrollHeight > geometry.clientHeight,
+              "Short viewport uses internal list overflow",
+            );
+          }
+          if (
+            name.includes("-end") &&
+            geometry.scrollHeight > geometry.clientHeight
+          ) {
+            assert.ok(
+              geometry.scrollTop > 0,
+              "End actually scrolls the overflowing list",
+            );
+          }
+          if (name.includes("-home") || name.includes("-back")) {
+            // Minimum browsing area for this fixed ordinary-path sample only,
+            // not a score or a constraint on separate long-path fixtures.
+            const minimumRows =
+              viewport.width === 390 && viewport.height === 640
+                ? 5
+                : viewport.width === 390 && viewport.height === 480
+                  ? 2
+                  : 1;
+            assert.ok(
+              geometry.fullyVisibleRows.length >= minimumRows,
+              `Ordinary-path density fixture exposes at least ${minimumRows} complete rows at the top`,
+            );
+            assert.ok(
+              geometry.scrollTop <= 1,
+              "Home/return restores top of list",
+            );
+          }
+        }
+      }
+      receipt.states.push({ name, filename, observation });
       await screenshot(filename);
     };
     await send("Emulation.setDeviceMetricsOverride", {
@@ -462,6 +708,187 @@ try {
       "document.querySelector('.provider-model-row').scrollIntoView({block:'start'})",
     );
     await capture("13-existing-row-input-filled");
+    // General uses the actual Settings route; DirectoryPicker has a labeled
+    // test-only launcher because SettingsView does not own that navigation.
+    await navigate();
+    await clickSelector("#settings-tab-general");
+    await waitFor(
+      "!!document.querySelector('details.settings-send-shortcuts')",
+    );
+    assert.equal(
+      await evaluate(
+        "document.querySelector('details.settings-send-shortcuts').open",
+      ),
+      false,
+    );
+    await evaluate(
+      "document.querySelector('details.settings-send-shortcuts').scrollIntoView({block:'center'})",
+    );
+    await capture("14-general-shortcuts-collapsed");
+    await clickSelector("details.settings-send-shortcuts summary");
+    assert.equal(
+      await evaluate(
+        "document.querySelector('details.settings-send-shortcuts').open",
+      ),
+      true,
+    );
+    await key("Enter", "Enter", 13);
+    await waitFor(
+      "!document.querySelector('details.settings-send-shortcuts').open",
+    );
+    await key("Enter", "Enter", 13);
+    await waitFor(
+      "document.querySelector('details.settings-send-shortcuts').open",
+    );
+    await capture("15-general-shortcuts-expanded");
+    await evaluate(
+      "document.querySelector('#foreground-control-risk').scrollIntoView({block:'center'})",
+    );
+    assert.ok(
+      await evaluate(
+        "!!document.querySelector('#foreground-control-help')?.textContent.trim()",
+      ),
+    );
+    await capture("16-general-foreground-description");
+    const directoryUrl = `${url}/settings-audit.html?${new URLSearchParams({ lang: options.lang, theme: options.theme, scene: "directory", directoryFailure: "1" })}`;
+    await send("Page.navigate", { url: directoryUrl });
+    await waitFor("!!document.querySelector('#directory-audit-open')");
+    await evaluate("document.fonts.ready");
+    await clickSelector("#directory-audit-open");
+    await waitFor("!!document.querySelector('.directory-picker-error button')");
+    assert.ok(
+      await evaluate(
+        "!!document.querySelector('[role=dialog].directory-picker-shell') && !document.querySelector('#root').contains(document.querySelector('.directory-picker-shell'))",
+      ),
+    );
+    assert.equal(
+      await evaluate(
+        "document.querySelector('.directory-picker-dialog footer .primary-button').disabled",
+      ),
+      true,
+    );
+    await key("Tab", "Tab", 9);
+    assert.ok(
+      await evaluate(
+        "document.querySelector('.directory-picker-shell').contains(document.activeElement)",
+      ),
+      "Tab remains inside actual modal",
+    );
+    await capture("17-directory-initial-failure");
+    await clickSelector(".directory-picker-error button");
+    await waitFor(
+      "!!document.querySelector('.directory-picker-list [data-index=\"0\"]')",
+    );
+    await capture("18-directory-retry-success");
+    await clickSelector('.directory-picker-list [data-index="0"]');
+    await waitFor(
+      "document.querySelector('.directory-picker-dialog footer strong')?.textContent === '/synthetic/empty'",
+    );
+    assert.equal(
+      await evaluate(
+        "document.querySelectorAll('.directory-picker-list [data-index]').length",
+      ),
+      0,
+    );
+    await capture("19-directory-empty");
+    await clickSelector(".directory-picker-breadcrumbs button");
+    await waitFor(
+      "document.querySelector('.directory-picker-dialog footer strong')?.textContent === '/synthetic'",
+    );
+    await capture("20-directory-parent");
+    await key("Escape", "Escape", 27);
+    await waitFor("!document.querySelector('.directory-picker-shell')");
+    await waitFor("document.activeElement?.id === 'directory-audit-open'");
+    await capture("21-directory-escape-focus");
+    await key("Enter", "Enter", 13);
+    await waitFor(
+      "!!document.querySelector('.directory-picker-list [data-index=\"0\"]')",
+    );
+    await capture("22-directory-keyboard-reopen");
+    await clickSelector(".directory-picker-dialog footer .secondary-button");
+    await waitFor("!document.querySelector('.directory-picker-shell')");
+    await waitFor("document.activeElement?.id === 'directory-audit-open'");
+    assert.deepEqual(await evaluate("window.__directoryAudit.calls"), [
+      "snapshot",
+      "snapshot",
+      "list:/synthetic",
+      "list:/synthetic/empty",
+      "list:/synthetic",
+      "snapshot",
+      "list:/synthetic",
+    ]);
+    await capture("23-directory-cancel");
+    // Reuse only the production directory journey at short height, not Settings.
+    for (const short of [false, true]) {
+      await send("Emulation.setDeviceMetricsOverride", {
+        width: short ? 390 : options.width,
+        height: short ? 480 : options.height,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+      const densityUrl = `${url}/settings-audit.html?${new URLSearchParams({ lang: options.lang, theme: options.theme, scene: "directory", directoryDensity: "1" })}`;
+      await send("Page.navigate", { url: densityUrl });
+      await waitFor("!!document.querySelector('#directory-audit-open')");
+      await evaluate("document.fonts.ready");
+      await clickSelector("#directory-audit-open");
+      await waitFor(
+        "document.querySelectorAll('.directory-picker-list [data-index]').length === 10",
+      );
+      const suffix = short ? "-short-390x480" : "";
+      // Genuine keyboard events switch modality; no focus()/scrollTop injection.
+      await key("End", "End", 35);
+      await waitFor(
+        "document.activeElement?.getAttribute('data-index') === '9'",
+      );
+      await capture("24-directory-density-end" + suffix);
+      await key("Home", "Home", 36);
+      await waitFor(
+        "document.activeElement?.getAttribute('data-index') === '0'",
+      );
+      await capture("25-directory-density-home" + suffix);
+      await key("Enter", "Enter", 13);
+      await waitFor(
+        `document.querySelector('#directory-picker-selection')?.textContent === ${JSON.stringify(densityLongPath)}`,
+      );
+      await capture("26-directory-density-child" + suffix);
+      await key("Tab", "Tab", 9);
+      await waitFor(
+        "document.activeElement?.id === 'directory-picker-selection'",
+      );
+      await key("End", "End", 35);
+      await waitFor(
+        "(() => { const path = document.querySelector('#directory-picker-selection'); return path.scrollTop > 0 && path.scrollTop + path.clientHeight >= path.scrollHeight - 1; })()",
+      );
+      await capture("28-directory-density-long-path-end" + suffix);
+      await key("Home", "Home", 36);
+      await waitFor(
+        "document.querySelector('#directory-picker-selection').scrollTop <= 1",
+      );
+      (receipt.longPathHome ??= []).push({
+        short,
+        observation: await evaluate(measure),
+      });
+      await key("Tab", "Tab", 9, 8);
+      await waitFor(
+        "document.activeElement === document.querySelector('.directory-picker-list')",
+      );
+      await key("Backspace", "Backspace", 8);
+      await waitFor(
+        "document.querySelectorAll('.directory-picker-list [data-index]').length === 10 && document.activeElement?.getAttribute('data-index') === '0'",
+      );
+      await capture("27-directory-density-back" + suffix);
+      // Backspace at the synthetic root is safe and must not issue another read.
+      await key("Backspace", "Backspace", 8);
+      assert.deepEqual(await evaluate("window.__directoryAudit.calls"), [
+        "snapshot",
+        "list:/synthetic",
+        `list:${densityLongPath}`,
+        "list:/synthetic",
+      ]);
+      await key("Escape", "Escape", 27);
+      await waitFor("!document.querySelector('.directory-picker-shell')");
+      await waitFor("document.activeElement?.id === 'directory-audit-open'");
+    }
     receipt.status = "captured";
   }
   assert.equal(evidence.rendererErrors.length, 0, "No renderer exceptions.");

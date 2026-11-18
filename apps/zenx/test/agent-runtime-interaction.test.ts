@@ -411,6 +411,38 @@ test("failed turn preserves provider error without an unrelated process warning"
   });
 });
 
+test("an empty Thread hides Back to live without resetting a held reader", async () => {
+  await withRuntimeDom(async (h) => {
+    const populated = runtimeThread([
+      runtimeMessage("read", "A real transcript can return to live."),
+    ]);
+    await h.render({ ...populated, turns: [] });
+    const scroll = document.querySelector<HTMLElement>(".messages")!;
+    Object.defineProperties(scroll, {
+      clientHeight: { configurable: true, get: () => 400 },
+      scrollHeight: { configurable: true, get: () => 1000 },
+    });
+    scroll.scrollTop = 200;
+    await act(async () =>
+      scroll.dispatchEvent(new window.Event("pointerdown", { bubbles: true })),
+    );
+    assert.ok(document.querySelector(".back-live") === null);
+    await h.render(populated);
+    assert.equal(
+      scroll.scrollTop,
+      200,
+      "visibility must not reset follow intent",
+    );
+    assert.ok(document.querySelector(".back-live"));
+    scroll.scrollTo = () => {
+      scroll.scrollTop = 600;
+    };
+    await h.click(".back-live");
+    assert.equal(scroll.scrollTop, 600);
+    assert.ok(document.querySelector(".back-live") === null);
+  });
+});
+
 test("transcript selection pauses live following; explicit Back to live clears it", async () => {
   await withRuntimeDom(async (h) => {
     await h.render(

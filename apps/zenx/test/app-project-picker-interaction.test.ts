@@ -29,6 +29,7 @@ import { workspaceLauncherSnapshot } from "./workspace-launcher-snapshot.js";
 import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
 import { i18n } from "../src/renderer/src/i18n.js";
 import { parseSentReferenceContent } from "../src/renderer/src/reference-draft.js";
+import { selectThreadHistoryWindow } from "../../../src/thread-history-window.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
 const {
@@ -355,6 +356,135 @@ test("New thread stays local, switches Project, and creates on first Send", asyn
     await unmountApp(harness);
   }
 });
+
+for (const outcome of ["accepted", "rejected", "navigated"] as const) {
+  test(`first Send pending feedback distinguishes creation and ${outcome} admission`, async () => {
+    const creation = deferred<ReturnType<typeof started>>();
+    const admission = deferred<object>();
+    let creates = 0;
+    let sends = 0;
+    const harness = await mountApp(oneProject(), {
+      startProjectThread: async () => {
+        creates++;
+        return creation.promise;
+      },
+      request: async (method) => {
+        if (method === "zen/turn/send") {
+          sends++;
+          return admission.promise;
+        }
+        throw new Error(`Unexpected protocol request: ${method}`);
+      },
+    });
+    try {
+      const composer = await waitFor(() =>
+        document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+      );
+      await setTextareaValue(composer, "Wait for first-message confirmation");
+      await invokeButtonClick(
+        await waitFor(() =>
+          document.querySelector<HTMLButtonElement>('[aria-label="Send"]'),
+        ),
+        2,
+      );
+      await waitFor(() => creates === 1);
+      assert.equal(sends, 0);
+      assert.ok(document.querySelector(".new-thread-draft-heading"));
+      assert.equal(
+        document.querySelector('.thread-empty[role="status"]'),
+        null,
+        "local creation is not message admission",
+      );
+
+      await act(async () =>
+        creation.resolve(started(liveThread(), "/work/zen")),
+      );
+      await waitFor(() => sends === 1);
+      const status = await waitFor(() =>
+        document.querySelector('.thread-empty[role="status"]'),
+      );
+      assert.match(status.textContent ?? "", /Sending…/);
+      assert.match(status.textContent ?? "", /Waiting for confirmation/);
+      assert.doesNotMatch(status.textContent ?? "", /Start a new thread/);
+      assert.equal(document.querySelector(".new-thread-draft-heading"), null);
+      assert.equal(
+        document.querySelector<HTMLTextAreaElement>("#thread-composer")?.value,
+        "Wait for first-message confirmation",
+      );
+      assert.equal(document.querySelector("[data-sent-message-id]"), null);
+      assert.equal(
+        document.querySelector<HTMLButtonElement>('[aria-label="Send"]')
+          ?.disabled,
+        true,
+      );
+
+      if (outcome === "navigated") {
+        await act(async () =>
+          document
+            .querySelector<HTMLButtonElement>(".settings-nav-row")
+            ?.click(),
+        );
+        await waitFor(
+          () => document.getElementById("thread-composer") === null,
+        );
+        assert.equal(
+          document.querySelector('.thread-empty[role="status"]'),
+          null,
+        );
+      }
+      await act(async () => {
+        if (outcome === "rejected")
+          admission.reject(new Error("Admission rejected"));
+        else admission.resolve({});
+      });
+      await waitFor(
+        () => document.querySelector('.thread-empty[role="status"]') === null,
+      );
+      if (outcome === "navigated") {
+        assert.equal(
+          document.getElementById("thread-composer"),
+          null,
+          "late admission must not reopen the Thread",
+        );
+        assert.match(document.body.textContent ?? "", /Settings/);
+      } else {
+        assert.equal(
+          document.querySelector<HTMLTextAreaElement>("#thread-composer")
+            ?.value,
+          outcome === "rejected" ? "Wait for first-message confirmation" : "",
+        );
+        if (outcome === "rejected") {
+          assert.equal(
+            document.querySelector(".thread-empty h2")?.textContent,
+            "Send needs attention",
+          );
+          assert.equal(
+            document.querySelector(".thread-empty")?.getAttribute("role"),
+            null,
+          );
+          const error = document.querySelector(".composer-error")!;
+          assert.equal(
+            error.querySelector('[role="alert"]')?.textContent,
+            "Send encountered an error.",
+          );
+          const details = error.querySelector("details")!;
+          assert.equal(details.open, false);
+          assert.equal(
+            details.querySelector("pre")?.textContent,
+            "Admission rejected",
+          );
+          await act(async () => details.querySelector("summary")?.click());
+          assert.equal(details.open, true);
+          assert.equal(sends, 1, "opening diagnostics never retries input");
+        }
+      }
+      assert.equal(creates, 1);
+      assert.equal(sends, 1, "feedback never dispatches or retries input");
+    } finally {
+      await unmountApp(harness);
+    }
+  });
+}
 
 test("fresh Thread establishes native provenance before sending and only durable current-epoch messages can quote or fork", async () => {
   let notify:
@@ -3316,6 +3446,299 @@ test("late canonical queue ID settles only the original unknown submission, not 
   }
 });
 
+for (const newerEvent of [false, true]) {
+  test(`delivery check uses full exact receipt outside a ${newerEvent ? "newer" : "same-watermark"} history window without replacing the window`, async () => {
+    const history: Thread = {
+      ...liveThread(),
+      turns: Array.from({ length: 21 }, (_, index) => ({
+        id: `delivery-history-${index}`,
+        itemsView: "full",
+        status: "completed",
+        error: null,
+        startedAt: index + 10,
+        completedAt: index + 11,
+        durationMs: 1000,
+        items: [
+          {
+            id: `delivery-history-input-${index}`,
+            type: "userMessage",
+            clientId: `history-client-${index}`,
+            content: [
+              {
+                type: "text",
+                text: `Historical delivery ${index}`,
+                text_elements: [],
+              },
+            ],
+          },
+        ],
+      })),
+    };
+    const full = resumed(history);
+    const selected = selectThreadHistoryWindow(
+      full.threadId,
+      full.thread.items,
+    );
+    const windowed = {
+      ...full,
+      thread: {
+        ...full.thread,
+        items: selected.items,
+        turns: full.thread.turns.filter((turn) =>
+          selected.turnIds.has(turn.id),
+        ),
+        history: selected.history,
+      },
+    };
+    const oldest = full.thread.items.find(
+      (item) => item.type === "user_message",
+    );
+    assert.ok(oldest?.type === "user_message");
+    assert.equal(
+      selected.items.some((item) => item.id === oldest.id),
+      false,
+    );
+    let clientId = "";
+    let sends = 0;
+    let checking = false;
+    const read = deferred<typeof full>();
+    let notify:
+      Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+    const harness = await mountThreadApp({
+      onNotification: (listener) => {
+        notify = listener;
+        return () => undefined;
+      },
+      request: async (method, params) => {
+        if (method === "zen/thread/resume")
+          return checking ? read.promise : windowed;
+        if (method === "zen/turn/send") {
+          sends++;
+          clientId = (params as { clientUserMessageId: string })
+            .clientUserMessageId;
+          // This exact receipt exists only outside the initial bounded view.
+          oldest.clientId = clientId;
+          throw new Error("Synthetic admission outcome unknown");
+        }
+        throw new Error(`Unexpected ${method}`);
+      },
+    });
+    try {
+      const composer = await selectedComposer();
+      await setTextareaValue(composer, "Synthetic earlier delivery");
+      await dispatchComposerKey(composer, { key: "Enter" });
+      await waitFor(() =>
+        document.querySelector('[data-send-state="unconfirmed"]'),
+      );
+      await setTextareaValue(composer, "Keep newer draft during full check");
+      checking = true;
+      const check = exactButton("Check delivery");
+      assert.ok(check);
+      await invokeButtonClick(check);
+      if (newerEvent)
+        await act(async () =>
+          notify?.("zen/thread/event", {
+            threadId: full.threadId,
+            processEpoch: full.processEpoch,
+            watermark: full.watermark + 1,
+            event: {
+              type: "item_completed",
+              item: {
+                type: "agent_message",
+                id: "delivery-newer-cache-message",
+                threadId: full.threadId,
+                turnId: "delivery-history-20",
+                createdAt: "2026-11-09T00:00:00Z",
+                text: "Newer cached canonical output",
+              },
+            },
+          }),
+        );
+      if (newerEvent)
+        assert.match(
+          document.body.textContent ?? "",
+          /Newer cached canonical output/,
+        );
+      await act(async () => {
+        read.resolve(full);
+        await read.promise;
+      });
+      assert.equal(
+        document.querySelector(
+          `[data-pending-send-client-id="${clientId}"]`,
+        ) === null,
+        true,
+        "Full exact acceptance must remove the recovery copy even when the bounded cache wins",
+      );
+      assert.equal(
+        document.querySelector(
+          '[data-sent-message-id="delivery-history-input-0"]',
+        ),
+        null,
+        "Explicit delivery check must not replace the retained history window",
+      );
+      assert.equal(document.querySelectorAll(".turn").length, 20);
+      if (newerEvent)
+        assert.match(
+          document.body.textContent ?? "",
+          /Newer cached canonical output/,
+        );
+      assert.equal(composer.value, "Keep newer draft during full check");
+      assert.equal(sends, 1);
+    } finally {
+      read.resolve(full);
+      await unmountApp(harness);
+    }
+  });
+}
+
+test("delivery check reports usable, unavailable and failed reads without changing exact send authority", async () => {
+  let notify:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  let clientId = "";
+  let sends = 0;
+  let reads = 0;
+  let read = async () => resumed(liveThread());
+  const harness = await mountThreadApp({
+    onNotification: (listener) => {
+      notify = listener;
+      return () => undefined;
+    },
+    request: async (method, params) => {
+      if (method === "zen/thread/resume") {
+        reads++;
+        return read();
+      }
+      if (method === "zen/turn/send") {
+        sends++;
+        clientId = (params as { clientUserMessageId: string })
+          .clientUserMessageId;
+        throw new Error("Synthetic admission outcome unknown");
+      }
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  try {
+    const composer = await selectedComposer();
+    await setTextareaValue(composer, "Synthetic delivery check input");
+    await dispatchComposerKey(composer, { key: "Enter" });
+    await waitFor(() =>
+      document.querySelector('[data-send-state="unconfirmed"]'),
+    );
+    await setTextareaValue(composer, "Newer draft must remain");
+    const feedback = () => {
+      const element = document.querySelector<HTMLElement>(
+        ".pending-send-check-feedback",
+      );
+      assert.ok(element);
+      return element;
+    };
+    const check = async () => {
+      const button = exactButton("Check delivery");
+      assert.ok(button);
+      await invokeButtonClick(button);
+    };
+
+    await check();
+    assert.equal(feedback().dataset.checkState, "completed");
+    assert.equal(
+      feedback().textContent,
+      "Check completed. Delivery is still unconfirmed.",
+    );
+    assert.ok(
+      document.querySelector(`[data-pending-send-client-id="${clientId}"]`),
+    );
+
+    read = async () => resumed({ ...liveThread(), id: "wrong-thread" });
+    await check();
+    assert.equal(feedback().dataset.checkState, "unavailable");
+    assert.doesNotMatch(feedback().textContent ?? "", /Check completed/);
+
+    read = async () => {
+      throw new Error("Synthetic recovery read failed");
+    };
+    await check();
+    assert.equal(feedback().dataset.checkState, "failed");
+    assert.equal(feedback().getAttribute("role"), "alert");
+    assert.match(
+      feedback().textContent ?? "",
+      /Synthetic recovery read failed/,
+    );
+    assert.equal(composer.value, "Newer draft must remain");
+    assert.equal(sends, 1, "All checks are reads, never sends");
+
+    const lateRead = deferred<ReturnType<typeof resumed>>();
+    read = () => lateRead.promise;
+    const readsBefore = reads;
+    const button = exactButton("Check delivery");
+    assert.ok(button);
+    await invokeButtonClick(button, 2);
+    assert.equal(reads, readsBefore + 1, "Repeated check activation is fenced");
+    assert.equal(feedback().dataset.checkState, "checking");
+    assert.equal(button.disabled, true);
+    let watermark = 0;
+    const emit = async (
+      event: import("../../../src/app-server.js").AppServerEvent,
+    ) =>
+      act(async () =>
+        notify?.("zen/thread/event", {
+          threadId: "thread-1",
+          processEpoch: "test-process-epoch",
+          watermark: ++watermark,
+          event,
+        }),
+      );
+    await emit({
+      type: "item_completed",
+      item: {
+        type: "turn_started",
+        id: "delivery-started",
+        threadId: "thread-1",
+        turnId: "delivery-turn",
+        createdAt: "2026-11-09T00:00:00Z",
+        selection: {
+          providerProfileId: "fake",
+          modelId: "fake",
+          reasoningEffort: "medium",
+        },
+      },
+    });
+    await emit({
+      type: "turn_started",
+      threadId: "thread-1",
+      turnId: "delivery-turn",
+    });
+    await emit({
+      type: "item_completed",
+      item: {
+        type: "user_message",
+        id: "delivery-user",
+        threadId: "thread-1",
+        turnId: "delivery-turn",
+        createdAt: "2026-11-09T00:00:00Z",
+        clientId,
+        text: "Synthetic delivery check input",
+      },
+    });
+    assert.equal(document.querySelector("[data-pending-send-client-id]"), null);
+    await act(async () => {
+      lateRead.resolve(resumed(liveThread()));
+      await lateRead.promise;
+    });
+    assert.equal(document.querySelector("[data-pending-send-client-id]"), null);
+    assert.equal(document.querySelector(".pending-send-check-feedback"), null);
+    assert.equal(
+      document.querySelectorAll('[data-sent-message-id="delivery-user"]')
+        .length,
+      1,
+    );
+    assert.equal(composer.value, "Newer draft must remain");
+    assert.equal(sends, 1);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 test("unconfirmed Send keeps a recoverable row and requires explicit recovery before same-id retry", async () => {
   const turnStartRequests: Array<{
     clientUserMessageId?: string;
@@ -4378,6 +4801,104 @@ async function chooseDraftProject(name: string): Promise<void> {
   );
   await act(async () => option.click());
 }
+
+test("empty welcome Project switching never offers Back to live", async () => {
+  const projects = twoProjectSnapshot();
+  projects.lastUsedWorkspace = "/work/documents";
+  let starts = 0;
+  let sends = 0;
+  const harness = await mountApp(projects, {
+    threads: async (archived) =>
+      archived
+        ? []
+        : [
+            summary(
+              false,
+              "existing-thread",
+              "Existing thread",
+              "/work/documents",
+            ),
+          ],
+    startProjectThread: async (workspace) => {
+      starts++;
+      return started(liveThread(), workspace);
+    },
+    request: async (method) => {
+      if (method === "zen/turn/send" || method === "turn/start") sends++;
+      return {};
+    },
+  });
+  const composer = () =>
+    document.querySelector<HTMLTextAreaElement>("#thread-composer");
+  const assertEmptyWelcome = () => {
+    assert.ok(document.querySelector(".transcript-history") === null);
+    assert.ok(document.querySelector(".back-live") === null);
+    assert.equal(starts, 0);
+    assert.equal(sends, 0);
+  };
+  try {
+    const initialComposer = await waitFor(composer);
+    await setTextareaValue(initialComposer, "Keep the documents draft");
+    const heading = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        ".new-thread-draft-heading .new-thread-project-trigger",
+      ),
+    );
+    const viewport = document.querySelector<HTMLElement>(".messages")!;
+    // JSDOM has no layout. Model the empty welcome's scrollable overlay inset,
+    // then exercise the actual pointer/focus handlers used by the native chooser.
+    Object.defineProperties(viewport, {
+      clientHeight: { configurable: true, get: () => 400 },
+      scrollHeight: { configurable: true, get: () => 600 },
+    });
+    viewport.scrollTop = 0;
+    assertEmptyWelcome();
+    await act(async () => {
+      heading.dispatchEvent(new window.Event("pointerdown", { bubbles: true }));
+      heading.focus();
+      heading.click();
+    });
+    assertEmptyWelcome();
+    const search = await waitFor(() =>
+      document.querySelector<HTMLInputElement>(
+        '.new-thread-project-popover input[type="search"]',
+      ),
+    );
+    await setInputValue(search, "zen");
+    await act(async () => {
+      search.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "ArrowDown",
+          bubbles: true,
+        }),
+      );
+    });
+    const option = document.activeElement as HTMLButtonElement;
+    assert.equal(option.getAttribute("role"), "menuitemradio");
+    assert.match(option.textContent ?? "", /zen/u);
+    // JSDOM does not synthesize Enter's native button click.
+    await act(async () => option.click());
+    assert.match(
+      document.querySelector(".new-thread-draft-heading")?.textContent ?? "",
+      /What should we build in zen\?/u,
+    );
+    assert.equal(composer()?.value, "");
+    assertEmptyWelcome();
+    await setTextareaValue(composer()!, "Keep the separate zen draft");
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(".new-thread-project-trigger-chip")
+        ?.click(),
+    );
+    await waitFor(() =>
+      document.querySelector(".new-thread-project-popover-portal"),
+    );
+    assert.equal(composer()?.value, "Keep the separate zen draft");
+    assertEmptyWelcome();
+  } finally {
+    await unmountApp(harness);
+  }
+});
 
 test("the Composer-context Project chip opens the searchable switcher", async () => {
   const projects = twoProjectSnapshot();
@@ -6205,7 +6726,9 @@ test("message source reads and opens its exact canonical thread without sending,
     request: async (method, params) => {
       calls.push({ method, params });
       if (method === "zen/thread/read")
-        return { thread: { id: "exact/source", archived: false } };
+        // A valid read includes a canonical item array, even when empty.
+        // This scenario asserts Thread navigation, not sending-call positioning.
+        return { thread: { id: "exact/source", archived: false, items: [] } };
       if (method === "zen/thread/resume")
         return resumed(
           (params as { threadId: string }).threadId === "thread-1"
@@ -6523,7 +7046,7 @@ test("side conversation message source stays in the side panel and preserves the
     request: async (method, params) => {
       const id = (params as { threadId: string }).threadId;
       if (method === "zen/thread/read")
-        return { thread: { id, archived: false } };
+        return { thread: { id, archived: false, items: [] } };
       if (method === "zen/thread/resume") {
         resumes.push(id);
         const value =
@@ -6588,8 +7111,12 @@ test("side conversation message source stays in the side panel and preserves the
 });
 for (const olderFirst of [true, false]) {
   test(`newer message source intent wins when older request finishes ${olderFirst ? "first" : "last"}`, async () => {
-    const first = deferred<{ thread: { id: string; archived: boolean } }>();
-    const second = deferred<{ thread: { id: string; archived: boolean } }>();
+    const first = deferred<{
+      thread: { id: string; archived: boolean; items: [] };
+    }>();
+    const second = deferred<{
+      thread: { id: string; archived: boolean; items: [] };
+    }>();
     const resumes: string[] = [];
     const thread = sourceNavigationThread();
     const original = thread.turns[0]!.items[0]! as any;
@@ -6626,9 +7153,13 @@ for (const olderFirst of [true, false]) {
       await act(async () => links[0]!.click());
       await act(async () => links[1]!.click());
       const finishFirst = () =>
-        first.resolve({ thread: { id: "exact/source", archived: false } });
+        first.resolve({
+          thread: { id: "exact/source", archived: false, items: [] },
+        });
       const finishSecond = () =>
-        second.resolve({ thread: { id: "second/source", archived: false } });
+        second.resolve({
+          thread: { id: "second/source", archived: false, items: [] },
+        });
       await act(async () => (olderFirst ? finishFirst() : finishSecond()));
       await act(async () => (olderFirst ? finishSecond() : finishFirst()));
       assert.equal(

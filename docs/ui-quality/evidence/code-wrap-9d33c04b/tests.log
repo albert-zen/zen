@@ -1,0 +1,14 @@
+✔ explicit code wrapping preserves the original payload and native button semantics (104.321183ms)
+✔ wrap CSS is global to fenced blocks while trace code grouping and prose leading remain unchanged (5.264024ms)
+✔ closed code retains toggle identity and focus across streaming updates with independent blocks (134.315792ms)
+✔ wrapped code copies current inline-token payload after a message update (17.572221ms)
+✔ nested and indented code remains conservative without exposing an unconfirmed wrap control (47.451123ms)
+✔ streaming skips unchanged Markdown work and retains context, locale and token updates (1478.56855ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4040.567361

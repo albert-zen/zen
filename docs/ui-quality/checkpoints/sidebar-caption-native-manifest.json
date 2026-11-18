@@ -1,0 +1,160 @@
+{
+  "type": "Actual native Electron app using the existing isolated synthetic Agent / Information profile and bundled Subagents plugin",
+  "sourceCommit": "58df4ea3852e4826d3aa31a931c3383258bc0c47",
+  "sourceDisclosure": "Caption source was frozen before commit; the five file hashes below were rechecked after native capture and match the freeze. Documentation-only checkpoint files are separate. No blanket clean-tree claim.",
+  "captureDate": "2026-11-09",
+  "evidenceRoot": "/workspace/shared/ui-quality-evidence",
+  "qaGuide": "sidebar-caption-validation.md",
+  "synthetic": true,
+  "domInjection": false,
+  "provider": "Unmodified production FakeModel; synthetic tasks and deterministic output",
+  "sourceFiles": [
+    {
+      "file": "apps/zenx/src/renderer/src/subagents-ui.tsx",
+      "sha256": "843e8727a42ff55cc96831126718808ff4fb432e5c341fa7606b606509ac6a1b"
+    },
+    {
+      "file": "apps/zenx/src/renderer/src/subagents.css",
+      "sha256": "e0802f2aec323a8bd4f3336ab29be6f92003a84cf51129d337f2d88e5235c43a"
+    },
+    {
+      "file": "apps/zenx/src/renderer/src/i18n/panels.ts",
+      "sha256": "8bf3f5e3f56f8ecb89ff55f0e7164846ff8d89e627729f378c15214fe855312f"
+    },
+    {
+      "file": "apps/zenx/test/subagents-ui.test.ts",
+      "sha256": "5017c4748b68a6b8d61107bafea0436bdbd503e1ae6dc8703f5902512023240d"
+    },
+    {
+      "file": "apps/zenx/docs/ui-ux.md",
+      "sha256": "55f5187568c5683ba41cfbc628c6f456efbde1e4cd04e506520eca9ccb78ab18"
+    }
+  ],
+  "build": {
+    "command": "npm run build:prepared --workspace @zen/zenx",
+    "result": "passed, reported by native operator; main/preload/renderer production completion independently confirmed in the saved log",
+    "log": {
+      "file": "build-sidebar-caption-final.log",
+      "sha256": "450358905012c4cd271ca98e4a0677d344a01e1b1ac870410f064c5d2cf7c8b4"
+    },
+    "fingerprint": {
+      "file": "sidebar-caption-build.sha256",
+      "sha256": "7dc16472cd85cf4a5336483115f6512526d05610918d3945558f5fcec8208b56"
+    },
+    "artifacts": [
+      {
+        "file": "apps/zenx/out/main/index.js",
+        "sha256": "3c3927332a1352aa8d07b832bdd3c8a87742d7508278e4a3663e5ed059b7778f",
+        "verifiedAgainstCurrentArtifact": true
+      },
+      {
+        "file": "apps/zenx/out/renderer/assets/index-BqwwMrta.js",
+        "sha256": "dac0e998f84a9e60ad1d8db112be4cedef3376e0d08d64582d87ee7440ecaa45",
+        "verifiedAgainstCurrentArtifact": true
+      },
+      {
+        "file": "apps/zenx/out/renderer/assets/index-D6yBphsh.css",
+        "sha256": "2eb3e067ad842c043ff92e27073df53c67d44ed06e37c62b30914add1a6f3195",
+        "verifiedAgainstCurrentArtifact": true
+      }
+    ],
+    "provenanceBoundary": "This newer caption build replaced the output directory used for fourth-native captures. Fourth-build captures and fingerprints remain separate historical evidence; no fourth-build result is relabeled as a caption-build native run."
+  },
+  "captureContext": {
+    "platform": "Linux native Electron",
+    "appearance": "light",
+    "languages": ["English", "Chinese"],
+    "actualImageBounds": [1188, 848],
+    "imageExtensionWarning": "All four .png-named originals contain JPEG bytes. They were inspected and preserved unchanged.",
+    "geometry": "Split main allocation is approximately 416px (visible main region between x=264 and x=680); dock width is approximately 340px (x=836 to x=1176). These are screenshot-observed boundaries, not fresh DOM measurements or a narrow OS-window claim.",
+    "actions": "Action sequence is supplied by the native operator. Independently inspected images corroborate stable visible states, not individual keystrokes or transient focus.",
+    "operatorSequence": [
+      "Opened split Information popover with Hidden switch and captured 01.",
+      "Pointer activation set Shown and made the child appear without selecting it; captured 02.",
+      "Space switched visibility off; Escape closed the popover. The workspace was hidden and Information reopened.",
+      "Captured the docked Hidden state in 03.",
+      "Changed language through Settings General, returned to the parent and captured Chinese dock in 04."
+    ],
+    "shutdown": "Native operator reports stopping the isolated app with Ctrl+C after capture."
+  },
+  "files": [
+    {
+      "file": "sidebar-caption-captures/01-split-sidebar-caption.png",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "bytes": 119800,
+      "sha256": "50d47f1bda96126d6fbdf820e169331c851475f11a558ec0deb74ea69a7db106",
+      "fullyDecoded": true,
+      "observation": "Split workspace retains the parent as the main conversation. The Information popover shows one Sidebar caption above the Hidden switch, the complete child title and Idle status. The child is absent from Projects and Recent. Show archived is unchecked."
+    },
+    {
+      "file": "sidebar-caption-captures/02-split-shown-sidebar-child.png",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "bytes": 123110,
+      "sha256": "abe9f22aaf23a4fb4496c38e8c19ba55c40dbf3b6c19f9a7ae1562b9252626c0",
+      "fullyDecoded": true,
+      "observation": "The same popover shows Sidebar above Shown. QA reviewer · native child appears in Projects and Recent; the parent remains selected and the main conversation title is unchanged."
+    },
+    {
+      "file": "sidebar-caption-captures/03-docked-sidebar-caption.png",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "bytes": 129460,
+      "sha256": "99a02465d238ca413b0c46842635e55960bffad13e254ba3a9439ac94b47412e",
+      "fullyDecoded": true,
+      "observation": "With the workspace hidden, Information occupies the right-hand dock. Sidebar appears above Hidden; the full child title, Idle status and unchecked Show archived control remain visible. The child is absent from Projects and Recent."
+    },
+    {
+      "file": "sidebar-caption-captures/04-chinese-sidebar-caption.png",
+      "encoding": "JPEG",
+      "screenshotBounds": [1188, 848],
+      "bytes": 127472,
+      "sha256": "37b15e93b759ed843a0f0ec274b568c029cfa9ece20eb1b3742ae7950fce96fc",
+      "fullyDecoded": true,
+      "observation": "The dock displays the Chinese scope caption 侧栏 above 已隐藏, distinct from the card-level 隐藏 action. The child title remains complete, its status is 空闲, and 显示已归档 is unchecked. The parent remains selected."
+    }
+  ],
+  "verification": {
+    "originalImagesVisuallyInspected": 4,
+    "originalImagesFullyDecodedAndHashed": 4,
+    "buildArtifactsHashChecked": 3,
+    "frozenSourceFileHashesRechecked": 5,
+    "focusedSuites": {
+      "command": "node --import tsx --test apps/zenx/test/subagents-ui.test.ts apps/zenx/test/sidebar-responsive-style.test.ts apps/zenx/test/plugin-information-layout.test.ts",
+      "passed": 50,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "exitCode": 0
+    },
+    "sidebarSuites": {
+      "command": "node --import tsx --test --test-concurrency=4 apps/zenx/test/sidebar-*.test.ts apps/zenx/test/sidebar-*.test.mjs apps/zenx/test/thread-sidebar-state.test.ts apps/zenx/test/trigger-sidebar-projection.test.ts",
+      "files": 20,
+      "passed": 138,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "exitCode": 0,
+      "log": "sidebar-caption-regression.tap",
+      "logSha256": "e1e4921287de9c17f9eb7a1a5a194dac2bc6b19812aa7c1b9caeca6ab95f4b0c"
+    },
+    "testCountNote": "The responsive suite appears in both selections; their counts are not disjoint.",
+    "typecheck": {
+      "command": "npm run typecheck:prepared --workspace @zen/zenx",
+      "configs": ["tsconfig.node.json", "tsconfig.web.json"],
+      "exitCode": 0
+    },
+    "scopedSourceFormattingAndDiffCheck": "passed",
+    "testLauncherAccommodation": "The initial tsx CLI command failed before tests with sandbox IPC-listen EPERM. The same tests passed via node --import tsx, which does not start that CLI IPC server."
+  },
+  "limits": [
+    "No target or quality-score claim. Independent Sol review is separate and not incorporated here.",
+    "Space and Escape operations and the Settings General language change are operator-reported; there are no separate transient screenshots of those steps in this four-image set.",
+    "No new native dark-theme, coarse-pointer, running-child, archive-reveal, failure/retry or child-navigation capture in this slice. Existing scoped automated tests cover their listed contracts but do not replace native coverage.",
+    "All four images share an 1188x848 native window; 416px describes the split main allocation rather than a narrow OS window.",
+    "Synthetic local profile and deterministic model output do not validate external-provider behavior or autonomous research.",
+    "The full repository aggregate was not rerun by this worker; these are scoped source tests, typecheck, build verification and native observations.",
+    "No production source, runtime authority, permission, profile-update, synchronous fence or navigation semantics were changed after the frozen caption slice."
+  ]
+}

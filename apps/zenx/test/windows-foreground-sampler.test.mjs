@@ -133,3 +133,32 @@ test("native sampler remains restricted to hosted Windows", async () => {
     createWindowsForegroundSampler({ platform: "win32", ci: "false" }),
   );
 });
+
+test("failed sample retains bounded stage evidence, never raw output or a cached result", async (t) => {
+  const failure = Object.assign(new Error("timeout"), {
+    killed: true,
+    signal: "SIGTERM",
+    stderr:
+      "private\nZEN_FOREGROUND_STAGE:started\nZEN_FOREGROUND_STAGE:assembly-loaded\n",
+    stdout: "private",
+  });
+  const f = await fixture(t, {
+    read: async () => {
+      throw failure;
+    },
+  });
+  const sampler = await f.create();
+  for (let i = 0; i < 10; i++)
+    await assert.rejects(sampler.read(), (e) => e === failure);
+  assert.equal(f.calls.length, 11);
+  assert.equal(sampler.evidence.failedSamples.length, 8);
+  assert.equal(sampler.evidence.failedSamplesDropped, 2);
+  const first = sampler.evidence.failedSamples[0];
+  assert.deepEqual(first.stages, ["started", "assembly-loaded"]);
+  assert.equal(first.budgetMs, 5000);
+  assert.equal(first.killed, true);
+  assert.ok(first.elapsedMs >= 0);
+  assert.doesNotMatch(JSON.stringify(sampler.evidence), /private/);
+  assert.deepEqual(sampler.evidence.sampleElapsedMs, []);
+  await sampler.close();
+});

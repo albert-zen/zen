@@ -1,0 +1,262 @@
+name: Desktop navigation preview (short independent feedback)
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/desktop-navigation-ui.yml
+      - apps/zenx/scripts/*main-ui-preview.mjs
+      - apps/zenx/scripts/preview-browser-lifecycle.mjs
+      - apps/zenx/test/navigation-main-ui-preview.test.mjs
+      - apps/zenx/test/busy-child-main-ui-preview.test.mjs
+      - apps/zenx/test/sidebar-information-interaction.test.ts
+      - apps/zenx/test/fixtures/ui-polish-visual*
+      - apps/zenx/src/renderer/src/App.tsx
+      - apps/zenx/src/renderer/src/Sidebar.tsx
+      - apps/zenx/src/renderer/src/sidebar-expansion.ts
+      - apps/zenx/src/renderer/src/sidebar-child-context.ts
+      - apps/zenx/src/renderer/src/i18n/shell.ts
+      - apps/zenx/src/renderer/src/plugin-information-host.tsx
+      - apps/zenx/src/renderer/src/EditableInformationPanel.tsx
+      - apps/zenx/src/renderer/src/ConversationInformationCards.tsx
+      - apps/zenx/src/renderer/src/subagents-ui.tsx
+      - apps/zenx/src/renderer/src/styles.css
+      - apps/zenx/src/renderer/src/shell-thread-panel.css
+      - apps/zenx/src/renderer/src/theme.css
+      - package-lock.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-navigation-ui-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  navigation:
+    name: Titlebar Information and Recent fallback (desktop only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - name: Record bounded optional evidence budget
+        run: echo "ZENX_NAVIGATION_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Renderer dependencies only, no native installers
+        timeout-minutes: 3
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Apply pinned renderer-only dependency fix
+        run: node apps/zenx/scripts/prepare-legend-list.mjs
+      - name: Use existing CJK fonts or official Ubuntu fonts
+        id: fonts
+        timeout-minutes: 2
+        run: |
+          if [ -z "$(fc-list :lang=zh family)" ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+          fi
+      - name: Validate only desktop navigation contracts
+        run: node --test apps/zenx/test/navigation-main-ui-preview.test.mjs apps/zenx/test/busy-child-main-ui-preview.test.mjs
+      - name: Bundle only the production App navigation fixture
+        id: navigationBuild
+        timeout-minutes: 2
+        run: node apps/zenx/scripts/build-main-ui-preview.mjs "${{ runner.temp }}/desktop-navigation-preview" navigation
+      - name: Capture light and dark desktop interaction states
+        timeout-minutes: 2
+        run: node apps/zenx/scripts/capture-main-ui-preview.mjs "${{ runner.temp }}/desktop-navigation-preview" fine
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-navigation-${{ github.event.pull_request.head.sha }}
+          path: |
+            ${{ runner.temp }}/desktop-navigation-preview/*.png
+            ${{ runner.temp }}/desktop-navigation-preview/*.json
+            ${{ runner.temp }}/desktop-navigation-preview/*.html
+            ${{ runner.temp }}/desktop-navigation-preview/*.log
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Report source, measured time and verification boundary
+        if: always()
+        run: |
+          node --input-type=module <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          import { readFile } from 'node:fs/promises';
+          const dir = process.env.RUNNER_TEMP + '/desktop-navigation-preview/';
+          try {
+            const source = JSON.parse(await readFile(dir + 'source.json'));
+            console.log(`Source: ${source.commit}; tree: ${source.tree}; build: ${(source.buildMs/1000).toFixed(1)}s`);
+            const evidence = JSON.parse(await readFile(dir + 'evidence.json'));
+            console.log(`Desktop capture: ${(evidence.captureMs/1000).toFixed(1)}s; screenshots: ${Object.keys(evidence.screenshots).length}; status: ${evidence.status}.`);
+          } catch { console.log('Preview incomplete; inspect retained diagnostics.'); }
+          console.log('Only 1280x900 light/dark production App rendering with synthetic read-only data and real pointer/keyboard input. Sandbox retained. No narrow/coarse capture, aggregate CI dependency, native Electron or real Host acceptance.');
+          NODE
+      - name: Isolated synthetic child visibility preference
+        if: ${{ !cancelled() && steps.fonts.outcome == 'success' && steps.navigationBuild.outcome == 'success' }}
+        timeout-minutes: 1
+        env:
+          ZENX_CHILD_SIDEBAR_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mkdir -p "${{ runner.temp }}/desktop-child-sidebar"
+          cp "${{ runner.temp }}/desktop-navigation-preview/navigation.html" "${{ runner.temp }}/desktop-navigation-preview/source.json" "${{ runner.temp }}/desktop-child-sidebar/"
+          node apps/zenx/scripts/capture-main-ui-preview.mjs "${{ runner.temp }}/desktop-child-sidebar" desktop-child-sidebar
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-child-sidebar-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/desktop-child-sidebar/*
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Child visibility verification boundary
+        if: always()
+        run: echo 'Child visibility probe uses synthetic in-memory preference only. No real Host/account settings, external calls or native Electron acceptance. Inspect its separate receipt for success/failure; ordinary navigation evidence remains separate.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Isolated synthetic child open and return
+        if: ${{ !cancelled() && steps.fonts.outcome == 'success' && steps.navigationBuild.outcome == 'success' }}
+        timeout-minutes: 1
+        env:
+          ZENX_CHILD_NAVIGATION_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mkdir -p "${{ runner.temp }}/desktop-child-navigation"
+          cp "${{ runner.temp }}/desktop-navigation-preview/navigation.html" "${{ runner.temp }}/desktop-navigation-preview/source.json" "${{ runner.temp }}/desktop-child-navigation/"
+          node apps/zenx/scripts/capture-main-ui-preview.mjs "${{ runner.temp }}/desktop-child-navigation" desktop-child-navigation
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-child-navigation-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/desktop-child-navigation/*
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Child navigation verification boundary
+        if: always()
+        run: echo 'Child open/return uses synthetic read-only conversations and one in-memory visibility preference, with unsent per-thread drafts. No real Host/account settings, sends or native Electron acceptance. Separate artifact and receipt; ordinary navigation and preference-only evidence remain untouched.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Isolated synthetic crowded child row with pending approval
+        if: ${{ !cancelled() && steps.fonts.outcome == 'success' && steps.navigationBuild.outcome == 'success' }}
+        timeout-minutes: 1
+        env:
+          ZENX_BUSY_CHILD_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mkdir -p "${{ runner.temp }}/desktop-busy-child"
+          cp "${{ runner.temp }}/desktop-navigation-preview/navigation.html" "${{ runner.temp }}/desktop-navigation-preview/source.json" "${{ runner.temp }}/desktop-busy-child/"
+          node apps/zenx/scripts/capture-main-ui-preview.mjs "${{ runner.temp }}/desktop-busy-child" desktop-busy-child
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-busy-child-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/desktop-busy-child/*
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Verify mounted Project and Recent child contexts
+        if: ${{ !cancelled() && steps.navigationBuild.outcome == 'success' }}
+        timeout-minutes: 1
+        working-directory: apps/zenx
+        run: node --import tsx --test test/sidebar-information-interaction.test.ts
+
+      - name: Observe combined approval and Asking in existing desktop fixture
+        continue-on-error: true
+        if: ${{ !cancelled() && steps.fonts.outcome == 'success' && steps.navigationBuild.outcome == 'success' }}
+        timeout-minutes: 2
+        env:
+          ZENX_COMBINED_ATTENTION_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mkdir -p "${{ runner.temp }}/desktop-combined-attention"
+          cp "${{ runner.temp }}/desktop-navigation-preview/navigation.html" "${{ runner.temp }}/desktop-navigation-preview/source.json" "${{ runner.temp }}/desktop-combined-attention/"
+          node apps/zenx/scripts/capture-main-ui-preview.mjs "${{ runner.temp }}/desktop-combined-attention" desktop-combined-attention
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true
+        if: always()
+        with:
+          name: desktop-combined-attention-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/desktop-combined-attention/*
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Combined attention evidence boundary
+        continue-on-error: true
+        if: always()
+        run: echo 'Combined approval and Asking uses production Sidebar with synthetic read-only summaries. This is scoped observation, not a claim of fit, comparative improvement, native App acceptance or approval interaction. Original navigation acceptance remains separate and unchanged.' >> "$GITHUB_STEP_SUMMARY"
+
+      # Remove these optional steps and the budget marker to disable this trial.
+      # Only PR #755; no new trigger, permission, installation or browser policy.
+      - name: Optional Chinese sidebar identity evidence
+        id: sidebarIdentity
+        continue-on-error: true
+        if: ${{ !cancelled() && github.event.pull_request.number == 755 && steps.fonts.outcome == 'success' && steps.navigationBuild.outcome == 'success' }}
+        timeout-minutes: 2
+        env:
+          ZENX_COMBINED_ATTENTION_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          root="${{ runner.temp }}/desktop-sidebar-identity"
+          mkdir -p "$root"
+          elapsed=$(( $(date +%s) - ZENX_NAVIGATION_STARTED_AT ))
+          if [ "$elapsed" -gt 180 ]; then
+            printf 'skipped-budget: original phases consumed %ss; no identity capture attempted\n' "$elapsed" | tee "$root/activation-status.txt"
+            exit 0
+          fi
+          test_code=0
+          timeout --signal=TERM --kill-after=2s 10s node --import tsx --test apps/zenx/test/sidebar-identity-matrix.test.mjs apps/zenx/test/sidebar-identity-labels.test.ts > "$root/matrix-test.log" 2>&1 || test_code=$?
+          if [ "$test_code" -ne 0 ]; then
+            printf 'test-failed: matrix exit=%s; no identity capture attempted\n' "$test_code" | tee "$root/activation-status.txt"
+            exit "$test_code"
+          fi
+          printf 'matrix-tests-passed\n' > "$root/activation-status.txt"
+          failed=0
+          for identity in zh-extension zh-shared-tail; do
+            dir="$root/$identity"
+            mkdir -p "$dir"
+            cp "${{ runner.temp }}/desktop-navigation-preview/navigation.html" "${{ runner.temp }}/desktop-navigation-preview/source.json" "$dir/"
+            code=0
+            ZENX_SIDEBAR_IDENTITY_CASE="$identity" timeout --signal=TERM --kill-after=5s 35s node apps/zenx/scripts/capture-main-ui-preview.mjs "$dir" desktop-combined-attention > "$dir/capture.log" 2>&1 || code=$?
+            printf '%s exit=%s (124/137 means bounded timeout, not acceptance)\n' "$identity" "$code" | tee -a "$root/activation-status.txt"
+            if [ "$code" -ne 0 ]; then failed=1; fi
+          done
+          exit "$failed"
+      - name: Retain optional identity evidence separately
+        continue-on-error: true
+        if: ${{ always() && github.event.pull_request.number == 755 }}
+        timeout-minutes: 1
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-sidebar-identity-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/desktop-sidebar-identity/**
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Report optional identity outcome without replacing original acceptance
+        continue-on-error: true
+        if: ${{ always() && github.event.pull_request.number == 755 }}
+        run: |
+          echo 'Optional sidebar identity outcome: ${{ steps.sidebarIdentity.outcome }}. Inspect each exact-head evidence.json AND activation-status.txt; skip, timeout, missing receipt or failure is not acceptance. Original navigation and combined receipts remain authoritative for their own phases. This trial supplies synthetic Chinese light-desktop observations only, not visual approval or native Electron acceptance.' >> "$GITHUB_STEP_SUMMARY"
+          if [ -f "${{ runner.temp }}/desktop-sidebar-identity/activation-status.txt" ]; then
+            cat "${{ runner.temp }}/desktop-sidebar-identity/activation-status.txt" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Compare ordinary sidebar titles without changing the product
+        continue-on-error: true
+        if: ${{ !cancelled() && github.event.pull_request.number == 755 && steps.fonts.outcome == 'success' && steps.navigationBuild.outcome == 'success' }}
+        timeout-minutes: 1
+        env:
+          ZENX_SIDEBAR_ORDINARY_TITLES: "1"
+        run: |
+          dir="${{ runner.temp }}/desktop-ordinary-titles"
+          mkdir -p "$dir"
+          elapsed=$(( $(date +%s) - ZENX_NAVIGATION_STARTED_AT ))
+          if [ "$elapsed" -gt 180 ]; then
+            printf 'skipped-budget: original phases consumed %ss\n' "$elapsed" > "$dir/activation-status.txt"
+            exit 0
+          fi
+          cp "${{ runner.temp }}/desktop-navigation-preview/navigation.html" "${{ runner.temp }}/desktop-navigation-preview/source.json" "$dir/"
+          node apps/zenx/scripts/capture-main-ui-preview.mjs "$dir" fine
+      - name: Retain ordinary-title comparison separately
+        continue-on-error: true
+        if: ${{ always() && github.event.pull_request.number == 755 }}
+        timeout-minutes: 1
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-ordinary-titles-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/desktop-ordinary-titles/*.png
+            ${{ runner.temp }}/desktop-ordinary-titles/*.json
+            ${{ runner.temp }}/desktop-ordinary-titles/*.txt
+          if-no-files-found: warn
+          retention-days: 7

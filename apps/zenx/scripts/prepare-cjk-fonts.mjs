@@ -104,7 +104,11 @@ export function officialArchive(value) {
   return url.href;
 }
 
-export function sourceArchives(target, read = readFileSync) {
+export function sourceArchives(
+  target,
+  read = readFileSync,
+  report = (message) => console.error(message),
+) {
   const sourcePath = target.sourcesentry?.replace(/:\d+$/, "");
   assert.ok(
     /^\/etc\/apt\/(?:sources\.list|sources\.list\.d\/[\w.-]+\.(?:sources|list))$/.test(
@@ -119,6 +123,37 @@ export function sourceArchives(target, read = readFileSync) {
     ),
     "APT source disables signature verification",
   );
+  const archive = (value, phase, line) => {
+    try {
+      return officialArchive(value);
+    } catch (error) {
+      // Report only bounded transport identity, never URL userinfo, path,
+      // query, fragment, source content or the raw parsing error.
+      try {
+        let identity = { parsed: false };
+        try {
+          const url = new URL(value);
+          identity = {
+            parsed: true,
+            protocol: url.protocol.slice(0, 16),
+            hostname: url.hostname.slice(0, 253),
+            port: url.port.slice(0, 5),
+            credentialsPresent: Boolean(url.username || url.password),
+            queryPresent: Boolean(url.search),
+            fragmentPresent: Boolean(url.hash),
+          };
+        } catch {
+          // Invalid URL input is intentionally not echoed.
+        }
+        report(
+          `CJK archive rejected: ${JSON.stringify({ phase, line, ...identity })}`,
+        );
+      } catch {
+        // A diagnostic sink must not replace the original validation failure.
+      }
+      throw error;
+    }
+  };
   const repo = target["repo-uri"];
   let mirrorList = "";
   let archives;
@@ -126,11 +161,19 @@ export function sourceArchives(target, read = readFileSync) {
     mirrorList = read("/etc/apt/apt-mirrors.txt", "utf8");
     archives = mirrorList
       .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith("#"))
-      .map((line) => officialArchive(line.split(/\s+/)[0]));
+      .map((line, index) => ({ value: line.trim(), line: index + 1 }))
+      .filter(({ value }) => value && !value.startsWith("#"))
+      .map(({ value, line }) =>
+        archive(value.split(/\s+/)[0], "mirror-list", line),
+      );
   } else {
-    archives = [officialArchive(repo)];
+    archives = [
+      archive(
+        repo,
+        "repo-uri",
+        Number(/:(\d{1,9})$/.exec(target.sourcesentry)?.[1]) || null,
+      ),
+    ];
   }
   assert.ok(
     archives.length > 0 && archives.length <= 3,

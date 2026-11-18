@@ -30,6 +30,9 @@ export function mergeThreadHistoryPages(
   return {
     ...current,
     canonicalItems,
+    ...(current.history
+      ? { history: { ...current.history, itemPositions: positions } }
+      : {}),
     turns: [...turns.values()].sort(
       (left, right) =>
         (order.get(left.id) ?? Infinity) - (order.get(right.id) ?? Infinity),

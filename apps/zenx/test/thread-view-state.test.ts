@@ -902,6 +902,8 @@ test("elapsed Turn time uses identical canonical millisecond windows during reco
     250,
     "receipt wall clock never changes elapsed Turn time",
   );
+  assert.equal(live.turns[0]?.completedAt, recovered.turns[0]?.completedAt);
+  assert.notEqual(live.turns[0]?.completedAt, 99999);
   const missing = applyNativeThreadEvent(
     thread([turn("turn-1", "inProgress")]),
     {
@@ -917,6 +919,7 @@ test("elapsed Turn time uses identical canonical millisecond windows during reco
     null,
     "unknown canonical timing never guesses from rounded seconds",
   );
+  assert.equal(missing.turns[0]?.completedAt, null);
 });
 
 for (const type of ["thread_message", "host_message"] as const) {

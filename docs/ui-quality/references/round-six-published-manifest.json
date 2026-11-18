@@ -1,0 +1,62 @@
+[
+  {
+    "file": "t3-pr28842-general-dark.png",
+    "source_page": "https://github.com/pingdotgg/t3code/pull/28842",
+    "original_asset_url": "https://uploads-production-47e4.up.railway.app/files/8c87b435-eeab-4fb8-a7ec-cf4dd243c758/after-general-dark.png",
+    "sha256": "8019ab4e3285e8abb9828eca12393f23ec48a9b201af3b23fed4bb35e5d4f897",
+    "bytes": 188574,
+    "width": 1280,
+    "height": 720,
+    "format": "PNG",
+    "downloaded_utc": "2026-11-09T19:28:28.016034+00:00",
+    "pixel_inspected": true
+  },
+  {
+    "file": "t3-pr28842-general-light.png",
+    "source_page": "https://github.com/pingdotgg/t3code/pull/28842",
+    "original_asset_url": "https://uploads-production-47e4.up.railway.app/files/8b961fbb-2574-4012-a034-354e06a2dbff/after-general-light.png",
+    "sha256": "a42fd9ae1f1024788ebf1a7738a2c51b9b8f9745914cc83d7f0b7e33cca330e0",
+    "bytes": 273068,
+    "width": 1280,
+    "height": 720,
+    "format": "PNG",
+    "downloaded_utc": "2026-11-09T19:28:28.016885+00:00",
+    "pixel_inspected": true
+  },
+  {
+    "file": "t3-pr28842-providers.png",
+    "source_page": "https://github.com/pingdotgg/t3code/pull/28842",
+    "original_asset_url": "https://uploads-production-47e4.up.railway.app/files/c8b477ba-4b9c-4ea2-a740-f2a55c82a271/after-providers.png",
+    "sha256": "ebfa524d14802b38408a254c3ffd977156f3d38f84eadc59a0843aaaefb7a113",
+    "bytes": 196627,
+    "width": 1280,
+    "height": 720,
+    "format": "PNG",
+    "downloaded_utc": "2026-11-09T19:28:28.017338+00:00",
+    "pixel_inspected": true
+  },
+  {
+    "file": "t3-pr25251-model-picker.png",
+    "source_page": "https://github.com/pingdotgg/t3code/pull/25251",
+    "original_asset_url": "https://files.tslop.org/2026/10/newdesign-color-model-picker-ae93b1cc.png",
+    "sha256": "15797d462049b9e99fec0cf534a4e6f81b7ef783ef775aab7e6dd14e8edda1a5",
+    "bytes": 61790,
+    "width": 784,
+    "height": 362,
+    "format": "PNG",
+    "downloaded_utc": "2026-11-09T19:28:28.017961+00:00",
+    "pixel_inspected": true
+  },
+  {
+    "file": "t3-pr25251-details-dark.png",
+    "source_page": "https://github.com/pingdotgg/t3code/pull/25251",
+    "original_asset_url": "https://files.tslop.org/2026/10/newdesign-color-details-dark-8fa23300.png",
+    "sha256": "1b25fd041a14286917440743c48d6606aa89a2f8765d6f650f030d333db9a900",
+    "bytes": 53623,
+    "width": 624,
+    "height": 442,
+    "format": "PNG",
+    "downloaded_utc": "2026-11-09T19:28:28.018217+00:00",
+    "pixel_inspected": true
+  }
+]

@@ -2,6 +2,36 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { JSDOM } from "jsdom";
+import postcss from "postcss";
+
+function assertTraceImport(styles) {
+  const root = postcss.parse(styles);
+  const imports = [];
+  root.walkAtRules("import", (rule) => {
+    if (
+      /^(?:"\.\/TraceInspector\.css"|'\.\/TraceInspector\.css')(?:\s|$)/u.test(
+        rule.params,
+      )
+    )
+      imports.push(rule);
+  });
+  assert.equal(
+    imports.length,
+    1,
+    "Trace stylesheet must be imported exactly once",
+  );
+  const rule = imports[0];
+  assert.equal(rule.parent, root, "Trace import must be top-level");
+  for (const previous of root.nodes.slice(0, root.nodes.indexOf(rule))) {
+    assert.ok(
+      previous.type === "comment" ||
+        (previous.type === "atrule" &&
+          ["charset", "import", "layer"].includes(previous.name) &&
+          !previous.nodes),
+      "Trace import must precede style rules and blocks",
+    );
+  }
+}
 
 test("read-only Trace controls retain coarse targets and scoped CSS", async () => {
   const css = await readFile(
@@ -15,7 +45,7 @@ test("read-only Trace controls retain coarse targets and scoped CSS", async () =
     new URL("../src/renderer/src/styles.css", import.meta.url),
     "utf8",
   );
-  assert(styles.startsWith('@import "./TraceInspector.css";'));
+  assertTraceImport(styles);
   assert.match(styles, /transition-duration:\s*0s !important/u);
 });
 
@@ -79,4 +109,25 @@ test("selected request metadata and hovered warnings remain readable in every th
   } finally {
     dom.window.close();
   }
+});
+
+test("Trace import permits preceding imports but rejects missing, duplicate, nested and late imports", () => {
+  assert.doesNotThrow(() =>
+    assertTraceImport(
+      '@import "./conversation-reading-position.css"; /* scope */ @import "./TraceInspector.css"; .app {}',
+    ),
+  );
+  assert.doesNotThrow(() =>
+    assertTraceImport(
+      '@charset "UTF-8"; @layer reset, app; @import "./TraceInspector.css";',
+    ),
+  );
+  for (const css of [
+    '/* @import "./TraceInspector.css"; */ .app {}',
+    '@import "./TraceInspector.css"; @import "./TraceInspector.css";',
+    '.app {} @import "./TraceInspector.css";',
+    '@media screen { @import "./TraceInspector.css"; }',
+    '@layer app {} @import "./TraceInspector.css";',
+  ])
+    assert.throws(() => assertTraceImport(css));
 });

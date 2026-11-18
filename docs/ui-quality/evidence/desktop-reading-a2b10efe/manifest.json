@@ -1,0 +1,17 @@
+{
+  "sourceCommit": "a2b10efed1327fcf50ebe21ba5c491627206af33",
+  "sourceTree": "252c914d5e3808d676cb048b308f9875c8574a33",
+  "run": "https://github.com/albert-zen/zen/actions/runs/43027899464",
+  "artifact": 13857802353,
+  "scope": "Production App with synthetic read-only data; 1280x900 light first long-prose frame only.",
+  "status": "partial; workflow failed",
+  "limitations": [
+    "One independent image: failed PNG is identical and not published twice.",
+    "Observer selected absent legacy column; rich-reading acceptance incomplete.",
+    "Observed 5px Composer offset and Back to live overlap remain in this source version.",
+    "Dark theme and later scenes not captured."
+  ],
+  "screenshots": {
+    "reading-desktop-light-prose-top.png": "24ee0b7b3dee73e92522bd5d0d1504fb2f3faed6aefc9953f4a44678ef55d0fa"
+  }
+}

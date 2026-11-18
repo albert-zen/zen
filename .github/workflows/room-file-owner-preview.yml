@@ -1,0 +1,97 @@
+name: Room file source labels (independent synthetic evidence)
+on:
+  pull_request:
+    paths:
+      - .github/workflows/room-file-owner-preview.yml
+      - apps/zenx/scripts/*room-file-owner*.mjs
+      - apps/zenx/scripts/capture-main-ui-preview.mjs
+      - apps/zenx/scripts/sidebar-state-preview.tsx
+      - apps/zenx/scripts/build-sidebar-state-preview.mjs
+      - apps/zenx/scripts/prepare-preview-fonts.mjs
+      - apps/zenx/scripts/preview-font-probe.mjs
+      - apps/zenx/scripts/preview-fonts-OFL.txt
+      - apps/zenx/scripts/preview-browser-lifecycle.mjs
+      - apps/zenx/src/renderer/src/auxiliary-panel.tsx
+      - apps/zenx/src/renderer/src/room-file-owner-labels.ts
+      - apps/zenx/src/renderer/src/workspace-resting-labels.ts
+      - apps/zenx/src/renderer/src/i18n/panels.ts
+      - apps/zenx/src/renderer/src/styles.css
+      - apps/zenx/src/renderer/src/theme.css
+      - apps/zenx/test/room-file-owner*.test.*
+      - package-lock.json
+permissions:
+  contents: read
+concurrency:
+  group: room-file-owner-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  room:
+    if: github.repository == 'albert-zen/zen' && github.event.pull_request.number == 755
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    env:
+      ZENX_ROOM_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Select exact current head and relevant final commit only
+        id: selection
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { appendFileSync } from 'node:fs';
+          import { roomPreviewNeeded } from './apps/zenx/scripts/room-file-owner-main-ui-preview.mjs';
+          const git = (...args) => execFileSync('git', args, { encoding: 'utf8', timeout: 30000 }).trim();
+          const current = git('ls-remote', '--exit-code', 'origin', 'refs/pull/755/head').split(/\s/)[0];
+          const needed = roomPreviewNeeded(git('diff', '--name-only', 'HEAD^', 'HEAD').split('\n'), process.env.ZENX_ROOM_EXPECTED_HEAD, git('rev-parse', 'HEAD'), current);
+          appendFileSync(process.env.GITHUB_OUTPUT, `needed=${needed}\n`);
+          if (!needed) appendFileSync(process.env.GITHUB_STEP_SUMMARY, 'No Room capture: stale head or unrelated final commit. This is not UI acceptance.\n');
+          NODE
+      - uses: actions/setup-node@v4
+        if: steps.selection.outputs.needed == 'true'
+        with:
+          node-version: 22
+          cache: npm
+      - if: steps.selection.outputs.needed == 'true'
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        timeout-minutes: 3
+      - if: steps.selection.outputs.needed == 'true'
+        run: node apps/zenx/scripts/prepare-legend-list.mjs
+      - uses: actions/cache@v4
+        if: steps.selection.outputs.needed == 'true'
+        with:
+          path: |
+            ${{ runner.temp }}/preview-fonts/*.ttc
+            ${{ runner.temp }}/preview-fonts/OFL.txt
+          key: zenx-noto-cjk-523d033d6cb47f4a80c58a35753646f5c3608a78-v1
+      - name: Verify existing pinned official CJK assets
+        if: steps.selection.outputs.needed == 'true'
+        timeout-minutes: 2
+        run: |
+          mkdir -p "${{ runner.temp }}/room-file-owner"
+          trap 'cp "${{ runner.temp }}/preview-fonts/fonts.json" "${{ runner.temp }}/room-file-owner/font-environment.json"' EXIT
+          node apps/zenx/scripts/prepare-preview-fonts.mjs "${{ runner.temp }}/preview-fonts" --allow-download
+      - if: steps.selection.outputs.needed == 'true'
+        run: node --test apps/zenx/test/preview-fonts.test.mjs apps/zenx/test/room-file-owner-preview.test.mjs
+      - if: steps.selection.outputs.needed == 'true'
+        run: node apps/zenx/scripts/build-room-file-owner-preview.mjs "${{ runner.temp }}/room-file-owner"
+        timeout-minutes: 2
+      - name: Capture through existing sandbox-enabled desktop lifecycle
+        if: steps.selection.outputs.needed == 'true'
+        env:
+          FONTCONFIG_FILE: ${{ runner.temp }}/preview-fonts/fonts.conf
+          ZENX_PREVIEW_FONT_RECEIPT: ${{ runner.temp }}/preview-fonts/fonts.json
+        run: |
+          test "$(git ls-remote --exit-code origin refs/pull/755/head | cut -f1)" = "$ZENX_ROOM_EXPECTED_HEAD"
+          node apps/zenx/scripts/capture-main-ui-preview.mjs "${{ runner.temp }}/room-file-owner" desktop-room
+        timeout-minutes: 2
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.selection.outputs.needed == 'true'
+        with:
+          name: room-file-owner-pinned-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/room-file-owner/*
+          if-no-files-found: warn
+          retention-days: 7

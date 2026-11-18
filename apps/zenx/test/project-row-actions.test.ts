@@ -85,7 +85,17 @@ test("configured Project rows expose scoped creation and a keyboard-safe More me
     });
 
     assert.equal(document.querySelectorAll(".project-more-trigger").length, 3);
-    assert.equal(document.querySelectorAll(".project-toggle svg").length, 3);
+    assert.equal(
+      document.querySelectorAll('.project-toggle > svg[data-icon="folder"]')
+        .length,
+      3,
+    );
+    assert.equal(
+      document.querySelectorAll(
+        '.project-toggle > svg.project-disclosure-icon[data-icon="chevron-down"]',
+      ).length,
+      3,
+    );
     assert.equal(
       document.querySelectorAll('[aria-label^="New thread in "]').length,
       3,

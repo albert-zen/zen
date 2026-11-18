@@ -1,0 +1,38 @@
+{
+  "sourceCommit": "446b8bd484773c8ad475f38a9575a7cdfa39514b",
+  "sourceTree": "91873ffb48e45f7d00be4917cab134a39414f5e0",
+  "sourceDirty": false,
+  "run": "https://github.com/albert-zen/zen/actions/runs/43009644920",
+  "artifactId": 13850565488,
+  "viewport": {
+    "width": 1280,
+    "height": 900
+  },
+  "buildMs": 4076,
+  "captureMs": 11293,
+  "status": "passed",
+  "scope": "Production Sidebar, ThreadView and queue with synthetic data; browser pointer/keyboard interaction, sandbox retained. Not native Electron, real Host, account or sending acceptance.",
+  "observations": {
+    "trayHeightRest": 240,
+    "trayHeightExpanded": 462.75,
+    "composerHeightBoth": 108,
+    "fullyReadableRowsRest": 3,
+    "fullyReadableRowsExpanded": 8
+  },
+  "limitations": [
+    "Expansion reduces visible preceding conversation area.",
+    "Keyboard path traverses many per-row controls.",
+    "Eight selected images from twelve captured; all twelve and state receipts remain in the artifact.",
+    "State comparison in the same version, not an additional production-version score increase."
+  ],
+  "screenshots": {
+    "queue-reading-desktop-light-rest.png": "997e636a4c7ee0ec5abccb0b8c9a1c3f6fe92f5a5b194e72ca2d00b481e1db11",
+    "queue-reading-desktop-light-expanded.png": "77bc08da3e0682b6d54b77792c1c4cb913efdc05ee611c018352ce9a35489c88",
+    "queue-reading-desktop-light-composer-focus.png": "cc46c4014c3e1e4fc72e682201d8b4c30b47777825a0e15f645c45f9683c4b52",
+    "queue-reading-desktop-light-collapse-toggle-focus.png": "a1482fb8715264bcc823e7bee518f29ff0c7894c1d93066c6476e5cd7e6c631a",
+    "queue-reading-desktop-dark-rest.png": "2b69a54c90bcc2558bb6319549ecf83ae1d4dcc1186b9f716a39075a02dabacd",
+    "queue-reading-desktop-dark-expanded.png": "2fb72ef7998d6b325db783035f22ce83cf07823a844f75502e7ee153c82e4d38",
+    "queue-reading-desktop-dark-composer-focus.png": "38141edccb1d22e9f75e5ff6dabe2649dda0a9a77102fb152f514b29bd6d9c66",
+    "queue-reading-desktop-dark-collapse-toggle-focus.png": "8813c7a4955e15ca4b88ad54ad22697faaaa894c496a43811da14d4e4b930479"
+  }
+}
