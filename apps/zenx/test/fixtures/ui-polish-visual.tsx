@@ -252,6 +252,7 @@ const ordinaryTitlePair = ordinaryTitleExperiment
         index === 0 ? "ordinary-keyboard" : "ordinary-reader",
         `桌面共享组件下半年验收记录和问题归档复查 · ${cue}`,
       ),
+      createdAt: `2026-10-15T03:0${8 - index}:00.000Z`,
       updatedAt: `2026-10-15T03:0${9 - index}:00.000Z`,
       cue,
     }))

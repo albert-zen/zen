@@ -1979,7 +1979,26 @@ export async function captureOrdinaryTitles({
   await evaluate(
     "document.fonts.ready.then(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))))",
   );
+  const scrollToRest = async () => {
+    const point = await evaluate(`(() => {
+      const r = document.querySelector('.sidebar-scroll').getBoundingClientRect();
+      return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+    })()`);
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseWheel",
+      ...point,
+      deltaX: 0,
+      deltaY: -2500,
+    });
+    await wait("document.querySelector('.sidebar-scroll').scrollTop < 1");
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: 700,
+      y: 220,
+    });
+  };
   const observe = async (scope) => {
+    await scrollToRest();
     await wait(
       `window.__ordinaryTitleFixture.every(item =>
         !!document.querySelector('.'+${JSON.stringify(scope)}+' [data-thread-id="'+item.threadId+'"] .thread-title > span:first-child'))`,
@@ -2043,6 +2062,7 @@ export async function captureOrdinaryTitles({
     recent,
   });
   if (options.theme !== "dark" || options.variant !== "two-lines") return;
+  await scrollToRest();
   const target =
     '.project-group [data-thread-id="ordinary-reader"] > .thread-row:focus-visible';
   assert(await tabTo(target), "Native Tab reaches ordinary title");
