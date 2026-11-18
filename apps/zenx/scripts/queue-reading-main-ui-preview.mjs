@@ -467,6 +467,186 @@ export async function tabToQueueControl({
   }
   throw Error(`Native Tab failed: ${step}`);
 }
+export const syntheticSteerFocusText =
+  "Compare the synthetic desktop notes, keep each queued instruction readable, and verify keyboard actions without sending messages or changing the saved draft.";
+
+/** Read-only DOM observation. A title attribute is not a painted tooltip. */
+export function observeQueueSteerFocus() {
+  const row = document.querySelector(
+    '[data-queue-id="synthetic-thread-message"]',
+  );
+  const button = row?.querySelector('[data-queue-control="steer"]');
+  const composer = document.querySelector(".composer");
+  const rect = (e) => {
+    if (!e) return null;
+    const r = e.getBoundingClientRect();
+    return {
+      x: r.x,
+      y: r.y,
+      right: r.right,
+      bottom: r.bottom,
+      width: r.width,
+      height: r.height,
+    };
+  };
+  const painted = (e) => {
+    if (!e) return false;
+    const r = e.getBoundingClientRect();
+    if (!(
+      r.width > 0 &&
+      r.height > 0 &&
+      r.x >= 0 &&
+      r.y >= 0 &&
+      r.right <= innerWidth &&
+      r.bottom <= innerHeight
+    ))
+      return false;
+    for (let parent = e; parent; parent = parent.parentElement) {
+      const s = getComputedStyle(parent);
+      if (
+        parent.hidden ||
+        s.display === "none" ||
+        s.visibility === "hidden" ||
+        s.opacity === "0"
+      )
+        return false;
+    }
+    return e.contains(
+      document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2),
+    );
+  };
+  const editor = composer?.querySelector('textarea,[contenteditable="true"]');
+  return {
+    rowCount: document.querySelectorAll(
+      '[data-queue-id="synthetic-thread-message"]',
+    ).length,
+    text: row?.querySelector(".user-bubble")?.textContent?.trim() ?? null,
+    source:
+      row?.querySelector(".message-source-link")?.textContent?.trim() ?? null,
+    order: [...document.querySelectorAll(".queue-row")].map(
+      (e) => e.dataset.queueId,
+    ),
+    running: !!composer?.querySelector(".action-orb.stop"),
+    composer: rect(composer),
+    draft: editor?.value ?? editor?.textContent ?? null,
+    button: button && {
+      rect: rect(button),
+      painted: painted(button),
+      focused: document.activeElement === button,
+      focusVisible: button.matches(":focus-visible"),
+      disabled: button.disabled,
+      label: button.getAttribute("aria-label"),
+      nativeTitleAttribute: button.getAttribute("title"),
+      visibleText: button.textContent?.trim(),
+      hasIcon: !!button.querySelector("svg"),
+      outline: getComputedStyle(button).outlineStyle,
+      outlineWidth: parseFloat(getComputedStyle(button).outlineWidth),
+    },
+    paintedDomTooltips: [...document.querySelectorAll('[role="tooltip"]')]
+      .filter(painted)
+      .map((e) => e.textContent?.trim()),
+  };
+}
+
+export function verifyQueueSteerFocus(s, before) {
+  assert.equal(s.rowCount, 1);
+  assert.equal(s.text, syntheticSteerFocusText);
+  assert(
+    s.source && s.running,
+    "Same agent-origin queued-message purpose while running",
+  );
+  assert(
+    s.button?.focused &&
+      s.button.focusVisible &&
+      s.button.painted &&
+      !s.button.disabled,
+    "Actual native keyboard focus must be visible and unobstructed",
+  );
+  assert(s.button.label && s.button.hasIcon);
+  assert(
+    s.button.outline !== "none" && s.button.outlineWidth > 0,
+    "Visible focus ring",
+  );
+  for (const key of ["text", "source", "order", "draft", "composer", "running"])
+    assert.deepEqual(s[key], before[key], "Focus must not mutate " + key);
+}
+
+/** Separate synthetic scene appended after existing queue evidence; no Steer activation. */
+export async function captureQueueSteerFocus({
+  send,
+  evaluate,
+  wait,
+  click,
+  capture,
+  evidence,
+  options,
+}) {
+  const trip = {
+    theme: options.theme,
+    status: "running",
+    scope:
+      "Synthetic long agent-origin queue while running; native Tab observation only",
+  };
+  (evidence.queueSteerFocusTrips ??= []).push(trip);
+  const observe = () => evaluate(`(${observeQueueSteerFocus.toString()})()`);
+  try {
+    const url = new URL(await evaluate("location.href"));
+    url.searchParams.delete("hostQueue");
+    url.searchParams.delete("idle");
+    url.searchParams.set("steerFocus", "1");
+    url.searchParams.set("lang", "en");
+    await send("Page.navigate", { url: url.href });
+    await wait(
+      `location.href===${JSON.stringify(url.href)} && !!document.querySelector('.queue-reading-toggle')`,
+    );
+    await click(".queue-reading-toggle");
+    await wait(
+      "document.querySelector('.queue-reading-toggle')?.getAttribute('aria-expanded')==='true'",
+    );
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: 700,
+      y: 180,
+    });
+    const before = (trip.before = await observe());
+    assert.equal(
+      before.text,
+      syntheticSteerFocusText,
+      "Require the isolated long synthetic item",
+    );
+    assert(before.running && before.source);
+    await tabToQueueControl({
+      send,
+      observe,
+      evaluate,
+      evidence,
+      options,
+      selector:
+        '[data-queue-id="synthetic-thread-message"] [data-queue-control="steer"]:focus-visible',
+      step: "long-agent-message-steer-baseline",
+    });
+    // Observe a delayed product tooltip if one exists; never synthesize it.
+    await evaluate("new Promise(resolve => setTimeout(resolve, 900))");
+    const held = (trip.held = await observe());
+    verifyQueueSteerFocus(held, before);
+    await capture(
+      `queue-reading-${options.name}-steer-tab-baseline`,
+      options,
+      "pending",
+    );
+    const after = (trip.afterScreenshot = await observe());
+    verifyQueueSteerFocus(after, before);
+    assert.deepEqual(after, held, "Captured focus state remains stable");
+    trip.nativeTooltipPixels =
+      "Not established by Page.captureScreenshot; title attribute recorded separately";
+    trip.status = "passed";
+  } catch (error) {
+    trip.status = "failed";
+    trip.error = String(error);
+    throw error;
+  }
+}
+
 export async function captureQueueReading({
   send,
   evaluate,
@@ -739,6 +919,15 @@ export async function captureQueueReading({
         hover.steer.pointerEvents !== "none",
       "Steer appears and can be reached when hovering its own row",
     );
+    await captureQueueSteerFocus({
+      send,
+      evaluate,
+      wait,
+      click,
+      capture,
+      evidence,
+      options,
+    });
   } catch (error) {
     (evidence.queueReadingFailures ??= []).push({
       theme: options.theme,

@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFile } from "node:fs/promises";
 import {
+  syntheticSteerFocusText,
+  observeQueueSteerFocus,
+  verifyQueueSteerFocus,
+  captureQueueSteerFocus,
   verifyQueueReading,
   observeQueueReading,
   verifyQueueReturn,
@@ -516,4 +520,144 @@ test("observer binds bridge and Composer to the selected thread, not a decoy", a
   } finally {
     dom.window.close();
   }
+});
+
+const steerFocusState = () => ({
+  rowCount: 1,
+  text: syntheticSteerFocusText,
+  source: "From Planning assistant",
+  order: ["synthetic-thread-message", "queue-1"],
+  running: true,
+  composer: { x: 350, y: 774, width: 800, height: 110 },
+  draft: "",
+  button: {
+    focused: true,
+    focusVisible: true,
+    painted: true,
+    disabled: false,
+    label: "Steer queued message 1",
+    nativeTitleAttribute: "At the next safe point",
+    visibleText: "",
+    hasIcon: true,
+    outline: "solid",
+    outlineWidth: 2,
+  },
+  paintedDomTooltips: [],
+});
+
+test("isolated Steer baseline uses native Tab without activating the action in either desktop theme", async () => {
+  for (const theme of ["light", "dark"]) {
+    const evidence = {},
+      inputs = [],
+      clicks = [],
+      frames = [];
+    await captureQueueSteerFocus({
+      options: { width: 1280, height: 900, theme, name: `desktop-${theme}` },
+      evidence,
+      send: async (method, args) => inputs.push([method, args]),
+      wait: async () => {},
+      click: async (selector) => clicks.push(selector),
+      evaluate: async (expression) => {
+        if (expression === "location.href")
+          return (
+            "http://localhost/pending.html?theme=" +
+            theme +
+            "&hostQueue=1&many="
+          );
+        if (expression.startsWith("document.activeElement")) return true;
+        return structuredClone(steerFocusState());
+      },
+      capture: async (...args) => frames.push(args),
+    });
+    const trip = evidence.queueSteerFocusTrips[0];
+    assert.equal(trip.status, "passed");
+    assert.equal(
+      trip.held.button.visibleText,
+      "",
+      "Record current icon-only presentation without prescribing a fix",
+    );
+    assert.deepEqual(trip.held.paintedDomTooltips, []);
+    assert.match(trip.nativeTooltipPixels, /Not established/);
+    assert.equal(frames.length, 1);
+    assert.equal(
+      frames[0][0],
+      `queue-reading-desktop-${theme}-steer-tab-baseline`,
+    );
+    assert.deepEqual(clicks, [".queue-reading-toggle"]);
+    const navigation = new URL(inputs[0][1].url);
+    assert.equal(navigation.searchParams.get("steerFocus"), "1");
+    assert.equal(navigation.searchParams.has("hostQueue"), false);
+    assert.equal(navigation.searchParams.get("lang"), "en");
+    const keys = inputs.filter(
+      ([method]) => method === "Input.dispatchKeyEvent",
+    );
+    assert.deepEqual(
+      keys.map(([, p]) => [p.type, p.key]),
+      [
+        ["rawKeyDown", "Tab"],
+        ["keyUp", "Tab"],
+      ],
+    );
+    assert.equal(evidence.queueReadingTabAttempts[0].matched, true);
+  }
+});
+
+test("Steer focus acceptance rejects wrong content, hidden focus and changed queue or draft", () => {
+  const before = steerFocusState();
+  for (const mutate of [
+    (s) => (s.text = "Short item"),
+    (s) => (s.running = false),
+    (s) => (s.source = null),
+    (s) => (s.button.painted = false),
+    (s) => (s.button.focusVisible = false),
+    (s) => (s.button.outline = "none"),
+    (s) => (s.button.outlineWidth = 0),
+    (s) => s.order.reverse(),
+    (s) => (s.draft = "changed"),
+    (s) => s.composer.height++,
+  ]) {
+    const s = steerFocusState();
+    mutate(s);
+    assert.throws(() => verifyQueueSteerFocus(s, before));
+  }
+});
+
+test("Steer baseline observer distinguishes native title from rendered DOM tooltip without changing the page", async () => {
+  const { JSDOM } = await import("jsdom");
+  const dom = new JSDOM(
+    `<div class="queue-row" data-queue-id="synthetic-thread-message"><span class="message-source-link">From Planning assistant</span><div class="user-bubble">${syntheticSteerFocusText}</div><button data-queue-control="steer" aria-label="Steer queued message 1" title="At the next safe point"><svg></svg></button></div><form class="composer"><textarea></textarea><button class="action-orb stop"></button></form>`,
+    { runScripts: "outside-only" },
+  );
+  try {
+    dom.window.document.elementFromPoint = () => null;
+    const before = dom.window.document.body.innerHTML;
+    const s = dom.window.eval(`(${observeQueueSteerFocus.toString()})()`);
+    assert.equal(s.text, syntheticSteerFocusText);
+    assert.equal(s.button.nativeTitleAttribute, "At the next safe point");
+    assert.equal(s.button.visibleText, "");
+    assert.deepEqual(Array.from(s.paintedDomTooltips), []);
+    assert.equal(s.button.painted, false, "JSDOM is not pixel acceptance");
+    assert.equal(dom.window.document.body.innerHTML, before);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("new observation is appended after established queue captures and is opt-in only", async () => {
+  const source = await readFile(
+    new URL("../scripts/queue-reading-main-ui-preview.mjs", import.meta.url),
+    "utf8",
+  );
+  const fixture = await readFile(
+    new URL("./fixtures/queue-steer-visual.tsx", import.meta.url),
+    "utf8",
+  );
+  const call = source.lastIndexOf("await captureQueueSteerFocus({");
+  assert(call > source.indexOf('await save("trigger-source-hover", true)'));
+  assert.match(fixture, /text: params.has\("steerFocus"\)/);
+  assert(fixture.includes(syntheticSteerFocusText));
+  assert.doesNotMatch(
+    captureQueueSteerFocus.toString(),
+    /\.focus\(|\.click\(|scrollIntoView|scrollTop\s*=/,
+  );
 });

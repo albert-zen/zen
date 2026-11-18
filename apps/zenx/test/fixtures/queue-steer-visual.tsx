@@ -102,9 +102,11 @@ initial = applyQueueItem(initial, {
   input: [
     {
       type: "text",
-      text: zh
-        ? "再检查窄屏布局和键盘焦点。保留检查结果，暂时不要发布。"
-        : "Check the narrow layout and keyboard focus too. Keep the findings; don’t publish yet.",
+      text: params.has("steerFocus")
+        ? "Compare the synthetic desktop notes, keep each queued instruction readable, and verify keyboard actions without sending messages or changing the saved draft."
+        : zh
+          ? "再检查窄屏布局和键盘焦点。保留检查结果，暂时不要发布。"
+          : "Check the narrow layout and keyboard focus too. Keep the findings; don’t publish yet.",
     },
   ],
 });
