@@ -2,6 +2,7 @@ import { useQuestionReadRecovery } from "./use-question-read-recovery.js";
 import {
   memo,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useSyncExternalStore,
@@ -106,6 +107,7 @@ function QuestionCard({
   disabled: boolean;
 }) {
   const { t } = useTranslation("panels");
+  const hintId = useId();
   const { question, draft, attempt } = view;
   const { threadId, callItemId } = question.request;
   let valid = false;
@@ -175,8 +177,27 @@ function QuestionCard({
       {question.specification.questions.map((q) => {
         const answer = draft.answers.find((a) => a.questionId === q.id);
         return (
-          <fieldset key={q.id} disabled={unavailable}>
+          <fieldset
+            key={q.id}
+            disabled={unavailable}
+            aria-describedby={
+              q.options?.length ? `${hintId}-${q.id}` : undefined
+            }
+          >
             <legend>{q.prompt}</legend>
+            {q.options?.length ? (
+              <p
+                id={`${hintId}-${q.id}`}
+                className="user-question-choice-hint user-question-draft-note"
+                style={{ margin: "0 0 6px" }}
+              >
+                {t(
+                  q.multiSelect
+                    ? "questionChooseMultipleHint"
+                    : "questionChooseOneHint",
+                )}
+              </p>
+            ) : null}
             {q.options?.length ? (
               <ul className="user-question-options">
                 {q.options?.map((option) => {

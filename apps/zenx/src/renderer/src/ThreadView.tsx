@@ -1,3 +1,4 @@
+import { informationReadingClearance } from "./information-reading-clearance.js";
 import { projectForkBoundary } from "./thread-fork-boundary.js";
 import { AppShotButton } from "./AppShotButton.js";
 import {
@@ -1060,9 +1061,63 @@ function ThreadViewContent({
     if (!zone || !column) return;
     const view = viewRef.current;
     const scrollport = column.closest<HTMLElement>(".messages");
+    const workspace = view?.closest<HTMLElement>(".workspace");
+    const information = workspace?.querySelector<HTMLElement>(
+      ":scope > .information-toolbar",
+    );
     const measure = () => {
-      const rect = column.getBoundingClientRect();
+      let rect = column.getBoundingClientRect();
       if (rect.width <= 0) return;
+      // Reuse the existing column read. Add back our own previous displacement
+      // so resize/open/close cannot feed the shifted coordinate into itself.
+      const previousShift = parseFloat(
+        view?.style.getPropertyValue("--information-reading-shift") || "0",
+      );
+      const laneRequested = information?.dataset.clearanceOpen === "true";
+      const contentId = laneRequested
+        ? information
+            ?.querySelector("button[aria-controls]")
+            ?.getAttribute("aria-controls")
+        : undefined;
+      const popover = contentId
+        ? view?.ownerDocument.getElementById(contentId)
+        : null;
+      const viewportLeft = view?.getBoundingClientRect().left ?? 0;
+      const fit =
+        view && popover
+          ? informationReadingClearance({
+              viewportLeft,
+              cardRight: Number(information?.dataset.clearanceRight),
+              unshiftedReadingLeft: rect.left + previousShift,
+              readingWidth: rect.width,
+              resourceOpen:
+                workspace?.querySelector<HTMLElement>(
+                  ":scope > .auxiliary-panel",
+                )?.dataset.open === "true",
+              direction: getComputedStyle(view).direction,
+              open: true,
+            })
+          : { cardWidth: undefined, shift: 0 };
+      if (view) {
+        const laneActive = String(fit.cardWidth !== undefined);
+        if (view.dataset.informationLane !== laneActive)
+          view.dataset.informationLane = laneActive;
+        if (previousShift !== fit.shift) {
+          view.style.setProperty(
+            "--information-reading-shift",
+            `${fit.shift}px`,
+          );
+          rect = column.getBoundingClientRect();
+        }
+      }
+      if (popover) {
+        if (fit.cardWidth)
+          popover.style.setProperty(
+            "--information-reading-card-width",
+            `${fit.cardWidth}px`,
+          );
+        else popover.style.removeProperty("--information-reading-card-width");
+      }
       const contentOrigin =
         zone.getBoundingClientRect().left +
         zone.clientLeft +
@@ -1070,7 +1125,7 @@ function ThreadViewContent({
       // The transcript centers inside its native scrollbar-reduced viewport.
       // Align the Composer to that measured column, not the wider bottom zone.
       if (view) {
-        const center = `${rect.left + rect.width / 2 - view.getBoundingClientRect().left}px`;
+        const center = `${rect.left + rect.width / 2 - viewportLeft}px`;
         if (
           view.style.getPropertyValue("--conversation-return-center") !== center
         )
@@ -1099,8 +1154,22 @@ function ThreadViewContent({
       }
     };
     measure();
+    // The card is portalled; opening it does not resize the fixed-width column.
+    // Observe only its toolbar presentation, not transcript mutations.
+    const informationObserver =
+      typeof MutationObserver === "undefined"
+        ? undefined
+        : new MutationObserver(measure);
+    if (information)
+      informationObserver?.observe(information, {
+        attributes: true,
+        attributeFilter: ["data-clearance-open", "data-clearance-right"],
+        subtree: true,
+        childList: true,
+      });
     if (typeof ResizeObserver === "undefined")
       return () => {
+        informationObserver?.disconnect();
         view?.style.removeProperty("--conversation-return-center");
       };
     const observer = new ResizeObserver(measure);
@@ -1111,9 +1180,19 @@ function ThreadViewContent({
     if (tray) observer.observe(tray);
     return () => {
       observer.disconnect();
+      informationObserver?.disconnect();
       view?.style.removeProperty("--conversation-return-center");
     };
   });
+  // Preserve displacement across render-time measurement observer refreshes.
+  // Only remove the geometry owner on actual unmount.
+  useLayoutEffect(() => {
+    const view = viewRef.current;
+    return () => {
+      view?.style.removeProperty("--information-reading-shift");
+      if (view) delete view.dataset.informationLane;
+    };
+  }, []);
   const composerTextareaRef = useRef<ComposerInput>(null);
   const returnToLive = () => {
     const scroll = scrollRef.current;

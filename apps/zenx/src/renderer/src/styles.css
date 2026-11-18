@@ -13817,3 +13817,17 @@ button:disabled {
   position: absolute;
   inset: 0;
 }
+
+/* A fitted information lane preserves width, height and scroll ownership; move only the inner
+   reading column. Existing measured alignment moves Composer, queues and return
+   control with it. Do not transform virtual-list positioning containers. */
+.thread-view[data-information-lane="true"] .messages-inner,
+.thread-view[data-information-lane="true"] .virtual-transcript-row,
+.thread-view[data-information-lane="true"] .virtual-transcript-header,
+.thread-view[data-information-lane="true"] .virtual-transcript-footer {
+  position: relative;
+  left: calc(-1 * var(--information-reading-shift, 0px));
+}
+.information-popover {
+  box-shadow: 0 4px 16px var(--color-elevation-low);
+}

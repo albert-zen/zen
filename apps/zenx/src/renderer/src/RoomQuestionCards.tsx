@@ -1,5 +1,5 @@
 import { useQuestionReadRecovery } from "./use-question-read-recovery.js";
-import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { useId, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import {
@@ -179,6 +179,7 @@ function RoomQuestionCard({
       mounted.current = false;
     };
   }, []);
+  const hintId = useId();
   const { question, draft, attempt } = view;
   const waiting = attempt && attempt.phase !== "rejected";
   const changed = draft.questionRevision !== question.revision;
@@ -235,8 +236,27 @@ function RoomQuestionCard({
       {question.specification.questions.map((q) => {
         const answer = draft.answers.find((a) => a.questionId === q.id);
         return (
-          <fieldset key={q.id} disabled={disabled || changed}>
+          <fieldset
+            key={q.id}
+            disabled={disabled || changed}
+            aria-describedby={
+              q.options?.length ? `${hintId}-${q.id}` : undefined
+            }
+          >
             <legend>{q.prompt}</legend>
+            {q.options?.length ? (
+              <p
+                id={`${hintId}-${q.id}`}
+                className="user-question-choice-hint user-question-draft-note"
+                style={{ margin: "0 0 6px" }}
+              >
+                {t(
+                  q.multiSelect
+                    ? "questionChooseMultipleHint"
+                    : "questionChooseOneHint",
+                )}
+              </p>
+            ) : null}
             {q.options?.length ? (
               <ul className="user-question-options">
                 {q.options?.map((option) => {

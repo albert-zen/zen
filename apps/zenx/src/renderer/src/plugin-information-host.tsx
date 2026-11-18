@@ -86,6 +86,10 @@ export function PluginInformationHost({
   const trigger = useRef<HTMLButtonElement>(null);
   const toolbar = useRef<HTMLDivElement>(null);
   const contentId = useId();
+  const [contentMounted, setContentMounted] = useState(false);
+  const contentRef = React.useCallback((node: HTMLDivElement | null) => {
+    setContentMounted(node !== null);
+  }, []);
   // Width changes rebuild observers; keep transition history across that rebind.
   const hasMeasuredLayout = useRef(false);
   const previousResourceOpen = useRef(false);
@@ -287,6 +291,8 @@ export function PluginInformationHost({
       <div
         ref={toolbar}
         className="information-toolbar"
+        data-clearance-open={presentedOpen && contentMounted}
+        data-clearance-right={layout.anchorX}
         hidden={!layout.available}
       >
         <Popover
@@ -329,6 +335,7 @@ export function PluginInformationHost({
             />
           </PopoverAnchor>
           <PopoverContent
+            ref={contentRef}
             id={contentId}
             onInteractOutside={(event) => {
               const target = event.target as Element | null;
@@ -359,7 +366,7 @@ export function PluginInformationHost({
             align="end"
             className="information-popover"
             style={{
-              width: layout.width,
+              width: `var(--information-reading-card-width, ${layout.width}px)`,
               maxHeight: `min(720px, calc(100vh - ${Math.max(layout.headerBottom, layout.triggerBottom ?? 44) + 16}px))`,
             }}
             sideOffset={8}
