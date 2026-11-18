@@ -2417,6 +2417,10 @@ button:disabled {
 .bottom-zone > * {
   pointer-events: auto;
 }
+/* The overlay fade is transparent here; the status text needs its own backing. */
+.bottom-zone > .background-shell-status {
+  background: var(--color-surface-main);
+}
 .bottom-zone::before {
   content: "";
   position: absolute;
