@@ -105,6 +105,26 @@ export function commandStatus(
   return commandPhaseLabel(commandPhase(item, turnStatus));
 }
 
+/** Inline shell outcomes are shown separately from the invocation lifetime. */
+export function commandTraceStatus(
+  item: CommandItem,
+  turnStatus: Turn["status"] = "inProgress",
+): string {
+  const { exitCode } = item;
+  if (
+    item.status === "failed" &&
+    (item.toolName === "shell" || item.toolName === "zenx_shell") &&
+    item.contentType !== "application/vnd.zen.tool-task+json" &&
+    commandPhase(item, turnStatus) === "completed" &&
+    exitCode !== null &&
+    Number.isSafeInteger(exitCode) &&
+    exitCode !== 0
+  ) {
+    return `${i18n.t("panels:exitCode")} ${exitCode}`;
+  }
+  return commandStatus(item, turnStatus);
+}
+
 /** Past-tense action claims need success evidence, unlike invocation completion. */
 export function commandActionCompleted(item: CommandItem): boolean {
   if (item.status !== "completed" || commandPhase(item) !== "completed")

@@ -388,7 +388,7 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
     <section
       ref={shelfRef}
       className={`pending-steer-panel queue-shelf steer-shelf${detailsOpen ? " is-open" : ""}`}
-      aria-label={t("steerPendingLabel")}
+      aria-label={t(held ? "steerHeldLabel" : "steerPendingLabel")}
     >
       {pending.length > 0 ? (
         <>
@@ -409,7 +409,9 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
                 <span className="mini-spinner" aria-hidden="true" />
               )}
               <span role="status" aria-live="polite" aria-atomic="true">
-                {t("steerPendingCount", { count: pending.length })}
+                {t(held ? "steerHeldCount" : "steerPendingCount", {
+                  count: pending.length,
+                })}
               </span>
               <Icon
                 name="chevron-down"

@@ -82,6 +82,12 @@
 .subagents-panel > header strong {
   font-weight: 500;
 }
+.subagent-sidebar-heading {
+  padding: 0 6px 4px;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+  text-align: right;
+}
 .subagent-tree {
   list-style: none;
   padding: 0;
@@ -113,11 +119,11 @@
 .subagent-tree-title {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 .subagent-tree-status {
+  flex-shrink: 0;
   font-size: var(--font-size-caption);
   color: var(--text-2);
 }
@@ -163,13 +169,10 @@
   display: grid;
   --conversation-gutter: 16px;
 }
-.thread-conversation-viewport .composer-tools {
-  flex-wrap: wrap;
-}
 .thread-conversation-viewport .composer-rail {
   align-items: flex-end;
 }
-.thread-conversation-viewport .composer-model-trigger {
+.thread-conversation-viewport .composer-model-menu {
   max-width: 180px;
 }
 .conversation-viewport-status {
@@ -281,4 +284,38 @@
     min-width: 44px;
     min-height: 44px;
   }
+}
+
+/* Question attention accompanies activity; it never changes execution status. */
+.subagent-tree-status:has(.thread-asking-badge),
+.subagent-tree-status:has(.subagent-approval-attention) {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  flex-shrink: 1;
+}
+
+/* Passive attention, same warning token as sidebar; not an action. */
+.subagent-approval-attention {
+  color: var(--warn);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.subagent-approval-attention::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+:root[data-appearance="light"]
+  .subagent-tree-row:is(:hover, :focus-visible)
+  .subagent-approval-attention {
+  color: color-mix(in srgb, var(--warn) 80%, black);
 }

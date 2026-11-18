@@ -277,7 +277,9 @@
   color: var(--color-text-muted) !important;
 }
 
-.queue-row-edit:disabled {
+.queue-row-edit:disabled,
+.queue-row-cancel:disabled,
+.queue-row-move:disabled {
   color: var(--color-text-disabled) !important;
 }
 
@@ -378,18 +380,6 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .queue-row-edit:not(:focus-visible):not(.is-pending),
-  .queue-row-cancel:not(:focus-visible):not(.is-pending) {
-    opacity: 0.55;
-  }
-
-  .queue-row:hover .queue-row-edit,
-  .queue-row:focus-within .queue-row-edit,
-  .queue-row:hover .queue-row-cancel,
-  .queue-row:focus-within .queue-row-cancel {
-    opacity: 1;
-  }
-
   .queue-shelf button:not(:disabled):hover,
   .queue-preview.is-expandable:hover {
     background: var(--color-surface-hover);
@@ -427,6 +417,7 @@
 }
 
 .queue-row-steer {
+  white-space: nowrap;
   color: var(--color-text-primary) !important;
 }
 .queue-row-steer:disabled {
@@ -597,6 +588,19 @@
 .pending-tray:empty {
   display: none;
 }
+/* A bounded pending list must advertise its hidden rows before interaction.
+   Native auto overflow supplies the thumb only when content actually overflows;
+   keep the shared thin, trackless geometry and the global auto-hide elsewhere. */
+.pending-tray,
+:root[data-scrollbar-autohide] .pending-tray {
+  scrollbar-color: var(--color-text-muted) transparent;
+}
+@media (forced-colors: active) {
+  .pending-tray,
+  :root[data-scrollbar-autohide] .pending-tray {
+    scrollbar-color: auto;
+  }
+}
 .pending-tray > .queue-shelf {
   width: 100%;
   max-width: none;
@@ -623,6 +627,11 @@
   padding: 0 0 6px;
 }
 .pending-tray .queue-shelf-header {
+  /* Keep delivery timing attached to the group while keyboard focus scrolls. */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--color-surface-inset);
   min-height: 32px;
   flex-wrap: wrap;
 }
@@ -637,6 +646,16 @@
 .pending-tray .pending-send-status,
 .pending-tray .pending-send-recovery p {
   margin: 4px 0;
+}
+.pending-tray .pending-send-check-feedback {
+  margin-top: var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-label);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.pending-tray .pending-send-check-feedback[data-check-state="failed"] {
+  color: var(--color-status-danger);
 }
 .pending-tray .pending-send-recovery,
 .pending-tray .pending-send-recovery pre,
@@ -676,8 +695,24 @@
   justify-content: flex-end;
 }
 @media (max-width: 480px) {
+  .pending-tray .queue-row-main {
+    flex-direction: column;
+  }
+  .pending-tray .queue-row-content,
   .pending-tray .queue-row-actions {
-    max-width: 88px;
+    width: 100%;
+  }
+  .pending-tray .queue-row-actions {
+    max-width: none;
+    padding-top: 0;
+    gap: 4px;
+  }
+}
+/* Use available height in tall narrow windows, not when a keyboard or short
+   viewport needs that space for the Composer and approval decisions. */
+@media (max-width: 480px) and (min-height: 700px) {
+  .pending-tray {
+    max-height: min(360px, 40dvh);
   }
 }
 .queue-move-up {
@@ -701,5 +736,181 @@
     min-width: 28px;
     min-height: 28px;
     padding: 4px;
+  }
+}
+
+/* Focus scrolling must leave room for the sticky group heading. */
+.pending-tray {
+  scroll-padding-block-start: 64px;
+}
+
+/* Localized in-progress labels may still need to wrap, unlike the idle icon. */
+@media (pointer: fine) and (min-width: 481px) {
+  .pending-tray .queue-row-actions {
+    max-width: 192px;
+  }
+}
+
+/* Desktop-only, explicit reading space; never resize the Composer or split the
+   existing pending groups into independent scrolling regions. */
+.queue-shelf .queue-reading-toggle {
+  display: none;
+}
+@media (min-width: 961px) {
+  .queue-shelf .queue-reading-toggle {
+    display: inline-flex;
+  }
+  .pending-tray:has(> .queue-shelf[data-reading-expanded="true"]) {
+    max-height: min(480px, 55dvh);
+    /* The bottom zone reserves a conversation lane. Its Composer
+       is a fixed-size sibling; only the message viewport yields when their
+       combined height reaches that existing cap. */
+    flex-shrink: 1;
+  }
+}
+
+/* Match the Composer's outer frame; the scrollbar stays inside this width. */
+@media (min-width: 961px) {
+  .thread-view .bottom-zone > .pending-tray {
+    left: var(--composer-column-left, 0px);
+    width: var(--composer-column-width, 100%);
+    max-width: var(--conversation-width);
+    margin-inline: 0;
+  }
+  .queue-shelf .queue-reading-toggle {
+    min-width: 32px;
+    padding-inline: 8px;
+  }
+}
+
+/* Keep pending provenance with its own bubble without changing the input lane. */
+.pending-tray .queue-message-group.has-sender {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  min-width: 0;
+  margin-inline-start: auto;
+}
+.pending-tray .queue-message-group.has-sender > .queue-message-body {
+  align-items: flex-start;
+}
+.pending-tray .queue-message-group.has-sender > .message-source-line {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Host-authored updates have their own card rather than a user bubble. Keep
+   their header and summary together on the same aligned queue content rail. */
+.pending-tray .queue-row-content > .host-message-content {
+  width: fit-content;
+  max-width: 100%;
+  margin-inline-start: auto;
+  padding-inline: 10px;
+  overflow-wrap: anywhere;
+}
+
+/* A qualified desktop pointer can discover the action without a permanent
+   label; keyboard focus reveals it, and touch or forced colors retain it. */
+@media (hover: hover) and (pointer: fine) and (forced-colors: none) and (not (any-pointer: coarse)) {
+  .pending-tray
+    .queue-row:not(:hover, :focus-within)
+    .queue-row-steer:not(.is-pending) {
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+
+/* A native Tab shortcut at the writing end, not another visible footer row.
+   The host lives outside the tray's clipped scroller and occupies no flow space.
+   Only keyboard focus reveals the shortcut; Tab itself is never intercepted. */
+.queue-reading-bridge-host {
+  display: none;
+}
+@media (min-width: 961px) and (pointer: fine) {
+  .queue-reading-bridge-host:not(:empty) {
+    display: block;
+    position: relative;
+    flex: 0 0 0;
+    height: 0;
+    min-height: 0;
+    left: var(--composer-column-left, 0px);
+    width: var(--composer-column-width, 100%);
+    max-width: var(--conversation-width);
+    z-index: 2;
+  }
+  /* Cancel only the extra flex gap introduced by the zero-height host. */
+  .bottom-zone.has-approval > .queue-reading-bridge-host:not(:empty) {
+    margin-block-start: calc(-1 * var(--bottom-zone-gap, 0px));
+  }
+  .queue-reading-bridge {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: calc(100% - 16px);
+    min-height: 32px;
+    padding: 4px 10px;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-control);
+    background: var(--color-surface-inset);
+    color: var(--color-text-primary);
+    font: inherit;
+    font-size: var(--font-size-caption);
+    line-height: 1.5;
+    white-space: normal;
+    clip-path: inset(50%);
+    pointer-events: none;
+  }
+  .queue-reading-bridge:focus-visible {
+    clip-path: none;
+    pointer-events: auto;
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 2px;
+  }
+  .queue-reading-bridge > svg {
+    flex: 0 0 auto;
+  }
+}
+
+/* The observed rich sender row already reserves a source line. A keyboard-only
+   hint uses its spare end space, not another row or a floating tooltip system.
+   The action's existing aria-label remains the single accessible name. */
+.queue-steer-keyboard-hint {
+  display: none;
+}
+@media (min-width: 961px) {
+  .pending-tray .queue-message-group.has-sender {
+    position: relative;
+  }
+  .pending-tray .queue-steer-keyboard-hint {
+    position: absolute;
+    inset-block-start: 3px;
+    inset-inline-end: 0;
+    display: block;
+    visibility: hidden;
+    max-width: 80px;
+    padding-inline: 5px;
+    border-radius: var(--radius-control);
+    background: var(--color-surface-elevated);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-caption);
+    line-height: 18px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+  }
+  .pending-tray
+    .queue-row:has(.queue-row-steer:focus-visible)
+    .queue-steer-keyboard-hint {
+    visibility: visible;
+  }
+  .pending-tray
+    .queue-row:has(.queue-row-steer:focus-visible)
+    .queue-message-group.has-sender:has(.queue-steer-keyboard-hint)
+    > .message-source-line {
+    max-width: max(0px, calc(100% - 88px));
   }
 }

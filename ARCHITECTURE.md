@@ -37,6 +37,7 @@
 
 - **Information component presentation** — Unimplemented legacy PR/artifact layout types remain parseable and inspectable in customization but do not create default or ordinary-view cards; this static implementation distinction neither infers provider emptiness nor rewrites saved layouts, content, visibility authority or question attention. Existing renderer providers report disposable content visibility through React context/callbacks; empty cards stay mounted behind hidden presentation so their bounded native reads can discover content, without introducing a content cache, permission or another placement authority.
 
+- **Information split overflow cue** — A disposable renderer-only marker observes the existing Information scroll owner and its direct content sizes, showing remaining overflow in the existing overlay toolbar without owning focus, scrolling, provider state or question authority.
 - **Information panel visibility** — Per-Thread/Room visibility and consumed foreground question attention tokens are disposable window-local presentation memory, separate from the durable sidebar layout and question authority; new selected-Thread questions may reveal the panel without changing focus, while background questions never navigate or open it.
 
 - **Editable conversation information layout** — Typed component instances, defaults and revision-checked local edits belong to the existing Thread/Room sidebar presentation store and Trace recovery; PAW uses its actual Room binding rather than a third owner, Host-bound sources retain their provider authority, reads of defaults never write state, and layout edits own neither provider content nor question state and create no execution, scheduling or foreground authority.
@@ -1429,6 +1430,7 @@ Models cannot invoke trusted-only setup/pause commands.
 
 - **Fullscreen primary conversation tab** — a renderer-only leading tab reveals the already-mounted main Thread/Room surface without reparenting it; its disposable selection is retained by the existing renderer sidebar controller across panel remounts and uses the owner-local presentation-intent fence, never a resource descriptor, second transcript/runtime or Host fact, and collapse restores the retained resource selection.
 - **Conversation workspace presentation** — the main navigation selects either a canonical Thread or a Room conversation; a Room owns its transient right-panel tab selection, while Files, Browser, Computer and Thread-oriented plugin panels receive only an explicitly selected real member Thread, never a Room ID. A room with no selected execution context exposes only Room-scoped tabs.
+- **Room workspace file labels** — Room same-relative-path file labels are a renderer-only projection of existing resource Thread titles; label abbreviation never changes resource routing, tab identity, order, selection, or retained file drafts.
 - **Companion workspace annotations** — an assistant Room may own a bounded, revision-checked notebook of matters, memory and exact Thread/Trigger references in the existing Room store; these are editable planning documents, not execution status, scheduling or a second journal. Actual execution remains authoritative in canonical Threads and Triggers; notebook snapshots enter the model context only through explicit normal tool reads/results, and editing notes never rewrites historical Items.
 
 ### Room message interactions
@@ -1753,6 +1755,8 @@ recorded timestamp; replay never consults the current zone or clock.
 ZenX's turn-outcome lookup is a disposable renderer index of the current immutable canonical-item array: one pass preserves any recorded abort and the last non-recovery failure in array order, without changing admission, Turn status, stored history or recovery authority.
 
 Existing-thread ordinary Send may transfer its draft into a renderer-local, client-ID-keyed pending presentation before native admission; this disposable copy distinguishes sending, admitted-but-not-yet-projected and unknown outcomes, reconciles only exact canonical identity, and never becomes a durable receipt, second transcript or model-consumption authority.
+
+Explicit delivery-check feedback is disposable renderer state owned by the exact pending input, admission state and mounted Thread view; its read-completion signal distinguishes a usable read from unavailable/stale results but never grants delivery, rejection, retry or removal authority.
 
 ZenX conversation action contexts use stable UI delegates whose targets update only after a committed render and are invalidated on unmount; this avoids unrelated history redraws while preserving the latest App-owned selection and permission checks, without granting or caching action authority.
 

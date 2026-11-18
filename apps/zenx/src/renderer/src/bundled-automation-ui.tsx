@@ -1834,8 +1834,12 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   }, [panel]);
   const dialog = useRef<HTMLElement>(null);
   const dialogInvoker = useRef<HTMLElement>(null);
+  const emptyRoomEntry = useRef<HTMLButtonElement>(null);
+  const roomRailEntry = useRef<HTMLButtonElement>(null);
+  const roomsMain = useRef<HTMLElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [roomsReadError, setRoomsReadError] = useState<string | null>(null);
   useEffect(() => {
     if (!primaryNavigation) return;
     selectedRef.current = initialRoomId;
@@ -2014,13 +2018,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     }
     delete intentRevisions.current[entry.id];
   };
-  const refresh = async () => {
-    if (olderRequest.current?.roomId === selectedRef.current) {
-      refreshAfterOlder.current = true;
-      return;
-    }
-    const sequence = ++refreshSequence.current;
-    const epoch = viewEpoch.current;
+  const readRooms = async (sequence: number, epoch: number) => {
     const next: RoomListResult = { rooms: [] };
     let cursor: number | null = 0;
     while (cursor !== null && next.rooms.length < 128) {
@@ -2184,7 +2182,27 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
         }),
       );
     }
+    if (sequence !== refreshSequence.current || epoch !== viewEpoch.current)
+      return;
+    setRoomsReadError(null);
     setLoading(false);
+  };
+  const refresh = async () => {
+    if (olderRequest.current?.roomId === selectedRef.current) {
+      refreshAfterOlder.current = true;
+      return;
+    }
+    const sequence = ++refreshSequence.current;
+    const epoch = viewEpoch.current;
+    try {
+      await readRooms(sequence, epoch);
+    } catch (reason) {
+      if (sequence === refreshSequence.current && epoch === viewEpoch.current) {
+        setRoomsReadError(describeError(reason));
+        setLoading(false);
+      }
+      throw reason;
+    }
   };
   useEffect(() => {
     selectedRef.current = selected;
@@ -2195,23 +2213,22 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       .list()
       .then(setThreads)
       .catch((reason: unknown) => setError(describeError(reason)));
-    void refresh().catch((reason: unknown) => {
-      setLoading(false);
-      setError(describeError(reason));
-    });
-    const timer = setInterval(
-      () =>
-        void refresh().catch((reason: unknown) =>
-          setError(describeError(reason)),
-        ),
-      3000,
-    );
+    void refresh().catch(() => {});
+    const timer = setInterval(() => void refresh().catch(() => {}), 3000);
     return () => clearInterval(timer);
   }, [sdk]);
   useEffect(() => {
     if (panel === "rename") dialog.current?.querySelector("input")?.focus();
     else if (panel !== null) dialogClose.current?.focus();
   }, [panel, assistantMode, assistantProjectPicker]);
+  const openRoomCreation = (event: React.MouseEvent<HTMLButtonElement>) => {
+    dialogInvoker.current = event.currentTarget;
+    setAssistantMode(false);
+    setName("");
+    setMemberName("");
+    setThreadId("");
+    setPanel("create");
+  };
   const closeDialog = () => {
     if (panel === "create" && assistantMode && greetingAdmission.current)
       greetingAdmission.current.cancelled = true;
@@ -2223,7 +2240,30 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           ? `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: selected })}`
           : ROOMS_ROUTE,
       );
-    requestAnimationFrame(() => dialogInvoker.current?.focus());
+    const epoch = viewEpoch.current;
+    requestAnimationFrame(() => {
+      if (epoch !== viewEpoch.current || !roomsMain.current?.isConnected)
+        return;
+      const sidebarEntry = primaryNavigation
+        ? document
+            .getElementById("sidebar-room-conversations")
+            ?.closest(".room-conversation-group")
+            ?.querySelector<HTMLButtonElement>(".room-conversation-create")
+        : null;
+      const target = [
+        dialogInvoker.current,
+        emptyRoomEntry.current,
+        roomRailEntry.current,
+        sidebarEntry,
+        roomsMain.current,
+      ].find(
+        (element) =>
+          element?.isConnected &&
+          !element.matches(":disabled") &&
+          !element.closest('[hidden], [inert], [aria-hidden="true"]'),
+      );
+      target?.focus();
+    });
   };
   const room = data.rooms.find((entry) => entry.id === selected);
   const assistantThread = threads.find(
@@ -2888,15 +2928,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           <div className="rooms-chat-list-head">
             <strong>{i18n.t("panels:rooms")}</strong>
             <button
+              ref={roomRailEntry}
               type="button"
-              onClick={(event) => {
-                dialogInvoker.current = event.currentTarget;
-                setAssistantMode(false);
-                setName("");
-                setMemberName("");
-                setThreadId("");
-                setPanel("create");
-              }}
+              onClick={openRoomCreation}
             >
               <Icon name="plus" size={15} /> {i18n.t("panels:new")}
             </button>
@@ -2941,15 +2975,43 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           ))}
         </nav>
       ) : null}
-      <main className="rooms-chat-main" hidden={inlineSetup}>
+      <main
+        ref={roomsMain}
+        className="rooms-chat-main"
+        hidden={inlineSetup}
+        tabIndex={-1}
+        aria-label={i18n.t("panels:rooms")}
+      >
         {loading ? (
           <p className="rooms-chat-empty" role="status">
             {i18n.t("panels:loadingRooms")}
           </p>
+        ) : room === undefined && (roomsReadError || initialRoomId) ? (
+          <div className="rooms-chat-empty" role="alert">
+            <h3>{i18n.t("panels:roomsAreUnavailable")}</h3>
+            {roomsReadError ? <p>{roomsReadError}</p> : null}
+          </div>
         ) : room === undefined ? (
           <div className="rooms-chat-empty">
             <h3>{i18n.t("panels:aPlaceToWorkTogether")}</h3>
-            <p>{i18n.t("panels:createARoomToBringYourAgents")}</p>
+            <p>
+              {i18n.t(
+                data.rooms.length === 0
+                  ? "panels:createARoomToBringYourAgents"
+                  : "panels:selectARoomToContinue",
+              )}
+            </p>
+            {data.rooms.length === 0 ? (
+              <button
+                type="button"
+                className="primary-button"
+                ref={emptyRoomEntry}
+                onClick={openRoomCreation}
+              >
+                {i18n.t("panels:newRoom")}
+              </button>
+            ) : null}
+            {error && panel === null ? <p role="alert">{error}</p> : null}
           </div>
         ) : (
           <>
@@ -4191,7 +4253,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 ) : null}
               </details>
             ) : null}
-            {error ? <p role="alert">{error}</p> : null}
+            {error || roomsReadError ? (
+              <p role="alert">{error || roomsReadError}</p>
+            ) : null}
           </section>
         </div>
       ) : null}

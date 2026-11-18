@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import React, {
@@ -491,8 +492,15 @@ export const SubagentsInformationVisibilityContext = createContext<{
   embedded?: boolean;
 } | null>(null);
 
+/** Read-only native attention membership; never copied into plugin SDK. */
+export const ChildThreadApprovalContext = createContext<ReadonlySet<string>>(
+  new Set(),
+);
+
 function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
   useTranslation("panels");
+  const sidebar = useContext(ChildThreadSidebarContext);
+  const approvalThreads = useContext(ChildThreadApprovalContext);
   const { parent, all, error, refresh } = useRelatedThreads(sdk);
   const [showArchived, setShowArchived] = useState(false);
   const render = (
@@ -521,17 +529,39 @@ function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
                 }
               >
                 <Icon name="users" />
-                <span className="subagent-tree-title">
-                  {threadTitle(child)}
-                </span>
-                <span className="subagent-tree-status">
-                  {child.archived
-                    ? i18n.t("panels:archivedStatus")
-                    : child.status === "active"
-                      ? i18n.t("shell:working")
-                      : child.status === "systemError"
-                        ? i18n.t("panels:unavailable")
-                        : i18n.t("panels:idleStatus")}
+                <span className="subagent-tree-identity">
+                  <span className="subagent-tree-title">
+                    {threadTitle(child)}
+                  </span>
+                  <span className="subagent-tree-status">
+                    {child.archived
+                      ? i18n.t("panels:archivedStatus")
+                      : child.status === "active"
+                        ? i18n.t("shell:working")
+                        : child.status === "systemError"
+                          ? i18n.t("panels:unavailable")
+                          : i18n.t("panels:idleStatus")}
+                    {child.status !== "systemError" &&
+                    (child.userQuestionSummary?.openCount ?? 0) > 0 ? (
+                      <span
+                        className="thread-asking-badge"
+                        role="img"
+                        aria-label={i18n.t("shell:threadAskingCount", {
+                          count: child.userQuestionSummary!.openCount,
+                        })}
+                        title={i18n.t("shell:threadAskingCount", {
+                          count: child.userQuestionSummary!.openCount,
+                        })}
+                      >
+                        {i18n.t("shell:threadAsking")}
+                      </span>
+                    ) : null}
+                    {approvalThreads.has(child.threadId) ? (
+                      <span className="subagent-approval-attention">
+                        {i18n.t("shell:needsYourApproval")}
+                      </span>
+                    ) : null}
+                  </span>
                 </span>
               </button>
               <SubagentSidebarVisibility thread={child} />
@@ -544,12 +574,34 @@ function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
       </ul>
     );
   };
+  const panelRef = useRef<HTMLElement>(null);
+  const [actionsHost, setActionsHost] = useState<Element | null>(null);
   const tree = render(parent, new Set([parent]));
   const information = useContext(SubagentsInformationVisibilityContext);
+  const createControl = (
+    <CreateSideChat
+      key={parent}
+      sdk={sdk}
+      parent={parent}
+      onCreated={refresh}
+    />
+  );
   const hasArchived = all.some(
     (entry) => entry.archived && entry.parentThreadId === parent,
   );
-  const visible = !!tree || hasArchived;
+  const visible = !!tree || hasArchived || error !== null;
+  useLayoutEffect(() => {
+    setActionsHost(
+      information?.embedded
+        ? (panelRef.current
+            ?.closest(".information-widget")
+            ?.querySelector(
+              ":scope > header > .information-widget-inline-actions",
+            ) ?? null)
+        : null,
+    );
+  }, [information?.embedded, visible, information?.manageMode]);
+
   useEffect(() => {
     information?.report(visible);
   }, [information, visible]);
@@ -561,20 +613,20 @@ function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
   if (information && !information.manageMode && !visible) return null;
   return (
     <section
+      ref={panelRef}
       className="subagents-panel"
       aria-label={i18n.t("panels:subagentConversations")}
     >
-      <header>
-        {!information?.embedded && (
-          <strong>{i18n.t("panels:subagents")}</strong>
-        )}
-        <CreateSideChat
-          key={parent}
-          sdk={sdk}
-          parent={parent}
-          onCreated={refresh}
-        />
-      </header>
+      {actionsHost ? (
+        createPortal(createControl, actionsHost)
+      ) : (
+        <header>
+          {!information?.embedded && (
+            <strong>{i18n.t("panels:subagents")}</strong>
+          )}
+          {createControl}
+        </header>
+      )}
       {error ? (
         <p role="alert">
           {error}
@@ -582,6 +634,13 @@ function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
             {i18n.t("panels:retry")}
           </button>
         </p>
+      ) : null}
+      {tree && sidebar ? (
+        <div
+          className={`subagent-sidebar-heading${information?.embedded ? " sr-only" : ""}`}
+        >
+          {i18n.t("panels:subagentSidebarHeading")}
+        </div>
       ) : null}
       {tree ?? (
         <p className="subagent-empty">{i18n.t("panels:noSubagentsYet")}</p>

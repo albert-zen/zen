@@ -40,3 +40,23 @@
     background: Highlight;
   }
 }
+
+/* In-flow visual duplicate: tabs keep their full accessible names.
+   This temporary slot moves content, never the tab strip or its controls. */
+.workspace-conversation-title-reveal {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
+  max-height: min(6lh, 25vh);
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-main);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-caption);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  pointer-events: auto;
+  overflow-y: auto;
+}
