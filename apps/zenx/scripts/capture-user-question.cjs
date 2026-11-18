@@ -485,6 +485,20 @@ async function runOrigin() {
     assert.equal(answer.reply.question.state, "answer-pending");
     await originBadge(threadId, false);
     await typeEmptyComposer(`Synthetic original ordinary ${key}. @fixture`);
+    // Editing the independent Composer is outside the nonmodal card. Its
+    // dismissal is remembered for this owner, unlike sidebar navigation.
+    await until(
+      () =>
+        evaluate(
+          "document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded')==='false' && !document.querySelector('.information-popover')",
+        ),
+      "ordinary Composer dismisses floating questions",
+    );
+    (result.origin.composerDismissals ??= []).push({
+      threadId,
+      expanded: false,
+      popoverCount: 0,
+    });
     await click(
       '.composer-suggestion-menu .selector-option:has(strong[title="fixture.txt"])',
       "Native workspace reference selection",
@@ -588,7 +602,10 @@ async function runOrigin() {
         (await composerSnapshot()).text,
         "Synthetic unrelated navigation draft.",
       );
-      await selectThread(row, "Return to recoverable original owner", true);
+      // Composer interaction already dismissed the card before navigation.
+      // Keep the strict route + remembered visibility check, then use the
+      // explicit openInformation below to inspect the preserved question draft.
+      await selectThread(row, "Return to recoverable original owner", false);
       await until(
         () => evaluate(`Boolean(document.querySelector('.steer-recovery'))`),
         "whole receipt remains recoverable",

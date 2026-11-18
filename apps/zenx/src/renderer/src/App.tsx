@@ -1,5 +1,4 @@
 import { CollapsedWorkspaceTabsPreview } from "./CollapsedWorkspaceTabsPreview.js";
-import "./collapsed-workspace-tabs-preview.css";
 import { projectInformationCommunications } from "./information-communications.js";
 import { withAppShotContext } from "./app-shot-draft.js";
 import { UserQuestionCards } from "./UserQuestionCards.js";
