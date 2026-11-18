@@ -308,12 +308,12 @@ function RoomQuestionCard({
             ) : null}
             <label className="user-question-text">
               {q.options?.length ? (
-                <span>{t("questionOptionalDetails")}</span>
+                <span>{t("questionAnswerOrDetails")}</span>
               ) : null}
               <textarea
                 aria-label={
                   q.options?.length
-                    ? `${q.prompt} · ${t("questionOptionalDetails")}`
+                    ? `${q.prompt} · ${t("questionAnswerOrDetails")}`
                     : q.prompt
                 }
                 rows={1}

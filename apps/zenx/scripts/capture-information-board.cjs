@@ -386,6 +386,123 @@ function assertInformationReadingUnchanged(before, after, shift) {
       `anchor.${edge} follows measured lane`,
     );
 }
+// The fit is based on actual DOM coordinates, not a fixed window breakpoint.
+function informationFitProbe({ left, right, width, viewportLeft }) {
+  const shift = Math.max(0, left + width + 16 - (right - 320));
+  return { shift, clearance: left - shift - viewportLeft - 24 };
+}
+async function captureInformationFitBoundary() {
+  const originalSize = window.getSize();
+  const original = await informationReadingSnapshot();
+  const measure = () =>
+    evaluate(`(()=>{
+    const view=document.querySelector('.thread-view'),column=view.querySelector('.virtual-transcript-header, .messages-inner'),toolbar=document.querySelector('.information-toolbar');
+    const r=column.getBoundingClientRect(),composer=document.querySelector('#thread-composer');
+    return {left:r.left,right:Number(toolbar.dataset.clearanceRight),width:r.width,viewportLeft:view.getBoundingClientRect().left,
+      resourceOpen:document.querySelector('.auxiliary-panel')?.dataset.open==='true',lane:view.dataset.informationLane==='true',
+      draft:composer.value,composerIdentity:composer===window.__informationComposer};
+  })()`);
+  await click(
+    ".information-toolbar button",
+    "Close Information before measured fit-boundary camera",
+  );
+  await until(
+    () =>
+      evaluate(
+        "!document.querySelector('.information-popover') && document.querySelector('.thread-view')?.dataset.informationLane!=='true'",
+      ),
+    "Information closed for boundary measurement",
+  );
+  const initial = await measure();
+  assert.equal(
+    initial.resourceOpen,
+    false,
+    "fit-boundary camera must keep right workspace closed",
+  );
+  const boundary = Math.round(
+    originalSize[0] -
+      (initial.right - initial.viewportLeft - initial.width - 360),
+  );
+  result.fitBoundary = { originalSize, boundary, initial, cases: [] };
+  for (const [suffix, delta, fits] of [
+    ["fits", 2, true],
+    ["floats", -2, false],
+  ]) {
+    await resizeWindow(boundary + delta, originalSize[1]);
+    await evaluate(
+      "new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))",
+    );
+    const closed = await measure();
+    const probe = informationFitProbe(closed);
+    const receipt = { suffix, closed, probe };
+    result.fitBoundary.cases.push(receipt);
+    assert.equal(closed.resourceOpen, false);
+    assert.equal(
+      probe.clearance >= 0,
+      fits,
+      "measured DOM must straddle the actual fit threshold",
+    );
+    const before = await informationReadingSnapshot();
+    assert.equal(
+      before.id,
+      original.id,
+      "resize retains the same paused message",
+    );
+    assert.equal(before.text, original.text);
+    assert.equal(
+      before.anchor.width,
+      original.anchor.width,
+      "boundary camera does not rewrap the anchor",
+    );
+    assert.ok(
+      before.anchor.bottom > before.viewport.top &&
+        before.anchor.top < before.viewport.bottom,
+      "same anchor remains visible",
+    );
+    Object.assign(receipt, { before });
+    await screenshot(`01a-${suffix}-closed.png`);
+    await click(
+      ".information-toolbar button",
+      `Open Information at measured ${suffix} width`,
+    );
+    await capture(`01a-${suffix}-open`, "overlay");
+    const opened = await measure();
+    const after = await informationReadingSnapshot();
+    Object.assign(receipt, { opened, after });
+    assert.equal(
+      opened.lane,
+      fits,
+      "presentation follows measured fit, not split-pane fallback",
+    );
+    assert.equal(opened.resourceOpen, false);
+    assert.equal(opened.draft, closed.draft);
+    assert.equal(opened.composerIdentity, true);
+    assertInformationReadingUnchanged(before, after, fits ? probe.shift : 0);
+    await click(
+      ".information-toolbar button",
+      `Close measured ${suffix} camera`,
+    );
+    await until(
+      () =>
+        evaluate(
+          "!document.querySelector('.information-popover') && document.querySelector('.thread-view')?.dataset.informationLane!=='true'",
+        ),
+      "boundary card closed",
+    );
+  }
+  await resizeWindow(...originalSize);
+  await click(
+    ".information-toolbar button",
+    "Restore original wide Information camera",
+  );
+  await until(
+    () =>
+      evaluate(
+        "document.querySelector('.thread-view')?.dataset.informationLane==='true'",
+      ),
+    "original fitted lane restored",
+  );
+}
 async function capture(name, mode) {
   await until(
     () =>
@@ -795,6 +912,7 @@ async function run() {
     "real trigger, lineage and command cards",
   );
   await capture("01-wide-light", "overlay");
+  await captureInformationFitBoundary();
   await until(
     () =>
       evaluate(

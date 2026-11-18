@@ -577,3 +577,64 @@ test("controlled Information camera rejects scrolling, reflow, changed text and 
       source.indexOf('await screenshot("00-wide-closed-baseline.png")'),
   );
 });
+
+test("native fit-boundary probe matches production fit with fractional platform geometry", async () => {
+  const source = await readFile(
+    new URL("../scripts/capture-information-board.cjs", import.meta.url),
+    "utf8",
+  );
+  const ast = ts.createSourceFile(
+    "capture.cjs",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.JS,
+  );
+  const helper = ast.statements.find(
+    (node) =>
+      ts.isFunctionDeclaration(node) &&
+      node.name?.text === "informationFitProbe",
+  );
+  assert.ok(helper);
+  const probe = runInNewContext(
+    helper.getText(ast) + ";informationFitProbe;",
+    {},
+  );
+  const production = await readFile(
+    new URL(
+      "../src/renderer/src/information-reading-clearance.ts",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const compiled = ts.transpileModule(production, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS },
+  }).outputText;
+  const exports = {};
+  runInNewContext(compiled, { exports });
+  for (const viewportLeft of [264, 264.5])
+    for (const width of [800, 799.5])
+      for (const delta of [-2, -0.25, 0, 0.25, 2]) {
+        const input = {
+          left: viewportLeft + 150,
+          right: viewportLeft + width + 360 + delta,
+          width,
+          viewportLeft,
+        };
+        const actual = exports.informationReadingClearance({
+          viewportLeft,
+          cardRight: input.right,
+          unshiftedReadingLeft: input.left,
+          readingWidth: width,
+          resourceOpen: false,
+          direction: "ltr",
+          open: true,
+        });
+        const measured = probe(input);
+        assert.equal(measured.clearance >= 0, actual.cardWidth !== undefined);
+        if (actual.cardWidth !== undefined)
+          assert.equal(measured.shift, actual.shift);
+      }
+  assert.match(source, /await captureInformationFitBoundary\(\)/);
+  assert.match(source, /"measured DOM must straddle the actual fit threshold"/);
+});

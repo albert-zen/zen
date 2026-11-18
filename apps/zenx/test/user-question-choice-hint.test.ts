@@ -106,6 +106,31 @@ for (const language of ["en", "zh-CN"] as const) {
           "Do not repeat group hint on every input",
         );
       }
+      const assertAnswerLabels = () => {
+        const label =
+          language === "en"
+            ? "Write an answer or add details"
+            : "填写回答或补充说明";
+        for (const field of fields.slice(0, 2)) {
+          assert.equal(
+            field.querySelector(".user-question-text > span")?.textContent,
+            label,
+          );
+          assert.equal(
+            field.querySelector("textarea")?.getAttribute("aria-label"),
+            `${field.querySelector("legend")?.textContent} · ${label}`,
+          );
+        }
+        assert.equal(
+          fields[2]!.querySelector(".user-question-text > span"),
+          null,
+        );
+        assert.equal(
+          fields[2]!.querySelector("textarea")?.getAttribute("aria-label"),
+          "Free prompt",
+        );
+      };
+      assertAnswerLabels();
       assert.equal(fields[2]!.hasAttribute("aria-describedby"), false);
       assert.equal(fields[0]!.querySelectorAll("input[type=radio]").length, 2);
       assert.equal(
@@ -133,11 +158,131 @@ for (const language of ["en", "zh-CN"] as const) {
         ]);
       });
       assert.equal(send().disabled, false);
+      assertAnswerLabels();
       assert.equal(
         document.querySelectorAll(".user-question-choice-hint").length,
         2,
       );
       assert.equal(document.activeElement?.id, "outside");
+    } finally {
+      await act(async () => root.unmount());
+      await i18n.changeLanguage("en");
+      Object.assign(globalThis, previous, {
+        IS_REACT_ACT_ENVIRONMENT: undefined,
+      });
+      dom.window.close();
+    }
+  });
+}
+
+for (const language of ["en", "zh-CN"] as const) {
+  test(`Room answer labels support unselected and selected options without changing free-text UI in ${language}`, async () => {
+    const dom = new JSDOM('<div id="root"></div>', { url: "http://localhost" });
+    const previous = {
+      window: globalThis.window,
+      document: globalThis.document,
+    };
+    Object.assign(globalThis, {
+      window: dom.window,
+      document: dom.window.document,
+      React,
+      IS_REACT_ACT_ENVIRONMENT: true,
+    });
+    await i18n.changeLanguage(language);
+    const options = [
+      { id: "a", label: "First" },
+      { id: "b", label: "Second" },
+    ];
+    Object.assign(window, {
+      zenx: {
+        roomQuestions: {
+          onChanged: () => () => {},
+          request: async ({ method }: { method: string }) => {
+            assert.equal(
+              method,
+              "list",
+              "this presentation test never submits",
+            );
+            return {
+              roomId: "label-room",
+              revision: 1,
+              openCount: 1,
+              totalQuestions: 1,
+              questions: [
+                {
+                  roomId: "label-room",
+                  id: "question",
+                  revision: 1,
+                  createdAt: 1,
+                  updatedAt: 1,
+                  origin: { threadId: "author", callItemId: "call" },
+                  state: "open",
+                  specification: {
+                    questions: [
+                      { id: "single", prompt: "Single prompt", options },
+                      {
+                        id: "multi",
+                        prompt: "Multiple prompt",
+                        options,
+                        multiSelect: true,
+                      },
+                      { id: "free", prompt: "Free prompt" },
+                    ],
+                    answerTemplate: "{{single}}\n{{multi}}\n{{free}}",
+                  },
+                },
+              ],
+            };
+          },
+        },
+      },
+    });
+    const { RoomQuestionCards } =
+      await import("../src/renderer/src/RoomQuestionCards.js");
+    const root = createRoot(document.getElementById("root")!);
+    try {
+      await act(async () => {
+        root.render(
+          React.createElement(RoomQuestionCards, {
+            roomId: "label-room",
+            members: [],
+            threads: [],
+          }),
+        );
+      });
+      const fields = [...document.querySelectorAll("fieldset")];
+      assert.equal(fields.length, 3);
+      const verify = () => {
+        const label =
+          language === "en"
+            ? "Write an answer or add details"
+            : "填写回答或补充说明";
+        for (const field of fields.slice(0, 2)) {
+          assert.equal(
+            field.querySelector(".user-question-text > span")?.textContent,
+            label,
+          );
+          assert.equal(
+            field.querySelector("textarea")?.getAttribute("aria-label"),
+            `${field.querySelector("legend")?.textContent} · ${label}`,
+          );
+        }
+        assert.equal(
+          fields[2]!.querySelector(".user-question-text > span"),
+          null,
+        );
+        assert.equal(
+          fields[2]!.querySelector("textarea")?.getAttribute("aria-label"),
+          "Free prompt",
+        );
+      };
+      verify();
+      for (const field of fields.slice(0, 2))
+        await act(async () => {
+          field.querySelector<HTMLInputElement>("input")!.click();
+        });
+      assert.equal(document.querySelectorAll("input:checked").length, 2);
+      verify();
     } finally {
       await act(async () => root.unmount());
       await i18n.changeLanguage("en");
