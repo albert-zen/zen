@@ -1913,20 +1913,83 @@ test("expanded Turn renders a steer at its delivery point", async () => {
   });
 });
 
+function renderTimestampedTurn(
+  status: Turn["status"],
+  request: string,
+  answer: string,
+  requestedAt: Date,
+  completedAt: Date,
+) {
+  const canonicalItems: CanonicalItem[] = [
+    {
+      id: "user-1",
+      type: "user_message",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      createdAt: requestedAt.toISOString(),
+      content: [{ type: "text", text: request }],
+    },
+  ];
+  return renderToStaticMarkup(
+    createElement(ThreadView, {
+      approvals: [],
+      composer: emptyComposerState(),
+      thread: {
+        ...thread([
+          {
+            ...turnWithItems(status, [user(request), agent(answer)]),
+            startedAt: Math.floor(requestedAt.getTime() / 1_000),
+            completedAt: Math.floor(completedAt.getTime() / 1_000),
+          },
+        ]),
+        canonicalItems,
+      },
+      onDraftChange: () => undefined,
+      onInterrupt: noop,
+      onRespondToApproval: noop,
+      onSubmit: noop,
+    }),
+  );
+}
+
+function assertTimestamp(
+  html: string,
+  kind: "user" | "assistant",
+  at: Date,
+  label: string,
+) {
+  const dom = new JSDOM(html);
+  try {
+    const times = dom.window.document.querySelectorAll(
+      `.${kind}-message-actions .message-time`,
+    );
+    assert.equal(times.length, 1, `${kind} timestamp appears exactly once`);
+    assert.equal(times[0].getAttribute("datetime"), at.toISOString());
+    assert.equal(times[0].textContent, label);
+  } finally {
+    dom.window.close();
+  }
+}
+
+const timestampTime = (at: Date) =>
+  new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(at);
+
 test("message controls are Turn-backed, accessible, and stable while hovering", () => {
   const completedAt = new Date();
   completedAt.setHours(12, 34, 0, 0);
-  const html = renderTurns([
-    {
-      ...turnWithItems(
-        "completed",
-        [user("Copy this *raw* Markdown"), agent("Answer")],
-        1_000,
-      ),
-      completedAt: Math.floor(completedAt.getTime() / 1_000),
-    },
-  ]);
-
+  const requestedAt = new Date(completedAt);
+  requestedAt.setHours(12, 30, 0, 0);
+  const html = renderTimestampedTurn(
+    "completed",
+    "Copy this *raw* Markdown",
+    "Answer",
+    requestedAt,
+    completedAt,
+  );
   assert.match(html, /class="message-actions user-message-actions"/u);
   assert.match(html, /aria-label="Copy user message"/u);
   assert.match(html, /class="message-actions assistant-message-actions"/u);
@@ -1934,15 +1997,8 @@ test("message controls are Turn-backed, accessible, and stable while hovering", 
   assert.equal((html.match(/data-icon="copy"/gu) ?? []).length, 2);
   assert.doesNotMatch(html, />Copy<|>Completed /u);
   assert.equal((html.match(/class="message-time"/gu) ?? []).length, 2);
-  const todayTime = new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).format(completedAt);
-  assert.equal(
-    (html.match(new RegExp(`>${todayTime}</time>`, "gu")) ?? []).length,
-    2,
-  );
+  assertTimestamp(html, "user", requestedAt, timestampTime(requestedAt));
+  assertTimestamp(html, "assistant", completedAt, timestampTime(completedAt));
 });
 
 test("Turn disclosure does not repeat cache telemetry from assistant actions", () => {
@@ -2054,48 +2110,79 @@ test("running Turns do not invent a completion timestamp in message controls", (
 test("terminal Turn timestamps show time only today and add a date across local days", () => {
   const today = new Date();
   today.setHours(12, 34, 0, 0);
-  const todayTime = new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).format(today);
-  for (const status of ["completed", "interrupted", "failed"] as const) {
-    const html = renderTurns([
-      {
-        ...turnWithItems(status, [user(`${status} request`), agent(status)]),
-        completedAt: Math.floor(today.getTime() / 1_000),
-      },
-    ]);
-
-    assert.equal(
-      (html.match(new RegExp(`>${todayTime}</time>`, "gu")) ?? []).length,
-      status === "completed" ? 2 : 1,
-    );
-    assert.doesNotMatch(html, />(?:Completed|Interrupted|Failed) /u);
-  }
-
   const otherDay = new Date(today);
-  otherDay.setDate(today.getDate() === 1 ? 2 : today.getDate() - 1);
-  const otherDate = new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-  }).format(otherDay);
-  const otherTime = new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).format(otherDay);
+  otherDay.setDate(today.getDate() - 1);
+  const previousYear = new Date(today);
+  previousYear.setFullYear(today.getFullYear() - 1);
+  for (const completedAt of [today, otherDay, previousYear]) {
+    const requestedAt = new Date(completedAt);
+    requestedAt.setHours(12, 30, 0, 0);
+    const prefix =
+      completedAt === today
+        ? ""
+        : new Intl.DateTimeFormat(undefined, {
+            month: "short",
+            day: "numeric",
+            ...(completedAt.getFullYear() === today.getFullYear()
+              ? {}
+              : { year: "numeric" as const }),
+          }).format(completedAt) + " ";
+    for (const status of ["completed", "interrupted", "failed"] as const) {
+      const html = renderTimestampedTurn(
+        status,
+        `${status} request`,
+        status,
+        requestedAt,
+        completedAt,
+      );
+      assertTimestamp(
+        html,
+        "user",
+        requestedAt,
+        prefix + timestampTime(requestedAt),
+      );
+      assert.equal(
+        (html.match(/class="message-time"/gu) ?? []).length,
+        status === "completed" ? 2 : 1,
+      );
+      if (status === "completed")
+        assertTimestamp(
+          html,
+          "assistant",
+          completedAt,
+          prefix + timestampTime(completedAt),
+        );
+      else
+        assert.doesNotMatch(
+          html,
+          /class="message-actions assistant-message-actions"/u,
+        );
+      assert.doesNotMatch(html, />(?:Completed|Interrupted|Failed) /u);
+    }
+  }
+});
+
+test("terminal Turns without matched canonical user facts do not borrow the completion time", () => {
   const html = renderTurns([
-    {
-      ...turnWithItems("completed", [user("Earlier"), agent("Earlier answer")]),
-      completedAt: Math.floor(otherDay.getTime() / 1_000),
-    },
+    turnWithItems("completed", [user("Unknown request time"), agent("Answer")]),
   ]);
-  assert.equal(
-    (html.match(new RegExp(`>${otherDate} ${otherTime}</time>`, "gu")) ?? [])
-      .length,
-    2,
-  );
+  const dom = new JSDOM(html);
+  try {
+    assert.equal(
+      dom.window.document.querySelectorAll(
+        ".user-message-actions .message-time",
+      ).length,
+      0,
+    );
+    assert.equal(
+      dom.window.document.querySelectorAll(
+        ".assistant-message-actions .message-time",
+      ).length,
+      1,
+    );
+  } finally {
+    dom.window.close();
+  }
 });
 
 test("reasoning detail uses the safe Markdown renderer", async () => {
