@@ -1964,8 +1964,10 @@ function assertTimestamp(
       `.${kind}-message-actions .message-time`,
     );
     assert.equal(times.length, 1, `${kind} timestamp appears exactly once`);
-    assert.equal(times[0].getAttribute("datetime"), at.toISOString());
-    assert.equal(times[0].textContent, label);
+    const time = times.item(0);
+    assert.ok(time);
+    assert.equal(time.getAttribute("datetime"), at.toISOString());
+    assert.equal(time.textContent, label);
   } finally {
     dom.window.close();
   }
