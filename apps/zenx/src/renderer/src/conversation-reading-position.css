@@ -1,26 +1,67 @@
-/* History return belongs to the writing surface, not over a sentence. */
-.composer-reading-position {
+/* Desktop history navigation is owned by the conversation, not the editor.
+   Only a conditional bottom inset is added to the scroll content; the
+   history viewport stays full-height and there is no permanent return row. */
+.conversation-reading-position {
   display: none;
 }
 @media (min-width: 961px) {
   .thread-view > .back-live {
     display: none;
   }
-  .composer-reading-position {
+  .thread-view[data-reading-earlier="true"] {
+    --history-return-clearance: 48px;
+  }
+  .thread-view[data-reading-earlier="true"] > .messages {
+    padding-bottom: calc(
+      var(--bottom-zone-height, 0px) + var(--history-return-clearance) + 24px
+    );
+    scroll-padding-bottom: calc(
+      var(--bottom-zone-height, 0px) + var(--history-return-clearance) + 24px
+    );
+  }
+  .thread-view[data-reading-earlier="true"] .virtual-transcript-footer {
+    padding-bottom: calc(
+      var(--bottom-zone-height, 0px) + var(--history-return-clearance) + 24px
+    );
+  }
+  .thread-view[data-reading-earlier="true"] .virtual-transcript-footer:empty {
+    padding-bottom: calc(
+      var(--bottom-zone-height, 0px) + var(--history-return-clearance)
+    );
+  }
+  .conversation-reading-position {
+    position: absolute;
+    z-index: 5;
+    left: var(--conversation-return-center, 50%);
+    bottom: calc(var(--bottom-zone-height, 0px) + 6px);
+    transform: translateX(-50%);
     display: flex;
     align-items: center;
-    flex: 0 0 auto;
-    margin: 0;
-    padding: 0;
-    color: var(--color-text-muted);
-    font-size: var(--font-size-caption);
+    justify-content: center;
   }
-  .composer-reading-position .quiet-button {
+  .conversation-reading-position button {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    min-height: 32px;
-    white-space: nowrap;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: 1px solid var(--color-border);
+    border-radius: 50%;
+    background: var(--color-surface-elevated);
     color: var(--color-text-secondary);
+    box-shadow: 0 2px 6px var(--color-shadow-low);
+  }
+  .conversation-reading-position button:hover {
+    background: var(--color-surface-control-hover);
+  }
+}
+@media (min-width: 961px) and (any-pointer: coarse) {
+  .thread-view[data-reading-earlier="true"] {
+    --history-return-clearance: 56px;
+  }
+  .conversation-reading-position button {
+    width: 44px;
+    height: 44px;
   }
 }

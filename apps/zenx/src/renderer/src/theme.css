@@ -236,6 +236,27 @@
   --color-surface-sidebar: #e4e4e4;
 }
 
+/*
+ * Desktop Graphite shell only: a near-white rail beside a white reading canvas
+ * in light mode, and one black plane in dark mode. Local controls, text,
+ * borders, status colors and optional palettes keep their existing roles.
+ * Reference relationship: DSH light; shipped T3 dark. These are not whole
+ * reference palettes, and do not change the narrow-window presentation.
+ */
+@media (min-width: 961px) {
+  :root[data-appearance="light"][data-theme-preset="graphite"] {
+    --color-canvas: #f9fafb;
+    --color-surface-sidebar: #f9fafb;
+    --color-surface-main: #ffffff;
+  }
+
+  :root[data-appearance="dark"][data-theme-preset="graphite"] {
+    --color-canvas: #000000;
+    --color-surface-sidebar: #000000;
+    --color-surface-main: #000000;
+  }
+}
+
 :root[data-appearance="dark"][data-theme-preset="cobalt"] {
   --color-canvas: #07111d;
   --color-surface-sidebar: #0b1724;

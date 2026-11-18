@@ -1137,7 +1137,7 @@ export function verifyReadingReentry(state, previous, phase) {
   assert.equal(
     state.cuePresent,
     false,
-    "Live mode has no active Composer return cue, even if it would be hidden",
+    "Live mode has no active conversation return cue, even if it would be hidden",
   );
   assert(
     Math.abs(state.maxTop - state.top) <= 1,
@@ -1180,6 +1180,50 @@ export function verifyReadingReentry(state, previous, phase) {
   );
 }
 
+/** The held-reading control belongs above the dock, not inside the editor. */
+export function verifyReadingCue(state, previous) {
+  const placement = state.cuePlacement;
+  assert(
+    state.cuePresent && state.cue && placement,
+    "Return cue is painted and hit-testable",
+  );
+  assert.equal(placement.count, 1, "One desktop return control");
+  assert(
+    placement.outsideComposer && placement.outsideBottomZone,
+    "Return control is separate from the Composer and its dock",
+  );
+  assert.deepEqual(
+    state.composer,
+    previous.composer,
+    "Holding history does not resize or move Composer",
+  );
+  const [x, , width] = state.composer;
+  const rect = placement.rect;
+  assert(
+    [
+      x,
+      width,
+      rect.x,
+      rect.y,
+      rect.width,
+      rect.height,
+      rect.bottom,
+      placement.bottomZoneTop,
+    ].every(Number.isFinite) &&
+      rect.width > 0 &&
+      rect.height > 0,
+    "Control and dock have actual measured geometry",
+  );
+  assert(
+    Math.abs(rect.x + rect.width / 2 - (x + width / 2)) <= 2,
+    "Return control is centered over Composer",
+  );
+  assert(
+    rect.bottom <= placement.bottomZoneTop - 4,
+    "Return control clears the entire dock rather than overlaying it",
+  );
+}
+
 export async function captureReadingReentry({
   send,
   evaluate,
@@ -1192,7 +1236,7 @@ export async function captureReadingReentry({
   const trip = {
     status: "running",
     startedAt: Date.now(),
-    scope: "standard desktop light, explicit Composer re-entry only",
+    scope: "standard desktop light, explicit conversation return control only",
     phases: [],
   };
   evidence.readingReentry = trip;
@@ -1208,6 +1252,7 @@ export async function captureReadingReentry({
       s.composer,
       s.cue,
       s.cuePresent,
+      s.cuePlacement,
       s.maxTop,
       s.primary,
       s.paragraphs,
@@ -1263,6 +1308,7 @@ export async function captureReadingReentry({
     for (const key of ["page", "left", "output", "draft", "composer"])
       assert.deepEqual(parked[key], state[key]);
     trip.afterWheel = parked;
+    verifyReadingCue(parked, state);
     await capture("reading-reentry-parked-cue", options, "reading");
     assert.equal(
       signature(await sample()),
@@ -1272,9 +1318,9 @@ export async function captureReadingReentry({
     trip.parkedScreenshot = {
       file: "reading-reentry-parked-cue.png",
       scope:
-        "Precondition only: native wheel exposed the real Composer cue; no growth yet",
+        "Precondition only: native wheel exposed the real conversation return control; no growth yet",
     };
-    await click(".composer-reading-position button.quiet-button");
+    await click(".conversation-reading-position button");
     state = await settle(
       (s) =>
         s.cuePresent === false &&

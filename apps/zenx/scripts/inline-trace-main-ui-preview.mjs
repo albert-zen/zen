@@ -202,9 +202,26 @@ export function observeInlineTrace(
     const primary = document.querySelector(
       ".composer .composer-send-control button.action-orb",
     );
-    const cue = document.querySelector(
-      ".composer-reading-position button.quiet-button",
-    );
+    const cue = document.querySelector(".conversation-reading-position button");
+    const cueRect = cue?.getBoundingClientRect();
+    const bottomZone = document
+      .querySelector(".bottom-zone")
+      ?.getBoundingClientRect();
+    const cuePlacement = cue && {
+      count: document.querySelectorAll(".conversation-reading-position button")
+        .length,
+      outsideComposer: !cue.closest(".composer"),
+      outsideBottomZone: !cue.closest(".bottom-zone"),
+      rect: {
+        x: cueRect.x,
+        y: cueRect.y,
+        width: cueRect.width,
+        height: cueRect.height,
+        right: cueRect.right,
+        bottom: cueRect.bottom,
+      },
+      bottomZoneTop: bottomZone?.top ?? null,
+    };
     const hit = (e) => {
       if (!visible(e)) return false;
       const r = e.getBoundingClientRect();
@@ -230,6 +247,7 @@ export function observeInlineTrace(
       primaryHit: hit(primary),
       cue: hit(cue),
       cuePresent: !!cue,
+      cuePlacement,
       tail: measure(root, stream.tail, true),
       itemCount: scroller.querySelectorAll(
         `.agent-copy[data-read-message-id="${stream.itemId}"]`,

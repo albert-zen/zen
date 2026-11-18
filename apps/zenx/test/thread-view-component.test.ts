@@ -6035,15 +6035,25 @@ test("desktop reading return preserves live scrolling and returns keyboard focus
         }),
       ),
     );
-    const button = requiredButton(".composer-reading-position button");
-    assert.equal(button.textContent?.includes("Back to live"), true);
-    assert.equal(button.closest(".composer") !== null, true);
-    assert.ok(
-      button.closest(".composer-actions"),
-      "history return reuses the existing rail instead of adding a header row",
+    const button = requiredButton(".conversation-reading-position button");
+    assert.equal(button.getAttribute("aria-label"), "Back to live");
+    assert.equal(button.getAttribute("title"), "Back to live");
+    assert.equal(button.textContent?.includes("Back to live"), false);
+    assert.equal(button.closest(".composer"), null);
+    assert.equal(button.closest("form"), null);
+    assert.equal(
+      requiredElement(".thread-view").getAttribute("data-reading-earlier"),
+      "true",
     );
     assert.equal(
-      button.closest(".composer-reading-position")?.getAttribute("aria-label"),
+      button.closest(".bottom-zone"),
+      null,
+      "history return remains outside the editor, queue and approval scroller",
+    );
+    assert.equal(
+      button
+        .closest(".conversation-reading-position")
+        ?.getAttribute("aria-label"),
       "Reading earlier messages",
     );
     await act(async () => {
@@ -6051,7 +6061,14 @@ test("desktop reading return preserves live scrolling and returns keyboard focus
       button.click();
     });
     assert.deepEqual(destination, { top: 1600, behavior: "auto" });
-    assert.equal(document.querySelector(".composer-reading-position"), null);
+    assert.equal(
+      document.querySelector(".conversation-reading-position"),
+      null,
+    );
+    assert.equal(
+      requiredElement(".thread-view").hasAttribute("data-reading-earlier"),
+      false,
+    );
     assert.equal(
       document.activeElement,
       document.querySelector(".composer textarea"),

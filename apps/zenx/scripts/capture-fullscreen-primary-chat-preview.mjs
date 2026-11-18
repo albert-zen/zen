@@ -20,7 +20,7 @@ const report = {
 const measureLiveControl = `(() => {
   const root = document.querySelector('#primary-conversation-content');
   const desktop = matchMedia('(min-width: 961px)').matches;
-  const localSelector = desktop ? '.composer-reading-position button' : '.thread-view > .back-live';
+  const localSelector = desktop ? '.conversation-reading-position button' : '.thread-view > .back-live';
   const selector = '#primary-conversation-content ' + localSelector;
   const controls = root?.querySelectorAll(localSelector) ?? [];
   const e = controls.length === 1 ? controls[0] : null;

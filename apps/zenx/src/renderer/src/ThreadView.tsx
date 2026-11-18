@@ -1091,6 +1091,13 @@ function ThreadViewContent({
         parseFloat(getComputedStyle(zone).paddingLeft);
       // The transcript centers inside its native scrollbar-reduced viewport.
       // Align the Composer to that measured column, not the wider bottom zone.
+      if (view) {
+        const center = `${rect.left + rect.width / 2 - view.getBoundingClientRect().left}px`;
+        if (
+          view.style.getPropertyValue("--conversation-return-center") !== center
+        )
+          view.style.setProperty("--conversation-return-center", center);
+      }
       const composerGeometry = steerPreviewColumn(rect, contentOrigin, 0);
       for (const [name, value] of Object.entries(composerGeometry)) {
         const pixel = `${value}px`;
@@ -1115,7 +1122,10 @@ function ThreadViewContent({
     };
     measure();
     if (typeof ResizeObserver === "undefined")
-      return () => view?.style.removeProperty("--conversation-gutter");
+      return () => {
+        view?.style.removeProperty("--conversation-gutter");
+        view?.style.removeProperty("--conversation-return-center");
+      };
     const observer = new ResizeObserver(measure);
     observer.observe(column);
     // A fixed-width column can move when its scrollport gains a native gutter.
@@ -1127,6 +1137,7 @@ function ThreadViewContent({
       observer.disconnect();
       desktop?.removeEventListener?.("change", measure);
       view?.style.removeProperty("--conversation-gutter");
+      view?.style.removeProperty("--conversation-return-center");
     };
   });
   const composerTextareaRef = useRef<ComposerInput>(null);
@@ -1347,7 +1358,7 @@ function ThreadViewContent({
 
   // The Composer overlays the bottom of the full-height transcript scroll
   // area. Publish its live height so the list reserves matching virtual
-  // space and Back to live can float just above it. This is geometry only;
+  // space. The desktop history-return control has its own lane above it. This is geometry only;
   // publishing a height never changes the reader's follow intent. Re-publish
   // on identity changes too: cached App navigation reuses this same DOM.
   useLayoutEffect(() => {
@@ -2237,6 +2248,9 @@ function ThreadViewContent({
     <div
       className={`thread-view${draggingImages ? " image-dragging" : ""}`}
       ref={viewRef}
+      data-reading-earlier={
+        !atLive && transcriptRows.length > 0 ? "true" : undefined
+      }
       onDragEnter={(event) => {
         if (composerDisabled || submitting) return;
         if (hasImageFiles(event.dataTransfer.files)) setDraggingImages(true);
@@ -2472,6 +2486,26 @@ function ThreadViewContent({
           <Icon name="arrow-down" size={14} />
           {i18n.t("shell:backToLive")}
         </button>
+      )}
+
+      {atLive || transcriptRows.length === 0 ? null : (
+        <div
+          className="conversation-reading-position"
+          role="group"
+          aria-label={i18n.t("shell:readingEarlierMessages")}
+        >
+          <button
+            type="button"
+            aria-label={i18n.t("shell:backToLive")}
+            title={i18n.t("shell:backToLive")}
+            onClick={() => {
+              returnToLive();
+              composerTextareaRef.current?.focus({ preventScroll: true });
+            }}
+          >
+            <Icon name="arrow-down" size={18} />
+          </button>
+        </div>
       )}
 
       <div
@@ -3109,27 +3143,6 @@ function ThreadViewContent({
               )}
             </div>
             <div className="composer-actions">
-              {atLive || transcriptRows.length === 0 ? null : (
-                <div
-                  className="composer-reading-position"
-                  role="group"
-                  aria-label={i18n.t("shell:readingEarlierMessages")}
-                >
-                  <button
-                    type="button"
-                    className="quiet-button"
-                    onClick={() => {
-                      returnToLive();
-                      composerTextareaRef.current?.focus({
-                        preventScroll: true,
-                      });
-                    }}
-                  >
-                    <Icon name="arrow-down" size={14} />
-                    {i18n.t("shell:backToLive")}
-                  </button>
-                </div>
-              )}
               <ComposerSendControl
                 mode={composerSendMode}
                 running={runningTurn !== null}

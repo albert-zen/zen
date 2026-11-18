@@ -8,6 +8,7 @@ import {
   verifyMessageTimes,
   informationDockReady,
   verifyReadingReentry,
+  verifyReadingCue,
   captureReadingReentry,
   observeReading,
   verifyApprovalMode,
@@ -149,7 +150,10 @@ test("dedicated profile is desktop-only, source-bound and independent of aggrega
     h = await read("../scripts/reading-main-ui-preview.mjs");
   assert.match(c, /desktopReading = captureProfile === "desktop-reading"/);
   assert.match(c, /desktopOnly \? "fine"/);
-  assert.match(c, /options of desktopOnly/);
+  assert.match(
+    c,
+    /desktopOnly\s*\? cases\.filter\(\(c\) => c\.width === 1280 && c\.height === 900\)/,
+  );
   assert.match(c, /c.width === 1280 && c.height === 900/);
   assert.match(c, /process.env.GITHUB_ACTIONS,\s*"true"/);
   assert.doesNotMatch(c, /['"]--no-sandbox/);
@@ -1033,7 +1037,81 @@ test("re-entry requires exact native same-item lifecycle and painted complete te
   assert.throws(() => verifyReadingReentry(running, before, 3));
 });
 
-test("one real-wheel/Composer-return sequence advances twice, finalizes once and retains only verified-state screenshots", async () => {
+test("re-entry observer reads the real conversation control ownership and dock geometry", async () => {
+  const { JSDOM } = await import("jsdom");
+  const { observeInlineTrace } =
+    await import("../scripts/inline-trace-main-ui-preview.mjs");
+  const dom = new JSDOM(
+    '<div class="thread-view"><div class="messages"></div><div class="conversation-reading-position"><button></button></div><div class="bottom-zone"><form class="composer"><textarea></textarea></form></div></div>',
+    { runScripts: "outside-only" },
+  );
+  try {
+    dom.window.__uiPolishTelemetry = {};
+    dom.window.structuredClone = structuredClone;
+    dom.window.document.elementFromPoint = () => null;
+    const observe = () =>
+      dom.window.eval(
+        `(${observeInlineTrace.toString()})(true, { itemId: "synthetic", tail: "tail" })`,
+      );
+    const before = dom.window.document.body.innerHTML;
+    const state = observe();
+    assert.equal(state.cuePresent, true);
+    assert.equal(state.cuePlacement.count, 1);
+    assert.equal(state.cuePlacement.outsideComposer, true);
+    assert.equal(state.cuePlacement.outsideBottomZone, true);
+    assert.equal(state.cuePlacement.bottomZoneTop, 0);
+    assert.equal(
+      state.cue,
+      false,
+      "JSDOM without painted geometry cannot certify the control",
+    );
+    assert.equal(dom.window.document.body.innerHTML, before);
+    const cue = dom.window.document.querySelector(
+      ".conversation-reading-position",
+    );
+    dom.window.document.querySelector(".composer").append(cue);
+    const misplaced = observe();
+    assert.equal(misplaced.cuePlacement.outsideComposer, false);
+    assert.equal(misplaced.cuePlacement.outsideBottomZone, false);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("held-reading return control stays centered above the dock outside Composer", () => {
+  const previous = { composer: [0, 700, 800, 100] };
+  const state = {
+    ...previous,
+    cue: true,
+    cuePresent: true,
+    cuePlacement: {
+      count: 1,
+      outsideComposer: true,
+      outsideBottomZone: true,
+      rect: { x: 382, y: 658, width: 36, height: 36, bottom: 694 },
+      bottomZoneTop: 700,
+    },
+  };
+  verifyReadingCue(state, previous);
+  for (const mutate of [
+    (s) => (s.cue = false),
+    (s) => (s.cuePresent = false),
+    (s) => (s.cuePlacement = null),
+    (s) => (s.cuePlacement.count = 2),
+    (s) => (s.cuePlacement.outsideComposer = false),
+    (s) => (s.cuePlacement.outsideBottomZone = false),
+    (s) => (s.cuePlacement.rect.x += 3),
+    (s) => (s.cuePlacement.rect.bottom = 701),
+    (s) => (s.cuePlacement.bottomZoneTop = null),
+    (s) => (s.composer[3] += 1),
+  ]) {
+    const bad = structuredClone(state);
+    mutate(bad);
+    assert.throws(() => verifyReadingCue(bad, previous));
+  }
+});
+
+test("one real-wheel/conversation-return sequence advances twice, finalizes once and retains only verified-state screenshots", async () => {
   for (const fail of [false, true]) {
     const evidence = {},
       inputs = [],
@@ -1048,6 +1126,15 @@ test("one real-wheel/Composer-return sequence advances twice, finalizes once and
       height,
       cue,
       cuePresent: cue,
+      cuePlacement: cue
+        ? {
+            count: 1,
+            outsideComposer: true,
+            outsideBottomZone: true,
+            rect: { x: 382, y: 658, width: 36, height: 36, bottom: 694 },
+            bottomZoneTop: 700,
+          }
+        : null,
       maxTop: height - 1000,
       receipt: {
         phase,
@@ -1081,7 +1168,7 @@ test("one real-wheel/Composer-return sequence advances twice, finalizes once and
         wait: async () => {},
         click: async (selector) => {
           inputs.push(selector);
-          if (selector.includes("composer-reading-position")) {
+          if (selector.includes("conversation-reading-position")) {
             cue = false;
             top = 1000;
           }
@@ -1129,7 +1216,7 @@ test("one real-wheel/Composer-return sequence advances twice, finalizes once and
     }
     assert.equal(inputs.filter((x) => x === "wheel").length, 1);
     assert.equal(
-      inputs.filter((x) => x.includes("composer-reading-position")).length,
+      inputs.filter((x) => x.includes("conversation-reading-position")).length,
       1,
     );
   }
