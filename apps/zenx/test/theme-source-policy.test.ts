@@ -20,6 +20,8 @@ const dynamicProductTokens = new Set([
   // ThreadView measures the transcript column for Composer and approval alignment.
   "--composer-column-left",
   "--composer-column-width",
+  // ThreadView measures the transcript column center for its history-return control.
+  "--conversation-return-center",
   // ThreadView owns pending tray alignment with the transcript column.
   "--pending-tray-gutter",
   "--pending-tray-left",
@@ -53,6 +55,38 @@ test("Composer layout seams are the two exact runtime measurements, not a token 
       `${token} must remain undefined`,
     );
   }
+});
+
+test("history-return center is one measured geometry seam, not a palette or token prefix", async () => {
+  assert.deepEqual(
+    [...dynamicProductTokens].filter((token) =>
+      token.startsWith("--conversation-return-"),
+    ),
+    ["--conversation-return-center"],
+  );
+  for (const token of [
+    "--conversation-return-color",
+    "--conversation-return-centre",
+    "--conversation-return-center-extra",
+  ]) {
+    assert.equal(dynamicProductTokens.has(token), false);
+  }
+  const owner = await readFile(
+    path.join(rendererRoot, "ThreadView.tsx"),
+    "utf8",
+  );
+  assert.match(
+    owner,
+    /const center = `\$\{rect\.left \+ rect\.width \/ 2 - view\.getBoundingClientRect\(\)\.left\}px`;/u,
+  );
+  assert.match(
+    owner,
+    /view\.style\.setProperty\("--conversation-return-center", center\);/u,
+  );
+  assert.match(
+    owner,
+    /view\?\.style\.removeProperty\("--conversation-return-center"\);/u,
+  );
 });
 
 test("renderer product styles keep raw colors in the single theme source", async () => {

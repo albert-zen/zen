@@ -669,6 +669,11 @@ function QueuedMessageRow({
                 : {})}
             >
               {groupSender ? source : null}
+              {groupSender && running && !steering && onSteer ? (
+                <span className="queue-steer-keyboard-hint" aria-hidden="true">
+                  {t("steerNow")}
+                </span>
+              ) : null}
               <div className="queue-message-body user-row">
                 {message.imageCount > 0 ? (
                   <span

@@ -5,6 +5,7 @@ import {
   syntheticSteerFocusText,
   observeQueueSteerFocus,
   verifyQueueSteerFocus,
+  verifyQueueSteerFocusCandidate,
   captureQueueSteerFocus,
   verifyQueueReading,
   observeQueueReading,
@@ -531,6 +532,7 @@ const steerFocusState = () => ({
   composer: { x: 350, y: 774, width: 800, height: 110 },
   draft: "",
   button: {
+    rect: { x: 1050, y: 420, right: 1078, bottom: 448, width: 28, height: 28 },
     focused: true,
     focusVisible: true,
     painted: true,
@@ -542,6 +544,30 @@ const steerFocusState = () => ({
     outline: "solid",
     outlineWidth: 2,
   },
+  sourceRect: {
+    x: 350,
+    y: 420,
+    right: 500,
+    bottom: 444,
+    width: 150,
+    height: 24,
+  },
+  bodyRect: {
+    x: 350,
+    y: 450,
+    right: 1000,
+    bottom: 490,
+    width: 650,
+    height: 40,
+  },
+  sourceClipped: false,
+  hint: {
+    text: "Steer now",
+    rect: { x: 930, y: 423, right: 1000, bottom: 441, width: 70, height: 18 },
+    visible: true,
+    ariaHidden: "true",
+    pointerEvents: "none",
+  },
   paintedDomTooltips: [],
 });
 
@@ -551,10 +577,15 @@ test("isolated Steer baseline uses native Tab without activating the action in e
       inputs = [],
       clicks = [],
       frames = [];
+    let keyboardFocused = false;
     await captureQueueSteerFocus({
       options: { width: 1280, height: 900, theme, name: `desktop-${theme}` },
       evidence,
-      send: async (method, args) => inputs.push([method, args]),
+      send: async (method, args) => {
+        inputs.push([method, args]);
+        if (method === "Input.dispatchKeyEvent" && args.type === "keyUp")
+          keyboardFocused = !keyboardFocused;
+      },
       wait: async () => {},
       click: async (selector) => clicks.push(selector),
       evaluate: async (expression) => {
@@ -565,7 +596,10 @@ test("isolated Steer baseline uses native Tab without activating the action in e
             "&hostQueue=1&many="
           );
         if (expression.startsWith("document.activeElement")) return true;
-        return structuredClone(steerFocusState());
+        const state = structuredClone(steerFocusState());
+        state.hint.visible = keyboardFocused;
+        state.button.focused = keyboardFocused;
+        return state;
       },
       capture: async (...args) => frames.push(args),
     });
@@ -581,7 +615,7 @@ test("isolated Steer baseline uses native Tab without activating the action in e
     assert.equal(frames.length, 1);
     assert.equal(
       frames[0][0],
-      `queue-reading-desktop-${theme}-steer-tab-baseline`,
+      `queue-reading-desktop-${theme}-steer-tab-candidate`,
     );
     assert.deepEqual(clicks, [".queue-reading-toggle"]);
     const navigation = new URL(inputs[0][1].url);
@@ -594,6 +628,8 @@ test("isolated Steer baseline uses native Tab without activating the action in e
     assert.deepEqual(
       keys.map(([, p]) => [p.type, p.key]),
       [
+        ["rawKeyDown", "Tab"],
+        ["keyUp", "Tab"],
         ["rawKeyDown", "Tab"],
         ["keyUp", "Tab"],
       ],
@@ -660,4 +696,26 @@ test("new observation is appended after established queue captures and is opt-in
     captureQueueSteerFocus.toString(),
     /\.focus\(|\.click\(|scrollIntoView|scrollTop\s*=/,
   );
+});
+
+test("keyboard-only candidate rejects missing, clipped, overlapping or geometry-changing hints", () => {
+  const before = steerFocusState();
+  before.hint.visible = false;
+  verifyQueueSteerFocusCandidate(steerFocusState(), before);
+  for (const mutate of [
+    (s) => (s.hint.visible = false),
+    (s) => (s.hint.text = "Send into the current turn"),
+    (s) => (s.hint.ariaHidden = "false"),
+    (s) => (s.hint.pointerEvents = "auto"),
+    (s) => (s.sourceClipped = true),
+    (s) => (s.hint.rect.x = s.sourceRect.right),
+    (s) => (s.hint.rect.bottom = s.bodyRect.y + 1),
+    (s) => s.sourceRect.right++,
+    (s) => s.bodyRect.y++,
+    (s) => s.button.rect.width++,
+  ]) {
+    const state = steerFocusState();
+    mutate(state);
+    assert.throws(() => verifyQueueSteerFocusCandidate(state, before));
+  }
 });

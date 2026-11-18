@@ -515,8 +515,36 @@ export function observeQueueSteerFocus() {
       document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2),
     );
   };
+  const hint = row?.querySelector(".queue-steer-keyboard-hint");
+  const hintRect = rect(hint),
+    trayRect = rect(row?.closest(".pending-tray"));
+  const hintStyle = hint ? getComputedStyle(hint) : null;
+  const source = row?.querySelector(".message-source-link");
+  const sourceText = source?.querySelector("span");
   const editor = composer?.querySelector('textarea,[contenteditable="true"]');
   return {
+    sourceRect: rect(source),
+    bodyRect: rect(row?.querySelector(".user-bubble")),
+    sourceClipped:
+      !!sourceText && sourceText.scrollWidth > sourceText.clientWidth + 1,
+    hint: hint && {
+      text: hint.textContent.trim(),
+      rect: hintRect,
+      ariaHidden: hint.getAttribute("aria-hidden"),
+      pointerEvents: hintStyle.pointerEvents,
+      visible:
+        hintRect.width > 0 &&
+        hintRect.height > 0 &&
+        hintStyle.display !== "none" &&
+        hintStyle.visibility === "visible" &&
+        Number(hintStyle.opacity) > 0 &&
+        !!trayRect &&
+        hintRect.x >= trayRect.x &&
+        hintRect.right <= trayRect.right &&
+        hintRect.y >= trayRect.y &&
+        hintRect.bottom <= trayRect.bottom &&
+        hint.scrollWidth <= hint.clientWidth + 1,
+    },
     rowCount: document.querySelectorAll(
       '[data-queue-id="synthetic-thread-message"]',
     ).length,
@@ -569,6 +597,45 @@ export function verifyQueueSteerFocus(s, before) {
   );
   for (const key of ["text", "source", "order", "draft", "composer", "running"])
     assert.deepEqual(s[key], before[key], "Focus must not mutate " + key);
+}
+
+export function verifyQueueSteerFocusCandidate(state, before) {
+  verifyQueueSteerFocus(state, before);
+  assert(
+    before.hint && !before.hint.visible,
+    "Pointer-away baseline has no visible label",
+  );
+  assert(
+    state.hint?.visible,
+    "Keyboard hint is fully visible within its own tray",
+  );
+  assert.equal(state.hint.text, "Steer now");
+  assert.equal(
+    state.hint.ariaHidden,
+    "true",
+    "Do not repeat the existing accessible action name",
+  );
+  assert.equal(
+    state.hint.pointerEvents,
+    "none",
+    "Hint cannot become another control",
+  );
+  assert(!state.sourceClipped, "The evidenced source remains complete");
+  for (const key of ["sourceRect", "bodyRect"])
+    assert.deepEqual(state[key], before[key], "Focus does not move " + key);
+  assert.deepEqual(
+    state.button.rect,
+    before.button.rect,
+    "Steer hit target does not move or resize",
+  );
+  assert(
+    state.hint.rect.x >= state.sourceRect.right + 4,
+    "Hint does not cover provenance",
+  );
+  assert(
+    state.hint.rect.bottom <= state.bodyRect.y,
+    "Hint stays above message content",
+  );
 }
 
 /** Separate synthetic scene appended after existing queue evidence; no Steer activation. */
@@ -628,15 +695,40 @@ export async function captureQueueSteerFocus({
     // Observe a delayed product tooltip if one exists; never synthesize it.
     await evaluate("new Promise(resolve => setTimeout(resolve, 900))");
     const held = (trip.held = await observe());
-    verifyQueueSteerFocus(held, before);
+    verifyQueueSteerFocusCandidate(held, before);
     await capture(
-      `queue-reading-${options.name}-steer-tab-baseline`,
+      `queue-reading-${options.name}-steer-tab-candidate`,
       options,
       "pending",
     );
     const after = (trip.afterScreenshot = await observe());
-    verifyQueueSteerFocus(after, before);
+    verifyQueueSteerFocusCandidate(after, before);
     assert.deepEqual(after, held, "Captured focus state remains stable");
+    for (const type of ["rawKeyDown", "keyUp"])
+      await send("Input.dispatchKeyEvent", {
+        type,
+        key: "Tab",
+        code: "Tab",
+        windowsVirtualKeyCode: 9,
+      });
+    const released = (trip.afterBlur = await observe());
+    assert(
+      !released.button.focused && !released.hint.visible,
+      "The hint disappears when native Tab leaves Steer",
+    );
+    for (const key of [
+      "text",
+      "source",
+      "order",
+      "draft",
+      "composer",
+      "running",
+    ])
+      assert.deepEqual(
+        released[key],
+        before[key],
+        "Leaving focus does not mutate " + key,
+      );
     trip.nativeTooltipPixels =
       "Not established by Page.captureScreenshot; title attribute recorded separately";
     trip.status = "passed";

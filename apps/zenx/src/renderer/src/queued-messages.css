@@ -873,3 +873,44 @@
     flex: 0 0 auto;
   }
 }
+
+/* The observed rich sender row already reserves a source line. A keyboard-only
+   hint uses its spare end space, not another row or a floating tooltip system.
+   The action's existing aria-label remains the single accessible name. */
+.queue-steer-keyboard-hint {
+  display: none;
+}
+@media (min-width: 961px) {
+  .pending-tray .queue-message-group.has-sender {
+    position: relative;
+  }
+  .pending-tray .queue-steer-keyboard-hint {
+    position: absolute;
+    inset-block-start: 3px;
+    inset-inline-end: 0;
+    display: block;
+    visibility: hidden;
+    max-width: 80px;
+    padding-inline: 5px;
+    border-radius: var(--radius-control);
+    background: var(--color-surface-elevated);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-caption);
+    line-height: 18px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+  }
+  .pending-tray
+    .queue-row:has(.queue-row-steer:focus-visible)
+    .queue-steer-keyboard-hint {
+    visibility: visible;
+  }
+  .pending-tray
+    .queue-row:has(.queue-row-steer:focus-visible)
+    .queue-message-group.has-sender:has(.queue-steer-keyboard-hint)
+    > .message-source-line {
+    max-width: max(0px, calc(100% - 88px));
+  }
+}
