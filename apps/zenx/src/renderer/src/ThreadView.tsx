@@ -2232,6 +2232,7 @@ function ThreadViewContent({
               row.turn.id,
             )!}
             sourceThreadId={sourceThreadId}
+            displayedThreadId={displayedThread?.id}
             isForkCurrent={isForkCurrent}
             imageCwd={displayedThread?.cwd}
             onOpenImage={onOpenImage}
@@ -2265,6 +2266,7 @@ function ThreadViewContent({
       canonicalPresentation,
       sourceThreadId,
       isForkCurrent,
+      displayedThread?.id,
       displayedThread?.cwd,
       onOpenImage,
       onReadAttachment,
@@ -3718,6 +3720,38 @@ function transcriptHasSelection(element: Element | null): boolean {
   );
 }
 
+type TranscriptInputItem = Extract<
+  ThreadItem,
+  { type: "userMessage" | "threadMessage" | "hostMessage" }
+>;
+
+function transcriptInputTimestamp(
+  item: TranscriptInputItem,
+  canonical: readonly CanonicalItem[] | undefined,
+  threadId: string | undefined,
+  turnId: string,
+): number | null {
+  const entry = canonical?.[0];
+  if (
+    canonical?.length !== 1 ||
+    entry === undefined ||
+    entry.id !== item.id ||
+    entry.threadId !== threadId ||
+    (entry.turnId !== undefined && entry.turnId !== turnId) ||
+    entry.type !== CANONICAL_TRANSCRIPT_INPUT_TYPE[item.type]
+  ) {
+    return null;
+  }
+  const milliseconds = Date.parse(entry.createdAt);
+  return Number.isFinite(milliseconds) ? milliseconds / 1_000 : null;
+}
+
+const CANONICAL_TRANSCRIPT_INPUT_TYPE = {
+  userMessage: "user_message",
+  threadMessage: "thread_message",
+  hostMessage: "host_message",
+} as const satisfies Record<TranscriptInputItem["type"], CanonicalItem["type"]>;
+
 const TurnBlock = memo(function TurnBlock({
   turn,
   compactionPending,
@@ -3730,6 +3764,7 @@ const TurnBlock = memo(function TurnBlock({
   wakeups,
   canonicalPresentation,
   sourceThreadId,
+  displayedThreadId,
   isForkCurrent,
   imageCwd,
   onOpenImage,
@@ -3750,6 +3785,7 @@ const TurnBlock = memo(function TurnBlock({
   wakeups: readonly TriggerHistoryEntry[];
   canonicalPresentation: TurnCanonicalPresentation;
   sourceThreadId: string | null;
+  displayedThreadId: string | undefined;
   isForkCurrent(itemId: string): boolean;
   imageCwd: string | undefined;
   onOpenImage(
@@ -3835,16 +3871,22 @@ const TurnBlock = memo(function TurnBlock({
     approvals.length === 0 &&
     ((activity.phase === "requested" && activity.active > 0) ||
       activity.phase === "thinking");
-  const renderInputItem = (
-    item: Extract<
-      ThreadItem,
-      { type: "userMessage" | "threadMessage" | "hostMessage" }
-    >,
-  ) => {
+  const renderInputItem = (item: TranscriptInputItem) => {
+    const timestamp = transcriptInputTimestamp(
+      item,
+      canonicalPresentation.quoteItems.get(item.id),
+      displayedThreadId,
+      turn.id,
+    );
     const wakeup = findInputWakeup(item, wakeups);
     if (item.type === "hostMessage")
       return (
-        <WakeupCard key={item.id} item={item} entry={wakeup} turn={turn} />
+        <WakeupCard
+          key={item.id}
+          item={item}
+          entry={wakeup}
+          timestamp={timestamp}
+        />
       );
     return wakeup === undefined ? (
       <InputMessage
@@ -3853,7 +3895,7 @@ const TurnBlock = memo(function TurnBlock({
         key={item.id}
         onOpenImage={onOpenImage}
         onReadAttachment={onReadAttachment}
-        turn={turn}
+        timestamp={timestamp}
         answeredQuestion={canonicalPresentation.answeredQuestions?.get(item.id)}
       />
     ) : (
@@ -3862,7 +3904,7 @@ const TurnBlock = memo(function TurnBlock({
         sourceId={wakeup.triggerId}
         findItemId={item.id}
         key={item.id}
-        turn={turn}
+        timestamp={timestamp}
       />
     );
   };
@@ -5019,14 +5061,14 @@ function InputMessage({
   answeredQuestion,
   item,
   attachments,
-  turn,
+  timestamp,
   onOpenImage,
   onReadAttachment,
 }: {
   answeredQuestion?: AnsweredQuestionPresentation;
   item: Extract<ThreadItem, { type: "userMessage" | "threadMessage" }>;
   attachments: readonly AttachmentRef[];
-  turn: Turn;
+  timestamp: number | null;
   onOpenImage(
     attachment: AttachmentRef,
     name: string,
@@ -5142,12 +5184,7 @@ function InputMessage({
             : "shell:copiedUserMessage",
         )}
         text={text}
-        turn={turn}
-        timestamp={
-          canonical === undefined
-            ? null
-            : Date.parse(canonical.createdAt) / 1_000
-        }
+        timestamp={timestamp}
       />
     </article>
   );
@@ -5245,7 +5282,7 @@ function AgentMessage({
           copyLabel={i18n.t("shell:copyAssistantMessage")}
           copiedLabel={i18n.t("shell:copiedAssistantMessage")}
           text={item.text}
-          turn={turn}
+          timestamp={turn.completedAt}
           usage={usage}
           forkTarget={forkTarget}
         />
@@ -5259,19 +5296,17 @@ function MessageActions({
   copyLabel,
   copiedLabel,
   text,
-  turn,
+  timestamp,
   usage,
   forkTarget,
-  timestamp = turn.completedAt,
 }: {
   className: string;
   copyLabel: string;
   copiedLabel: string;
   text: string;
-  turn: Turn;
+  timestamp: number | null;
   usage?: ModelUsageAggregate;
   forkTarget?: MessageForkTarget;
-  timestamp?: number | null;
 }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
@@ -5387,12 +5422,12 @@ function TriggerMessageBubble({
   text,
   sourceId,
   findItemId,
-  turn,
+  timestamp,
 }: {
   text: string;
   sourceId?: string;
   findItemId?: string;
-  turn: Turn;
+  timestamp: number | null;
 }) {
   const presentation = triggerMessagePresentation(text, sourceId);
   return (
@@ -5410,7 +5445,7 @@ function TriggerMessageBubble({
         copyLabel={i18n.t("shell:copyHostMessage")}
         copiedLabel={i18n.t("shell:copiedHostMessage")}
         text={presentation.text}
-        turn={turn}
+        timestamp={timestamp}
       />
     </article>
   );
@@ -5422,18 +5457,18 @@ function WakeupCard(
     | {
         item: Extract<ThreadItem, { type: "hostMessage" }>;
         entry?: TriggerHistoryEntry;
-        turn: Turn;
+        timestamp: number | null;
       },
 ) {
   if ("item" in props) {
-    const { item, entry, turn } = props;
+    const { item, entry, timestamp } = props;
     if (item.source === "trigger")
       return (
         <TriggerMessageBubble
           text={item.text}
           sourceId={item.sourceId}
           findItemId={item.id}
-          turn={turn}
+          timestamp={timestamp}
         />
       );
     return (
@@ -5452,7 +5487,7 @@ function WakeupCard(
           copyLabel={i18n.t("shell:copyHostMessage")}
           copiedLabel={i18n.t("shell:copiedHostMessage")}
           text={item.text}
-          turn={turn}
+          timestamp={timestamp}
         />
       </article>
     );

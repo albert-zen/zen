@@ -2003,6 +2003,170 @@ test("message controls are Turn-backed, accessible, and stable while hovering", 
   assertTimestamp(html, "assistant", completedAt, timestampTime(completedAt));
 });
 
+test("message actions show each input's journal time and only the reply's Turn end", () => {
+  const stamp = (day: number, minute: number) =>
+    new Date(2020, 0, day, 9, minute).toISOString();
+  const startedAt = Date.parse(stamp(2, 3)) / 1_000;
+  const finishedAt = stamp(2, 9);
+  let view = {
+    ...thread([turnWithItems("completed", [])]),
+    canonicalItems: [],
+  } as Thread;
+  const common = { threadId: view.id, turnId: "turn-1" };
+  const samples = [
+    {
+      id: "sender-human",
+      type: "user_message",
+      createdAt: stamp(1, 57),
+      content: [{ type: "text", text: "Human message" }],
+    },
+    {
+      id: "sender-legacy",
+      type: "user_message",
+      clientId: "legacy-client",
+      createdAt: stamp(1, 58),
+      content: [{ type: "text", text: "Legacy trigger context" }],
+    },
+    {
+      id: "sender-thread",
+      type: "thread_message",
+      mode: "steer",
+      messageType: "guidance",
+      clientId: "peer-client",
+      createdAt: stamp(1, 59),
+      sender: {
+        threadId: "peer-thread",
+        toolCallId: "peer-tool",
+        callId: "peer-call",
+      },
+      content: [{ type: "text", text: "Inter-thread message" }],
+    },
+    {
+      id: "sender-native",
+      type: "host_message",
+      sender: "host",
+      source: "trigger",
+      sourceId: "native-trigger",
+      clientId: "native-client",
+      createdAt: stamp(2, 1),
+      mode: "start",
+      text: "Native trigger context",
+    },
+    {
+      id: "sender-host",
+      type: "host_message",
+      sender: "host",
+      source: "bootstrap",
+      clientId: "host-client",
+      createdAt: stamp(2, 2),
+      mode: "start",
+      text: "Bootstrap context",
+    },
+    {
+      id: "sender-without-record",
+      type: "host_message",
+      sender: "host",
+      source: "bootstrap",
+      clientId: "missing-client",
+      createdAt: stamp(2, 3),
+      mode: "start",
+      text: "Missing record context",
+    },
+  ] as const;
+  for (const sample of samples) {
+    // Clone text parts to satisfy the canonical mutable UserInput shape.
+    const item: CanonicalItem =
+      "content" in sample
+        ? {
+            ...common,
+            ...sample,
+            content: sample.content.map((part) => ({ ...part })),
+          }
+        : { ...common, ...sample };
+    view = applyNativeThreadEvent(view, { type: "item_completed", item });
+  }
+  const projected = view.turns[0]!;
+  const html = renderToStaticMarkup(
+    createElement(ThreadView, {
+      approvals: [],
+      composer: emptyComposerState(),
+      thread: {
+        ...view,
+        turns: [
+          {
+            ...projected,
+            startedAt,
+            completedAt: Date.parse(finishedAt) / 1_000,
+            items: [...projected.items, agent("Synthetic reply")],
+          },
+        ],
+        canonicalItems:
+          view.canonicalItems?.filter(
+            (item) => item.id !== "sender-without-record",
+          ) ?? [],
+      },
+      wakeups: [
+        {
+          id: "legacy-history",
+          triggerId: "legacy-trigger",
+          threadId: view.id,
+          clientUserMessageId: "legacy-client",
+          kind: "timer",
+          status: "completed",
+          reason: "Synthetic schedule",
+          prompt: "Legacy trigger context",
+          startedAt: Date.parse(stamp(1, 1)) / 1_000,
+          completedAt: null,
+          turnId: common.turnId,
+          error: null,
+          sourceThreadId: null,
+          sourceTurnId: null,
+          sourceRoomId: null,
+          sourceRoomMessageId: null,
+          replyRoomId: null,
+          replyAuthor: null,
+          programInvocationId: null,
+          programOutcome: null,
+          programOutcomes: [],
+        },
+      ],
+      onDraftChange: () => undefined,
+      onInterrupt: noop,
+      onRespondToApproval: noop,
+      onSubmit: noop,
+    }),
+  );
+  const dom = new JSDOM(html);
+  try {
+    const doc = dom.window.document;
+    for (const sample of samples) {
+      const bubble = doc.querySelector(
+        `[data-thread-find-item-id="${sample.id}"]`,
+      );
+      const row = bubble?.closest(".user-row, .host-message-row");
+      assert.ok(row, `Missing input row: ${sample.id}`);
+      if (sample.id === "sender-native" || sample.id === "sender-legacy")
+        assert.ok(row.classList.contains("trigger-message-row"), sample.id);
+      const time = row.querySelector("time.message-time");
+      if (sample.id === "sender-without-record") assert.equal(time, null);
+      else
+        assert.equal(
+          time?.getAttribute("datetime"),
+          sample.createdAt,
+          sample.id,
+        );
+    }
+    assert.equal(
+      doc
+        .querySelector(".assistant-message-actions time")
+        ?.getAttribute("datetime"),
+      finishedAt,
+    );
+  } finally {
+    dom.window.close();
+  }
+});
+
 test("Turn disclosure does not repeat cache telemetry from assistant actions", () => {
   const html = renderTurns(
     [turnWithItems("completed", [user("request"), agent("Done")], 1_000)],
