@@ -1961,6 +1961,8 @@ button:disabled {
 }
 .user-row:hover .message-actions,
 .user-row:focus-within .message-actions,
+.host-message-row:hover > .host-message-actions,
+.host-message-row:focus-within > .host-message-actions,
 .agent-copy:hover .message-actions,
 .agent-copy:focus-within .message-actions {
   opacity: 1;

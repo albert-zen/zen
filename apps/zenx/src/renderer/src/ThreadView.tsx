@@ -60,7 +60,7 @@ import {
   triggerMessagePresentation,
 } from "./trigger-message-presentation.js";
 import { InlineComposerEditor } from "./InlineComposerEditor.js";
-import type { ComposerInput } from "./composer-input.js";
+import { composerInputElement, type ComposerInput } from "./composer-input.js";
 import { normalizeInlineReferences } from "./reference-draft.js";
 import { InlineReferenceContent } from "./InlineReferenceContent.js";
 import { ReferenceToken } from "./ReferenceToken.js";
@@ -118,6 +118,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
 
@@ -1194,11 +1195,24 @@ function ThreadViewContent({
     };
   }, []);
   const composerTextareaRef = useRef<ComposerInput>(null);
-  const returnToLive = () => {
+  const composerHasFocus = () =>
+    composerInputElement(composerTextareaRef.current)?.contains(
+      document.activeElement,
+    ) === true;
+  const preserveComposerOnMouseDown = (
+    event: ReactMouseEvent<HTMLButtonElement>,
+  ) => {
+    if (event.button === 0 && composerHasFocus()) event.preventDefault();
+  };
+  const returnToLive = (event: ReactMouseEvent<HTMLButtonElement>) => {
     const scroll = scrollRef.current;
     if (scroll === null) return;
+    if (event.detail === 0 || !composerHasFocus()) {
+      // The viewport's focus handler pauses following; restore it after focus.
+      scroll.focus({ preventScroll: true });
+      document.getSelection()?.removeAllRanges();
+    }
     shouldFollowRef.current = true;
-    document.getSelection()?.removeAllRanges();
     scroll.scrollTo({ top: scroll.scrollHeight, behavior: "auto" });
     observedScrollTop.current = scroll.scrollTop;
     setAtLive(true);
@@ -2379,6 +2393,7 @@ function ThreadViewContent({
               }
               onContentSettled={followBottom}
               className="messages"
+              tabIndex={-1}
               style={{ overflowAnchor: atLive ? "none" : undefined }}
               onWheel={(event) => {
                 if (isNestedTranscriptScroll(event.target, event.currentTarget))
@@ -2537,7 +2552,12 @@ function ThreadViewContent({
         }}
       />
       {atLive || transcriptRows.length === 0 ? null : (
-        <button className="back-live" type="button" onClick={returnToLive}>
+        <button
+          className="back-live"
+          type="button"
+          onMouseDown={preserveComposerOnMouseDown}
+          onClick={returnToLive}
+        >
           <Icon name="arrow-down" size={14} />
           {i18n.t("shell:backToLive")}
         </button>
@@ -2553,10 +2573,8 @@ function ThreadViewContent({
             type="button"
             aria-label={i18n.t("shell:backToLive")}
             title={i18n.t("shell:backToLive")}
-            onClick={() => {
-              returnToLive();
-              composerTextareaRef.current?.focus({ preventScroll: true });
-            }}
+            onMouseDown={preserveComposerOnMouseDown}
+            onClick={returnToLive}
           >
             <Icon name="arrow-down" size={18} />
           </button>

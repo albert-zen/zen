@@ -5763,3 +5763,96 @@ test("inline shell invocation stays Completed while expanded details retain exac
     );
   });
 });
+test("returning to the latest message keeps either transcript focus or an active draft selection", async () => {
+  const { recoveryScenario } =
+    await import("./fixtures/loop-recovery-scenario.js");
+  for (const selector of [
+    ".back-live",
+    ".conversation-reading-position button",
+  ]) {
+    for (const editing of [false, true]) {
+      await withDom(async (root) => {
+        await act(async () =>
+          root.render(
+            createElement(ThreadView, {
+              approvals: [],
+              composer: editComposer(emptyComposerState(), "Unsent draft"),
+              thread: recoveryScenario("completed"),
+              onDraftChange: () => undefined,
+              onInterrupt: noop,
+              onRespondToApproval: noop,
+              onSubmit: noop,
+            }),
+          ),
+        );
+        const viewport = requiredElement(".messages");
+        let top = 250;
+        let jumps = 0;
+        Object.defineProperties(viewport, {
+          clientHeight: { value: 400 },
+          scrollHeight: { value: 1400 },
+          scrollTop: {
+            get: () => top,
+            set: (target: number) => {
+              top = Math.min(target, 1000);
+            },
+          },
+          scrollTo: {
+            value: (options: ScrollToOptions) => {
+              jumps += 1;
+              viewport.scrollTop = options.top ?? 0;
+            },
+          },
+        });
+        await act(async () => {
+          viewport.dispatchEvent(
+            new window.WheelEvent("wheel", { bubbles: true, deltaY: -100 }),
+          );
+          viewport.dispatchEvent(new window.Event("scroll"));
+        });
+        const jump = requiredButton(selector);
+        const composer = document.querySelector("textarea");
+        assert.ok(composer);
+        if (editing) {
+          composer.focus();
+          composer.setSelectionRange(2, 6);
+          const mouseDown = new window.MouseEvent("mousedown", {
+            bubbles: true,
+            cancelable: true,
+            button: 0,
+          });
+          jump.dispatchEvent(mouseDown);
+          assert.equal(mouseDown.defaultPrevented, true);
+          await act(async () => {
+            jump.dispatchEvent(
+              new window.MouseEvent("click", { bubbles: true, detail: 1 }),
+            );
+          });
+          assert.equal(document.activeElement === composer, true);
+          assert.equal(composer.value, "Unsent draft");
+          assert.deepEqual(
+            [composer.selectionStart, composer.selectionEnd],
+            [2, 6],
+          );
+        } else {
+          jump.focus();
+          assert.equal(document.activeElement === jump, true);
+          await act(async () => jump.click());
+          assert.equal(
+            document.activeElement === viewport,
+            true,
+            `expected transcript focus after ${selector}, got ${document.activeElement?.tagName}`,
+          );
+        }
+        assert.equal(viewport.tabIndex, -1);
+        assert.equal(top, 1000);
+        assert.equal(jumps, 1);
+        assert.equal(
+          document.querySelector(selector) === null,
+          true,
+          "jump control disappears",
+        );
+      });
+    }
+  }
+});
