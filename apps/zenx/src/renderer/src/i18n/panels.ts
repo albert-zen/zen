@@ -617,6 +617,8 @@ export const en = {
     "Pending message text is unavailable; do not send again",
   messageHasNotBeenSentChooseSend:
     "Message has not been sent. Choose Send pending message to send it.",
+  roomDeliveryStillUnconfirmed: "Delivery is still unconfirmed.",
+  roomIntroductionNotStarted: "Introduction has not started.",
   cancellationNotConfirmedCheckDelivery:
     "Cancellation not confirmed; check delivery",
   rooms: "Rooms",
@@ -1728,6 +1730,8 @@ export const zhCN = {
   noImmutableRoomMessageIdReturned: "未返回不可变的房间消息 ID",
   pendingMessageTextIsUnavailableDoNot: "待发送消息文本不可用；请勿再次发送",
   messageHasNotBeenSentChooseSend: "消息尚未发送。选择“发送待发消息”即可发送。",
+  roomDeliveryStillUnconfirmed: "投递仍未确认。",
+  roomIntroductionNotStarted: "尚未开始介绍。",
   cancellationNotConfirmedCheckDelivery: "取消未确认；请检查投递状态",
   rooms: "房间",
   noMessagesYet: "尚无消息",

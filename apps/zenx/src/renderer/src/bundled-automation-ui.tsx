@@ -1820,6 +1820,19 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const revisions = sharedDrafts?.revisions ?? localRevisions;
   const refreshSequence = useRef(0);
   const [feedback, setFeedback] = useState<Record<string, string>>({});
+  const deliveryChecks = useRef(new Map<string, symbol>());
+  const deliveryCheckKey = (roomId: string, operationId: string) =>
+    JSON.stringify([roomId, operationId]);
+  const clearDeliveryCheck = (roomId: string, operationId: string) => {
+    const key = deliveryCheckKey(roomId, operationId);
+    deliveryChecks.current.delete(key);
+    setFeedback((current) => {
+      if (!(key in current)) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  };
   const [deliveries, setDeliveries] = useState<
     Record<string, RoomDeliveryResult>
   >({});
@@ -1983,10 +1996,11 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     roomId: string,
     entry: RoomPendingSend,
     result: RoomDeliveryResult,
+    preserveRoomError = false,
   ) => {
     if (result.state !== "saved" || (!result.messageId && !result.wakeupId))
       return;
-    setRoomErrors((current) => ({ ...current, [roomId]: "" }));
+    if (!preserveRoomError) setRoomErrors((current) => ({ ...current, [roomId]: "" }));
     refreshSequence.current += 1;
     const revision =
       entry.revision ?? intentRevisions.current[entry.id]?.revision;
@@ -1998,7 +2012,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       setRoomPending(roomId, null);
     delete intentRevisions.current[entry.id];
     // Successful sends settle silently; only failures and uncertainty need a rail.
-    setFeedback((current) => ({ ...current, [roomId]: "" }));
+    clearDeliveryCheck(roomId, entry.id);
     await sdk.commands
       .execute("ack-operation", { roomId, operationId: entry.id })
       .catch((reason: unknown) =>
@@ -2008,6 +2022,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       );
   };
   const finishCancelled = (roomId: string, entry: RoomPendingSend) => {
+    clearDeliveryCheck(roomId, entry.id);
     if (pendingRef.current[roomId]?.id === entry.id)
       setRoomPending(roomId, null);
     const revision =
@@ -2756,12 +2771,21 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     entry: RoomPendingSend,
     resume: boolean,
   ) => {
-    setRoomErrors((current) => ({ ...current, [roomId]: "" }));
+    const key = deliveryCheckKey(roomId, entry.id);
+    const token = Symbol();
+    if (resume) deliveryChecks.current.delete(key);
+    else deliveryChecks.current.set(key, token);
+    const isCurrent = () =>
+      resume || deliveryChecks.current.get(key) === token;
+    const show = (message: string) =>
+      setFeedback((current) => ({ ...current, [key]: message }));
+    if (resume) setRoomErrors((current) => ({ ...current, [roomId]: "" }));
     try {
       let state = (await sdk.commands.execute("operation", {
         roomId,
         operationId: entry.id,
       })) as RoomDeliveryResult;
+      if (!isCurrent()) return;
       if (state.state === "prepared" && resume) {
         if (!state.text)
           throw new Error(
@@ -2784,22 +2808,34 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           operationId: entry.id,
         })) as RoomDeliveryResult;
       }
+      if (!isCurrent()) return;
       if (state.state === "saved" && (state.messageId || state.wakeupId))
-        await finishSaved(roomId, entry, state);
-      else if (state.state === "cancelled") {
+        await finishSaved(roomId, entry, state, !resume);
+      else if (state.state === "cancelled")
         finishCancelled(roomId, entry);
-        setFeedback((current) => ({ ...current, [roomId]: "" }));
-      } else
-        setFeedback((current) => ({
-          ...current,
-          [roomId]: i18n.t("panels:messageHasNotBeenSentChooseSend"),
-        }));
-      await refresh();
+      else
+        show(
+          i18n.t(
+            state.state === "prepared"
+              ? (state.kind ?? entry.kind) === "assistantIntroduction"
+                ? "panels:roomIntroductionNotStarted"
+                : "panels:messageHasNotBeenSentChooseSend"
+              : "panels:roomDeliveryStillUnconfirmed",
+          ),
+        );
+      // Refresh can fail even after the exact operation result is known.
+      void refresh().catch(() => {});
     } catch (reason) {
-      setRoomErrors((current) => ({
-        ...current,
-        [roomId]: `Delivery remains unconfirmed. ${describeError(reason)}`,
-      }));
+      if (!isCurrent()) return;
+      if (resume)
+        setRoomErrors((current) => ({
+          ...current,
+          [roomId]: `Delivery remains unconfirmed. ${describeError(reason)}`,
+        }));
+      else
+        show(i18n.t("panels:roomDeliveryStillUnconfirmed"));
+    } finally {
+      if (!resume && isCurrent()) deliveryChecks.current.delete(key);
     }
   };
   const cancelPrepared = async (roomId: string, entry: RoomPendingSend) => {
@@ -2833,7 +2869,6 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       if (result.state !== "cancelled")
         throw new Error(i18n.t("panels:cancellationNotConfirmedCheckDelivery"));
       finishCancelled(roomId, entry);
-      setFeedback((current) => ({ ...current, [roomId]: "" }));
       await refresh();
     } catch (reason) {
       // A lost cancel result is never permission to drop a possibly saved send.
@@ -3082,7 +3117,6 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
             ) : null}
             {error ||
             roomErrors[room.id] ||
-            feedback[room.id] ||
             pending ||
             (room.operations ?? []).some(
               (entry) => entry.id !== pendingByRoom[room.id]?.id,
@@ -3097,20 +3131,22 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     {roomErrors[room.id] || error}
                   </p>
                 ) : null}
-                {feedback[room.id] ? (
-                  <p role="status">{feedback[room.id]}</p>
-                ) : null}
                 {pending ? (
-                  <div role="status" className="room-send-pending">
+                  <div
+                    role="status"
+                    className="room-send-pending"
+                    data-operation-id={pending.id}
+                  >
                     {pending.cancelled
                       ? i18n.t("panels:sendCancelledNoMessageWasSent")
                       : pending.wakeupId
                         ? i18n.t("panels:pawWelcomeAlreadyStarted")
                         : pending.messageId
                           ? i18n.t("panels:messageSavedCheckItsDeliveryStatus")
-                          : i18n.t(
+                          : (feedback[deliveryCheckKey(room.id, pending.id)] ??
+                            i18n.t(
                               "panels:deliveryUnconfirmedCheckItsStatusBeforeSending",
-                            )}{" "}
+                            ))}{" "}
                     <button
                       type="button"
                       onClick={() =>
@@ -3155,6 +3191,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     <div
                       className="room-send-pending"
                       key={operation.id}
+                      data-operation-id={operation.id}
                       role="status"
                     >
                       {i18n.t(
@@ -3162,7 +3199,12 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                           ? "panels:pawIntroductionPreview"
                           : "panels:pendingMessage",
                       )}{" "}
-                      {operationStateLabel(operation)} ·{" "}
+                      {(!operation.cancelled &&
+                        !operation.messageId &&
+                        !operation.wakeupId
+                        ? feedback[deliveryCheckKey(room.id, operation.id)]
+                        : undefined) ?? operationStateLabel(operation)}{" "}
+                      ·{" "}
                       {operation.kind === "assistantIntroduction"
                         ? ""
                         : Array.from(operation.text).slice(0, 70).join("")}{" "}
