@@ -1,6 +1,6 @@
 /* Desktop history navigation is owned by the conversation, not the editor.
-   Reserve room only while the button is present. The messages must stop
-   above the button, not continue painting underneath its opaque surface. */
+   Only a conditional bottom inset is added to the scroll content; the
+   history viewport stays full-height and there is no permanent return row. */
 .conversation-reading-position {
   display: none;
 }
@@ -12,19 +12,22 @@
     --history-return-clearance: 48px;
   }
   .thread-view[data-reading-earlier="true"] > .messages {
-    bottom: calc(
-      var(--bottom-zone-height, 0px) + var(--history-return-clearance)
+    padding-bottom: calc(
+      var(--bottom-zone-height, 0px) + var(--history-return-clearance) + 24px
     );
-    padding-bottom: 24px;
-    scroll-padding-bottom: 24px;
+    scroll-padding-bottom: calc(
+      var(--bottom-zone-height, 0px) + var(--history-return-clearance) + 24px
+    );
   }
-  /* The same inset previously lived in the scroll content. Moving it to the
-     scrollport edge must not also leave it in the virtual footer. */
   .thread-view[data-reading-earlier="true"] .virtual-transcript-footer {
-    padding-bottom: 24px;
+    padding-bottom: calc(
+      var(--bottom-zone-height, 0px) + var(--history-return-clearance) + 24px
+    );
   }
   .thread-view[data-reading-earlier="true"] .virtual-transcript-footer:empty {
-    padding-bottom: 0;
+    padding-bottom: calc(
+      var(--bottom-zone-height, 0px) + var(--history-return-clearance)
+    );
   }
   .conversation-reading-position {
     position: absolute;
