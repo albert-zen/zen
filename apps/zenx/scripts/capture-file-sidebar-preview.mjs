@@ -1084,7 +1084,7 @@ try {
       ),
     );
     await clickSelector(
-      "[data-local-path-preview] .markdown-code-actions button",
+      "[data-local-path-preview] .markdown-code-actions button:not(.markdown-code-copy):not(.markdown-code-wrap)",
     );
     await waitFor(
       `document.querySelector('.auxiliary-content:not([hidden])')?.id.includes('long-source')`,
@@ -1098,10 +1098,34 @@ try {
     );
     check(
       receipt,
-      "text-path-copy-remains-separate",
+      "text-path-preserves-exact-source",
       await evaluate(
-        `document.querySelectorAll('[data-local-path-preview] .markdown-code-actions button').length===2 && document.querySelector('[data-local-path-preview] pre code').textContent==='/synthetic/file-sidebar-preview/src/long-source.ts'`,
+        `document.querySelector('[data-local-path-preview] pre code')?.textContent==='/synthetic/file-sidebar-preview/src/long-source.ts'`,
       ),
+    );
+    check(
+      receipt,
+      "text-path-open-copy-wrap-remain-separate",
+      await evaluate(`(() => {
+        const actions=document.querySelector('[data-local-path-preview] .markdown-code-actions');
+        const open=actions?.querySelector('button:not(.markdown-code-copy):not(.markdown-code-wrap)');
+        const copy=actions?.querySelector('button.markdown-code-copy');
+        const wrap=actions?.querySelector('button.markdown-code-wrap');
+        return !!open && !!copy && !!wrap && new Set([open,copy,wrap]).size===3 && actions.querySelectorAll('button').length===3;
+      })()`),
+    );
+    check(
+      receipt,
+      "text-path-action-accessible-labels",
+      await evaluate(`(() => {
+        const buttons=[...document.querySelectorAll('[data-local-path-preview] .markdown-code-actions button')];
+        const expected=${JSON.stringify(
+          lang === "en"
+            ? ["Open file", "Copy", "Wrap lines"]
+            : ["打开文件", "复制", "代码换行"],
+        )};
+        return buttons.length===expected.length && buttons.every((button,index)=>(button.getAttribute('aria-label') ?? button.textContent.trim())===expected[index]);
+      })()`),
     );
     await screenshot(`local-paths-${lang}-text-block-opened.png`);
     receipt.status = receipt.checks.every((check) => check.status === "passed")

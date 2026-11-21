@@ -7,6 +7,7 @@ import {
 
 // Pure guard tests only. These numbers are NOT browser evidence.
 const geometry = () => ({
+  desktop: false,
   overflow: false,
   normal: {
     bubble: { right: 350 },
@@ -286,3 +287,120 @@ for (const className of ["bottom-zone", "pending-tray"]) {
     dom.window.close();
   });
 }
+
+// This is a measured-frame contract, not a fixed platform scrollbar allowance.
+function desktopGeometry(scrollbar = 15) {
+  const g = geometry();
+  g.desktop = true;
+  g.tray = {
+    rect: { left: 150, right: 950, width: 800 },
+    clientLeft: 1,
+    clientWidth: 798 - scrollbar,
+    offsetWidth: 800,
+  };
+  g.composer = { left: 150, right: 950, width: 800 };
+  g.normal.bubble.right = g.normal.images[0].right = 950;
+  g.pending.bubble.right = g.pending.images[0].right = 949 - scrollbar;
+  return g;
+}
+for (const scrollbar of [0, 6, 10, 15, 20]) {
+  test(`desktop measured inner rail with ${scrollbar}px scrollbar`, () => {
+    assertSteerGeometry(desktopGeometry(scrollbar), 1, "desktop rail");
+  });
+}
+for (const [name, change] of [
+  [
+    "body shifted",
+    (g) => {
+      g.pending.bubble.right -= 3;
+    },
+  ],
+  [
+    "image shifted",
+    (g) => {
+      g.pending.images[0].right += 3;
+    },
+  ],
+  [
+    "outer left shifted",
+    (g) => {
+      g.tray.rect.left += 3;
+    },
+  ],
+  [
+    "outer right shifted",
+    (g) => {
+      g.tray.rect.right += 3;
+    },
+  ],
+  [
+    "missing tray",
+    (g) => {
+      g.tray = null;
+    },
+  ],
+  [
+    "unobserved media",
+    (g) => {
+      g.desktop = null;
+    },
+  ],
+  [
+    "fabricated client width",
+    (g) => {
+      g.tray.clientWidth = 900;
+    },
+  ],
+  [
+    "old canonical edge inside desktop",
+    (g) => {
+      g.pending.bubble.right = 950;
+    },
+  ],
+])
+  test(`desktop rail rejects ${name}`, () => {
+    const g = desktopGeometry();
+    change(g);
+    assert.throws(() => assertSteerGeometry(g, 1, name));
+  });
+test("narrow layout still requires canonical alignment rather than an inner rail allowance", () => {
+  const g = desktopGeometry();
+  g.desktop = false;
+  assert.throws(() => assertSteerGeometry(g, 1, "narrow"));
+});
+test("DOM measurement reads actual tray client metrics and desktop media", () => {
+  const dom = new JSDOM(
+    `<div class="bottom-zone"><div class="pending-tray"><section class="pending-steer-panel"><ol><li></li></ol></section></div><form class="composer"></form></div>`,
+  );
+  const doc = dom.window.document;
+  let mediaQuery;
+  dom.window.matchMedia = (query) => {
+    mediaQuery = query;
+    return { matches: true };
+  };
+  const tray = doc.querySelector(".pending-tray");
+  Object.defineProperties(tray, {
+    clientLeft: { value: 1 },
+    clientWidth: { value: 783 },
+    offsetWidth: { value: 800 },
+  });
+  tray.getBoundingClientRect = () => ({
+    left: 150,
+    right: 950,
+    width: 800,
+    height: 200,
+  });
+  doc.querySelector(".composer").getBoundingClientRect =
+    tray.getBoundingClientRect;
+  const g = measureSteerComparison(doc);
+  assert.equal(mediaQuery, "(min-width: 961px)");
+  assert.equal(g.desktop, true);
+  assert.deepEqual(g.tray, {
+    rect: { left: 150, right: 950, width: 800, height: 200 },
+    clientLeft: 1,
+    clientWidth: 783,
+    offsetWidth: 800,
+  });
+  assert.deepEqual(g.composer, g.tray.rect);
+  dom.window.close();
+});

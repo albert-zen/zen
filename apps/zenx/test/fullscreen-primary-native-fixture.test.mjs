@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { verifyNativeFullscreen } from "../scripts/verify-fullscreen-primary-native.mjs";
 import { parse } from "yaml";
+import { JSDOM } from "jsdom";
 const read = (name) =>
   readFile(new URL(`../scripts/${name}`, import.meta.url), "utf8");
 test("native preload exposes only the bounded fixture mount channel", async () => {
@@ -58,6 +59,52 @@ test("native acceptance keeps production mounting, exact leases and explicit sco
     /desktopCapturer|--no-sandbox|setPermissionCheckHandler|rerun/,
   );
 });
+test("native reading probe distinguishes paused chat from the desktop button being visible", async () => {
+  const source = await read("capture-fullscreen-primary-native.ts");
+  const measure = source.match(/const measure = `([\s\S]*?)`;/)?.[1];
+  assert.ok(measure);
+  const dom = new JSDOM(`
+    <section id="primary-conversation-content">
+      <div class="thread-view" data-reading-earlier="true">
+        <div class="messages"></div>
+        <button class="back-live" style="display:none">Legacy</button>
+        <div class="conversation-reading-position"><button>Latest</button></div>
+        <textarea></textarea>
+      </div>
+    </section><aside class="auxiliary-panel" data-primary-active="true"></aside>
+  `);
+  try {
+    const { window } = dom;
+    const cue = window.document.querySelector(
+      ".conversation-reading-position button",
+    );
+    cue.getBoundingClientRect = () => ({ width: 36, height: 36 });
+    const observe = () =>
+      vm.runInNewContext(measure, {
+        window,
+        document: window.document,
+        getComputedStyle: window.getComputedStyle,
+      });
+    assert.equal(observe().paused, true);
+    assert.equal(observe().returnVisible, true);
+    cue.style.visibility = "hidden";
+    assert.equal(observe().paused, true);
+    assert.equal(observe().returnVisible, false);
+    cue.remove();
+    assert.equal(
+      observe().returnVisible,
+      false,
+      "the hidden legacy button does not count",
+    );
+    window.document
+      .querySelector(".thread-view")
+      .removeAttribute("data-reading-earlier");
+    assert.equal(observe().paused, false);
+  } finally {
+    dom.window.close();
+  }
+});
+
 test("hosted native acceptance is independent and does not replace Chromium coverage", async () => {
   const source = await readFile(
     new URL(

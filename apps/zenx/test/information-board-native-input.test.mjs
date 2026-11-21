@@ -479,9 +479,9 @@ test("information regression traverses OS hit testing in split and maximized mai
   assert.deepEqual(
     calls.filter((call) => call.mode).map((call) => call.mode),
     [
-      "dock",
+      "overlay",
       "closed",
-      "dock",
+      "overlay",
       "closed",
       "overlay",
       "closed",
@@ -489,4 +489,152 @@ test("information regression traverses OS hit testing in split and maximized mai
       "closed",
     ],
   );
+});
+
+test("controlled Information camera rejects scrolling, reflow, changed text and viewport", async () => {
+  const source = await readFile(
+    new URL("../scripts/capture-information-board.cjs", import.meta.url),
+    "utf8",
+  );
+  const ast = ts.createSourceFile(
+    "capture.cjs",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.JS,
+  );
+  const helper = ast.statements.find(
+    (node) =>
+      ts.isFunctionDeclaration(node) &&
+      node.name?.text === "assertInformationReadingUnchanged",
+  );
+  assert.ok(helper);
+  const verify = runInNewContext(
+    helper.getText(ast) + ";assertInformationReadingUnchanged;",
+    { assert },
+  );
+  const before = {
+    window: { width: 1600, height: 970 },
+    viewport: {
+      left: 264,
+      right: 1600,
+      top: 44,
+      bottom: 970,
+      width: 1336,
+      height: 926,
+    },
+    scrollTop: 300,
+    maxTop: 650,
+    id: "synthetic-message-1",
+    text: "Synthetic immutable request",
+    anchor: {
+      left: 526,
+      right: 1326,
+      top: 120,
+      bottom: 250,
+      width: 800,
+      height: 130,
+    },
+  };
+  const after = structuredClone(before);
+  after.anchor.left -= 74;
+  after.anchor.right -= 74;
+  after.maxTop += 40; // New content below a paused reader is allowed, not scroll movement.
+  verify(before, after, 74);
+  for (const mutate of [
+    (x) => {
+      x.scrollTop += 40;
+      x.anchor.top -= 40;
+      x.anchor.bottom -= 40;
+    },
+    (x) => {
+      x.anchor.height += 1;
+    },
+    (x) => {
+      x.text += "changed";
+    },
+    (x) => {
+      x.id = "other-message";
+    },
+    (x) => {
+      x.viewport.width -= 1;
+    },
+    (x) => {
+      x.window.height -= 1;
+    },
+    (x) => {
+      x.anchor.left += 2;
+    },
+  ]) {
+    const broken = structuredClone(after);
+    mutate(broken);
+    assert.throws(() => verify(before, broken, 74));
+  }
+  assert.match(source, /type: "mouseWheel"/);
+  assert.match(source, /w\?\.trusted/);
+  assert.ok(
+    source.indexOf("await prepareInformationReadingCamera()") <
+      source.indexOf('await screenshot("00-wide-closed-baseline.png")'),
+  );
+});
+
+test("native fit-boundary probe matches production fit with fractional platform geometry", async () => {
+  const source = await readFile(
+    new URL("../scripts/capture-information-board.cjs", import.meta.url),
+    "utf8",
+  );
+  const ast = ts.createSourceFile(
+    "capture.cjs",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.JS,
+  );
+  const helper = ast.statements.find(
+    (node) =>
+      ts.isFunctionDeclaration(node) &&
+      node.name?.text === "informationFitProbe",
+  );
+  assert.ok(helper);
+  const probe = runInNewContext(
+    helper.getText(ast) + ";informationFitProbe;",
+    {},
+  );
+  const production = await readFile(
+    new URL(
+      "../src/renderer/src/information-reading-clearance.ts",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const compiled = ts.transpileModule(production, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS },
+  }).outputText;
+  const exports = {};
+  runInNewContext(compiled, { exports });
+  for (const viewportLeft of [264, 264.5])
+    for (const width of [800, 799.5])
+      for (const delta of [-2, -0.25, 0, 0.25, 2]) {
+        const input = {
+          left: viewportLeft + 150,
+          right: viewportLeft + width + 360 + delta,
+          width,
+          viewportLeft,
+        };
+        const actual = exports.informationReadingClearance({
+          viewportLeft,
+          cardRight: input.right,
+          unshiftedReadingLeft: input.left,
+          readingWidth: width,
+          resourceOpen: false,
+          direction: "ltr",
+          open: true,
+        });
+        const measured = probe(input);
+        assert.equal(measured.clearance >= 0, actual.cardWidth !== undefined);
+        if (actual.cardWidth !== undefined)
+          assert.equal(measured.shift, actual.shift);
+      }
+  assert.match(source, /await captureInformationFitBoundary\(\)/);
+  assert.match(source, /"measured DOM must straddle the actual fit threshold"/);
 });

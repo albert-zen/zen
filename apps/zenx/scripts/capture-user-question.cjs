@@ -151,49 +151,111 @@ async function screenshot(name) {
   await fs.writeFile(path.join(directory, name), png);
   result.screenshots[name] = createHash("sha256").update(png).digest("hex");
 }
+// Check the known title without changing the screenshot's current reading position.
+// Earlier interactions may intentionally have scrolled it above the card viewport.
+async function inspectInformationHeading(selector) {
+  return evaluate(`(()=>{
+    const e=document.querySelector(${JSON.stringify(selector)});
+    if(!e)throw Error('Missing information heading');
+    const ancestors=[];
+    for(let p=e.parentElement;p;p=p.parentElement) ancestors.push({node:p,top:p.scrollTop,left:p.scrollLeft});
+    const before=e.getBoundingClientRect();
+    let observation;
+    try {
+      e.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});
+      const r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);
+      observation={text:e.textContent,top:r.top,bottom:r.bottom,originalTop:before.top,hitClass:hit?.className,unoccluded:e.contains(hit)};
+    } finally {
+      for(const {node,top,left} of ancestors) node.scrollTo({top,left,behavior:'instant'});
+    }
+    observation.scrollRestored=ancestors.every(({node,top,left})=>node.scrollTop===top&&node.scrollLeft===left);
+    return observation;
+  })()`);
+}
 async function capture(name, mode) {
   await until(
     () =>
       evaluate(
-        `Boolean(document.querySelector(${JSON.stringify(mode === "dock" ? ".information-dock" : mode === "overlay" ? ".information-popover" : ".information-toolbar button[aria-pressed=false]")}))`,
+        `Boolean(document.querySelector(${JSON.stringify(mode === "overlay" ? ".information-popover" : ".information-toolbar button[aria-pressed=false]")}))`,
       ),
     name + " presentation",
   );
   await pause(250);
   const geometry = await evaluate(
-    `(()=>{const rect=s=>{const e=document.querySelector(s);if(!e)return null;const r=e.getBoundingClientRect(),c=getComputedStyle(e);return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height,display:c.display,visibility:c.visibility,color:c.color,background:c.backgroundColor}};return {chat:rect('.agent-surface'),composer:rect('#thread-composer'),card:rect('.information-dock'),popover:rect('.information-popover'),workspace:rect('.workspace'),resource:rect('.auxiliary-panel'),titlebar:rect('.window-titlebar-session'),resourceHeading:document.querySelector('.auxiliary-panel')?.dataset.open==='true'?rect('.auxiliary-heading'):null,informationToggle:rect('.information-toolbar button'),workspaceToggle:rect('.auxiliary-close-button'),expanded:document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded'),overflow:document.documentElement.scrollWidth>innerWidth,composerIdentity:window.__informationComposer===document.querySelector('#thread-composer'),draft:document.querySelector('#thread-composer')?.value}})()`,
+    `(()=>{const rect=s=>{const e=document.querySelector(s);if(!e)return null;const r=e.getBoundingClientRect(),c=getComputedStyle(e);return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height,display:c.display,visibility:c.visibility,color:c.color,background:c.backgroundColor}};return {chat:rect('.agent-surface'),composer:rect('#thread-composer'),card:rect('.information-popover'),popoverCount:document.querySelectorAll('.information-popover').length,legacyDockCount:document.querySelectorAll('.information-dock').length,popover:rect('.information-popover'),workspace:rect('.workspace'),resource:rect('.auxiliary-panel'),titlebar:rect('.window-titlebar-session'),resourceHeading:document.querySelector('.auxiliary-panel')?.dataset.open==='true'?rect('.auxiliary-heading'):null,resourceExpanded:document.querySelector('.auxiliary-panel')?.dataset.expanded,primaryActive:document.querySelector('.auxiliary-panel')?.dataset.primaryActive,informationEntryHidden:document.querySelector('.information-toolbar')?.hidden,informationToggle:rect('.information-toolbar button'),workspaceToggle:rect('.auxiliary-close-button'),expanded:document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded'),overflow:document.documentElement.scrollWidth>innerWidth,composerIdentity:window.__informationComposer===document.querySelector('#thread-composer'),draft:document.querySelector('#thread-composer')?.value}})()`,
   );
-  if (mode === "dock") {
+  if (mode === "overlay") {
+    assert.equal(
+      geometry.popoverCount,
+      1,
+      "exactly one floating Information card",
+    );
+    assert.equal(geometry.legacyDockCount, 0, "no reserved information dock");
     assert.ok(
-      geometry.chat.right <= geometry.card.left,
-      "docked card cannot overlap the main conversation",
+      geometry.card.width > 0 && geometry.card.width <= 341,
+      "floating card is bounded to 340px",
     );
     assert.ok(
-      geometry.composer.right <= geometry.card.left,
-      "docked card cannot overlap Composer",
+      geometry.card.left >= geometry.chat.left + 11,
+      "card stays inside conversation leading clearance",
     );
     assert.ok(
-      geometry.chat.width >= 550,
-      "conversation retains a usable allocation",
+      Math.abs(geometry.card.right - (geometry.chat.right - 12)) <= 1,
+      "card follows conversation trailing edge",
     );
     assert.ok(
       geometry.card.bottom <= geometry.workspace.bottom + 1,
       "card remains within workspace height",
     );
-    const visibleHeaders = [geometry.titlebar, geometry.resourceHeading].filter(
-      (rect) => rect && rect.visibility !== "hidden" && rect.display !== "none",
-    );
     assert.ok(
-      visibleHeaders.every((rect) => geometry.card.top >= rect.bottom + 11),
-      "card clears actual visible conversation/workspace headings on every platform",
+      geometry.card.top >= geometry.informationToggle.bottom,
+      "card sits below chat controls",
+    );
+    if (geometry.resourceHeading && geometry.resourceExpanded === "false") {
+      assert.ok(
+        geometry.card.right <= geometry.resource.left,
+        "split resource remains outside the card",
+      );
+      assert.ok(
+        Math.abs(geometry.chat.right - geometry.resource.left) <= 1,
+        "no third column beside split conversation",
+      );
+    } else {
+      assert.ok(
+        Math.abs(geometry.chat.right - geometry.workspace.right) <= 1,
+        "floating information reserves no conversation width",
+      );
+    }
+    geometry.firstCardHeading = await inspectInformationHeading(
+      ".information-popover .user-question-attention > header, .information-popover .room-question-attention > header, .information-popover .conversation-information-section > header",
     );
     assert.equal(
-      await evaluate(
-        "(()=>{const e=document.querySelector('.information-dock .conversation-information-section > header'),r=e.getBoundingClientRect();return e.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))})()",
-      ),
+      geometry.firstCardHeading.scrollRestored,
+      true,
+      "heading check restores every scroll position",
+    );
+    assert.equal(
+      geometry.firstCardHeading.unoccluded,
       true,
       "first card heading is not occluded by a higher titlebar layer",
     );
+  }
+  if (mode === "closed") {
+    assert.equal(
+      geometry.popoverCount,
+      0,
+      "closed information has no floating card",
+    );
+    assert.equal(geometry.legacyDockCount, 0);
+    if (
+      geometry.resourceExpanded === "true" &&
+      geometry.primaryActive !== "true"
+    )
+      assert.equal(
+        geometry.informationEntryHidden,
+        true,
+        "resource-only fullscreen has no Information entry",
+      );
   }
   assert.equal(geometry.overflow, false, "no page-level horizontal overflow");
   if (mode !== "closed") assert.equal(geometry.expanded, "true");
@@ -208,6 +270,19 @@ async function capture(name, mode) {
       geometry.workspaceToggle.color,
       "shared active foreground",
     );
+  }
+  if (name === "01-wide-light-independent-drafts") {
+    const baseline = await evaluate("window.__informationLayoutBaseline");
+    for (const key of ["chat", "composer"])
+      for (const edge of ["left", "right", "top", "bottom", "width", "height"])
+        assert.equal(
+          geometry[key][edge],
+          baseline[key][edge],
+          `opening floating card preserves ${key}.${edge}`,
+        );
+    assert.equal(geometry.draft, baseline.draft);
+    assert.equal(geometry.composerIdentity, true);
+    geometry.closedBaseline = baseline;
   }
   await screenshot(name + ".png");
   result.cases.push({ name, mode, geometry });
@@ -410,6 +485,20 @@ async function runOrigin() {
     assert.equal(answer.reply.question.state, "answer-pending");
     await originBadge(threadId, false);
     await typeEmptyComposer(`Synthetic original ordinary ${key}. @fixture`);
+    // Editing the independent Composer is outside the nonmodal card. Its
+    // dismissal is remembered for this owner, unlike sidebar navigation.
+    await until(
+      () =>
+        evaluate(
+          "document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded')==='false' && !document.querySelector('.information-popover')",
+        ),
+      "ordinary Composer dismisses floating questions",
+    );
+    (result.origin.composerDismissals ??= []).push({
+      threadId,
+      expanded: false,
+      popoverCount: 0,
+    });
     await click(
       '.composer-suggestion-menu .selector-option:has(strong[title="fixture.txt"])',
       "Native workspace reference selection",
@@ -513,7 +602,10 @@ async function runOrigin() {
         (await composerSnapshot()).text,
         "Synthetic unrelated navigation draft.",
       );
-      await selectThread(row, "Return to recoverable original owner", true);
+      // Composer interaction already dismissed the card before navigation.
+      // Keep the strict route + remembered visibility check, then use the
+      // explicit openInformation below to inspect the preserved question draft.
+      await selectThread(row, "Return to recoverable original owner", false);
       await until(
         () => evaluate(`Boolean(document.querySelector('.steer-recovery'))`),
         "whole receipt remains recoverable",
@@ -530,7 +622,7 @@ async function runOrigin() {
         detail,
         "original question draft not overwritten",
       );
-      await capture("07-origin-navigation-blocked-recoverable", "dock");
+      await capture("07-origin-navigation-blocked-recoverable", "overlay");
       await click(
         ".steer-recovery > div > button",
         "Explicit restore from durable receipt",
@@ -616,7 +708,7 @@ async function runOrigin() {
       index === 0
         ? "06-origin-mixed-restored-once"
         : "08-origin-explicit-recovery-restored-once",
-      "dock",
+      "overlay",
     );
     result.origin.batches.push({
       threadId,
@@ -717,6 +809,26 @@ async function run() {
   await evaluate(
     "(()=>{window.__informationComposer=document.querySelector('#thread-composer');return true})()",
   );
+  // Foreground publication may already have revealed questions. Close via
+  // the real toggle before measuring the independent conversation baseline.
+  if (
+    await evaluate(
+      "document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded')==='true'",
+    )
+  ) {
+    await click(
+      ".information-toolbar button",
+      "Close auto-revealed questions for layout baseline",
+    );
+    await until(
+      () => evaluate("!document.querySelector('.information-popover')"),
+      "question baseline closed",
+    );
+    await pause(250);
+  }
+  await evaluate(
+    "(()=>{if(document.querySelector('.information-popover, .information-dock'))throw Error('Opening baseline requires closed information');const rect=s=>{const r=document.querySelector(s).getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}};window.__informationLayoutBaseline={chat:rect('.agent-surface'),composer:rect('#thread-composer'),draft:document.querySelector('#thread-composer').value};return true})()",
+  );
   await openInformation();
   await cardVisible(card(color));
   assert.equal(
@@ -747,7 +859,7 @@ async function run() {
     "Native separate request draft",
   );
   assert.equal(responseAttempts.length, 0, "editing never submits");
-  await capture("01-wide-light-independent-drafts", "dock");
+  await capture("01-wide-light-independent-drafts", "overlay");
 
   await click(
     ".information-toolbar button",
@@ -811,7 +923,7 @@ async function run() {
     "dark appearance",
   );
   await openInformation();
-  await capture("02-maximized-main-dark-dock", "dock");
+  await capture("02-maximized-main-dark-overlay", "overlay");
   assert.equal(result.cases.at(-1).geometry.composerIdentity, true);
   assert.equal(
     result.cases.at(-1).geometry.draft,
@@ -857,7 +969,7 @@ async function run() {
     await evaluate(`${query(card(note) + " textarea")}.value`),
     "Synthetic independent note draft.",
   );
-  await capture("04-answer-confirmed-other-draft-intact", "dock");
+  await capture("04-answer-confirmed-other-draft-intact", "overlay");
   await click(
     card(note) + " .user-question-actions > button:first-child",
     "Explicit Cancel this entire request",
@@ -914,7 +1026,7 @@ async function run() {
     true,
     "unknown cannot resend",
   );
-  await capture("05-real-host-reply-lost-unknown", "dock");
+  await capture("05-real-host-reply-lost-unknown", "overlay");
   // The last action is the real Check response button, not a direct RPC replacement.
   await click(
     card(unknown) + " .user-question-actions > button:last-child",

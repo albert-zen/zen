@@ -1913,20 +1913,85 @@ test("expanded Turn renders a steer at its delivery point", async () => {
   });
 });
 
+function renderTimestampedTurn(
+  status: Turn["status"],
+  request: string,
+  answer: string,
+  requestedAt: Date,
+  completedAt: Date,
+) {
+  const canonicalItems: CanonicalItem[] = [
+    {
+      id: "user-1",
+      type: "user_message",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      createdAt: requestedAt.toISOString(),
+      content: [{ type: "text", text: request }],
+    },
+  ];
+  return renderToStaticMarkup(
+    createElement(ThreadView, {
+      approvals: [],
+      composer: emptyComposerState(),
+      thread: {
+        ...thread([
+          {
+            ...turnWithItems(status, [user(request), agent(answer)]),
+            startedAt: Math.floor(requestedAt.getTime() / 1_000),
+            completedAt: Math.floor(completedAt.getTime() / 1_000),
+          },
+        ]),
+        canonicalItems,
+      },
+      onDraftChange: () => undefined,
+      onInterrupt: noop,
+      onRespondToApproval: noop,
+      onSubmit: noop,
+    }),
+  );
+}
+
+function assertTimestamp(
+  html: string,
+  kind: "user" | "assistant",
+  at: Date,
+  label: string,
+) {
+  const dom = new JSDOM(html);
+  try {
+    const times = dom.window.document.querySelectorAll(
+      `.${kind}-message-actions .message-time`,
+    );
+    assert.equal(times.length, 1, `${kind} timestamp appears exactly once`);
+    const time = times.item(0);
+    assert.ok(time);
+    assert.equal(time.getAttribute("datetime"), at.toISOString());
+    assert.equal(time.textContent, label);
+  } finally {
+    dom.window.close();
+  }
+}
+
+const timestampTime = (at: Date) =>
+  new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(at);
+
 test("message controls are Turn-backed, accessible, and stable while hovering", () => {
   const completedAt = new Date();
   completedAt.setHours(12, 34, 0, 0);
-  const html = renderTurns([
-    {
-      ...turnWithItems(
-        "completed",
-        [user("Copy this *raw* Markdown"), agent("Answer")],
-        1_000,
-      ),
-      completedAt: Math.floor(completedAt.getTime() / 1_000),
-    },
-  ]);
-
+  const requestedAt = new Date(completedAt);
+  requestedAt.setHours(12, 30, 0, 0);
+  const html = renderTimestampedTurn(
+    "completed",
+    "Copy this *raw* Markdown",
+    "Answer",
+    requestedAt,
+    completedAt,
+  );
   assert.match(html, /class="message-actions user-message-actions"/u);
   assert.match(html, /aria-label="Copy user message"/u);
   assert.match(html, /class="message-actions assistant-message-actions"/u);
@@ -1934,15 +1999,172 @@ test("message controls are Turn-backed, accessible, and stable while hovering", 
   assert.equal((html.match(/data-icon="copy"/gu) ?? []).length, 2);
   assert.doesNotMatch(html, />Copy<|>Completed /u);
   assert.equal((html.match(/class="message-time"/gu) ?? []).length, 2);
-  const todayTime = new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).format(completedAt);
-  assert.equal(
-    (html.match(new RegExp(`>${todayTime}</time>`, "gu")) ?? []).length,
-    2,
+  assertTimestamp(html, "user", requestedAt, timestampTime(requestedAt));
+  assertTimestamp(html, "assistant", completedAt, timestampTime(completedAt));
+});
+
+test("message actions show each input's journal time and only the reply's Turn end", () => {
+  const stamp = (day: number, minute: number) =>
+    new Date(2020, 0, day, 9, minute).toISOString();
+  const startedAt = Date.parse(stamp(2, 3)) / 1_000;
+  const finishedAt = stamp(2, 9);
+  let view = {
+    ...thread([turnWithItems("completed", [])]),
+    canonicalItems: [],
+  } as Thread;
+  const common = { threadId: view.id, turnId: "turn-1" };
+  const samples = [
+    {
+      id: "sender-human",
+      type: "user_message",
+      createdAt: stamp(1, 57),
+      content: [{ type: "text", text: "Human message" }],
+    },
+    {
+      id: "sender-legacy",
+      type: "user_message",
+      clientId: "legacy-client",
+      createdAt: stamp(1, 58),
+      content: [{ type: "text", text: "Legacy trigger context" }],
+    },
+    {
+      id: "sender-thread",
+      type: "thread_message",
+      mode: "steer",
+      messageType: "guidance",
+      clientId: "peer-client",
+      createdAt: stamp(1, 59),
+      sender: {
+        threadId: "peer-thread",
+        toolCallId: "peer-tool",
+        callId: "peer-call",
+      },
+      content: [{ type: "text", text: "Inter-thread message" }],
+    },
+    {
+      id: "sender-native",
+      type: "host_message",
+      sender: "host",
+      source: "trigger",
+      sourceId: "native-trigger",
+      clientId: "native-client",
+      createdAt: stamp(2, 1),
+      mode: "start",
+      text: "Native trigger context",
+    },
+    {
+      id: "sender-host",
+      type: "host_message",
+      sender: "host",
+      source: "bootstrap",
+      clientId: "host-client",
+      createdAt: stamp(2, 2),
+      mode: "start",
+      text: "Bootstrap context",
+    },
+    {
+      id: "sender-without-record",
+      type: "host_message",
+      sender: "host",
+      source: "bootstrap",
+      clientId: "missing-client",
+      createdAt: stamp(2, 3),
+      mode: "start",
+      text: "Missing record context",
+    },
+  ] as const;
+  for (const sample of samples) {
+    // Clone text parts to satisfy the canonical mutable UserInput shape.
+    const item: CanonicalItem =
+      "content" in sample
+        ? {
+            ...common,
+            ...sample,
+            content: sample.content.map((part) => ({ ...part })),
+          }
+        : { ...common, ...sample };
+    view = applyNativeThreadEvent(view, { type: "item_completed", item });
+  }
+  const projected = view.turns[0]!;
+  const html = renderToStaticMarkup(
+    createElement(ThreadView, {
+      approvals: [],
+      composer: emptyComposerState(),
+      thread: {
+        ...view,
+        turns: [
+          {
+            ...projected,
+            startedAt,
+            completedAt: Date.parse(finishedAt) / 1_000,
+            items: [...projected.items, agent("Synthetic reply")],
+          },
+        ],
+        canonicalItems:
+          view.canonicalItems?.filter(
+            (item) => item.id !== "sender-without-record",
+          ) ?? [],
+      },
+      wakeups: [
+        {
+          id: "legacy-history",
+          triggerId: "legacy-trigger",
+          threadId: view.id,
+          clientUserMessageId: "legacy-client",
+          kind: "timer",
+          status: "completed",
+          reason: "Synthetic schedule",
+          prompt: "Legacy trigger context",
+          startedAt: Date.parse(stamp(1, 1)) / 1_000,
+          completedAt: null,
+          turnId: common.turnId,
+          error: null,
+          sourceThreadId: null,
+          sourceTurnId: null,
+          sourceRoomId: null,
+          sourceRoomMessageId: null,
+          replyRoomId: null,
+          replyAuthor: null,
+          programInvocationId: null,
+          programOutcome: null,
+          programOutcomes: [],
+        },
+      ],
+      onDraftChange: () => undefined,
+      onInterrupt: noop,
+      onRespondToApproval: noop,
+      onSubmit: noop,
+    }),
   );
+  const dom = new JSDOM(html);
+  try {
+    const doc = dom.window.document;
+    for (const sample of samples) {
+      const bubble = doc.querySelector(
+        `[data-thread-find-item-id="${sample.id}"]`,
+      );
+      const row = bubble?.closest(".user-row, .host-message-row");
+      assert.ok(row, `Missing input row: ${sample.id}`);
+      if (sample.id === "sender-native" || sample.id === "sender-legacy")
+        assert.ok(row.classList.contains("trigger-message-row"), sample.id);
+      const time = row.querySelector("time.message-time");
+      if (sample.id === "sender-without-record") assert.equal(time, null);
+      else
+        assert.equal(
+          time?.getAttribute("datetime"),
+          sample.createdAt,
+          sample.id,
+        );
+    }
+    assert.equal(
+      doc
+        .querySelector(".assistant-message-actions time")
+        ?.getAttribute("datetime"),
+      finishedAt,
+    );
+  } finally {
+    dom.window.close();
+  }
 });
 
 test("Turn disclosure does not repeat cache telemetry from assistant actions", () => {
@@ -2054,48 +2276,79 @@ test("running Turns do not invent a completion timestamp in message controls", (
 test("terminal Turn timestamps show time only today and add a date across local days", () => {
   const today = new Date();
   today.setHours(12, 34, 0, 0);
-  const todayTime = new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).format(today);
-  for (const status of ["completed", "interrupted", "failed"] as const) {
-    const html = renderTurns([
-      {
-        ...turnWithItems(status, [user(`${status} request`), agent(status)]),
-        completedAt: Math.floor(today.getTime() / 1_000),
-      },
-    ]);
-
-    assert.equal(
-      (html.match(new RegExp(`>${todayTime}</time>`, "gu")) ?? []).length,
-      status === "completed" ? 2 : 1,
-    );
-    assert.doesNotMatch(html, />(?:Completed|Interrupted|Failed) /u);
-  }
-
   const otherDay = new Date(today);
-  otherDay.setDate(today.getDate() === 1 ? 2 : today.getDate() - 1);
-  const otherDate = new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-  }).format(otherDay);
-  const otherTime = new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).format(otherDay);
+  otherDay.setDate(today.getDate() - 1);
+  const previousYear = new Date(today);
+  previousYear.setFullYear(today.getFullYear() - 1);
+  for (const completedAt of [today, otherDay, previousYear]) {
+    const requestedAt = new Date(completedAt);
+    requestedAt.setHours(12, 30, 0, 0);
+    const prefix =
+      completedAt === today
+        ? ""
+        : new Intl.DateTimeFormat(undefined, {
+            month: "short",
+            day: "numeric",
+            ...(completedAt.getFullYear() === today.getFullYear()
+              ? {}
+              : { year: "numeric" as const }),
+          }).format(completedAt) + " ";
+    for (const status of ["completed", "interrupted", "failed"] as const) {
+      const html = renderTimestampedTurn(
+        status,
+        `${status} request`,
+        status,
+        requestedAt,
+        completedAt,
+      );
+      assertTimestamp(
+        html,
+        "user",
+        requestedAt,
+        prefix + timestampTime(requestedAt),
+      );
+      assert.equal(
+        (html.match(/class="message-time"/gu) ?? []).length,
+        status === "completed" ? 2 : 1,
+      );
+      if (status === "completed")
+        assertTimestamp(
+          html,
+          "assistant",
+          completedAt,
+          prefix + timestampTime(completedAt),
+        );
+      else
+        assert.doesNotMatch(
+          html,
+          /class="message-actions assistant-message-actions"/u,
+        );
+      assert.doesNotMatch(html, />(?:Completed|Interrupted|Failed) /u);
+    }
+  }
+});
+
+test("terminal Turns without matched canonical user facts do not borrow the completion time", () => {
   const html = renderTurns([
-    {
-      ...turnWithItems("completed", [user("Earlier"), agent("Earlier answer")]),
-      completedAt: Math.floor(otherDay.getTime() / 1_000),
-    },
+    turnWithItems("completed", [user("Unknown request time"), agent("Answer")]),
   ]);
-  assert.equal(
-    (html.match(new RegExp(`>${otherDate} ${otherTime}</time>`, "gu")) ?? [])
-      .length,
-    2,
-  );
+  const dom = new JSDOM(html);
+  try {
+    assert.equal(
+      dom.window.document.querySelectorAll(
+        ".user-message-actions .message-time",
+      ).length,
+      0,
+    );
+    assert.equal(
+      dom.window.document.querySelectorAll(
+        ".assistant-message-actions .message-time",
+      ).length,
+      1,
+    );
+  } finally {
+    dom.window.close();
+  }
 });
 
 test("reasoning detail uses the safe Markdown renderer", async () => {
@@ -5239,7 +5492,7 @@ test("ordinary send shows an honest local row and clears input before admission 
 test("checking an old thread cannot disable or report a delivery error in the new thread", async () => {
   await withDom(async (root) => {
     let rejectOld!: (error: Error) => void;
-    const oldRead = new Promise<void>((_resolve, reject) => {
+    const oldRead = new Promise<"checked">((_resolve, reject) => {
       rejectOld = reject;
     });
     const pending = (id: string) =>
@@ -5265,7 +5518,7 @@ test("checking an old thread cannot disable or report a delivery error in the ne
           onRespondToApproval: noop,
           onSubmit: noop,
           onCheckPendingSends: () =>
-            id === "thread-a" ? oldRead : Promise.resolve(),
+            id === "thread-a" ? oldRead : Promise.resolve("checked" as const),
         }),
       );
     await act(async () => renderView("thread-a"));
@@ -5364,4 +5617,242 @@ test("local sending presentation hides draft framing but keeps readable skill an
   assert.match(html, /example.ts/);
   assert.doesNotMatch(html, /\[skill:11111111/);
   assert.doesNotMatch(html, /data-sent-message-id/);
+});
+
+test("send logical close returns immediately and delayed cleanup never steals outside focus", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    const { flushSync } = await import("react-dom");
+    const calls: string[] = [];
+    await act(async () =>
+      root.render(
+        createElement(
+          React.Fragment,
+          {},
+          createElement(ComposerSendControl, {
+            mode: "soft",
+            running: true,
+            hasDraft: true,
+            disabled: false,
+            sendDisabled: false,
+            primaryMode: "steer",
+            primaryLabel: "Steer now",
+            compact: false,
+            onPrimary: () => assert.fail("unexpected primary"),
+            onSend: (intent) => calls.push(intent),
+            onStop: () => assert.fail("unexpected stop"),
+            onModeChange: async () => {},
+          }),
+          createElement("input", { "aria-label": "After send control" }),
+        ),
+      ),
+    );
+    await act(async () => openSendOptions());
+    await act(async () => {
+      flushSync(() => requiredButton(".composer-send-options button").click());
+      assert.equal(
+        document.activeElement?.getAttribute("aria-label"),
+        "Steer now",
+        "logical close returns before deferred FocusScope cleanup",
+      );
+      requiredElement<HTMLInputElement>(
+        '[aria-label="After send control"]',
+      ).focus();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+    assert.equal(
+      document.activeElement?.getAttribute("aria-label"),
+      "After send control",
+    );
+    assert.deepEqual(calls, ["batch-next"]);
+  });
+});
+
+for (const shiftKey of [false, true])
+  test(`send dialog Tab boundary ${shiftKey ? "backward" : "forward"} preserves destination after cleanup`, async () => {
+    await withDom(async (root) => {
+      const { ComposerSendControl } =
+        await import("../src/renderer/src/ComposerSendControl.js");
+      await act(async () =>
+        root.render(
+          createElement(
+            React.Fragment,
+            {},
+            createElement(ComposerSendControl, {
+              mode: "soft",
+              running: true,
+              hasDraft: true,
+              disabled: false,
+              sendDisabled: false,
+              primaryMode: "steer",
+              primaryLabel: "Steer now",
+              compact: false,
+              onPrimary: () => assert.fail("must not send"),
+              onSend: () => assert.fail("must not send"),
+              onStop: () => assert.fail("must not stop"),
+              onModeChange: async () => {},
+            }),
+            createElement("input", { "aria-label": "After send control" }),
+          ),
+        ),
+      );
+      await act(async () => openSendOptions());
+      const buttons = [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          ".composer-send-popover button:not(:disabled)",
+        ),
+      ];
+      const edge = shiftKey ? buttons[0]! : buttons.at(-1)!;
+      await act(async () => {
+        edge.focus();
+        edge.dispatchEvent(
+          new window.KeyboardEvent("keydown", {
+            key: "Tab",
+            shiftKey,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      });
+      assert.equal(
+        document.activeElement?.getAttribute("aria-label"),
+        shiftKey ? "Steer now" : "After send control",
+      );
+      assert.equal(document.querySelector(".composer-send-popover"), null);
+    });
+  });
+
+test("inline shell invocation stays Completed while expanded details retain exact nonzero result", async () => {
+  await withDom(async (root) => {
+    const base = commandItem("shell-detail-outcome", "grep absent file");
+    assert.equal(base.type, "commandExecution");
+    if (base.type !== "commandExecution") return;
+    const item = {
+      ...base,
+      toolName: "shell",
+      status: "failed" as const,
+      exitCode: 1,
+      aggregatedOutput: "Synthetic exact nonzero output",
+    };
+    const before = structuredClone(item);
+    await renderInteractive(root, turnWithItems("inProgress", [item]));
+    assert.equal(
+      requiredElement(".tool-status.completed").textContent,
+      "Completed",
+    );
+    assert.equal(document.querySelector(".trace-detail"), null);
+    await act(async () => requiredButton(".trace-item-toggle").click());
+    assert.equal(
+      requiredElement(".tool-status.completed").textContent,
+      "Completed",
+    );
+    assert.match(
+      requiredElement(".trace-detail").textContent ?? "",
+      /Exit code:? 1/,
+    );
+    assert.match(
+      requiredElement(".trace-detail").textContent ?? "",
+      /Synthetic exact nonzero output/,
+    );
+    assert.deepEqual(
+      item,
+      before,
+      "presentation never rewrites returned facts",
+    );
+  });
+});
+test("returning to the latest message keeps either transcript focus or an active draft selection", async () => {
+  const { recoveryScenario } =
+    await import("./fixtures/loop-recovery-scenario.js");
+  for (const selector of [
+    ".back-live",
+    ".conversation-reading-position button",
+  ]) {
+    for (const editing of [false, true]) {
+      await withDom(async (root) => {
+        await act(async () =>
+          root.render(
+            createElement(ThreadView, {
+              approvals: [],
+              composer: editComposer(emptyComposerState(), "Unsent draft"),
+              thread: recoveryScenario("completed"),
+              onDraftChange: () => undefined,
+              onInterrupt: noop,
+              onRespondToApproval: noop,
+              onSubmit: noop,
+            }),
+          ),
+        );
+        const viewport = requiredElement(".messages");
+        let top = 250;
+        let jumps = 0;
+        Object.defineProperties(viewport, {
+          clientHeight: { value: 400 },
+          scrollHeight: { value: 1400 },
+          scrollTop: {
+            get: () => top,
+            set: (target: number) => {
+              top = Math.min(target, 1000);
+            },
+          },
+          scrollTo: {
+            value: (options: ScrollToOptions) => {
+              jumps += 1;
+              viewport.scrollTop = options.top ?? 0;
+            },
+          },
+        });
+        await act(async () => {
+          viewport.dispatchEvent(
+            new window.WheelEvent("wheel", { bubbles: true, deltaY: -100 }),
+          );
+          viewport.dispatchEvent(new window.Event("scroll"));
+        });
+        const jump = requiredButton(selector);
+        const composer = document.querySelector("textarea");
+        assert.ok(composer);
+        if (editing) {
+          composer.focus();
+          composer.setSelectionRange(2, 6);
+          const mouseDown = new window.MouseEvent("mousedown", {
+            bubbles: true,
+            cancelable: true,
+            button: 0,
+          });
+          jump.dispatchEvent(mouseDown);
+          assert.equal(mouseDown.defaultPrevented, true);
+          await act(async () => {
+            jump.dispatchEvent(
+              new window.MouseEvent("click", { bubbles: true, detail: 1 }),
+            );
+          });
+          assert.equal(document.activeElement === composer, true);
+          assert.equal(composer.value, "Unsent draft");
+          assert.deepEqual(
+            [composer.selectionStart, composer.selectionEnd],
+            [2, 6],
+          );
+        } else {
+          jump.focus();
+          assert.equal(document.activeElement === jump, true);
+          await act(async () => jump.click());
+          assert.equal(
+            document.activeElement === viewport,
+            true,
+            `expected transcript focus after ${selector}, got ${document.activeElement?.tagName}`,
+          );
+        }
+        assert.equal(viewport.tabIndex, -1);
+        assert.equal(top, 1000);
+        assert.equal(jumps, 1);
+        assert.equal(
+          document.querySelector(selector) === null,
+          true,
+          "jump control disappears",
+        );
+      });
+    }
+  }
 });

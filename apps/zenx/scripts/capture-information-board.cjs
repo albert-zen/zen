@@ -139,7 +139,7 @@ async function verifyInformationOsInput() {
       "Open maximized main information with actual OS pointer",
       true,
     );
-    await capture(`16-${repeat}-os-main-information`, "dock");
+    await capture(`16-${repeat}-os-main-information`, "overlay");
     await click(
       ".information-toolbar button",
       "Close maximized main information with actual OS pointer",
@@ -272,47 +272,301 @@ async function screenshot(name) {
     (await window.webContents.capturePage()).toPNG(),
   );
 }
+// Check the known title without changing the screenshot's current reading position.
+// Earlier interactions may intentionally have scrolled it above the card viewport.
+async function inspectInformationHeading(selector) {
+  return evaluate(`(()=>{
+    const e=document.querySelector(${JSON.stringify(selector)});
+    if(!e)throw Error('Missing information heading');
+    const ancestors=[];
+    for(let p=e.parentElement;p;p=p.parentElement) ancestors.push({node:p,top:p.scrollTop,left:p.scrollLeft});
+    const before=e.getBoundingClientRect();
+    let observation;
+    try {
+      e.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});
+      const r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);
+      observation={text:e.textContent,top:r.top,bottom:r.bottom,originalTop:before.top,hitClass:hit?.className,unoccluded:e.contains(hit)};
+    } finally {
+      for(const {node,top,left} of ancestors) node.scrollTo({top,left,behavior:'instant'});
+    }
+    observation.scrollRestored=ancestors.every(({node,top,left})=>node.scrollTop===top&&node.scrollLeft===left);
+    return observation;
+  })()`);
+}
+// Read a stable user-authored anchor, not the active Turn's changing timer/body.
+async function informationReadingSnapshot() {
+  return evaluate(`(()=>{
+    const scroll=document.querySelector('.thread-view .messages');
+    const anchor=window.__informationReadingAnchor;
+    if(!scroll || !anchor?.isConnected) throw Error('Missing controlled reading anchor');
+    const rect=e=>{const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}};
+    return {scrollTop:scroll.scrollTop,maxTop:scroll.scrollHeight-scroll.clientHeight,
+      viewport:rect(scroll),anchor:rect(anchor),
+      id:anchor.closest('[data-sent-message-id]').dataset.sentMessageId,
+      text:anchor.textContent,window:{width:innerWidth,height:innerHeight}};
+  })()`);
+}
+async function prepareInformationReadingCamera() {
+  const prepared = await evaluate(`(()=>{
+    const scroll=document.querySelector('.thread-view .messages');
+    const r=scroll.getBoundingClientRect();
+    window.__informationReadingWheel=null;
+    scroll.addEventListener('wheel',e=>{window.__informationReadingWheel={trusted:e.isTrusted,deltaY:e.deltaY}}, {once:true});
+    return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/3),scrollTop:scroll.scrollTop};
+  })()`);
+  window.webContents.sendInputEvent({
+    type: "mouseWheel",
+    x: prepared.x,
+    y: prepared.y,
+    deltaX: 0,
+    deltaY: 320,
+    canScroll: true,
+    hasPreciseScrollingDeltas: true,
+  });
+  await until(
+    () =>
+      evaluate(
+        `(()=>{const s=document.querySelector('.thread-view .messages'),w=window.__informationReadingWheel;return w?.trusted&&w.deltaY<0&&s.scrollTop<${prepared.scrollTop}&&s.scrollHeight-s.clientHeight-s.scrollTop>100})()`,
+      ),
+    "native wheel pauses tail following and moves to earlier reading",
+  );
+  await evaluate(`(()=>{
+    const scroll=document.querySelector('.thread-view .messages'),r=scroll.getBoundingClientRect();
+    const bottom=document.querySelector('.bottom-zone').getBoundingClientRect().top;
+    window.__informationReadingAnchor=[...scroll.querySelectorAll('[data-sent-message-id] .user-bubble')].find(e=>{const a=e.getBoundingClientRect();return a.bottom>r.top+40&&a.top<bottom-40});
+    if(!window.__informationReadingAnchor) throw Error('No visible named user message for controlled camera');
+    return true;
+  })()`);
+  let previous;
+  let stable = 0;
+  result.readingCamera = {
+    input: "trusted Electron native wheel; no DOM scroll assignment",
+    wheel: await evaluate("window.__informationReadingWheel"),
+    samples: [],
+  };
+  await until(async () => {
+    const sample = await informationReadingSnapshot();
+    result.readingCamera.samples.push(sample);
+    // This is an observed non-tail anchor barrier, not an assumed sleep. New
+    // rows may arrive below it; maxTop is therefore diagnostic, not frozen.
+    const signature = JSON.stringify({ ...sample, maxTop: undefined });
+    stable = signature === previous ? stable + 1 : 0;
+    previous = signature;
+    return stable >= 2 && sample.maxTop - sample.scrollTop > 100;
+  }, "same visible reading anchor and viewport across consecutive observations");
+  result.readingCamera.before = await informationReadingSnapshot();
+}
+function assertInformationReadingUnchanged(before, after, shift) {
+  assert.deepEqual(
+    after.window,
+    before.window,
+    "opening Information preserves viewport dimensions",
+  );
+  assert.deepEqual(
+    after.viewport,
+    before.viewport,
+    "opening Information preserves transcript scrollport",
+  );
+  assert.equal(
+    after.scrollTop,
+    before.scrollTop,
+    "opening Information preserves explicit non-tail scrollTop",
+  );
+  assert.equal(after.id, before.id, "same named visible message");
+  assert.equal(after.text, before.text, "same immutable user message contents");
+  for (const edge of ["top", "bottom", "width", "height"])
+    assert.equal(
+      after.anchor[edge],
+      before.anchor[edge],
+      `opening Information preserves anchor.${edge}`,
+    );
+  for (const edge of ["left", "right"])
+    assert.ok(
+      Math.abs(before.anchor[edge] - after.anchor[edge] - shift) <= 0.5,
+      `anchor.${edge} follows measured lane`,
+    );
+}
+// The fit is based on actual DOM coordinates, not a fixed window breakpoint.
+function informationFitProbe({ left, right, width, viewportLeft }) {
+  const shift = Math.max(0, left + width + 16 - (right - 320));
+  return { shift, clearance: left - shift - viewportLeft - 24 };
+}
+async function captureInformationFitBoundary() {
+  const originalSize = window.getSize();
+  const original = await informationReadingSnapshot();
+  const measure = () =>
+    evaluate(`(()=>{
+    const view=document.querySelector('.thread-view'),column=view.querySelector('.virtual-transcript-header, .messages-inner'),toolbar=document.querySelector('.information-toolbar');
+    const r=column.getBoundingClientRect(),composer=document.querySelector('#thread-composer');
+    return {left:r.left,right:Number(toolbar.dataset.clearanceRight),width:r.width,viewportLeft:view.getBoundingClientRect().left,
+      resourceOpen:document.querySelector('.auxiliary-panel')?.dataset.open==='true',lane:view.dataset.informationLane==='true',
+      draft:composer.value,composerIdentity:composer===window.__informationComposer};
+  })()`);
+  await click(
+    ".information-toolbar button",
+    "Close Information before measured fit-boundary camera",
+  );
+  await until(
+    () =>
+      evaluate(
+        "!document.querySelector('.information-popover') && document.querySelector('.thread-view')?.dataset.informationLane!=='true'",
+      ),
+    "Information closed for boundary measurement",
+  );
+  const initial = await measure();
+  assert.equal(
+    initial.resourceOpen,
+    false,
+    "fit-boundary camera must keep right workspace closed",
+  );
+  const boundary = Math.round(
+    originalSize[0] -
+      (initial.right - initial.viewportLeft - initial.width - 360),
+  );
+  result.fitBoundary = { originalSize, boundary, initial, cases: [] };
+  for (const [suffix, delta, fits] of [
+    ["fits", 2, true],
+    ["floats", -2, false],
+  ]) {
+    await resizeWindow(boundary + delta, originalSize[1]);
+    await evaluate(
+      "new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))",
+    );
+    const closed = await measure();
+    const probe = informationFitProbe(closed);
+    const receipt = { suffix, closed, probe };
+    result.fitBoundary.cases.push(receipt);
+    assert.equal(closed.resourceOpen, false);
+    assert.equal(
+      probe.clearance >= 0,
+      fits,
+      "measured DOM must straddle the actual fit threshold",
+    );
+    const before = await informationReadingSnapshot();
+    assert.equal(
+      before.id,
+      original.id,
+      "resize retains the same paused message",
+    );
+    assert.equal(before.text, original.text);
+    assert.equal(
+      before.anchor.width,
+      original.anchor.width,
+      "boundary camera does not rewrap the anchor",
+    );
+    assert.ok(
+      before.anchor.bottom > before.viewport.top &&
+        before.anchor.top < before.viewport.bottom,
+      "same anchor remains visible",
+    );
+    Object.assign(receipt, { before });
+    await screenshot(`01a-${suffix}-closed.png`);
+    await click(
+      ".information-toolbar button",
+      `Open Information at measured ${suffix} width`,
+    );
+    await capture(`01a-${suffix}-open`, "overlay");
+    const opened = await measure();
+    const after = await informationReadingSnapshot();
+    Object.assign(receipt, { opened, after });
+    assert.equal(
+      opened.lane,
+      fits,
+      "presentation follows measured fit, not split-pane fallback",
+    );
+    assert.equal(opened.resourceOpen, false);
+    assert.equal(opened.draft, closed.draft);
+    assert.equal(opened.composerIdentity, true);
+    assertInformationReadingUnchanged(before, after, fits ? probe.shift : 0);
+    await click(
+      ".information-toolbar button",
+      `Close measured ${suffix} camera`,
+    );
+    await until(
+      () =>
+        evaluate(
+          "!document.querySelector('.information-popover') && document.querySelector('.thread-view')?.dataset.informationLane!=='true'",
+        ),
+      "boundary card closed",
+    );
+  }
+  await resizeWindow(...originalSize);
+  await click(
+    ".information-toolbar button",
+    "Restore original wide Information camera",
+  );
+  await until(
+    () =>
+      evaluate(
+        "document.querySelector('.thread-view')?.dataset.informationLane==='true'",
+      ),
+    "original fitted lane restored",
+  );
+}
 async function capture(name, mode) {
   await until(
     () =>
       evaluate(
-        `Boolean(document.querySelector(${JSON.stringify(mode === "dock" ? ".information-dock" : mode === "overlay" ? ".information-popover" : ".information-toolbar button[aria-pressed=false]")}))`,
+        `Boolean(document.querySelector(${JSON.stringify(mode === "overlay" ? ".information-popover" : ".information-toolbar button[aria-pressed=false]")}))`,
       ),
     name + " presentation",
   );
   await pause(250);
   const geometry = await evaluate(
-    `(()=>{const rect=s=>{const e=document.querySelector(s);if(!e)return null;const r=e.getBoundingClientRect(),c=getComputedStyle(e);return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height,display:c.display,visibility:c.visibility,color:c.color,background:c.backgroundColor}};return {chat:rect('.agent-surface'),composer:rect('#thread-composer'),card:rect('.information-dock'),popover:rect('.information-popover'),workspace:rect('.workspace'),resource:rect('.auxiliary-panel'),titlebar:rect('.window-titlebar-session'),resourceHeading:document.querySelector('.auxiliary-panel')?.dataset.open==='true'?rect('.auxiliary-heading'):null,resourceExpanded:document.querySelector('.auxiliary-panel')?.dataset.expanded,primaryActive:document.querySelector('.auxiliary-panel')?.dataset.primaryActive,informationSlot:rect('.auxiliary-information-slot'),informationEntryHidden:document.querySelector('.information-toolbar')?.hidden,informationToggle:rect('.information-toolbar button'),workspaceToggle:rect('.auxiliary-close-button'),expanded:document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded'),overflow:document.documentElement.scrollWidth>innerWidth,composerIdentity:window.__informationComposer===document.querySelector('#thread-composer'),draft:document.querySelector('#thread-composer')?.value}})()`,
+    `(()=>{const rect=s=>{const e=document.querySelector(s);if(!e)return null;const r=e.getBoundingClientRect(),c=getComputedStyle(e);return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height,display:c.display,visibility:c.visibility,color:c.color,background:c.backgroundColor}};return {reading:rect('.thread-view .virtual-transcript-header, .thread-view .messages-inner'),lane:document.querySelector('.thread-view')?.dataset.informationLane==='true',shift:parseFloat(document.querySelector('.thread-view')?.style.getPropertyValue('--information-reading-shift')||'0'),resourceOpen:document.querySelector('.auxiliary-panel')?.dataset.open==='true',chat:rect('.agent-surface'),composer:rect('#thread-composer'),composerShell:rect('.bottom-zone > .composer'),commandStrip:rect('.bottom-zone > .background-shell-status'),card:rect('.information-popover'),popoverCount:document.querySelectorAll('.information-popover').length,legacyDockCount:document.querySelectorAll('.information-dock').length,popover:rect('.information-popover'),workspace:rect('.workspace'),resource:rect('.auxiliary-panel'),titlebar:rect('.window-titlebar-session'),resourceHeading:document.querySelector('.auxiliary-panel')?.dataset.open==='true'?rect('.auxiliary-heading'):null,resourceExpanded:document.querySelector('.auxiliary-panel')?.dataset.expanded,primaryActive:document.querySelector('.auxiliary-panel')?.dataset.primaryActive,informationSlot:rect('.auxiliary-information-slot'),informationEntryHidden:document.querySelector('.information-toolbar')?.hidden,informationToggle:rect('.information-toolbar button'),workspaceToggle:rect('.auxiliary-close-button'),expanded:document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded'),overflow:document.documentElement.scrollWidth>innerWidth,composerIdentity:window.__informationComposer===document.querySelector('#thread-composer'),draft:document.querySelector('#thread-composer')?.value}})()`,
   );
-  if (mode === "dock") {
+  if (mode === "overlay") {
+    assert.equal(
+      geometry.popoverCount,
+      1,
+      "exactly one floating Information card",
+    );
+    assert.equal(geometry.legacyDockCount, 0, "no reserved information dock");
     assert.ok(
-      geometry.chat.right <= geometry.card.left,
-      "docked card cannot overlap the main conversation",
+      geometry.card.width > 0 && geometry.card.width <= 341,
+      "floating card is bounded to 340px",
     );
     assert.ok(
-      geometry.composer.right <= geometry.card.left,
-      "docked card cannot overlap Composer",
+      geometry.card.left >= geometry.chat.left + 11,
+      "card stays inside conversation leading clearance",
     );
     assert.ok(
-      geometry.chat.width >= 550,
-      "conversation retains a usable allocation",
+      Math.abs(geometry.card.right - (geometry.chat.right - 12)) <= 1,
+      "card follows conversation trailing edge",
     );
     assert.ok(
       geometry.card.bottom <= geometry.workspace.bottom + 1,
       "card remains within workspace height",
     );
-    const visibleHeaders = [geometry.titlebar, geometry.resourceHeading].filter(
-      (rect) => rect && rect.visibility !== "hidden" && rect.display !== "none",
-    );
     assert.ok(
-      visibleHeaders.every((rect) => geometry.card.top >= rect.bottom + 11),
-      "card clears actual visible conversation/workspace headings on every platform",
+      geometry.card.top >= geometry.informationToggle.bottom,
+      "card sits below chat controls",
     );
+    if (geometry.resourceHeading && geometry.resourceExpanded === "false") {
+      assert.ok(
+        geometry.card.right <= geometry.resource.left,
+        "split resource remains outside the card",
+      );
+      assert.ok(
+        Math.abs(geometry.chat.right - geometry.resource.left) <= 1,
+        "no third column beside split conversation",
+      );
+    } else {
+      assert.ok(
+        Math.abs(geometry.chat.right - geometry.workspace.right) <= 1,
+        "floating information reserves no conversation width",
+      );
+    }
     // Accepted questions are above component settings. With multiple questions,
     // the settings toolbar is legitimately below the fold, not occluded.
     // Check the first real heading in DOM order and retain the hit-test evidence.
-    geometry.firstCardHeading = await evaluate(
-      "(()=>{const e=document.querySelector('.information-dock .user-question-attention > header, .information-dock .room-question-attention > header, .information-dock .information-settings-toolbar');if(!e)throw Error('Missing information heading');const r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return {text:e.textContent,top:r.top,bottom:r.bottom,hitClass:hit?.className,unoccluded:e.contains(hit)}})()",
+    geometry.firstCardHeading = await inspectInformationHeading(
+      ".information-popover .user-question-attention > header, .information-popover .room-question-attention > header, .information-popover .information-settings-toolbar",
+    );
+    assert.equal(
+      geometry.firstCardHeading.scrollRestored,
+      true,
+      "heading check restores every scroll position",
     );
     assert.equal(
       geometry.firstCardHeading.unoccluded,
@@ -342,6 +596,23 @@ async function capture(name, mode) {
     );
     assert.equal(resizeState.focusUnchanged, true);
     result.fullscreenSplitResizer = resizeState;
+  }
+  if (mode === "closed") {
+    assert.equal(
+      geometry.popoverCount,
+      0,
+      "closed information has no floating card",
+    );
+    assert.equal(geometry.legacyDockCount, 0);
+    if (
+      geometry.resourceExpanded === "true" &&
+      geometry.primaryActive !== "true"
+    )
+      assert.equal(
+        geometry.informationEntryHidden,
+        true,
+        "resource-only fullscreen has no Information entry",
+      );
   }
   assert.equal(geometry.overflow, false, "no page-level horizontal overflow");
   if (mode !== "closed") {
@@ -393,6 +664,88 @@ async function capture(name, mode) {
       geometry.workspaceToggle.color,
       "shared active foreground",
     );
+  }
+  if (geometry.lane) {
+    assert.equal(mode, "overlay", "lane requires an open Information card");
+    assert.equal(
+      geometry.resourceOpen,
+      false,
+      "lane never moves a split conversation",
+    );
+    assert.ok(geometry.reading, "lane measures the real reading column");
+    assert.ok(
+      geometry.card.left - geometry.reading.right >= 15.5,
+      "Information lane leaves at least 16px reading clearance (0.5px rounding tolerance)",
+    );
+    assert.ok(
+      geometry.reading.left >= geometry.chat.left + 23.5,
+      "lane retains the conversation leading gutter",
+    );
+  } else {
+    assert.equal(
+      geometry.shift,
+      0,
+      "floating fallback never displaces the reading column",
+    );
+  }
+  if (name.startsWith("01-")) {
+    assert.ok(
+      geometry.composerShell && geometry.commandStrip,
+      "wide camera includes the active background command strip",
+    );
+    for (const edge of ["left", "right"])
+      assert.ok(
+        Math.abs(geometry.commandStrip[edge] - geometry.composerShell[edge]) <=
+          0.5,
+        `background command strip shares Composer.${edge}`,
+      );
+    const after = await informationReadingSnapshot();
+    result.readingCamera.after = after;
+    assertInformationReadingUnchanged(
+      result.readingCamera.before,
+      after,
+      geometry.shift,
+    );
+    const baseline = await evaluate("window.__informationLayoutBaseline");
+    for (const edge of ["left", "right", "top", "bottom", "width", "height"])
+      assert.equal(
+        geometry.chat[edge],
+        baseline.chat[edge],
+        `opening Information preserves outer chat.${edge}`,
+      );
+    for (const key of ["composer", "reading"])
+      for (const edge of ["top", "bottom", "width", "height"])
+        assert.equal(
+          geometry[key][edge],
+          baseline[key][edge],
+          `opening Information preserves ${key}.${edge}`,
+        );
+    // This camera is intentionally wide with workspace closed. A floating
+    // fallback here would hide a regression in the newly chosen lane design.
+    assert.equal(
+      geometry.lane,
+      true,
+      "wide camera must activate the Information lane",
+    );
+    const displacement = baseline.reading.left - geometry.reading.left;
+    assert.ok(
+      displacement > 0,
+      "wide reading column moves into existing left whitespace",
+    );
+    assert.ok(
+      Math.abs(displacement - geometry.shift) <= 0.5,
+      "measured reading displacement matches the owned shift",
+    );
+    for (const edge of ["left", "right"])
+      assert.ok(
+        Math.abs(
+          baseline.composer[edge] - geometry.composer[edge] - displacement,
+        ) <= 0.5,
+        `composer.${edge} follows exactly the unchanged-width reading column`,
+      );
+    assert.equal(geometry.draft, baseline.draft);
+    assert.equal(geometry.composerIdentity, true);
+    geometry.closedBaseline = baseline;
   }
   await screenshot(name + ".png");
   result.cases.push({ name, mode, geometry });
@@ -544,6 +897,12 @@ async function run() {
   await evaluate(
     "(()=>{window.__informationComposer=document.querySelector('#thread-composer');return true})()",
   );
+  await screenshot("00-live-before-controlled-reading.png");
+  await prepareInformationReadingCamera();
+  await evaluate(
+    "(()=>{if(document.querySelector('.information-popover, .information-dock'))throw Error('Opening baseline requires closed information');const rect=s=>{const r=document.querySelector(s).getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}};window.__informationLayoutBaseline={reading:rect('.thread-view .virtual-transcript-header, .thread-view .messages-inner'),chat:rect('.agent-surface'),composer:rect('#thread-composer'),draft:document.querySelector('#thread-composer').value};return true})()",
+  );
+  await screenshot("00-wide-closed-baseline.png");
   await click(".information-toolbar button", "Open wide information card");
   await until(
     () =>
@@ -552,7 +911,8 @@ async function run() {
       ),
     "real trigger, lineage and command cards",
   );
-  await capture("01-wide-light", "dock");
+  await capture("01-wide-light", "overlay");
+  await captureInformationFitBoundary();
   await until(
     () =>
       evaluate(
@@ -1021,7 +1381,7 @@ async function run() {
     ".information-toolbar button",
     "Open information in maximized main conversation",
   );
-  await capture("04-maximized-main-dock", "dock");
+  await capture("04-maximized-main-overlay", "overlay");
   assert.equal(result.cases.at(-1).geometry.composerIdentity, true);
   assert.equal(
     result.cases.at(-1).geometry.draft,
@@ -1032,7 +1392,7 @@ async function run() {
     () => evaluate("document.documentElement.dataset.appearance==='dark'"),
     "actual app dark appearance",
   );
-  await capture("05-maximized-main-dark", "dock");
+  await capture("05-maximized-main-dark", "overlay");
   await click(
     '[data-tab-id="file:fixture.txt"] [role="tab"]',
     "Switch maximized workspace to its file resource",
@@ -1058,15 +1418,15 @@ async function run() {
   );
   await capture("08-narrow-reopened", "overlay");
   await resizeWindow(1600, 1000);
-  await capture("08a-open-overlay-to-dock", "dock");
+  await capture("08a-open-overlay-resize-wide", "overlay");
   assert.equal(result.cases.at(-1).geometry.composerIdentity, true);
   await resizeWindow(1000, 820);
-  await capture("08b-open-dock-to-overlay", "overlay");
-  // Native layout at our exact responsive boundary, not only a spacious window.
+  await capture("08b-open-overlay-resize-narrow", "overlay");
+  // Both sides of the former dock breakpoint retain full conversation width.
   await resizeWindow(1184, 820);
-  await capture("08c-920px-allocation-dock", "dock");
+  await capture("08c-920px-allocation-overlay", "overlay");
   assert.equal(result.cases.at(-1).geometry.workspace.width, 920);
-  assert.equal(result.cases.at(-1).geometry.chat.width, 556);
+  assert.equal(result.cases.at(-1).geometry.chat.width, 920);
   assert.ok(result.cases.at(-1).geometry.composer.width >= 480);
   await resizeWindow(1183, 820);
   await capture("08d-919px-allocation-overlay", "overlay");
@@ -1107,7 +1467,7 @@ async function run() {
     ".information-toolbar button",
     "Open second conversation information",
   );
-  await capture("10-second-owner", "dock");
+  await capture("10-second-owner", "overlay");
   assert.ok(
     !(await evaluate(
       "document.querySelector('.information-content')?.textContent.includes('Daily synthetic review')",
@@ -1129,12 +1489,8 @@ async function run() {
       ),
     "original owner's remembered open state is restored",
   );
-  // A restored resource Tab uses an overlay; the main Tab uses the dock.
-  // Owner visibility must survive either independently restored workspace view.
-  const restoredMode = await evaluate(
-    "(()=>{const p=document.querySelector('.auxiliary-panel');return p?.dataset.open==='true' && p.dataset.expanded==='true' && p.dataset.primaryActive!=='true' ? 'overlay' : 'dock'})()",
-  );
-  await capture("10a-original-owner-restored", restoredMode);
+  // The selected main conversation restores the same floating presentation.
+  await capture("10a-original-owner-restored", "overlay");
   assert.equal(
     await evaluate(
       "document.querySelector('.information-toolbar button').getAttribute('aria-expanded')",
@@ -1655,7 +2011,7 @@ async function run() {
   const captureInformationCrop = async (name) => {
     await settleScreenshotFrame();
     const rectangle = await evaluate(
-      "(()=>{const e=document.querySelector('.information-dock,.information-popover'),r=e.getBoundingClientRect();return {x:Math.ceil(r.x),y:Math.ceil(r.y),width:Math.floor(r.width),height:Math.floor(r.height)}})()",
+      "(()=>{const e=document.querySelector('.information-popover'),r=e.getBoundingClientRect();return {x:Math.ceil(r.x),y:Math.ceil(r.y),width:Math.floor(r.width),height:Math.floor(r.height)}})()",
     );
     await fs.writeFile(
       path.join(directory, name),

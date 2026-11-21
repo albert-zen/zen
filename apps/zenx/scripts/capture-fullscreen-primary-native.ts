@@ -55,15 +55,18 @@ async function until(check: () => Promise<boolean> | boolean, label: string) {
   }
   throw Error(`Timed out: ${label}; no input replay`);
 }
+// Both native cases are desktop widths; the legacy .back-live node is hidden.
+const readingReturnSelector =
+  "#primary-conversation-content .conversation-reading-position button";
 const measure = `(() => {
  const root=document.querySelector('#primary-conversation-content'), v=root.querySelector('.messages'), r=v.getBoundingClientRect();
  const rows=[...v.querySelectorAll('[data-transcript-row-key]')].filter(e=>e.getBoundingClientRect().bottom>r.top).sort((a,b)=>a.getBoundingClientRect().top-b.getBoundingClientRect().top);
- const row=rows[0],editor=root.querySelector('textarea,.cm-content');
- return {top:v.scrollTop,range:v.scrollHeight-v.clientHeight,x:r.x,y:r.y,width:r.width,height:r.height,key:row?.dataset.transcriptRowKey,offset:row?.getBoundingClientRect().top-r.top,visibility:getComputedStyle(root).visibility,primary:document.querySelector('.auxiliary-panel').dataset.primaryActive,paused:!!root.querySelector('.back-live'),draft:editor?.value??editor?.textContent,wheelCount:window.__nativeWheelCount??0,streamCount:(root.textContent.match(/Synthetic streamed text chunk/g)||[]).length};
+ const row=rows[0],editor=root.querySelector('textarea,.cm-content'),cue=root.querySelector('.conversation-reading-position button'),cueRect=cue?.getBoundingClientRect();
+ return {top:v.scrollTop,range:v.scrollHeight-v.clientHeight,x:r.x,y:r.y,width:r.width,height:r.height,key:row?.dataset.transcriptRowKey,offset:row?.getBoundingClientRect().top-r.top,visibility:getComputedStyle(root).visibility,primary:document.querySelector('.auxiliary-panel').dataset.primaryActive,paused:v.closest('.thread-view')?.dataset.readingEarlier==='true',returnVisible:!!cueRect?.width && !!cueRect?.height && getComputedStyle(cue).visibility!=='hidden',draft:editor?.value??editor?.textContent,wheelCount:window.__nativeWheelCount??0,streamCount:(root.textContent.match(/Synthetic streamed text chunk/g)||[]).length};
 })()`;
 async function click(selector: string) {
   const point = await evaluate(
-    `(() => {const e=document.querySelector(${JSON.stringify(selector)}),r=e.getBoundingClientRect(),x=Math.round(r.x+r.width/2),y=Math.round(r.y+r.height/2);if(!r.width||!e.contains(document.elementFromPoint(x,y)))throw Error('Occluded fixture target');return {x,y}})()`,
+    `(() => {const selector=${JSON.stringify(selector)},e=document.querySelector(selector);if(!e)throw Error('Missing fixture target: '+selector);const r=e.getBoundingClientRect(),x=Math.round(r.x+r.width/2),y=Math.round(r.y+r.height/2);if(!r.width||!r.height)throw Error('Zero-size fixture target: '+selector);const hit=document.elementFromPoint(x,y);if(!e.contains(hit))throw Error('Occluded fixture target: '+selector+'; hit='+(hit?.tagName??'none')+'.'+(hit?.className??''));return {x,y}})()`,
   );
   owner!.focus();
   owner!.webContents.focus();
@@ -130,6 +133,8 @@ function sameReading(actual: any, expected: any, label: string) {
   );
   assert.equal(actual.draft, expected.draft, `${label}: draft`);
   assert.ok(actual.paused, `${label}: remains paused`);
+  if (actual.visibility === "visible")
+    assert.ok(actual.returnVisible, `${label}: desktop return is visible`);
 }
 async function capture(name: string, native: boolean) {
   const renderer = await owner!.webContents.capturePage();
@@ -247,8 +252,12 @@ async function run() {
   for (const [index, width] of [1280, 1000].entries()) {
     owner.setContentSize(width, 900);
     await pause(500);
-    if (await evaluate("!!document.querySelector('.back-live')"))
-      await click(".back-live");
+    if (
+      await evaluate(
+        `!!document.querySelector(${JSON.stringify(readingReturnSelector)})`,
+      )
+    )
+      await click(readingReturnSelector);
     await until(async () => {
       const m = await evaluate(measure);
       return m.range - m.top <= 4;
@@ -256,7 +265,12 @@ async function run() {
     const live = await evaluate(measure);
     await wheel(live.range * 0.5);
     const saved = await evaluate(measure);
-    assert.ok(saved.paused && saved.top > 50 && saved.top < saved.range - 50);
+    assert.ok(
+      saved.paused &&
+        saved.returnVisible &&
+        saved.top > 50 &&
+        saved.top < saved.range - 50,
+    );
     const sequence = index * 10 + 1;
     await evaluate(
       `window.__fullscreenPrimaryPreview.preview('thread-a',${sequence})`,
