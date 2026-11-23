@@ -6,6 +6,7 @@ import {
   isValidElement,
   memo,
   useContext,
+  useReducer,
   useState,
   type ReactNode,
 } from "react";
@@ -28,6 +29,32 @@ export const MessageLinkContext = createContext<
   ((target: { kind: "file" | "browser"; value: string }) => void) | null
 >(null);
 
+// The ThreadView owns this ephemeral store, not the virtual message row.
+export function createMessageCodeWrapChoices() {
+  const entries = new Map<string, string>();
+  return {
+    has(key: string, fence: string) {
+      return entries.get(key) === fence;
+    },
+    set(key: string, fence: string, wrapped: boolean) {
+      entries.delete(key);
+      if (!wrapped) return;
+      // Bound both the number and size of explicitly changed fences.
+      if (entries.size >= 128) {
+        const oldest = entries.keys().next().value;
+        if (oldest !== undefined) entries.delete(oldest);
+      }
+      entries.set(key, fence);
+    },
+  };
+}
+
+export const MessageCodeWrapContext = createContext<ReturnType<
+  typeof createMessageCodeWrapChoices
+> | null>(null);
+
+type CodeWrapChoice = { wrapped: boolean; set(wrapped: boolean): void };
+
 export type MarkdownBlock =
   | { type: "paragraph"; text: string }
   | { type: "heading"; depth: number; text: string }
@@ -46,12 +73,15 @@ export interface MarkdownInlineToken {
 export const Markdown = memo(function Markdown({
   text,
   inlineTokens = [],
+  wrapMessageId,
 }: {
   text: string;
   inlineTokens?: readonly MarkdownInlineToken[];
+  wrapMessageId?: string;
 }) {
   useTranslation("panels");
   const onOpen = useContext(MessageLinkContext);
+  const wrapChoices = useContext(MessageCodeWrapContext);
   const renderText = (value: string): ReactNode => {
     if (!inlineTokens.length) return value;
     const output: ReactNode[] = [];
@@ -229,11 +259,18 @@ export const Markdown = memo(function Markdown({
   const streamingFence =
     streamingBlock === null ? null : findUnclosedFence(text);
 
+  const codeRender = {
+    text,
+    inlineTokens,
+    renderText,
+    copyText,
+    wrapChoices,
+    wrapMessageId,
+  };
+
   if (streamingFence !== null && streamingBlock !== null) {
     return (
-      <CodeRenderContext.Provider
-        value={{ text, inlineTokens, renderText, copyText }}
-      >
+      <CodeRenderContext.Provider value={codeRender}>
         <div className="markdown-body">
           <ReactMarkdown
             remarkPlugins={[
@@ -260,9 +297,7 @@ export const Markdown = memo(function Markdown({
   }
 
   return (
-    <CodeRenderContext.Provider
-      value={{ text, inlineTokens, renderText, copyText }}
-    >
+    <CodeRenderContext.Provider value={codeRender}>
       <div className="markdown-body">
         <ReactMarkdown
           remarkPlugins={[
@@ -290,11 +325,20 @@ const CodeRenderContext = createContext({
   inlineTokens: [] as readonly MarkdownInlineToken[],
   renderText: (value: string): ReactNode => value,
   copyText: (value: string): string => value,
+  wrapChoices: null as React.ContextType<typeof MessageCodeWrapContext>,
+  wrapMessageId: undefined as string | undefined,
 });
 
 const MessageCodePre: NonNullable<Components["pre"]> = ({ children, node }) => {
-  const { text, inlineTokens, renderText, copyText } =
-    useContext(CodeRenderContext);
+  const {
+    text,
+    inlineTokens,
+    renderText,
+    copyText,
+    wrapChoices,
+    wrapMessageId,
+  } = useContext(CodeRenderContext);
+  const [, refreshWrap] = useReducer((value: number) => value + 1, 0);
   const child = Children.only(children);
   if (isValidElement(child)) {
     const props = child.props as {
@@ -302,6 +346,26 @@ const MessageCodePre: NonNullable<Components["pre"]> = ({ children, node }) => {
       children?: unknown;
     };
     const language = props.className?.match(/language-(\S+)/u)?.[1] ?? "";
+    const lines = sourceLines(text);
+    const wrapAllowed = closedCodeFence(lines, node);
+    const start = node?.position?.start.line;
+    const end = node?.position?.end.line;
+    let wrapChoice: CodeWrapChoice | undefined;
+    if (wrapAllowed && wrapChoices && wrapMessageId && start && end) {
+      // Exact source keeps an edited replacement from inheriting an older
+      // choice. Appends and Markdown link preparation do not change line IDs.
+      const fence = lines.slice(start - 1, end).join("\n");
+      if (fence.length <= 65_536) {
+        const key = JSON.stringify([wrapMessageId, start]);
+        wrapChoice = {
+          wrapped: wrapChoices.has(key, fence),
+          set(wrapped) {
+            wrapChoices.set(key, fence, wrapped);
+            refreshWrap();
+          },
+        };
+      }
+    }
     return (
       <CodeBlock
         block={{
@@ -312,7 +376,8 @@ const MessageCodePre: NonNullable<Components["pre"]> = ({ children, node }) => {
         }}
         renderText={renderText}
         copyText={copyText}
-        wrapAllowed={closedCodeFence(sourceLines(text), node)}
+        wrapAllowed={wrapAllowed}
+        wrapChoice={wrapChoice}
         filePathAllowed={
           closedTopLevelFence(text, node) &&
           !inlineTokens.some((token) =>
@@ -550,12 +615,14 @@ function CodeBlock({
   copyText = (value) => value,
   filePathAllowed = false,
   wrapAllowed = false,
+  wrapChoice,
 }: {
   block: Extract<MarkdownBlock, { type: "code" }>;
   renderText?(value: string): ReactNode;
   copyText?(value: string): string;
   filePathAllowed?: boolean;
   wrapAllowed?: boolean;
+  wrapChoice?: CodeWrapChoice;
 }) {
   useTranslation("panels");
   const onOpen = useContext(MessageLinkContext);
@@ -575,7 +642,8 @@ function CodeBlock({
         )
       : null;
   const [copied, setCopied] = useState(false);
-  const [wrapped, setWrapped] = useState(false);
+  const [localWrapped, setLocalWrapped] = useState(false);
+  const wrapped = wrapChoice?.wrapped ?? localWrapped;
   const copy = async () => {
     await navigator.clipboard.writeText(copyText(block.text));
     setCopied(true);
@@ -606,7 +674,11 @@ function CodeBlock({
               type="button"
               className="markdown-code-wrap"
               aria-pressed={wrapped}
-              onClick={() => setWrapped((value) => !value)}
+              onClick={() =>
+                wrapChoice
+                  ? wrapChoice.set(!wrapped)
+                  : setLocalWrapped(!wrapped)
+              }
             >
               {i18n.t("panels:wrapCodeLines")}
             </button>

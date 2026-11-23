@@ -190,7 +190,12 @@ import {
 } from "./queued-message-images.js";
 import { PermissionSelect } from "./PermissionSelect.js";
 import type { FilePermissionMode } from "../../protocol-client/types.js";
-import { Markdown, MessageLinkContext } from "./Markdown.js";
+import {
+  createMessageCodeWrapChoices,
+  Markdown,
+  MessageCodeWrapContext,
+  MessageLinkContext,
+} from "./Markdown.js";
 import {
   AttachmentImage,
   ImagePreview,
@@ -596,6 +601,11 @@ function HistoryThreadView(props: ThreadViewProps) {
   // separate media refresh/payload read is pending. A newer canonical snapshot
   // also removes old references synchronously; never merge stale Host results.
 
+  const threadId = props.thread?.id;
+  const codeWrapChoices = useMemo(
+    () => (threadId ? createMessageCodeWrapChoices() : null),
+    [threadId],
+  );
   return (
     <ThreadReadingContext.Provider value={readingState}>
       <MessageSourceViewportContext.Provider value={props.thread?.id ?? null}>
@@ -617,15 +627,17 @@ function HistoryThreadView(props: ThreadViewProps) {
               onReadAttachment={props.onReadAttachment}
             />
           ) : (
-            <ThreadViewContent
-              {...props}
-              thread={queueThread}
-              pendingSteer={pendingSteer}
-              threadAttachments={attachments}
-              canonicalPresentation={presentation}
-              sourceThreadId={sourceThreadId}
-              isForkCurrent={isForkCurrent}
-            />
+            <MessageCodeWrapContext.Provider value={codeWrapChoices}>
+              <ThreadViewContent
+                {...props}
+                thread={queueThread}
+                pendingSteer={pendingSteer}
+                threadAttachments={attachments}
+                canonicalPresentation={presentation}
+                sourceThreadId={sourceThreadId}
+                isForkCurrent={isForkCurrent}
+              />
+            </MessageCodeWrapContext.Provider>
           )}
         </div>
       </MessageSourceViewportContext.Provider>
@@ -5290,7 +5302,7 @@ function AgentMessage({
       tabIndex={-1}
     >
       <div data-message-quote-body data-thread-find-item-id={item.id}>
-        <Markdown text={item.text} />
+        <Markdown text={item.text} wrapMessageId={item.id} />
       </div>
       {item.text.length === 0 ? <span className="stream-cursor" /> : null}
       {showActions ? (
