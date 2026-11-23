@@ -899,6 +899,51 @@ async function run() {
     "(()=>{window.__informationComposer=document.querySelector('#thread-composer');return true})()",
   );
   await screenshot("00-live-before-controlled-reading.png");
+  // Take the actual main window across the Graphite color seam with no card
+  // or adjacent resource. Preserve the same draft and the native theme.
+  const originalShellSize = window.getSize();
+  assert.equal(window.webContents.getZoomFactor(), 1);
+  result.graphiteShell = [];
+  for (const appearance of ["light", "dark"]) {
+    nativeTheme.themeSource = appearance;
+    await until(
+      () =>
+        evaluate(
+          `document.documentElement.dataset.appearance === ${JSON.stringify(appearance)} && document.documentElement.dataset.themePreset === 'graphite'`,
+        ),
+      `Graphite ${appearance} before palette capture`,
+    );
+    for (const width of [961, 960]) {
+      await resizeWindow(width, 820);
+      await settleScreenshotFrame();
+      const shell = await evaluate(
+        "(()=>{const bg=s=>getComputedStyle(document.querySelector(s)).backgroundColor;return {width:innerWidth,height:innerHeight,dpr:devicePixelRatio,wide:matchMedia('(min-width: 961px)').matches,sidebar:bg('.sidebar'),main:bg('.workspace'),composer:bg('.bottom-zone > .composer'),sameComposer:document.querySelector('#thread-composer')===window.__informationComposer,draft:document.querySelector('#thread-composer').value,independent:!document.querySelector('.information-popover, .auxiliary-panel[data-open=true]')}})()",
+      );
+      assert.equal(shell.width, width);
+      assert.equal(shell.wide, width >= 961);
+      assert.equal(shell.independent, true);
+      assert.equal(shell.sameComposer, true);
+      assert.equal(
+        shell.draft,
+        "Synthetic draft must survive information and workspace toggles.",
+      );
+      const file = `graphite-${appearance}-${width}.png`;
+      await screenshot(file);
+      result.graphiteShell.push({
+        file,
+        ...shell,
+        outerSize: window.getSize(),
+        contentSize: window.getContentSize(),
+        zoomFactor: window.webContents.getZoomFactor(),
+      });
+    }
+  }
+  await resizeWindow(...originalShellSize);
+  nativeTheme.themeSource = "light";
+  await until(
+    () => evaluate("document.documentElement.dataset.appearance === 'light'"),
+    "restore light after Graphite palette capture",
+  );
   await prepareInformationReadingCamera();
   await evaluate(
     "(()=>{if(document.querySelector('.information-popover, .information-dock'))throw Error('Opening baseline requires closed information');const rect=s=>{const r=document.querySelector(s).getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}};window.__informationLayoutBaseline={reading:rect('.thread-view .virtual-transcript-header, .thread-view .messages-inner'),chat:rect('.agent-surface'),composer:rect('#thread-composer'),draft:document.querySelector('#thread-composer').value};return true})()",
