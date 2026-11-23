@@ -83,7 +83,13 @@ export function HostMessageContent({
             ) : (
               <span
                 className="thread-message-sender host-message-source"
-                title={JSON.stringify({ source, sourceId })}
+                // The main transcript and its queue keep exact IDs in details.
+                // The existing Fleet history diagnostic hint is unchanged.
+                title={
+                  sourceNavigation
+                    ? undefined
+                    : JSON.stringify({ source, sourceId })
+                }
               >
                 {label}
               </span>

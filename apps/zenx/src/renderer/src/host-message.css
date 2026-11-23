@@ -49,9 +49,6 @@
   font-size: var(--font-size-caption);
   color: var(--color-text-secondary);
 }
-.host-message-row .message-actions {
-  opacity: 1;
-}
 @media (pointer: coarse) {
   .host-message-toggle,
   .host-message-copy {
