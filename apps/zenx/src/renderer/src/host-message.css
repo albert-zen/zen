@@ -49,6 +49,17 @@
   font-size: var(--font-size-caption);
   color: var(--color-text-secondary);
 }
+/* Keep the Room/Host time scannable without making Copy compete with it. */
+.host-message-row > .host-message-actions {
+  opacity: 1;
+}
+@media (hover: hover) and (pointer: fine) {
+  .host-message-row:not(:hover):not(:focus-within)
+    > .host-message-actions
+    > .message-copy {
+    opacity: 0;
+  }
+}
 @media (pointer: coarse) {
   .host-message-toggle,
   .host-message-copy {

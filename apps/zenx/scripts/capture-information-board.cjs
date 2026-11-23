@@ -1667,9 +1667,10 @@ async function run() {
     const host=${query(hostRow)},source=host.querySelector('.host-message-source');
     return {light:document.documentElement.dataset.appearance==='light',
       preset:document.documentElement.dataset.themePreset,width:innerWidth,height:innerHeight,dpr:devicePixelRatio,
-      hovered:host.matches(':hover'),fine:matchMedia('(pointer:fine)').matches,
+      hovered:host.matches(':hover'),fine:matchMedia('(hover:hover) and (pointer:fine)').matches,
       source:source.textContent.trim(),sourceTitle:source.getAttribute('title'),
       actions:getComputedStyle(host.querySelector('.host-message-actions')).opacity,
+      copy:getComputedStyle(host.querySelector('.host-message-actions > .message-copy')).opacity,
       hostTime:host.querySelector('time')?.dateTime,
       replyTime:host.closest('.thread-view').querySelector('.assistant-message-actions time')?.dateTime,
       expanded:host.querySelector('.host-message-toggle').getAttribute('aria-expanded'),
@@ -1681,6 +1682,9 @@ async function run() {
   assert.equal(rest.light, false);
   assert.equal(rest.preset, "graphite");
   assert.equal(rest.expanded, "false");
+  assert.equal(rest.sourceTitle, null);
+  assert.equal(rest.actions, "1");
+  assert.equal(rest.copy, rest.fine ? "0" : "1");
   assert.equal(rest.hostTime, "2026-11-01T12:01:00.000Z");
   assert.equal(rest.replyTime, "2026-11-01T12:05:00.000Z");
   await screenshot("host-provenance-rest.png");
@@ -1688,6 +1692,7 @@ async function run() {
   const hover = await provenanceSnapshot();
   assert.equal(hover.hovered, true);
   assert.equal(hover.actions, "1");
+  assert.equal(hover.copy, "1");
   await screenshot("host-provenance-hover.png");
   await click(
     hostRow + " .host-message-toggle",
