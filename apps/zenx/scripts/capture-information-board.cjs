@@ -1966,6 +1966,112 @@ async function run() {
     details,
     zoomFactor: window.webContents.getZoomFactor(),
   };
+  // Capture the same completed synthetic reply on both sides of the layout
+  // breakpoint. The earlier Graphite frames contain active tool output.
+  const answer =
+    '.agent-copy[data-read-message-id="information-other-turn-answer"]';
+  const readCompletedGraphite = () =>
+    evaluate(`(()=>{
+      const editor=document.querySelector('#thread-composer');
+      const view=editor?.closest('.thread-view'), reply=view?.querySelector(${JSON.stringify(answer)});
+      const body=reply?.querySelector(':scope > [data-message-quote-body]');
+      const actions=reply?.querySelector(':scope > .assistant-message-actions');
+      const scroll=reply?.closest('.messages'), column=view?.querySelector('.virtual-transcript-header, .messages-inner');
+      const composer=view?.querySelector(':scope > .bottom-zone > .composer');
+      const host=${query(hostRow)};
+      const rect=e=>{const r=e?.getBoundingClientRect();return r?.width&&r?.height?
+        {left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height}:null;};
+      const paragraphs=[...(body?.querySelectorAll('.markdown-body > p')??[])].map(p=>{
+        const range=document.createRange();range.selectNodeContents(p);
+        const lines=[...range.getClientRects()].filter(r=>r.width&&r.height);
+        return {rect:rect(p),lineCount:new Set(lines.map(r=>Math.round(r.top))).size};
+      });
+      return {
+        width:innerWidth,height:innerHeight,dpr:devicePixelRatio,
+        wide:matchMedia('(min-width: 961px)').matches,
+        appearance:document.documentElement.dataset.appearance,
+        preset:document.documentElement.dataset.themePreset,
+        independent:!document.querySelector('.information-popover, .auxiliary-panel[data-open=true]'),
+        roomDetailsClosed:host?.querySelector('.host-message-toggle')?.getAttribute('aria-expanded')==='false',
+        focusOnRoomToggle:document.activeElement===host?.querySelector('.host-message-toggle'),
+        readyBody:Boolean(body?.textContent.startsWith('The information card should sit beside this conversation')),
+        answerId:reply?.dataset.readMessageId,
+        answerTime:actions?.querySelector('time')?.dateTime,
+        hovered:reply?.matches(':hover'),focused:reply?.matches(':focus-within'),
+        tailDistance:scroll?scroll.scrollHeight-scroll.clientHeight-scroll.scrollTop:null,
+        draft:editor?.value,
+        reply:rect(reply),body:rect(body),actions:rect(actions),column:rect(column),composer:rect(composer),viewport:rect(scroll),paragraphs,
+        paddingInlineStart:body?getComputedStyle(body).paddingInlineStart:null,
+        paddingInlineEnd:body?getComputedStyle(body).paddingInlineEnd:null,
+      };
+    })()`);
+  const originalCompletedSize = window.getSize();
+  const originalCompleted = await readCompletedGraphite();
+  const completedReady = (s) =>
+    s.appearance === "dark" &&
+    s.preset === "graphite" &&
+    s.independent &&
+    s.roomDetailsClosed &&
+    s.readyBody &&
+    s.answerId === "information-other-turn-answer" &&
+    s.answerTime === "2026-11-01T12:05:00.000Z" &&
+    s.draft === originalCompleted.draft &&
+    s.focusOnRoomToggle === originalCompleted.focusOnRoomToggle &&
+    s.tailDistance !== null &&
+    Math.abs(s.tailDistance) <= 1 &&
+    s.reply &&
+    s.body &&
+    s.actions &&
+    s.column &&
+    s.composer &&
+    s.viewport &&
+    s.paragraphs.length === 2 &&
+    s.paragraphs.every(
+      (p) =>
+        p.lineCount &&
+        p.rect.top >= s.viewport.top &&
+        p.rect.bottom <= s.composer.top,
+    );
+  result.graphiteCompletedReply = [];
+  assert.equal(window.webContents.getZoomFactor(), 1);
+  try {
+    for (const width of [961, 960]) {
+      await resizeWindow(width, 820);
+      await hoverHostCapture("#thread-composer");
+      await until(async () => {
+        const sample = await readCompletedGraphite();
+        return (
+          sample.width === width &&
+          completedReady(sample) &&
+          !sample.hovered &&
+          !sample.focused
+        );
+      }, `completed Graphite body at the pinned tail, ${width}px`);
+      await settleScreenshotFrame();
+      const sample = await readCompletedGraphite();
+      assert.equal(sample.width, width);
+      assert.equal(sample.wide, width >= 961);
+      assert.ok(completedReady(sample) && !sample.hovered && !sample.focused);
+      const file = `graphite-completed-dark-${width}.png`;
+      await screenshot(file);
+      result.graphiteCompletedReply.push({
+        file,
+        ...sample,
+        outerSize: window.getSize(),
+        contentSize: window.getContentSize(),
+        zoomFactor: window.webContents.getZoomFactor(),
+      });
+    }
+  } finally {
+    await resizeWindow(...originalCompletedSize);
+    await hoverHostCapture(hostRow + " .host-message-toggle");
+  }
+  await until(async () => {
+    const restored = await readCompletedGraphite();
+    return (
+      restored.width === originalCompleted.width && completedReady(restored)
+    );
+  }, "completed Graphite capture restored the original closed conversation");
   await click(
     ".information-toolbar button",
     "Open second conversation information",
