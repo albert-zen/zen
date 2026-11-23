@@ -5891,6 +5891,9 @@ test("returning to the latest message keeps either transcript focus or an active
           viewport.dispatchEvent(new window.Event("scroll"));
         });
         const jump = requiredButton(selector);
+        assert.equal(jump.getAttribute("aria-label"), "Back to live");
+        assert.equal(jump.getAttribute("title"), "Back to live");
+        assert.equal(jump.textContent?.trim(), "");
         const composer = document.querySelector("textarea");
         assert.ok(composer);
         if (editing) {

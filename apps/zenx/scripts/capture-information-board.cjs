@@ -961,7 +961,56 @@ async function run() {
     if (width === 961) {
       await click(selector, "Return to latest by pointer at 961px");
     } else {
-      await focusWithNativeTab(selector, "Reach narrow return arrow by Tab");
+      result.readingReturnKeyboard = [];
+      await evaluate(`(()=>{
+        const editor=document.querySelector('#thread-composer');
+        const view=editor?.closest('.thread-view'),button=view?.querySelector('.back-live');
+        if(!document.hasFocus()||!button?.getBoundingClientRect().width) throw Error('Paused primary thread must be active');
+        editor.focus({preventScroll:true});
+        if(document.activeElement!==editor) throw Error('Could not start at the primary Composer');
+        window.__returnTab=null;
+        document.addEventListener('keydown',function capture(e){
+          if(e.key!=='Tab') return;
+          if(!e.shiftKey||!e.isTrusted) return;
+          const previous=e.target;
+          setTimeout(()=>{window.__returnTab={trusted:true,prevented:e.defaultPrevented,editor:previous===editor}},0);
+        },{capture:true,signal:(window.__returnTabAbort=new AbortController()).signal});
+        return true;
+      })()`);
+      try {
+        for (let step = 0; step < 8; step++) {
+          await evaluate("window.__returnTab=null");
+          for (const type of ["keyDown", "keyUp"]) {
+            window.webContents.sendInputEvent({
+              type,
+              keyCode: "Tab",
+              modifiers: ["shift"],
+            });
+          }
+          await until(
+            () => evaluate("Boolean(window.__returnTab)"),
+            "Trusted Shift+Tab reached the primary Chrome renderer",
+          );
+          await settleScreenshotFrame();
+          const sample = await evaluate(`(()=>{
+            const e=document.querySelector('#thread-composer'),v=e.closest('.thread-view');
+            const b=v.querySelector('.back-live'),s=v.querySelector('.messages'),a=document.activeElement;
+            return {key:window.__returnTab,hit:Boolean(b&&a===b),visible:Boolean(b?.getBoundingClientRect().width),
+              inThread:v.contains(a),inBottom:Boolean(a?.closest('.bottom-zone')),tag:a?.tagName,
+              tailDistance:s.scrollHeight-s.clientHeight-s.scrollTop};
+          })()`);
+          result.readingReturnKeyboard.push(sample);
+          if (sample.hit) break;
+          if (!sample.visible || !sample.inThread) break;
+        }
+      } finally {
+        await evaluate("window.__returnTabAbort.abort()");
+      }
+      assert.equal(
+        result.readingReturnKeyboard.at(-1)?.hit,
+        true,
+        "Native Shift+Tab from the Composer must reach the visible arrow",
+      );
       await evaluate(
         `${query(selector)}.addEventListener('click',e=>{window.__readingReturnKey=e.isTrusted&&e.detail===0},{once:true})`,
       );
@@ -974,13 +1023,19 @@ async function run() {
         ),
       `Back at latest with the original Composer draft at ${width}px`,
     );
-    if (width === 960)
-      assert.equal(await evaluate("window.__readingReturnKey"), true);
+    if (width === 960) {
+      assert.deepEqual(
+        await evaluate(
+          "(()=>{const s=document.querySelector('#thread-composer').closest('.thread-view').querySelector('.messages');return {trustedKeyClick:window.__readingReturnKey,transcriptFocus:document.activeElement===s}})()",
+        ),
+        { trustedKeyClick: true, transcriptFocus: true },
+      );
+    }
     result.readingReturn.push({
       file,
       ...control,
       zoomFactor: window.webContents.getZoomFactor(),
-      method: width === 961 ? "pointer" : "Tab then Enter",
+      method: width === 961 ? "pointer" : "Shift+Tab then Enter",
     });
   }
   await resizeWindow(...originalShellSize);

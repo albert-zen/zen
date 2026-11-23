@@ -2570,11 +2570,12 @@ function ThreadViewContent({
         <button
           className="back-live"
           type="button"
+          aria-label={i18n.t("shell:backToLive")}
+          title={i18n.t("shell:backToLive")}
           onMouseDown={preserveComposerOnMouseDown}
           onClick={returnToLive}
         >
-          <Icon name="arrow-down" size={14} />
-          {i18n.t("shell:backToLive")}
+          <Icon name="arrow-down" size={18} />
         </button>
       )}
 

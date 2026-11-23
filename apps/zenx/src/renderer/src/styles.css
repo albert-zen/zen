@@ -2381,18 +2381,23 @@ button:disabled {
   left: 50%;
   bottom: calc(var(--bottom-zone-height, 0px) + 12px);
   z-index: 5;
+  width: 36px;
   min-height: 36px;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
+  display: inline-grid;
+  place-items: center;
   transform: translateX(-50%);
-  padding: 0 13px;
+  padding: 0;
   border: 1px solid var(--border-strong);
-  border-radius: 18px;
+  border-radius: 50%;
   background: var(--surface-2);
   color: var(--text-2);
   box-shadow: 0 10px 30px var(--shadow-color);
-  font-size: var(--font-size-caption);
+}
+@media (max-width: 960px) and (any-pointer: coarse) {
+  .back-live {
+    width: 44px;
+    min-height: 44px;
+  }
 }
 
 .bottom-zone {
@@ -5936,8 +5941,11 @@ button:disabled {
   .turn-running-label,
   .turn-toggle,
   .trace-toggle,
-  .trace-item-toggle,
+  .trace-item-toggle {
+    min-height: 44px;
+  }
   .back-live {
+    width: 44px;
     min-height: 44px;
   }
   .bottom-zone {
