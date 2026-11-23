@@ -1636,6 +1636,74 @@ async function run() {
     "Switch to a different synthetic conversation",
   );
   await capture("09-switch-owner-closed", "closed");
+  // Same ordinary Room-sourced message on both builds, read from the real journal.
+  const hostRow =
+    '.host-message-row:has([data-thread-find-item-id="synthetic-provenance-host"])';
+  const hoverHostCapture = async (selector) => {
+    const point = await evaluate(`(()=>{
+      const e=${query(selector)},r=e.getBoundingClientRect();
+      const x=Math.floor(r.left+r.width/2),y=Math.floor(r.top+r.height/2);
+      if(!e.contains(document.elementFromPoint(x,y))) throw Error('Native pointer cannot reach capture target');
+      window.__hostCaptureMove=false;
+      e.addEventListener('mousemove',ev=>{window.__hostCaptureMove=ev.isTrusted},{once:true,capture:true});
+      return {x,y};
+    })()`);
+    window.webContents.sendInputEvent({ type: "mouseMove", ...point });
+    await until(
+      () => evaluate("window.__hostCaptureMove"),
+      "Trusted Room provenance pointer position",
+    );
+    await pause(180);
+  };
+  await until(
+    () => evaluate(`Boolean(${query(hostRow)})`),
+    "ordinary Room provenance in the actual transcript",
+  );
+  const provenanceSnapshot = () =>
+    evaluate(`(()=>{
+    const host=${query(hostRow)},source=host.querySelector('.host-message-source');
+    return {light:document.documentElement.dataset.appearance==='light',
+      preset:document.documentElement.dataset.themePreset,width:innerWidth,height:innerHeight,dpr:devicePixelRatio,
+      hovered:host.matches(':hover'),fine:matchMedia('(pointer:fine)').matches,
+      source:source.textContent.trim(),sourceTitle:source.getAttribute('title'),
+      actions:getComputedStyle(host.querySelector('.host-message-actions')).opacity,
+      hostTime:host.querySelector('time')?.dateTime,
+      replyTime:host.closest('.thread-view').querySelector('.assistant-message-actions time')?.dateTime,
+      expanded:host.querySelector('.host-message-toggle').getAttribute('aria-expanded'),
+      sourceIdVisible:host.querySelector('.host-message-source-id')?.textContent.includes('synthetic-room-brief')??false};
+  })()`);
+  await hoverHostCapture("#thread-composer");
+  const rest = await provenanceSnapshot();
+  assert.equal(rest.hovered, false);
+  assert.equal(rest.light, false);
+  assert.equal(rest.preset, "graphite");
+  assert.equal(rest.expanded, "false");
+  assert.equal(rest.hostTime, "2026-11-01T12:01:00.000Z");
+  assert.equal(rest.replyTime, "2026-11-01T12:05:00.000Z");
+  await screenshot("host-provenance-rest.png");
+  await hoverHostCapture(hostRow + " .host-message-source");
+  const hover = await provenanceSnapshot();
+  assert.equal(hover.hovered, true);
+  assert.equal(hover.actions, "1");
+  await screenshot("host-provenance-hover.png");
+  await click(
+    hostRow + " .host-message-toggle",
+    "Open Room source details explicitly",
+  );
+  const details = await provenanceSnapshot();
+  assert.equal(details.expanded, "true");
+  assert.equal(details.sourceIdVisible, true);
+  await screenshot("host-provenance-details.png");
+  await click(
+    hostRow + " .host-message-toggle",
+    "Restore closed Room source details",
+  );
+  result.hostProvenance = {
+    rest,
+    hover,
+    details,
+    zoomFactor: window.webContents.getZoomFactor(),
+  };
   await click(
     ".information-toolbar button",
     "Open second conversation information",

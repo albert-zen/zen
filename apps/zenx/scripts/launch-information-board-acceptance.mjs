@@ -136,6 +136,23 @@ try {
         ],
         receiptTimezone: { timeZone: "UTC", source: "client" },
       },
+      ...(threadId === "information-other"
+        ? [
+            {
+              id: "synthetic-provenance-host",
+              threadId,
+              turnId,
+              createdAt: "2026-11-01T12:01:00.000Z",
+              type: "host_message",
+              sender: "host",
+              source: "room",
+              sourceId: "synthetic-room-brief",
+              clientId: "synthetic-provenance",
+              mode: "steer",
+              text: "Room handoff: leave the draft open and keep the reading area clear for the review.",
+            },
+          ]
+        : []),
       {
         id: turnId + "-answer",
         threadId,
@@ -148,7 +165,10 @@ try {
         id: turnId + "-completed",
         threadId,
         turnId,
-        createdAt,
+        createdAt:
+          threadId === "information-other"
+            ? "2026-11-01T12:05:00.000Z"
+            : createdAt,
         type: "turn_completed",
         status: "completed",
       },
