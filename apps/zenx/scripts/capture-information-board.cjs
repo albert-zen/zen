@@ -840,15 +840,35 @@ async function captureMarkdownRemount() {
     await insertComposerText(
       "Keep this synthetic draft while reading older messages.",
     );
-    await evaluate(`(()=>{
-    const row=${query(markdownRow)}, scroll=row.closest(".messages");
-    if(!row.closest("[data-transcript-row-key]")||!scroll.querySelector(".virtual-transcript-content"))
-      throw Error("The owned renderer is not using LegendList");
-    if(scroll.scrollHeight-scroll.clientHeight-scroll.scrollTop>2)
-      throw Error("Before Wrap, the newest row must be at the tail");
-    window.__markdownObserved={row,scroll,composer:document.querySelector("#thread-composer")};
-    return true;
-  })()`);
+    await until(
+      () =>
+        evaluate(`(async()=>{
+        const measure=()=>{
+          const row=${query(markdownRow)}, composer=document.querySelector("#thread-composer");
+          const view=row?.closest(".thread-view"), scroll=row?.closest(".messages");
+          if(${query(targetThread)}?.getAttribute("aria-current")!=="page" ||
+            !view || composer!==view.querySelector("#thread-composer") ||
+            !scroll || !row.closest("[data-transcript-row-key]") ||
+            !scroll.querySelector(".virtual-transcript-content") ||
+            scroll.scrollHeight-scroll.clientHeight-scroll.scrollTop>2) return null;
+          const buttons=row.querySelectorAll(".markdown-code-wrap");
+          if(buttons.length!==2) return null;
+          const button=buttons[0], r=button.getBoundingClientRect();
+          const x=r.left+r.width/2,y=r.top+r.height/2;
+          if(!r.width||!r.height||!button.contains(document.elementFromPoint(x,y))) return null;
+          return {row,scroll,composer,button,x,y,top:scroll.scrollTop};
+        };
+        const first=measure();
+        if(!first)return false;
+        await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+        const next=measure();
+        if(!next || ["row","scroll","composer","button","x","y","top"].some(key=>first[key]!==next[key]))
+          return false;
+        window.__markdownObserved={row:next.row,scroll:next.scroll,composer:next.composer};
+        return true;
+      })()`),
+      "Stable selected Markdown Thread, virtual tail, and visible first Wrap control",
+    );
     await click(
       markdownRow + " .markdown-code-wrap",
       "Wrap the first closed fence",
