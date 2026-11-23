@@ -228,33 +228,22 @@
 }
 
 /* Presets remap semantic roles; components never select a palette directly. */
-:root[data-appearance="dark"][data-theme-preset="graphite"] {
-  --color-surface-sidebar: #000000;
-}
-
-:root[data-appearance="light"][data-theme-preset="graphite"] {
-  --color-surface-sidebar: #eff1f6;
-}
-
 /*
- * Desktop Graphite shell only: a near-white rail beside a white reading canvas
- * in light mode, and one black plane in dark mode. Local controls, text,
- * borders, status colors and optional palettes keep their existing roles.
- * Reference relationship: DSH light; shipped T3 dark. These are not whole
- * reference palettes, and do not change the narrow-window presentation.
+ * Graphite shell: keep the near-white rail/white reading canvas in light
+ * mode and one black plane in dark mode as the desktop window resizes.
+ * Reference relationship: DSH light; shipped T3 dark. This is not either
+ * reference palette and leaves controls, text, borders and other presets alone.
  */
-@media (min-width: 961px) {
-  :root[data-appearance="light"][data-theme-preset="graphite"] {
-    --color-canvas: #f9fafb;
-    --color-surface-sidebar: #f9fafb;
-    --color-surface-main: #ffffff;
-  }
+:root[data-appearance="light"][data-theme-preset="graphite"] {
+  --color-canvas: #f9fafb;
+  --color-surface-sidebar: #f9fafb;
+  --color-surface-main: #ffffff;
+}
 
-  :root[data-appearance="dark"][data-theme-preset="graphite"] {
-    --color-canvas: #000000;
-    --color-surface-sidebar: #000000;
-    --color-surface-main: #000000;
-  }
+:root[data-appearance="dark"][data-theme-preset="graphite"] {
+  --color-canvas: #000000;
+  --color-surface-sidebar: #000000;
+  --color-surface-main: #000000;
 }
 
 :root[data-appearance="dark"][data-theme-preset="cobalt"] {
