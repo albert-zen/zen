@@ -1063,9 +1063,10 @@ function ThreadViewContent({
     const view = viewRef.current;
     const scrollport = column.closest<HTMLElement>(".messages");
     const workspace = view?.closest<HTMLElement>(".workspace");
-    const information = workspace?.querySelector<HTMLElement>(
-      ":scope > .information-toolbar",
-    );
+    // A retained side-chat transcript is not the primary card's layout owner.
+    const information = view?.closest(".auxiliary-panel")
+      ? undefined
+      : workspace?.querySelector<HTMLElement>(":scope > .information-toolbar");
     const measure = () => {
       let rect = column.getBoundingClientRect();
       if (rect.width <= 0) return;
@@ -1092,9 +1093,7 @@ function ThreadViewContent({
               unshiftedReadingLeft: rect.left + previousShift,
               readingWidth: rect.width,
               resourceOpen:
-                workspace?.querySelector<HTMLElement>(
-                  ":scope > .auxiliary-panel",
-                )?.dataset.open === "true",
+                information?.dataset.clearanceResourceBeside === "true",
               direction: getComputedStyle(view).direction,
               open: true,
             })
@@ -1164,7 +1163,11 @@ function ThreadViewContent({
     if (information)
       informationObserver?.observe(information, {
         attributes: true,
-        attributeFilter: ["data-clearance-open", "data-clearance-right"],
+        attributeFilter: [
+          "data-clearance-open",
+          "data-clearance-right",
+          "data-clearance-resource-beside",
+        ],
         subtree: true,
         childList: true,
       });

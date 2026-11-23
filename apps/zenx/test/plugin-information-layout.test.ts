@@ -806,6 +806,21 @@ test("information follows late and replaced workspace panels without a width cha
     );
     await toggle();
     assert.equal(button().getAttribute("aria-expanded"), "true");
+    const currentCard = document.querySelector(".information-popover");
+    assert.ok(currentCard);
+    assert.equal(toolbar().dataset.clearanceResourceBeside, "true");
+    await act(async () => {
+      second.dataset.expanded = "true";
+      second.dataset.primaryActive = "true";
+    });
+    assert.equal(toolbar().dataset.clearanceResourceBeside, "false");
+    assert.equal(document.querySelector(".information-popover"), currentCard);
+    await act(async () => {
+      second.dataset.expanded = "false";
+      second.dataset.primaryActive = "false";
+    });
+    assert.equal(toolbar().dataset.clearanceResourceBeside, "true");
+    assert.equal(document.querySelector(".information-popover"), currentCard);
     const replacementHeading = document.createElement("header");
     replacementHeading.className = "auxiliary-heading";
     const oldHeading = second.firstElementChild!;
@@ -870,6 +885,122 @@ test("late native-only information starts observing the current panel", async ()
     );
   } finally {
     await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
+
+test("floating Information respects the primary draft height without shortening a fitted card", async () => {
+  const dom = new JSDOM(
+    '<main class="workspace"><section id="primary-conversation-content" class="agent-surface"><div class="thread-conversation-surface"><div class="thread-view"><div class="bottom-zone"><form class="composer"><textarea>Synthetic draft</textarea></form></div></div></div></section><div id="root"></div></main>',
+    { url: "https://zenx.local" },
+  );
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const workspace = document.querySelector<HTMLElement>(".workspace")!;
+  workspace.getBoundingClientRect = () =>
+    ({ top: 44, right: 1000, width: 736 }) as DOMRect;
+  const resize = new Map<Element, () => void>();
+  const previous = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class {
+    readonly nodes = new Set<Element>();
+    constructor(readonly measure: () => void) {}
+    observe(node: Element) {
+      this.nodes.add(node);
+      resize.set(node, this.measure);
+    }
+    disconnect() {
+      for (const node of this.nodes)
+        if (resize.get(node) === this.measure) resize.delete(node);
+    }
+  } as unknown as typeof ResizeObserver;
+  const view = document.querySelector<HTMLElement>(".thread-view")!;
+  const composer = view.querySelector<HTMLElement>(".composer")!;
+  const draft = composer.querySelector("textarea")!;
+  let top = 694;
+  composer.getBoundingClientRect = () =>
+    ({ left: 288, right: 966, width: 678, top, height: 108 }) as DOMRect;
+  const panel = document.createElement("aside");
+  panel.className = "auxiliary-panel";
+  panel.dataset.open = "true";
+  panel.dataset.expanded = "true";
+  panel.dataset.primaryActive = "true";
+  panel.innerHTML =
+    '<header class="auxiliary-heading"></header><div class="thread-view"><div class="bottom-zone"><form class="composer"></form></div></div>';
+  const heading = panel.querySelector<HTMLElement>("header")!;
+  heading.getBoundingClientRect = () => ({ bottom: 88 }) as DOMRect;
+  workspace.append(panel);
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    await act(async () =>
+      root.render(
+        React.createElement(PluginInformationHost, {
+          snapshot: { ...snapshot, information: [] },
+          registry: createPluginUiRegistry(),
+          owner: { kind: "thread", threadId: "narrow-primary-composer" },
+          theme: "light",
+          resourcePanelWidth: 480,
+          contextContent: React.createElement("input", {
+            "aria-label": "Card answer",
+            defaultValue: "Synthetic card answer",
+          }),
+          navigate() {},
+          executeCommand: async () => null,
+          readHandle: async () => null,
+        }),
+      ),
+    );
+    const trigger = document.querySelector<HTMLButtonElement>(
+      ".information-toolbar button",
+    )!;
+    await act(async () => trigger.click());
+    const card = document.querySelector<HTMLElement>(".information-popover")!;
+    assert.ok(card);
+    assert.match(card.style.maxHeight, /min\(590px/);
+    assert.equal(resize.has(panel.querySelector(".composer")!), false);
+
+    const answer = card.querySelector("input")!;
+    await act(async () => answer.focus());
+    top = 623;
+    await act(async () => resize.get(composer)?.());
+    assert.match(card.style.maxHeight, /min\(519px/);
+    assert.equal(document.activeElement, answer);
+
+    await act(async () => {
+      view.dataset.informationLane = "true";
+    });
+    assert.match(card.style.maxHeight, /min\(720px/);
+    assert.equal(document.querySelector(".information-popover"), card);
+
+    await act(async () => {
+      view.dataset.informationLane = "false";
+      top = 225;
+    });
+    assert.match(card.style.maxHeight, /min\(720px/);
+    assert.equal(draft.value, "Synthetic draft");
+
+    const replacement = composer.cloneNode(true) as HTMLElement;
+    replacement.getBoundingClientRect = () =>
+      ({ left: 288, right: 966, width: 678, top: 650, height: 108 }) as DOMRect;
+    await act(async () => composer.replaceWith(replacement));
+    assert.equal(resize.has(composer), false);
+    assert.equal(resize.has(replacement), true);
+    assert.match(card.style.maxHeight, /min\(546px/);
+    assert.equal(document.activeElement, answer);
+    assert.equal(
+      replacement.querySelector("textarea")!.value,
+      "Synthetic draft",
+    );
+
+    await act(async () => replacement.remove());
+    assert.equal(resize.has(replacement), false);
+    assert.match(card.style.maxHeight, /min\(720px/);
+    assert.equal(document.querySelector(".information-popover"), card);
+  } finally {
+    await act(async () => root.unmount());
+    globalThis.ResizeObserver = previous;
     dom.window.close();
   }
 });

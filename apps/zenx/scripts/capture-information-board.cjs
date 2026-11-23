@@ -667,10 +667,11 @@ async function capture(name, mode) {
   }
   if (geometry.lane) {
     assert.equal(mode, "overlay", "lane requires an open Information card");
-    assert.equal(
-      geometry.resourceOpen,
-      false,
-      "lane never moves a split conversation",
+    assert.ok(
+      !geometry.resourceOpen ||
+        (geometry.resourceExpanded === "true" &&
+          geometry.primaryActive === "true"),
+      "lane never moves a conversation with an adjacent resource",
     );
     assert.ok(geometry.reading, "lane measures the real reading column");
     assert.ok(

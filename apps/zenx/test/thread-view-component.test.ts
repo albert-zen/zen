@@ -5856,3 +5856,98 @@ test("returning to the latest message keeps either transcript focus or an active
     }
   }
 });
+
+test("wide fullscreen main conversation gives Information clearance without remounting the draft", async () => {
+  await withDom(async (root) => {
+    const container = requiredElement("#root");
+    const workspace = document.createElement("main");
+    workspace.className = "workspace";
+    container.replaceWith(workspace);
+    workspace.innerHTML = `
+      <aside class="auxiliary-panel" data-open="true"></aside>
+      <div class="information-toolbar" data-clearance-open="true"
+           data-clearance-right="1588" data-clearance-resource-beside="true">
+        <button aria-controls="test-information-card"></button>
+      </div>`;
+    workspace.prepend(container);
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      '<div id="test-information-card"></div><style>.thread-view{direction:ltr}.bottom-zone{padding-left:0px}</style>',
+    );
+    const toolbar = requiredElement(".information-toolbar");
+    const card = requiredElement("#test-information-card");
+    const panel = requiredElement(".auxiliary-panel");
+    const originalRect = window.HTMLElement.prototype.getBoundingClientRect;
+    window.HTMLElement.prototype.getBoundingClientRect = function () {
+      if (this.matches(".messages-inner")) {
+        const view = this.closest<HTMLElement>(".thread-view")!;
+        const shift =
+          parseFloat(
+            view.style.getPropertyValue("--information-reading-shift"),
+          ) || 0;
+        return new window.DOMRect(526.5 - shift, 44, 800, 28);
+      }
+      if (this.matches(".thread-view, .bottom-zone"))
+        return new window.DOMRect(264, 0, 1336, 970);
+      return originalRect.call(this);
+    };
+    await act(async () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer: editComposer(emptyComposerState(), "Keep this draft"),
+          thread: thread([
+            turnWithItems("completed", [user("Read"), agent("Reply")]),
+          ]),
+          onDraftChange: () => {},
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      ),
+    );
+    const view = requiredElement(".thread-view");
+    const composer = requiredElement<HTMLTextAreaElement>("#thread-composer");
+    await act(async () => composer.focus());
+    assert.equal(view.dataset.informationLane, "false");
+    await act(async () => {
+      panel.dataset.expanded = "true";
+      panel.dataset.primaryActive = "true";
+      toolbar.dataset.clearanceResourceBeside = "false";
+    });
+    assert.equal(view.dataset.informationLane, "true");
+    assert.equal(
+      view.style.getPropertyValue("--information-reading-shift"),
+      "74.5px",
+    );
+    assert.equal(
+      card.style.getPropertyValue("--information-reading-card-width"),
+      "320px",
+    );
+    assert.equal(requiredElement("#thread-composer"), composer);
+    assert.equal(composer.value, "Keep this draft");
+    assert.equal(document.activeElement, composer);
+    await act(async () => {
+      toolbar.dataset.clearanceRight = "1200";
+    });
+    assert.equal(view.dataset.informationLane, "false");
+    assert.equal(
+      card.style.getPropertyValue("--information-reading-card-width"),
+      "",
+    );
+    await act(async () => {
+      toolbar.dataset.clearanceRight = "1588";
+    });
+    assert.equal(
+      view.style.getPropertyValue("--information-reading-shift"),
+      "74.5px",
+    );
+    await act(async () => {
+      panel.dataset.expanded = "false";
+      panel.dataset.primaryActive = "false";
+      toolbar.dataset.clearanceResourceBeside = "true";
+    });
+    assert.equal(view.dataset.informationLane, "false");
+    assert.equal(document.activeElement, composer);
+  });
+});

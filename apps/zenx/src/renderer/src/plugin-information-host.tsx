@@ -102,6 +102,7 @@ export function PluginInformationHost({
     anchorY: 0,
     right: 12,
     available: true,
+    resourceBeside: false,
   });
   useLayoutEffect(() => {
     const workspace = toolbar.current?.closest(".workspace");
@@ -126,8 +127,10 @@ export function PluginInformationHost({
       const resourceOpen = panel?.dataset.open === "true";
       const primaryActive =
         resourceOpen && panel?.dataset.primaryActive === "true";
-      const resourceWidth =
-        resourceOpen && !primaryActive ? resourcePanelWidth : 0;
+      // An open workspace can be the tab strip above the primary transcript,
+      // rather than a second column beside it.
+      const resourceBeside = resourceOpen && !primaryActive;
+      const resourceWidth = resourceBeside ? resourcePanelWidth : 0;
       // Windows/Linux have a separate visible conversation row below the OS
       // strip; macOS may hide that row when workspace tabs own the same space.
       const headerBottom = Math.max(
@@ -137,13 +140,14 @@ export function PluginInformationHost({
       const triggerBottom = trigger.current?.getBoundingClientRect().bottom;
       const next = {
         headerBottom,
+        resourceBeside,
         available:
           !resourceOpen || panel?.dataset.expanded !== "true" || primaryActive,
         // Render must not synchronously flush the transcript's dirty layout,
         // including when Radix keeps the information popover closed.
         triggerBottom,
-        // Same floating card in closed and split workspaces, entirely on the
-        // conversation side of the divider. Never allocate a third column.
+        // Keep the card on the conversation side of a split. Otherwise the
+        // transcript may make space for it without changing its own width.
         width: Math.max(0, Math.min(340, bounds.width - resourceWidth - 24)),
         anchorX: bounds.right - resourceWidth - 12,
         anchorY: Math.max(headerBottom, triggerBottom ?? bounds.top),
@@ -242,6 +246,81 @@ export function PluginInformationHost({
   const active =
     contributions.find((item) => item.key === selected) ?? contributions[0];
   const presentedOpen = open && layout.available;
+  const [composerClearance, setComposerClearance] = useState<number | null>(
+    null,
+  );
+  useLayoutEffect(() => {
+    if (!presentedOpen || owner.kind !== "thread") return;
+    const workspace = toolbar.current?.closest<HTMLElement>(".workspace");
+    if (!workspace) return;
+    let view: HTMLElement | null = null;
+    let composer: HTMLElement | null = null;
+    const measure = () => {
+      const rect = composer?.getBoundingClientRect();
+      // Fitted cards have their own column. Cap floating cards above the
+      // owning composer, unless the window is too short for a usable card.
+      const available = rect ? Math.floor(rect.top - layout.anchorY - 16) : 0;
+      setComposerClearance(
+        rect &&
+          rect.width > 0 &&
+          rect.height > 0 &&
+          rect.right > layout.anchorX - layout.width &&
+          rect.left < layout.anchorX &&
+          view?.dataset.informationLane !== "true" &&
+          available >= 180
+          ? available
+          : null,
+      );
+    };
+    const size =
+      typeof ResizeObserver === "undefined"
+        ? undefined
+        : new ResizeObserver(measure);
+    const structure = new MutationObserver((records) => {
+      if (records.some(({ type }) => type === "childList")) bindComposer();
+      else measure();
+    });
+    const bindComposer = () => {
+      const surface = workspace.querySelector<HTMLElement>(
+        ":scope > #primary-conversation-content.agent-surface",
+      );
+      const transcript = surface?.querySelector<HTMLElement>(
+        ":scope > .thread-conversation-surface",
+      );
+      view =
+        transcript?.querySelector<HTMLElement>(":scope > .thread-view") ?? null;
+      const bottom = view?.querySelector<HTMLElement>(":scope > .bottom-zone");
+      composer =
+        bottom?.querySelector<HTMLElement>(":scope > .composer") ?? null;
+      size?.disconnect();
+      structure.disconnect();
+      for (const node of [workspace, surface, transcript, view, bottom]) {
+        if (node)
+          structure.observe(
+            node,
+            node === view
+              ? {
+                  childList: true,
+                  attributes: true,
+                  attributeFilter: ["data-information-lane"],
+                }
+              : { childList: true },
+          );
+      }
+      if (bottom) size?.observe(bottom);
+      if (composer) size?.observe(composer);
+      measure();
+    };
+    bindComposer();
+    return () => {
+      size?.disconnect();
+      structure.disconnect();
+    };
+  }, [presentedOpen, owner.kind, layout.anchorX, layout.anchorY, layout.width]);
+  const heightCap =
+    presentedOpen && owner.kind === "thread" && composerClearance !== null
+      ? Math.min(720, composerClearance)
+      : 720;
   if (!active && !contextContent) return null;
   const admissionId = snapshot.plugins.find(
     (plugin) => plugin.id === active?.pluginId,
@@ -293,6 +372,7 @@ export function PluginInformationHost({
         className="information-toolbar"
         data-clearance-open={presentedOpen && contentMounted}
         data-clearance-right={layout.anchorX}
+        data-clearance-resource-beside={layout.resourceBeside}
         hidden={!layout.available}
       >
         <Popover
@@ -367,7 +447,7 @@ export function PluginInformationHost({
             className="information-popover"
             style={{
               width: `var(--information-reading-card-width, ${layout.width}px)`,
-              maxHeight: `min(720px, calc(100vh - ${Math.max(layout.headerBottom, layout.triggerBottom ?? 44) + 16}px))`,
+              maxHeight: `min(${heightCap}px, calc(100vh - ${Math.max(layout.headerBottom, layout.triggerBottom ?? 44) + 16}px))`,
             }}
             sideOffset={8}
             aria-label={active?.title ?? t("boardTitle")}
