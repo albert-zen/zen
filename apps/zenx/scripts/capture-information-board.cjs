@@ -1011,10 +1011,42 @@ async function run() {
         true,
         "Native Shift+Tab from the Composer must reach the visible arrow",
       );
-      await evaluate(
-        `${query(selector)}.addEventListener('click',e=>{window.__readingReturnKey=e.isTrusted&&e.detail===0},{once:true})`,
-      );
-      await pressKey("Enter", "Return to latest by Enter at 960px");
+      await evaluate(`(()=>{
+        const b=${query(selector)};
+        if(document.activeElement!==b) throw Error('Enter target must be the focused return button');
+        window.__readingEnter={keydown:false,keypress:false,click:false};
+        b.addEventListener('keydown',e=>{if(e.isTrusted&&e.key==='Enter')setTimeout(()=>{window.__readingEnter.keydown=true;window.__readingEnter.prevented=e.defaultPrevented},0)},{once:true});
+        b.addEventListener('keypress',e=>{window.__readingEnter.keypress=e.isTrusted&&e.charCode===13},{once:true});
+        b.addEventListener('click',e=>{window.__readingEnter.click=e.isTrusted&&e.detail===0},{once:true});
+        return true;
+      })()`);
+      // Electron sends raw keydown; Blink activates a button on Enter's CR keypress.
+      const enterInput = window.webContents;
+      enterInput.sendInputEvent({ type: "keyDown", keyCode: "Enter" });
+      try {
+        await until(
+          () => evaluate("window.__readingEnter.keydown"),
+          "Trusted Enter keydown reached the narrow return button",
+        );
+        assert.equal(
+          await evaluate(
+            `!window.__readingEnter.prevented && document.activeElement===${query(selector)}`,
+          ),
+          true,
+          "Return button still owns Enter before its character event",
+        );
+        enterInput.sendInputEvent({ type: "char", keyCode: "\r" });
+        await until(
+          () =>
+            evaluate(
+              "window.__readingEnter.keypress && window.__readingEnter.click",
+            ),
+          "Trusted carriage return activated the narrow return button",
+        );
+      } finally {
+        enterInput.sendInputEvent({ type: "keyUp", keyCode: "Enter" });
+        result.readingReturnEnter = await evaluate("window.__readingEnter");
+      }
     }
     await until(
       () =>
@@ -1026,7 +1058,7 @@ async function run() {
     if (width === 960) {
       assert.deepEqual(
         await evaluate(
-          "(()=>{const s=document.querySelector('#thread-composer').closest('.thread-view').querySelector('.messages');return {trustedKeyClick:window.__readingReturnKey,transcriptFocus:document.activeElement===s}})()",
+          "(()=>{const s=document.querySelector('#thread-composer').closest('.thread-view').querySelector('.messages');return {trustedKeyClick:window.__readingEnter.click,transcriptFocus:document.activeElement===s}})()",
         ),
         { trustedKeyClick: true, transcriptFocus: true },
       );
