@@ -1745,6 +1745,18 @@ function ThreadViewContent({
     runningTurn !== null,
     composerSendMode,
   );
+  const composerPlaceholder =
+    sendIntent === "start"
+      ? i18n.t(
+          watching
+            ? "shell:sendAMessageToWakeThisThread"
+            : "shell:askZenxAnything",
+        )
+      : sendIntent === "replace"
+        ? i18n.t("shell:interruptCurrentReplyAndSend")
+        : sendIntent === "steer"
+          ? i18n.t("shell:steerTheCurrentRun")
+          : i18n.t("shell:messageForTheNextTurn");
   const primaryMode =
     runningTurn === null ? "send" : !hasDraft ? "stop" : sendIntent;
   const intentLabel = (intent: ComposerIntent) =>
@@ -3039,16 +3051,7 @@ function ThreadViewContent({
                       ),
                     );
                 }}
-                placeholder={
-                  runningTurn === null
-                    ? watching
-                      ? i18n.t("shell:sendAMessageToWakeThisThread")
-                      : i18n.t("shell:askZenxAnything")
-                    : composerSendMode === "queue" ||
-                        composerSendMode === "batch"
-                      ? i18n.t("shell:messageForTheNextTurn")
-                      : i18n.t("shell:steerTheCurrentRun")
-                }
+                placeholder={composerPlaceholder}
               />
             </MessageLinkContext.Provider>
           ) : (
@@ -3126,15 +3129,7 @@ function ThreadViewContent({
                   ),
                 );
               }}
-              placeholder={
-                runningTurn === null
-                  ? watching
-                    ? i18n.t("shell:sendAMessageToWakeThisThread")
-                    : i18n.t("shell:askZenxAnything")
-                  : composerSendMode === "queue" || composerSendMode === "batch"
-                    ? i18n.t("shell:messageForTheNextTurn")
-                    : i18n.t("shell:steerTheCurrentRun")
-              }
+              placeholder={composerPlaceholder}
               textareaRef={composerTextareaRef}
               rows={1}
               value={skillDraft.text}

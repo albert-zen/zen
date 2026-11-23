@@ -5,7 +5,7 @@ import {
   type RefObject,
 } from "react";
 import type { ComposerInput } from "./composer-input.js";
-import { Icon } from "./icons.js";
+import { Icon, type IconName } from "./icons.js";
 
 /** Shared presentation only. Drafts, admission and permissions remain with callers. */
 export function ComposerShell({
@@ -86,10 +86,15 @@ export function ComposerEditor({
 
 export function ComposerAction({
   mode = "send",
+  icon,
   label,
   className = "",
   ...props
-}: ComponentProps<"button"> & { mode?: string; label: string }) {
+}: ComponentProps<"button"> & {
+  mode?: string;
+  icon?: IconName;
+  label: string;
+}) {
   return (
     <button
       {...props}
@@ -97,7 +102,7 @@ export function ComposerAction({
       type="button"
       aria-label={label}
     >
-      <Icon name={mode === "stop" ? "stop" : "send"} size={18} />
+      <Icon name={mode === "stop" ? "stop" : (icon ?? "send")} size={18} />
     </button>
   );
 }

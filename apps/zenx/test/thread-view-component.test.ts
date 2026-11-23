@@ -3483,13 +3483,89 @@ test("failed turn folds received trace and preserves the error without a final a
   );
 });
 
+test("an empty active composer describes the actual default, including interrupt", async () => {
+  const { withSkillDraft } = await import("../src/renderer/src/skill-draft.js");
+  const { i18n } = await import("../src/renderer/src/i18n.js");
+  const originalLanguage = i18n.language;
+  const referenceDraft = withSkillDraft(
+    "Use this file",
+    [],
+    [{ kind: "file", name: "sample.ts", cwd: "/synthetic", path: "sample.ts" }],
+  );
+  const intents: string[] = [];
+  try {
+    await withDom(async (root) => {
+      const render = async (
+        mode: "batch" | "queue" | "soft" | "hard",
+        text = "",
+        threadStatus: "inProgress" | "completed" = "inProgress",
+      ) =>
+        act(async () =>
+          root.render(
+            createElement(ThreadView, {
+              approvals: [],
+              composerSendMode: mode,
+              composer: editComposer(emptyComposerState(), text),
+              thread: thread([
+                turnWithItems(threadStatus, [user("Synthetic request")]),
+              ]),
+              onDraftChange: () => undefined,
+              onInterrupt: async () =>
+                assert.fail("No interrupt until user sends"),
+              onRespondToApproval: noop,
+              onSubmit: async (intent) => {
+                intents.push(intent);
+              },
+            }),
+          ),
+        );
+
+      await act(async () => i18n.changeLanguage("en"));
+      for (const [mode, hint] of [
+        ["soft", "Steer the current run…"],
+        ["hard", "Interrupt this reply and send…"],
+        ["batch", "Message for the next turn…"],
+        ["queue", "Message for the next turn…"],
+      ] as const) {
+        await render(mode);
+        assert.equal(
+          requiredElement<HTMLTextAreaElement>("#thread-composer").placeholder,
+          hint,
+        );
+        assert.ok(document.querySelector(".action-orb[aria-label='Stop']"));
+      }
+      await render("hard", "", "completed");
+      assert.equal(
+        requiredElement<HTMLTextAreaElement>("#thread-composer").placeholder,
+        i18n.t("shell:askZenxAnything"),
+      );
+
+      await render("hard", referenceDraft);
+      assert.ok(document.querySelector(".cm-content"));
+      await render("hard");
+      assert.equal(
+        requiredElement(".cm-placeholder").textContent,
+        "Interrupt this reply and send…",
+      );
+      await act(async () => i18n.changeLanguage("zh-CN"));
+      assert.equal(
+        requiredElement(".cm-placeholder").textContent,
+        "中断当前回复并发送…",
+      );
+      assert.deepEqual(intents, []);
+    });
+  } finally {
+    await i18n.changeLanguage(originalLanguage);
+  }
+});
+
 test("keyboard modifiers and send button honor all running send modes", async () => {
   await withDom(async (root) => {
-    for (const [mode, normal, alternate] of [
-      ["batch", "batch-next", "steer"],
-      ["queue", "queue", "steer"],
-      ["soft", "steer", "batch-next"],
-      ["hard", "replace", "batch-next"],
+    for (const [mode, normal, alternate, icon] of [
+      ["batch", "batch-next", "steer", "layers"],
+      ["queue", "queue", "steer", "list-detail"],
+      ["soft", "steer", "batch-next", "send"],
+      ["hard", "replace", "batch-next", "send"],
     ] as const) {
       const intents: string[] = [];
       await act(async () =>
@@ -3507,6 +3583,10 @@ test("keyboard modifiers and send button honor all running send modes", async ()
             },
           }),
         ),
+      );
+      assert.equal(
+        requiredButton(".action-orb").querySelector("svg")?.dataset.icon,
+        icon,
       );
       const textarea = document.querySelector("textarea")!;
       await act(async () => {

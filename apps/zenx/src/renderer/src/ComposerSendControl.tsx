@@ -291,6 +291,15 @@ export function ComposerSendControl({
           <ComposerAction
             ref={primary}
             mode={primaryMode}
+            icon={
+              running &&
+              hasDraft &&
+              !compact &&
+              primaryMode === sendIntent &&
+              (sendIntent === "batch-next" || sendIntent === "queue")
+                ? intentIcon(sendIntent)
+                : undefined
+            }
             label={primaryLabel}
             aria-describedby={`${id}-hint`}
             aria-keyshortcuts="ArrowUp ArrowDown"
