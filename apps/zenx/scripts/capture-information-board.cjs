@@ -1638,7 +1638,7 @@ async function run() {
   await capture("09-switch-owner-closed", "closed");
   // Same ordinary Room-sourced message on both builds, read from the real journal.
   const hostRow =
-    '.host-message-row:has([data-thread-find-item-id="synthetic-provenance-host"])';
+    '.thread-view:has(#thread-composer) .host-message-row:has(.host-message-actions time[datetime="2026-11-01T12:01:00.000Z"])';
   const hoverHostCapture = async (selector) => {
     const point = await evaluate(`(()=>{
       const e=${query(selector)},r=e.getBoundingClientRect();
@@ -1656,8 +1656,11 @@ async function run() {
     await pause(180);
   };
   await until(
-    () => evaluate(`Boolean(${query(hostRow)})`),
-    "ordinary Room provenance in the actual transcript",
+    () =>
+      evaluate(
+        `document.querySelectorAll(${JSON.stringify(hostRow)}).length===1`,
+      ),
+    "unique ordinary Room provenance in the primary transcript",
   );
   const provenanceSnapshot = () =>
     evaluate(`(()=>{
@@ -1693,6 +1696,12 @@ async function run() {
   const details = await provenanceSnapshot();
   assert.equal(details.expanded, "true");
   assert.equal(details.sourceIdVisible, true);
+  assert.equal(
+    await evaluate(
+      `${query(hostRow)}.querySelector('pre[data-thread-find-item-id="synthetic-provenance-host"]')?.textContent`,
+    ),
+    "Room handoff: leave the draft open and keep the reading area clear for the review.",
+  );
   await screenshot("host-provenance-details.png");
   await click(
     hostRow + " .host-message-toggle",
