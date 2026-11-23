@@ -944,6 +944,46 @@ async function run() {
     () => evaluate("document.documentElement.dataset.appearance === 'light'"),
     "restore light after Graphite palette capture",
   );
+  result.readingReturn = [];
+  for (const width of [961, 960]) {
+    await resizeWindow(width, 820);
+    const selector =
+      width === 961 ? ".conversation-reading-position button" : ".back-live";
+    await prepareInformationReadingCamera();
+    const control = await evaluate(
+      `(()=>{const b=${query(selector)},r=b.getBoundingClientRect();return {width:innerWidth,height:innerHeight,dpr:devicePixelRatio,button:{x:r.x,y:r.y,width:r.width,height:r.height,text:b.textContent.trim(),label:b.getAttribute('aria-label')},draft:document.querySelector('#thread-composer')===window.__informationComposer}})()`,
+    );
+    assert.equal(control.width, width);
+    assert.equal(control.draft, true);
+    assert.ok(control.button.width > 0);
+    const file = `reading-return-light-${width}.png`;
+    await screenshot(file);
+    if (width === 961) {
+      await click(selector, "Return to latest by pointer at 961px");
+    } else {
+      await focusWithNativeTab(selector, "Reach narrow return arrow by Tab");
+      await evaluate(
+        `${query(selector)}.addEventListener('click',e=>{window.__readingReturnKey=e.isTrusted&&e.detail===0},{once:true})`,
+      );
+      await pressKey("Enter", "Return to latest by Enter at 960px");
+    }
+    await until(
+      () =>
+        evaluate(
+          `(()=>{const s=document.querySelector('.thread-view .messages'),c=document.querySelector('#thread-composer');return !${query(selector)}&&s.scrollHeight-s.clientHeight-s.scrollTop<4&&c===window.__informationComposer&&c.value==='Synthetic draft must survive information and workspace toggles.'})()`,
+        ),
+      `Back at latest with the original Composer draft at ${width}px`,
+    );
+    if (width === 960)
+      assert.equal(await evaluate("window.__readingReturnKey"), true);
+    result.readingReturn.push({
+      file,
+      ...control,
+      zoomFactor: window.webContents.getZoomFactor(),
+      method: width === 961 ? "pointer" : "Tab then Enter",
+    });
+  }
+  await resizeWindow(...originalShellSize);
   await prepareInformationReadingCamera();
   await evaluate(
     "(()=>{if(document.querySelector('.information-popover, .information-dock'))throw Error('Opening baseline requires closed information');const rect=s=>{const r=document.querySelector(s).getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}};window.__informationLayoutBaseline={reading:rect('.thread-view .virtual-transcript-header, .thread-view .messages-inner'),chat:rect('.agent-surface'),composer:rect('#thread-composer'),draft:document.querySelector('#thread-composer').value};return true})()",
