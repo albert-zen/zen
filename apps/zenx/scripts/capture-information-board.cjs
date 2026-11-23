@@ -69,7 +69,12 @@ async function resizeWindow(width, height) {
     return evaluate(`window.innerWidth === ${contentWidth}`);
   }, "native resize delivered to renderer");
 }
-async function click(selector, label = selector, systemPointer = false) {
+async function click(
+  selector,
+  label = selector,
+  systemPointer = false,
+  scrollTarget = true,
+) {
   window.show();
   window.focus();
   window.webContents.focus();
@@ -84,7 +89,7 @@ async function click(selector, label = selector, systemPointer = false) {
   // missing pre-dispatch targets may wait; unknown dispatched input never retries.
   await until(async () => {
     point = await evaluate(
-      `(()=>{const e=${query(selector)};if(!e)return null;e.scrollIntoView({block:'center',inline:'nearest'});const r=e.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;if(e.disabled||!r.width||!r.height||!e.contains(document.elementFromPoint(x,y)))throw Error('Obscured/disabled native target: '+${JSON.stringify(label)}+' '+JSON.stringify({r:{x:r.x,y:r.y,width:r.width,height:r.height},hits:document.elementsFromPoint(x,y).map(n=>n.className).slice(0,5)}));e.addEventListener('click',event=>{if(event.isTrusted)window.__informationNativeClick=${acknowledgedClick}},{capture:true,once:true});return {x:Math.round(x),y:Math.round(y)}})()`,
+      `(()=>{const e=${query(selector)};if(!e)return null;if(${scrollTarget})e.scrollIntoView({block:'center',inline:'nearest'});const r=e.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;if(e.disabled||!r.width||!r.height||!e.contains(document.elementFromPoint(x,y)))throw Error('Obscured/disabled native target: '+${JSON.stringify(label)}+' '+JSON.stringify({r:{x:r.x,y:r.y,width:r.width,height:r.height},hits:document.elementsFromPoint(x,y).map(n=>n.className).slice(0,5)}));e.addEventListener('click',event=>{if(event.isTrusted)window.__informationNativeClick=${acknowledgedClick}},{capture:true,once:true});return {x:Math.round(x),y:Math.round(y)}})()`,
     );
     return point !== null;
   }, label + " target prepared before input");
@@ -767,6 +772,229 @@ const networkReady = app.whenReady().then(() =>
     callback({ cancel: !allowed });
   }),
 );
+async function captureMarkdownRemount() {
+  const priorWindowSize = window.getSize();
+  const priorAppearance = nativeTheme.themeSource;
+  try {
+    await resizeWindow(1200, 860);
+    nativeTheme.themeSource = "dark";
+    await until(
+      () =>
+        evaluate(
+          "document.documentElement.dataset.appearance==='dark' && document.documentElement.dataset.themePreset==='graphite'",
+        ),
+      "Graphite dark for independent Markdown history",
+    );
+    const markdownRow =
+      '.thread-view:has(#thread-composer) [data-read-message-id="information-markdown-wrap-turn-15-answer"]';
+    const targetThread =
+      '.thread-row-shell[data-thread-id="information-markdown-wrap"] > button.thread-row';
+    await click(targetThread, "Open synthetic Markdown history");
+    await until(
+      () =>
+        evaluate(
+          `${query(targetThread)}?.getAttribute("aria-current")==="page"`,
+        ),
+      "Independent Markdown history is the selected Thread",
+    );
+    if (
+      await evaluate(
+        "Boolean(document.querySelector('.workspace > .auxiliary-panel[data-open=true]'))",
+      )
+    ) {
+      await click(
+        ".workspace > .auxiliary-panel[data-open=true] .auxiliary-close-button",
+        "Close active right workspace before Markdown camera",
+      );
+    }
+    if (
+      await evaluate("Boolean(document.querySelector('.information-popover'))")
+    ) {
+      await click(
+        ".information-toolbar button",
+        "Dismiss active Information before Markdown camera",
+      );
+    }
+    await until(
+      () =>
+        evaluate(
+          "!document.querySelector('.workspace > .auxiliary-panel[data-open=true], .information-popover')",
+        ),
+      "Independent Markdown capture has no right overlay or workspace allocation",
+    );
+    await until(
+      () =>
+        evaluate(
+          "document.querySelectorAll(" +
+            JSON.stringify(markdownRow + " .markdown-code-wrap") +
+            ").length === 2",
+        ),
+      "Two identical completed Markdown fences in newest synthetic row",
+    );
+    await click(
+      "#thread-composer",
+      "Focus independent Markdown draft",
+      false,
+      false,
+    );
+    await insertComposerText(
+      "Keep this synthetic draft while reading older messages.",
+    );
+    await evaluate(`(()=>{
+    const row=${query(markdownRow)}, scroll=row.closest(".messages");
+    if(!row.closest("[data-transcript-row-key]")||!scroll.querySelector(".virtual-transcript-content"))
+      throw Error("The owned renderer is not using LegendList");
+    if(scroll.scrollHeight-scroll.clientHeight-scroll.scrollTop>2)
+      throw Error("Before Wrap, the newest row must be at the tail");
+    window.__markdownObserved={row,scroll,composer:document.querySelector("#thread-composer")};
+    return true;
+  })()`);
+    await click(
+      markdownRow + " .markdown-code-wrap",
+      "Wrap the first closed fence",
+      false,
+      false,
+    );
+    const markdownSnapshot = () =>
+      evaluate(
+        "(()=>{" +
+          "const o=window.__markdownObserved,row=document.querySelector(" +
+          JSON.stringify(markdownRow) +
+          "),s=o.scroll;" +
+          "if(!row)return null;" +
+          "const box=e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};};" +
+          "return {id:row.getAttribute('data-read-message-id'),sameNode:row===o.row,originalConnected:o.row.isConnected," +
+          "composerSame:document.querySelector('#thread-composer')===o.composer,draft:o.composer.value," +
+          "top:s.scrollTop,tail:s.scrollHeight-s.clientHeight-s.scrollTop,viewport:box(s),width:innerWidth,height:innerHeight," +
+          "appearance:document.documentElement.dataset.appearance,preset:document.documentElement.dataset.themePreset," +
+          "blocks:[...row.querySelectorAll('.markdown-code')].map(b=>{const pre=b.querySelector('pre'),btn=b.querySelector('.markdown-code-wrap');" +
+          "return {wrapped:b.dataset.wrapped,pressed:btn.getAttribute('aria-pressed'),text:pre.textContent," +
+          "box:box(b),header:box(btn),scrollWidth:pre.scrollWidth,clientWidth:pre.clientWidth};})};})()",
+      );
+    await until(
+      () =>
+        evaluate(
+          "document.querySelector(" +
+            JSON.stringify(markdownRow + " .markdown-code-wrap") +
+            ").getAttribute('aria-pressed')==='true'",
+        ),
+      "Trusted Wrap toggles only the first actual fence",
+    );
+    await settleScreenshotFrame();
+    const markdownBefore = await markdownSnapshot();
+    assert.equal(markdownBefore.preset, "graphite");
+    assert.equal(markdownBefore.appearance, "dark");
+    assert.equal(markdownBefore.blocks.length, 2);
+    assert.deepEqual(
+      markdownBefore.blocks.map((b) => b.pressed),
+      ["true", "false"],
+    );
+    assert.equal(markdownBefore.blocks[0].text, markdownBefore.blocks[1].text);
+    assert.ok(
+      markdownBefore.blocks[0].scrollWidth <=
+        markdownBefore.blocks[0].clientWidth + 1,
+    );
+    assert.ok(
+      markdownBefore.blocks[1].scrollWidth >
+        markdownBefore.blocks[1].clientWidth,
+    );
+    await screenshot("markdown-wrap-before-scroll-away.png");
+    const focusCheck = await evaluate(
+      "(()=>{const o=window.__markdownObserved,s=o.scroll,top=s.scrollTop;" +
+        "getSelection()?.removeAllRanges();o.composer.focus({preventScroll:true});return {top,next:s.scrollTop,focused:document.activeElement===o.composer};})()",
+    );
+    assert.equal(focusCheck.focused, true);
+    assert.equal(focusCheck.next, focusCheck.top);
+    const wheelReceipts = [];
+    for (let attempt = 0; attempt < 12; attempt++) {
+      if (await evaluate("!window.__markdownObserved.row.isConnected")) break;
+      const point = await evaluate(
+        "(()=>{const o=window.__markdownObserved,s=o.scroll,r=s.getBoundingClientRect();" +
+          "const y=Math.floor(r.top+r.height/3),x=[r.left+4,r.right-24,r.left+r.width/2].map(Math.floor).find(px=>{const hit=document.elementFromPoint(px,y);return s.contains(hit)&&!hit.closest('pre');});" +
+          "if(x===undefined)throw Error('No reachable transcript wheel target outside code');" +
+          "o.wheel=null;s.addEventListener('wheel',e=>{o.wheel={trusted:e.isTrusted,deltaY:e.deltaY};},{once:true});return {x,y};})()",
+      );
+      window.webContents.sendInputEvent({
+        type: "mouseWheel",
+        ...point,
+        deltaX: 0,
+        deltaY: 640,
+        canScroll: true,
+        hasPreciseScrollingDeltas: true,
+      });
+      await until(
+        () =>
+          evaluate(
+            "window.__markdownObserved.wheel?.trusted && window.__markdownObserved.wheel.deltaY<0",
+          ),
+        "Trusted upward transcript wheel",
+      );
+      wheelReceipts.push(await evaluate("window.__markdownObserved.wheel"));
+      await settleScreenshotFrame();
+    }
+    assert.equal(
+      await evaluate("!window.__markdownObserved.row.isConnected"),
+      true,
+      "Actual source row unmounted, not merely outside viewport",
+    );
+    assert.ok(wheelReceipts.length > 0);
+    assert.equal(
+      await evaluate(
+        "document.querySelector(" + JSON.stringify(markdownRow) + ")===null",
+      ),
+      true,
+    );
+    const returnControl =
+      ".thread-view:has(#thread-composer) .conversation-reading-position button";
+    await click(
+      returnControl,
+      "Return through the native reading-position arrow",
+      false,
+      false,
+    );
+    await until(
+      () =>
+        evaluate(
+          "(()=>{const o=window.__markdownObserved,row=document.querySelector(" +
+            JSON.stringify(markdownRow) +
+            ");return row!==null&&row!==o.row&&!o.row.isConnected&&o.scroll.scrollHeight-o.scroll.clientHeight-o.scroll.scrollTop<=2;})()",
+        ),
+      "Fresh newest row after native return to latest",
+    );
+    await settleScreenshotFrame();
+    const markdownAfter = await markdownSnapshot();
+    assert.equal(markdownAfter.sameNode, false);
+    assert.equal(markdownAfter.originalConnected, false);
+    assert.equal(markdownAfter.id, markdownBefore.id);
+    assert.equal(markdownAfter.composerSame, true);
+    assert.equal(markdownAfter.draft, markdownBefore.draft);
+    assert.equal(markdownAfter.blocks.length, 2);
+    assert.deepEqual(
+      markdownAfter.blocks.map((b) => b.text),
+      markdownBefore.blocks.map((b) => b.text),
+    );
+    assert.equal(markdownAfter.blocks[1].pressed, "false");
+    for (const b of markdownAfter.blocks) assert.equal(b.wrapped, b.pressed);
+    assert.equal(markdownAfter.width, markdownBefore.width);
+    assert.equal(markdownAfter.height, markdownBefore.height);
+    await screenshot("markdown-wrap-after-native-return.png");
+    result.markdownWrapRemount = {
+      before: markdownBefore,
+      after: markdownAfter,
+      wheelReceipts,
+      files: [
+        "markdown-wrap-before-scroll-away.png",
+        "markdown-wrap-after-native-return.png",
+      ],
+      input:
+        "Chromium-trusted control clicks and wheel; no programmatic scroll assignment; focus-only handoff with preventScroll",
+    };
+  } finally {
+    await evaluate("delete window.__markdownObserved").catch(() => {});
+    nativeTheme.themeSource = priorAppearance;
+    await resizeWindow(...priorWindowSize);
+  }
+}
 async function run() {
   await networkReady;
   await until(async () => {
@@ -2388,6 +2616,17 @@ async function run() {
     }
   }
   result.ok = true;
+  try {
+    await captureMarkdownRemount();
+    result.markdownWrapRemount.status = "captured";
+  } catch (error) {
+    result.markdownWrapRemount = {
+      status: "failed",
+      waitingFor: result.waitingFor,
+      reason: String(error.stack || error),
+    };
+    delete result.waitingFor;
+  }
 }
 void import(pathToFileURL(path.join(__dirname, "../out/main/index.js")).href)
   .then(run)

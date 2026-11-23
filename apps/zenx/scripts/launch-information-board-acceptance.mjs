@@ -175,6 +175,72 @@ try {
     ]);
     await metadata.setName(threadId, title);
   }
+  const markdownThread = "information-markdown-wrap";
+  const markdownLine = "synthetic-long-wrap-0123456789 ".repeat(12).trimEnd();
+  const fence = ["```text", markdownLine, "```"].join("\n");
+  const markdownItems = Array.from({ length: 16 }, (_, index) => {
+    const threadId = markdownThread;
+    const turnId = `${threadId}-turn-${index}`;
+    const createdAt = new Date(Date.UTC(2026, 9, 31, 12, index)).toISOString();
+    return [
+      {
+        id: `${turnId}-start`,
+        threadId,
+        turnId,
+        createdAt,
+        type: "turn_started",
+        selection,
+      },
+      {
+        id: `${turnId}-user`,
+        threadId,
+        turnId,
+        createdAt,
+        type: "user_message",
+        content: [
+          { type: "text", text: `Synthetic wrap history ${index + 1}` },
+        ],
+        receiptTimezone: { timeZone: "UTC", source: "client" },
+      },
+      {
+        id: `${turnId}-answer`,
+        threadId,
+        turnId,
+        createdAt,
+        type: "agent_message",
+        text:
+          index === 15
+            ? [fence, fence].join("\n\n")
+            : Array.from(
+                { length: 12 },
+                (_, line) =>
+                  `Synthetic reading spacer ${index + 1}.${line + 1}`,
+              ).join("\n\n"),
+      },
+      {
+        id: `${turnId}-completed`,
+        threadId,
+        turnId,
+        createdAt,
+        type: "turn_completed",
+        status: "completed",
+      },
+    ];
+  }).flat();
+  await journal.create([
+    {
+      id: `${markdownThread}-metadata`,
+      threadId: markdownThread,
+      createdAt: "2026-10-31T12:00:00.000Z",
+      type: "thread_metadata",
+      cwd: workspace,
+      ...selection,
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+    },
+    ...markdownItems,
+  ]);
+  await metadata.setName(markdownThread, "Synthetic Markdown wrap history");
 } finally {
   await journal.close();
   await trace.flush();
