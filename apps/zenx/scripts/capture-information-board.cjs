@@ -2073,6 +2073,102 @@ async function run() {
         contentSize: window.getContentSize(),
         zoomFactor: window.webContents.getZoomFactor(),
       });
+      if (
+        appearance !== "dark" ||
+        width !== 961 ||
+        sample.draft !== "" ||
+        !sample.focusOnRoomToggle
+      )
+        continue;
+      const prefix = "graphite-composer-dark-961-empty";
+      const passiveFile = `${prefix}-passive.png`;
+      const focusedFile = `${prefix}-shift-tab.png`;
+      const readFocus = () =>
+        evaluate(`(()=>{
+        const e=${query("#thread-composer")},c=e.closest(".composer"),h=${query(hostRow)};
+        const css=getComputedStyle(c), a=document.activeElement;
+        return {
+          passive:a===document.body&&!c.matches(":hover")&&!h.matches(":hover")&&
+            c.closest(".thread-view").querySelector(".messages")?.matches(":hover"),
+          focused:a===e&&e.matches(":focus-visible")&&!c.matches(":hover")&&!h.matches(":hover"),
+          clear:![...document.querySelectorAll("[role=menu],[role=dialog],[role=alertdialog],[role=listbox]")]
+            .some(n=>n.checkVisibility({visibilityProperty:true,opacityProperty:true})),
+          edge:css.borderTopColor, fill:css.backgroundColor, shadow:css.boxShadow,
+          readingEvents:window.__composerCamera?.readingEvents,
+          tab:window.__composerCamera?.tab,
+        };
+      })()`);
+      try {
+        const point = await evaluate(`(()=>{
+          const e=${query("#thread-composer")},v=e.closest(".thread-view"),s=v.querySelector(".messages"),r=s.getBoundingClientRect();
+          const x=Math.round(r.left+5),y=Math.round(r.top+r.height*.8),hit=document.elementFromPoint(x,y);
+          const rail=e.closest(".composer").querySelector(".composer-rail .composer-tool");
+          if(!s.contains(hit)||hit.closest("[data-read-message-id],button,a")||rail?.disabled!==false)
+            throw Error("Composer camera needs whitespace and an enabled Add Images button");
+          document.activeElement.blur();
+          const controller=new AbortController(), opts={capture:true,signal:controller.signal};
+          const probe=window.__composerCamera={controller,readingEvents:0,tab:false};
+          for(const type of ["focusin","pointerdown","wheel","scroll"])
+            s.addEventListener(type,()=>probe.readingEvents++,opts);
+          document.addEventListener("keydown",ev=>{
+            if(ev.key==="Tab"&&ev.shiftKey&&ev.isTrusted&&ev.target===rail)
+              setTimeout(()=>{probe.tab=!ev.defaultPrevented&&document.activeElement===e},0);
+          },opts);
+          return {x,y};
+        })()`);
+        window.webContents.sendInputEvent({ type: "mouseMove", ...point });
+        await settleScreenshotFrame();
+        const unchanged = async () => {
+          const { focusOnRoomToggle, ...geometry } =
+            await readCompletedGraphite();
+          const { focusOnRoomToggle: beforeFocus, ...beforeGeometry } = sample;
+          assert.ok(beforeFocus && !focusOnRoomToggle);
+          assert.deepEqual(geometry, beforeGeometry);
+        };
+        const passive = await readFocus();
+        assert.ok(passive.passive && passive.clear && !passive.readingEvents);
+        await unchanged();
+        await screenshot(passiveFile);
+        await evaluate(`(()=>{
+          const e=${query("#thread-composer")};
+          e.closest(".composer").querySelector(".composer-rail .composer-tool").focus({preventScroll:true});
+        })()`);
+        for (const type of ["keyDown", "keyUp"]) {
+          window.webContents.sendInputEvent({
+            type,
+            keyCode: "Tab",
+            modifiers: ["shift"],
+          });
+        }
+        await until(
+          async () => (await readFocus()).tab,
+          "Trusted Shift+Tab from Add Images to composer",
+          10,
+        );
+        await settleScreenshotFrame();
+        const focused = await readFocus();
+        assert.ok(focused.focused && focused.clear && !focused.readingEvents);
+        await unchanged();
+        await screenshot(focusedFile);
+        result.graphiteComposerFocus = {
+          passiveFile,
+          focusedFile,
+          passive,
+          focused,
+        };
+      } catch {
+        delete result.waitingFor;
+        for (const file of [passiveFile, focusedFile])
+          await fs
+            .rm(path.join(directory, file), { force: true })
+            .catch(() => {});
+      } finally {
+        await evaluate(`(()=>{
+          window.__composerCamera?.controller.abort();
+          delete window.__composerCamera;
+          ${query(hostRow + " .host-message-toggle")}.focus({preventScroll:true});
+        })()`);
+      }
     }
   };
   result.graphiteCompletedReply = [];
