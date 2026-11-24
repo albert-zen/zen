@@ -43,9 +43,9 @@ async function evaluate(expression) {
   if (!reply.ok) throw Error(reply.error);
   return reply.value;
 }
-async function until(check, label) {
+async function until(check, label, attempts = 300) {
   result.waitingFor = label;
-  for (let i = 0; i < 300; i++) {
+  for (let i = 0; i < attempts; i++) {
     if (await check()) {
       delete result.waitingFor;
       return;
@@ -2007,8 +2007,8 @@ async function run() {
     })()`);
   const originalCompletedSize = window.getSize();
   const originalCompleted = await readCompletedGraphite();
-  const completedReady = (s) =>
-    s.appearance === "dark" &&
+  const completedReady = (s, appearance = "dark") =>
+    s.appearance === appearance &&
     s.preset === "graphite" &&
     s.independent &&
     s.roomDetailsClosed &&
@@ -2032,29 +2032,41 @@ async function run() {
         p.rect.top >= s.viewport.top &&
         p.rect.bottom <= s.composer.top,
     );
-  result.graphiteCompletedReply = [];
-  assert.equal(window.webContents.getZoomFactor(), 1);
-  try {
+  const captureCompletedGraphite = async (appearance, samples, twins) => {
     for (const width of [961, 960]) {
+      const twin = twins?.find((sample) => sample.width === width);
+      if (twins) assert.ok(twin);
       await resizeWindow(width, 820);
       await hoverHostCapture("#thread-composer");
-      await until(async () => {
-        const sample = await readCompletedGraphite();
-        return (
-          sample.width === width &&
-          completedReady(sample) &&
-          !sample.hovered &&
-          !sample.focused
-        );
-      }, `completed Graphite body at the pinned tail, ${width}px`);
+      await until(
+        async () => {
+          const sample = await readCompletedGraphite();
+          return (
+            sample.width === width &&
+            (!twin || sample.height === twin.height) &&
+            completedReady(sample, appearance) &&
+            !sample.hovered &&
+            !sample.focused
+          );
+        },
+        `completed Graphite body at the pinned tail, ${width}px`,
+        twin ? 100 : undefined,
+      );
       await settleScreenshotFrame();
       const sample = await readCompletedGraphite();
       assert.equal(sample.width, width);
       assert.equal(sample.wide, width >= 961);
-      assert.ok(completedReady(sample) && !sample.hovered && !sample.focused);
-      const file = `graphite-completed-dark-${width}.png`;
+      if (twin) {
+        assert.equal(sample.height, twin.height);
+      }
+      assert.ok(
+        completedReady(sample, appearance) &&
+          !sample.hovered &&
+          !sample.focused,
+      );
+      const file = `graphite-completed-${appearance}-${width}.png`;
       await screenshot(file);
-      result.graphiteCompletedReply.push({
+      samples.push({
         file,
         ...sample,
         outerSize: window.getSize(),
@@ -2062,6 +2074,11 @@ async function run() {
         zoomFactor: window.webContents.getZoomFactor(),
       });
     }
+  };
+  result.graphiteCompletedReply = [];
+  assert.equal(window.webContents.getZoomFactor(), 1);
+  try {
+    await captureCompletedGraphite("dark", result.graphiteCompletedReply);
   } finally {
     await resizeWindow(...originalCompletedSize);
     await hoverHostCapture(hostRow + " .host-message-toggle");
@@ -2072,6 +2089,45 @@ async function run() {
       restored.width === originalCompleted.width && completedReady(restored)
     );
   }, "completed Graphite capture restored the original closed conversation");
+  // The light twin is optional; keep the required dark evidence and later cases.
+  const originalThemeSource = nativeTheme.themeSource;
+  const lightSamples = [];
+  try {
+    nativeTheme.themeSource = "light";
+    await captureCompletedGraphite(
+      "light",
+      lightSamples,
+      result.graphiteCompletedReply,
+    );
+    result.graphiteCompletedReplyLight = lightSamples;
+  } catch {
+    delete result.waitingFor;
+    for (const width of [961, 960]) {
+      await fs
+        .rm(path.join(directory, `graphite-completed-light-${width}.png`), {
+          force: true,
+        })
+        .catch(() => {});
+    }
+    result.graphiteCompletedReplyLight = [];
+  } finally {
+    nativeTheme.themeSource = originalThemeSource;
+    await resizeWindow(...originalCompletedSize);
+    await hoverHostCapture(hostRow + " .host-message-toggle");
+    if (originalCompleted.focusOnRoomToggle) {
+      await evaluate(
+        `${query(hostRow + " .host-message-toggle")}.focus({preventScroll:true})`,
+      );
+    }
+    await until(async () => {
+      const restored = await readCompletedGraphite();
+      return (
+        restored.width === originalCompleted.width &&
+        restored.height === originalCompleted.height &&
+        completedReady(restored, originalCompleted.appearance)
+      );
+    }, "restore original theme, viewport and focus after optional light capture");
+  }
   await click(
     ".information-toolbar button",
     "Open second conversation information",
