@@ -2007,11 +2007,7 @@ async function run() {
     })()`);
   const originalCompletedSize = window.getSize();
   const originalCompleted = await readCompletedGraphite();
-  const completedReady = (
-    s,
-    appearance = "dark",
-    focusOnRoomToggle = originalCompleted.focusOnRoomToggle,
-  ) =>
+  const completedReady = (s, appearance = "dark") =>
     s.appearance === appearance &&
     s.preset === "graphite" &&
     s.independent &&
@@ -2020,7 +2016,7 @@ async function run() {
     s.answerId === "information-other-turn-answer" &&
     s.answerTime === "2026-11-01T12:05:00.000Z" &&
     s.draft === originalCompleted.draft &&
-    s.focusOnRoomToggle === focusOnRoomToggle &&
+    s.focusOnRoomToggle === originalCompleted.focusOnRoomToggle &&
     s.tailDistance !== null &&
     Math.abs(s.tailDistance) <= 1 &&
     s.reply &&
@@ -2131,123 +2127,6 @@ async function run() {
         completedReady(restored, originalCompleted.appearance)
       );
     }, "restore original theme, viewport and focus after optional light capture");
-  }
-  // Trial one border color in the native light scene, without shipping CSS.
-  const passiveNames = ["before", "trial"].map(
-    (variant) => `graphite-room-border-light-961-${variant}.png`,
-  );
-  const roomToggle = query(hostRow + " .host-message-toggle");
-  const readPassiveRoom = () =>
-    evaluate(`(()=>{
-      const host = ${query(hostRow)};
-      const toggle = ${roomToggle};
-      const copy = host.querySelector(':scope > .host-message-actions > .message-copy');
-      return {bodyFocused: document.activeElement === document.body,
-        hovered:host.matches(':hover'), focusWithin:host.matches(':focus-within'),
-        focusVisible:toggle.matches(':focus-visible'),
-        fineHover:matchMedia('(hover:hover) and (pointer:fine)').matches,
-        copyOpacity:getComputedStyle(copy).opacity,
-        border:getComputedStyle(host).borderTopColor,
-        rect:host.getBoundingClientRect().toJSON()};
-    })()`);
-  const passiveRoomReady = (s) =>
-    s.bodyFocused &&
-    !s.hovered &&
-    !s.focusWithin &&
-    !s.focusVisible &&
-    (!s.fineHover || s.copyOpacity === "0");
-  const light961 = result.graphiteCompletedReplyLight?.find(
-    (s) => s.width === 961,
-  );
-  let cssKey;
-  // A missing optional twin cannot affect earlier captures or later scenarios.
-  if (light961 && originalCompleted.focusOnRoomToggle) {
-    try {
-      nativeTheme.themeSource = "light";
-      await resizeWindow(961, 820);
-      await hoverHostCapture("#thread-composer");
-      assert.equal(
-        await evaluate(`document.activeElement === ${roomToggle}`),
-        true,
-      );
-      await evaluate(`${roomToggle}.blur()`);
-      const trialState = async () => {
-        const reading = await readCompletedGraphite();
-        const room = await readPassiveRoom();
-        assert.ok(
-          reading.width === 961 &&
-            reading.height === light961.height &&
-            completedReady(reading, "light", false) &&
-            !reading.hovered &&
-            !reading.focused &&
-            passiveRoomReady(room),
-        );
-        const { draft: _draft, ...safeReading } = reading;
-        return { reading: safeReading, room };
-      };
-      await until(
-        async () => {
-          const reading = await readCompletedGraphite();
-          return (
-            reading.appearance === "light" &&
-            passiveRoomReady(await readPassiveRoom())
-          );
-        },
-        "passive Room card in Graphite light",
-        50,
-      );
-      await settleScreenshotFrame();
-      const before = await trialState();
-      await screenshot(passiveNames[0]);
-      cssKey = await window.webContents.insertCSS(
-        `:root[data-theme-preset="graphite"][data-appearance="light"] ${hostRow}:not(:hover):not(:focus-within):has(> .host-message-content > .host-message-toggle[aria-expanded='false']) { border-color: var(--border-soft); }`,
-      );
-      await settleScreenshotFrame();
-      const trial = await trialState();
-      assert.notEqual(trial.room.border, before.room.border);
-      assert.deepEqual(trial.reading, before.reading);
-      assert.deepEqual(
-        { ...trial.room, border: before.room.border },
-        before.room,
-      );
-      await screenshot(passiveNames[1]);
-      result.graphitePassiveRoomBorder = passiveNames.map((file, i) => ({
-        file,
-        ...[before, trial][i],
-      }));
-    } catch {
-      result.graphitePassiveRoomBorder = [];
-      delete result.waitingFor;
-      for (const file of passiveNames) {
-        await fs
-          .rm(path.join(directory, file), { force: true })
-          .catch(() => {});
-      }
-    } finally {
-      if (cssKey !== undefined)
-        await window.webContents.removeInsertedCSS(cssKey);
-      nativeTheme.themeSource = originalThemeSource;
-      await resizeWindow(...originalCompletedSize);
-      await until(async () => {
-        const restored = await readCompletedGraphite();
-        return (
-          restored.appearance === originalCompleted.appearance &&
-          (await evaluate(`Boolean(${roomToggle})`))
-        );
-      }, "restore appearance after passive Room trial");
-      if (!(await evaluate(`document.activeElement === ${roomToggle}`))) {
-        await evaluate(`${roomToggle}.focus({preventScroll:true})`);
-      }
-      await hoverHostCapture(hostRow + " .host-message-toggle");
-      await until(async () => {
-        const restored = await readCompletedGraphite();
-        return (
-          restored.width === originalCompleted.width &&
-          restored.height === originalCompleted.height &&
-          completedReady(restored, originalCompleted.appearance)
-        );
-      }, "restore the original reading state after passive Room trial");
-    }
   }
   await click(
     ".information-toolbar button",
