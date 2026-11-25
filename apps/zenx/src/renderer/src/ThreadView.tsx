@@ -3056,7 +3056,11 @@ function ThreadViewContent({
                     ? imageFiles(event.clipboardData.files)
                     : [];
                   if (files.length === 0) return;
-                  event.preventDefault();
+                  if (
+                    !clipboardHasImageAlongsideText(event.clipboardData, files)
+                  ) {
+                    event.preventDefault();
+                  }
                   importComposerImages(() => onImportImages(files));
                 }}
                 onKeyDown={(event) => {
@@ -3147,7 +3151,11 @@ function ThreadViewContent({
                 }
                 const files = imageFiles(event.clipboardData.files);
                 if (files.length === 0) return;
-                event.preventDefault();
+                if (
+                  !clipboardHasImageAlongsideText(event.clipboardData, files)
+                ) {
+                  event.preventDefault();
+                }
                 importComposerImages(() => onImportImages(files));
               }}
               onKeyDown={(event) => {
@@ -5282,6 +5290,30 @@ function DraftImage({
         <Icon name="x" size={12} />
       </button>
     </div>
+  );
+}
+
+// Keep the editor's own paste and undo behavior for a message copied with an
+// image. An image-only or filename clipboard keeps the existing attachment path.
+function clipboardHasImageAlongsideText(
+  clipboard: DataTransfer | null,
+  images: readonly File[],
+): boolean {
+  if (typeof clipboard?.getData !== "function") return false;
+  const plain = clipboard.getData("text/plain").trim();
+  if (!plain || images.some((image) => image.name === plain)) return false;
+  const html = clipboard.getData("text/html");
+  if (!html) return false;
+  // Inspect an inert fragment only; never render markup or read any image URL.
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  for (const node of template.content.querySelectorAll(
+    "script, style, [hidden]",
+  ))
+    node.remove();
+  return Boolean(
+    template.content.querySelector("img") &&
+    template.content.textContent?.trim(),
   );
 }
 
