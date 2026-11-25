@@ -12,6 +12,7 @@ import {
 import type { ZenXProviderProfile } from "../../main/host-profile.js";
 import type { ModelSummary } from "../../protocol-client/index.js";
 import { Icon } from "./icons.js";
+import { decodeModelKey } from "../../../../../src/protocol/model-key.js";
 import {
   canSendWithModel,
   groupedModelOptions,
@@ -53,13 +54,18 @@ export function ComposerModelMenu({
   const [query, setQuery] = useState("");
   const selected = models.find((model) => model.id === selectedModel);
   const available = canSendWithModel(models, selectedModel);
+  const searchTerm = query.toLocaleLowerCase();
   const groups = groupedModelOptions(models, providerProfiles)
     .map((group) => ({
       ...group,
-      models: group.models.filter((model) =>
-        `${model.displayName} ${group.displayName}`
-          .toLocaleLowerCase()
-          .includes(query.toLocaleLowerCase()),
+      models: group.models.filter(
+        (model) =>
+          `${model.displayName} ${group.displayName}`
+            .toLocaleLowerCase()
+            .includes(searchTerm) ||
+          decodeModelKey(model.id)
+            .modelId.toLocaleLowerCase()
+            .includes(searchTerm),
       ),
     }))
     .filter((group) => group.models.length > 0);

@@ -56,14 +56,16 @@ test("Composer model menu groups Providers and manages keyboard focus", async ()
             modelError: null,
             models: [
               model(selected, "Alpha Text", ["low", "medium"], true),
-              model(key("beta", "beta-vision"), "Beta Vision", ["high"]),
+              model(key("beta", "vendor/beta-vision-v2"), "Beta Vision", [
+                "high",
+              ]),
               model(key("alpha", "hidden"), "Hidden", ["medium"], false, true),
             ],
             onModelChange: (value: string) => modelChanges.push(value),
             onReasoningChange: (value: string) => reasoningChanges.push(value),
             providerProfiles: [
               provider("alpha", "Alpha Cloud", ["alpha-text", "hidden"]),
-              provider("beta", "Beta Local", ["beta-vision"]),
+              provider("beta", "Beta Local", ["vendor/beta-vision-v2"]),
             ],
             selectedModel: selected,
             selectedReasoningEffort: "medium",
@@ -118,12 +120,45 @@ test("Composer model menu groups Providers and manages keyboard focus", async ()
     );
     assert.equal(document.body.textContent?.includes("Hidden"), false);
 
+    const search = requiredElement<HTMLInputElement>(".composer-model-search");
+    const setSearch = async (value: string) => {
+      const propsKey = Object.keys(search).find((key) =>
+        key.startsWith("__reactProps$"),
+      );
+      assert.ok(propsKey);
+      const props = Reflect.get(search, propsKey) as {
+        onChange(event: { target: { value: string } }): void;
+      };
+      await act(async () => props.onChange({ target: { value } }));
+      assert.equal(search.value, value);
+      assert.equal(document.activeElement, search);
+    };
+    const matchingModels = () =>
+      Array.from(
+        document.querySelectorAll('[role="menuitemradio"] strong'),
+      ).map((label) => label.textContent);
+    for (const query of [
+      "vendor/beta-vision-v2",
+      "BETA-VISION-V2",
+      "Beta Vision",
+      "Beta Local",
+    ]) {
+      await setSearch(query);
+      assert.deepEqual(matchingModels(), ["Beta Vision"], query);
+    }
+    for (const query of ["hidden", key("beta", "vendor/beta-vision-v2")]) {
+      await setSearch(query);
+      assert.deepEqual(matchingModels(), [], query);
+    }
+    assert.deepEqual(modelChanges, []);
+    await setSearch("");
+
     const beta = Array.from(
       document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
     ).find((button) => button.textContent?.includes("Beta Vision"));
     assert.ok(beta);
     await act(async () => beta.click());
-    assert.deepEqual(modelChanges, [key("beta", "beta-vision")]);
+    assert.deepEqual(modelChanges, [key("beta", "vendor/beta-vision-v2")]);
     assert.equal(document.querySelector('[role="menu"]'), null);
     assert.equal(
       document.activeElement === trigger,
