@@ -3007,6 +3007,10 @@ button:disabled {
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
+.composer-model-group button small.composer-model-version {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
 .composer-model-group [aria-checked="true"],
 .composer-effort-option[aria-checked="true"] {
   color: var(--text-accent);
