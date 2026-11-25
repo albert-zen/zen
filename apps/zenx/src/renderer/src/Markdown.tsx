@@ -11,8 +11,9 @@ import {
   type ReactNode,
 } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
-import type { PluggableList } from "unified";
+import type { PluggableList, Processor } from "unified";
 import remarkGfm from "remark-gfm";
+import { cjkFriendlyExtension } from "micromark-extension-cjk-friendly";
 import type { Parent, Root } from "mdast";
 import type {
   Root as HtmlRoot,
@@ -24,6 +25,14 @@ import { isLocalPath, remarkLocalPaths } from "./local-path-links.js";
 import { MarkdownImage } from "./MarkdownImage.js";
 import { classifyImageSource } from "../../image-source.js";
 import { classifyMessageLink } from "../../external-link-policy.js";
+
+// Adjust emphasis parsing without rewriting the source or fenced code.
+function remarkCjkEmphasis(this: Processor) {
+  const data = this.data() as {
+    micromarkExtensions?: ReturnType<typeof cjkFriendlyExtension>[];
+  };
+  (data.micromarkExtensions ??= []).push(cjkFriendlyExtension());
+}
 
 export const MessageLinkContext = createContext<
   ((target: { kind: "file" | "browser"; value: string }) => void) | null
@@ -275,6 +284,7 @@ export const Markdown = memo(function Markdown({
           <ReactMarkdown
             remarkPlugins={[
               remarkGfm,
+              remarkCjkEmphasis,
               remarkBareAutolinkResidue,
               inlineWebLinks,
               ...localPathPlugins,
@@ -302,6 +312,7 @@ export const Markdown = memo(function Markdown({
         <ReactMarkdown
           remarkPlugins={[
             remarkGfm,
+            remarkCjkEmphasis,
             remarkBareAutolinkResidue,
             inlineWebLinks,
             ...localPathPlugins,
