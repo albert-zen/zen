@@ -895,7 +895,35 @@ function ThreadViewContent({
     setCancelConfirmation(null);
     setCancelNotice(null);
   }, [thread?.id]);
-  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const attachmentOwner = JSON.stringify([composerId, thread?.id ?? null]);
+  const attachmentRequests = useRef(new Map<string, symbol>());
+  const [attachmentErrors, setAttachmentErrors] = useState(
+    () => new Map<string, string>(),
+  );
+  const attachmentError = attachmentErrors.get(attachmentOwner) ?? null;
+  const setAttachmentError = (owner: string, error: string | null) => {
+    setAttachmentErrors((errors) => {
+      if ((errors.get(owner) ?? null) === error) return errors;
+      const next = new Map(errors);
+      if (error === null) next.delete(owner);
+      else next.set(owner, error);
+      return next;
+    });
+  };
+  const importComposerImages = (action: () => Promise<void>) => {
+    const request = Symbol();
+    attachmentRequests.current.set(attachmentOwner, request);
+    setAttachmentError(attachmentOwner, null);
+    void action()
+      .catch((error: unknown) => {
+        if (attachmentRequests.current.get(attachmentOwner) === request)
+          setAttachmentError(attachmentOwner, describeError(error));
+      })
+      .finally(() => {
+        if (attachmentRequests.current.get(attachmentOwner) === request)
+          attachmentRequests.current.delete(attachmentOwner);
+      });
+  };
   const [draggingImages, setDraggingImages] = useState(false);
   const [preview, setPreview] = useState<{
     attachment: AttachmentRef;
@@ -1621,7 +1649,10 @@ function ThreadViewContent({
             )
               return;
             if (!found) {
-              setAttachmentError(i18n.t("shell:referenceSourceUnavailable"));
+              setAttachmentError(
+                attachmentOwner,
+                i18n.t("shell:referenceSourceUnavailable"),
+              );
               return;
             }
             const target = resolveQuoteSource(quote);
@@ -2368,10 +2399,7 @@ function ThreadViewContent({
         setDraggingImages(false);
         if (files.length === 0) return;
         event.preventDefault();
-        setAttachmentError(null);
-        void onImportImages(files).catch((error: unknown) =>
-          setAttachmentError(describeError(error)),
-        );
+        importComposerImages(() => onImportImages(files));
       }}
     >
       {virtualTranscript &&
@@ -3029,10 +3057,7 @@ function ThreadViewContent({
                     : [];
                   if (files.length === 0) return;
                   event.preventDefault();
-                  setAttachmentError(null);
-                  void onImportImages(files).catch((error: unknown) =>
-                    setAttachmentError(describeError(error)),
-                  );
+                  importComposerImages(() => onImportImages(files));
                 }}
                 onKeyDown={(event) => {
                   if (
@@ -3123,10 +3148,7 @@ function ThreadViewContent({
                 const files = imageFiles(event.clipboardData.files);
                 if (files.length === 0) return;
                 event.preventDefault();
-                setAttachmentError(null);
-                void onImportImages(files).catch((error: unknown) =>
-                  setAttachmentError(describeError(error)),
-                );
+                importComposerImages(() => onImportImages(files));
               }}
               onKeyDown={(event) => {
                 if (handleComposerSuggestionKey(event, selector)) return;
@@ -3157,10 +3179,7 @@ function ThreadViewContent({
                 title={i18n.t("shell:addImages")}
                 disabled={composerDisabled || submitting}
                 onClick={() => {
-                  setAttachmentError(null);
-                  void onPickImages().catch((error: unknown) =>
-                    setAttachmentError(describeError(error)),
-                  );
+                  importComposerImages(onPickImages);
                 }}
               >
                 <Icon name="paperclip" />
