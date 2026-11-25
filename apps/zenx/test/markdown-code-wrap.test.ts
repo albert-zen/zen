@@ -99,7 +99,7 @@ test("wrap CSS is global to fenced blocks while trace code grouping and prose le
   );
   assert.match(
     css,
-    /\.thread-view \.agent-copy\s*\{\s*font-size: 15px;\s*line-height: 1.8;/,
+    /\n\.thread-view \.agent-copy\s*\{\s*font-size: 0\.9375rem;\s*line-height: 1.8;/,
   );
 });
 

@@ -1945,6 +1945,11 @@ button:disabled {
   font-size: 14px;
   line-height: 1.68;
 }
+/* Keep reading type independent of the conversation layout breakpoint. */
+.thread-view .agent-copy {
+  font-size: 0.9375rem;
+  line-height: 1.8;
+}
 .message-actions {
   min-height: 24px;
   display: flex;
@@ -13369,10 +13374,6 @@ button:disabled {
       transparent,
       var(--color-surface-main) 18%
     );
-  }
-  .thread-view .agent-copy {
-    font-size: 15px;
-    line-height: 1.8;
   }
   .thread-view .agent-copy .markdown-body p {
     margin-bottom: 16px;
