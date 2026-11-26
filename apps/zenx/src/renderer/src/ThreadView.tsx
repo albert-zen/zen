@@ -1466,6 +1466,19 @@ function ThreadViewContent({
     saveReadingPosition();
   }, [pauseFollowing, saveReadingPosition]);
 
+  const handleVirtualContentSettled = useCallback(() => {
+    const scroll = scrollRef.current;
+    if (!scroll) return;
+    if (shouldFollowRef.current) {
+      followBottom();
+      return;
+    }
+    // A resize may change the distance from the tail with no scroll event.
+    setAtLive(
+      scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 1,
+    );
+  }, [followBottom]);
+
   // The Composer overlays the bottom of the full-height transcript scroll
   // area. Publish its live height so the list reserves matching virtual
   // space. The desktop history-return control has its own lane above it. This is geometry only;
@@ -2446,7 +2459,7 @@ function ThreadViewContent({
                   ) : null}
                 </>
               }
-              onContentSettled={followBottom}
+              onContentSettled={handleVirtualContentSettled}
               className="messages"
               tabIndex={-1}
               style={{ overflowAnchor: atLive ? "none" : undefined }}
