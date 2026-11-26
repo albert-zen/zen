@@ -1,5 +1,5 @@
 import { useQuestionReadRecovery } from "./use-question-read-recovery.js";
-import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { useId, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import {
@@ -179,6 +179,7 @@ function RoomQuestionCard({
       mounted.current = false;
     };
   }, []);
+  const hintId = useId();
   const { question, draft, attempt } = view;
   const waiting = attempt && attempt.phase !== "rejected";
   const changed = draft.questionRevision !== question.revision;
@@ -232,11 +233,30 @@ function RoomQuestionCard({
         )}
       </p>
       <small className="room-question-origin">{origin}</small>
-      {question.specification.questions.map((q) => {
+      {question.specification.questions.map((q, index) => {
         const answer = draft.answers.find((a) => a.questionId === q.id);
+        const choiceHintId = q.options?.length
+          ? `${hintId}-${index}`
+          : undefined;
         return (
-          <fieldset key={q.id} disabled={disabled || changed}>
+          <fieldset
+            key={q.id}
+            disabled={disabled || changed}
+            aria-describedby={choiceHintId}
+          >
             <legend>{q.prompt}</legend>
+            {q.options?.length ? (
+              <p
+                id={choiceHintId}
+                className="user-question-choice-hint user-question-draft-note"
+              >
+                {t(
+                  q.multiSelect
+                    ? "questionChooseMultipleHint"
+                    : "questionChooseOneHint",
+                )}
+              </p>
+            ) : null}
             {q.options?.length ? (
               <ul className="user-question-options">
                 {q.options?.map((option) => {
@@ -288,12 +308,12 @@ function RoomQuestionCard({
             ) : null}
             <label className="user-question-text">
               {q.options?.length ? (
-                <span>{t("questionOptionalDetails")}</span>
+                <span>{t("questionAnswerOrDetails")}</span>
               ) : null}
               <textarea
                 aria-label={
                   q.options?.length
-                    ? `${q.prompt} · ${t("questionOptionalDetails")}`
+                    ? `${q.prompt} · ${t("questionAnswerOrDetails")}`
                     : q.prompt
                 }
                 rows={1}

@@ -242,7 +242,7 @@ ItemList replay，Renderer 不保存另一份 transcript authority。
 - 用户消息使用右对齐气泡；Agent Message 左侧自然排版，不使用气泡或重复头像轨道。
 - Conversation stream 中的 Agent Message 不显示重复的 assistant logo/avatar + “ZenX” identity row；Completed Turn 的 **Worked for** disclosure 或 Running Turn 的状态/时长成为首条 metadata，正文与 inline Trace / Tool affordance 紧随其后；当前 trace 已表达真实运行/思考时，顶部不再重复泛化状态文字，但保留可访问状态和时长，审批、停止与等待仍明确可见。此规则不影响产品壳/Sidebar 的 ZenX 品牌，也不影响 Thread row 的 Provider logo + model identity。
 - Agent Message 与 Trace Group 位于 Turn 的同一一级流中，不制造错误缩进。
-- 正文优先可读宽度、行高和段落节奏；Trace 比正文更小、更弱。
+- 正文优先可读宽度、行高和段落节奏；窗口变窄优先自然换行，不在断点缩小 Agent 正文字号；Trace 比正文更小、更弱。
 - Trace Group 保持轻量，不使用厚边框或每一步一个大卡片。
 - Thinking 与 Tool row 采用一致的紧凑视觉；完成色保持克制，避免大量成功状态争夺注意力。
 - 代码块属于相邻 Agent Message 内容，可以有容器，但不能被误认为 Tool Call。
@@ -585,6 +585,7 @@ New PAW setup discloses an hourly heartbeat and model-quota use before Create. I
 - 从完整用户流程审视界面。先枚举页面、设置分区、插件页面、弹窗和关键状态，再实际逐页打开；不得把类型检查、单页截图或通过的组件测试表述为全产品体验验收。
 - 复用已有成熟组件与交互。Room、Thread、side chat 共享正常 Composer、浮层式 @ 提示和右侧工作区；不为插件复制一套低完成度输入框、选择器或导航。
 - 设计参考应能说明具体借鉴了什么：信息层级、密度、颜色、侧栏、输入框、Tab 或消息布局。没有源码、公开设计材料或实际产品观察的依据时，不声称某设计来自 DeepSeek Harness、T3 Code 或其他产品。
+- 离开最新消息后，在 Composer 上方显示独立的向下箭头；保留“回到最新”的可访问名称和提示，不用正文标签占位。
 - 所有 Tab 的选中态使用表面深浅与文字对比，不用强调色底线。保留键盘焦点环、可访问名称与选中语义；选中与焦点是两件事。
 - Windows / Linux 的原生窗口操作独占最上方一行。除左侧 Sidebar 外，主页面标题与右侧工作区操作全部位于其下方，宽窄屏都不得与系统窗口按钮重叠。原生操作行统一使用 Sidebar 顶部的 surface token，与下方主标题/内容形成可见的深浅分区；浅色、深色和配色主题同步生效。
 - 图标按钮必须有准确的 tooltip 与可访问名称。关闭 Tab、关闭右栏、展开右栏、全屏打开子会话是不同动作；新建 Tab 的加号只打开内容类型选择器，不隐式创建线程。每个操作的作用对象与用途必须从所在侧栏或全屏布局中清楚可见；不是禁止叉号或加号，而是不能让它们脱离被遮挡的 Tab 名称，像无归属的顶栏按钮。
@@ -1203,7 +1204,7 @@ Navigation, dismissal and newer reference identities invalidate stale async read
 
 A native answered-question message pairs each question’s compact quote-style pill with only its selected option labels and actual free-text answer. Multiple questions use separate pairs, with no added answer headings or unselected options in the message body. Question pills and disclosure titles use a question icon, distinct from message quotes. Information-card question headings use the same question icon. The read-only disclosure reuses the information card’s option rows, typography and selected-check styling; it does not introduce editable controls. The disclosure separates the prompt from all options and marks exact selected option IDs with an accessible check state, not color alone. Hover previews the complete authored question and choices; click or keyboard activation keeps the same disclosure open, with Escape, close and outside dismissal. Selected options display their authored labels in authored order, with independently entered free text preserved verbatim. Multiple questions and selections remain visible. Missing or ambiguous original content is explicitly unavailable and preserves the recorded answer; plain historical prose is never guessed into a structured question. This is display-only and does not alter stored inputs, model context, copying, routing, or answer admission.
 
-Question information cards show the default open request heading once, while retaining distinct sending, uncertain, rejected and terminal status messages. Choice-question text fields are labeled as optional additional details; free-answer fields use their actual question as the accessible label without repeating a generic answer heading. Each field keeps its own question binding and draft, including a text-only alternative to a choice.
+Question information cards show the default open request heading once, while retaining distinct sending, uncertain, rejected and terminal status messages. Choice-question text fields explicitly say that users can write an answer or add details; free-answer fields use their actual question as the accessible label without repeating a generic answer heading. Each field keeps its own question binding and draft, including a text-only alternative to a choice.
 
 Healthy question cards have no manual refresh action. Native/Room question events, connection recovery and returning to the app refresh the list automatically; transient read failures receive at most two delayed retries (1s, 3s). Read failure appears as one compact row: “Loading failed” beside a reload-icon “Retry” button with an explicit accessible name. It does not expose technical details in the card. Recovery only reads lists, keeps independent drafts and uncertain response identities, and retires when the view changes or unmounts.
 

@@ -2,6 +2,7 @@ import { useQuestionReadRecovery } from "./use-question-read-recovery.js";
 import {
   memo,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useSyncExternalStore,
@@ -106,6 +107,7 @@ function QuestionCard({
   disabled: boolean;
 }) {
   const { t } = useTranslation("panels");
+  const hintId = useId();
   const { question, draft, attempt } = view;
   const { threadId, callItemId } = question.request;
   let valid = false;
@@ -172,11 +174,30 @@ function QuestionCard({
           {t(`questionState.${status}`)}
         </p>
       )}
-      {question.specification.questions.map((q) => {
+      {question.specification.questions.map((q, index) => {
         const answer = draft.answers.find((a) => a.questionId === q.id);
+        const choiceHintId = q.options?.length
+          ? `${hintId}-${index}`
+          : undefined;
         return (
-          <fieldset key={q.id} disabled={unavailable}>
+          <fieldset
+            key={q.id}
+            disabled={unavailable}
+            aria-describedby={choiceHintId}
+          >
             <legend>{q.prompt}</legend>
+            {q.options?.length ? (
+              <p
+                id={choiceHintId}
+                className="user-question-choice-hint user-question-draft-note"
+              >
+                {t(
+                  q.multiSelect
+                    ? "questionChooseMultipleHint"
+                    : "questionChooseOneHint",
+                )}
+              </p>
+            ) : null}
             {q.options?.length ? (
               <ul className="user-question-options">
                 {q.options?.map((option) => {
@@ -224,12 +245,12 @@ function QuestionCard({
             ) : null}
             <label className="user-question-text">
               {q.options?.length ? (
-                <span>{t("questionOptionalDetails")}</span>
+                <span>{t("questionAnswerOrDetails")}</span>
               ) : null}
               <textarea
                 aria-label={
                   q.options?.length
-                    ? `${q.prompt} · ${t("questionOptionalDetails")}`
+                    ? `${q.prompt} · ${t("questionAnswerOrDetails")}`
                     : q.prompt
                 }
                 rows={1}
