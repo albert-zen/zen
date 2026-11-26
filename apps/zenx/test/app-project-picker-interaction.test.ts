@@ -12127,7 +12127,7 @@ test("unsubscribed private Thread question edges discover and remove Asking with
   }
 });
 
-for (const mode of ["dock", "popover"] as const) {
+for (const mode of ["fitted", "popover"] as const) {
   test(`real App ${mode} pending Send keeps historical rows in one stable grid`, async () => {
     const admission = deferred<unknown>();
     const priorResizeObserver = globalThis.ResizeObserver;
@@ -12164,8 +12164,26 @@ for (const mode of ["dock", "popover"] as const) {
       });
       const composer = await selectedComposer();
       const workspace = document.querySelector<HTMLElement>(".workspace")!;
+      const right = mode === "fitted" ? 1600 : 856;
+      const unshiftedLeft = mode === "fitted" ? 550 : 288;
+      const readingWidth = mode === "fitted" ? 800 : 530;
+      const view = workspace.querySelector<HTMLElement>(".thread-view")!;
+      const inner = view.querySelector<HTMLElement>(".messages-inner")!;
       workspace.getBoundingClientRect = () =>
-        ({ top: 44, width: mode === "dock" ? 1600 : 856 }) as DOMRect;
+        ({ top: 44, left: 264, right, width: right - 264 }) as DOMRect;
+      view.getBoundingClientRect = workspace.getBoundingClientRect;
+      view.style.direction = "ltr";
+      inner.getBoundingClientRect = () => {
+        const shift = parseFloat(
+          view.style.getPropertyValue("--information-reading-shift") || "0",
+        );
+        const left = unshiftedLeft - shift;
+        return {
+          left,
+          right: left + readingWidth,
+          width: readingWidth,
+        } as DOMRect;
+      };
       await act(async () => {
         for (const measurement of measurements) {
           if (measurement.target === workspace) measurement.deliver();
@@ -12175,13 +12193,30 @@ for (const mode of ["dock", "popover"] as const) {
         ".information-toolbar button",
       )!;
       await act(async () => information.click());
-      assert.equal(
-        Boolean(document.querySelector(`.information-${mode}`)),
-        true,
-        "exercise the measured information layout rather than infer its mode",
+      await act(async () => {
+        for (const measurement of measurements) {
+          if (measurement.target === inner) measurement.deliver();
+        }
+      });
+      const card = document.querySelector<HTMLElement>(".information-popover")!;
+      assert.ok(
+        card,
+        "both width regimes open the same nonmodal information card",
       );
+      assert.equal(view.dataset.informationLane, String(mode === "fitted"));
+      assert.equal(
+        card.style.getPropertyValue("--information-reading-card-width"),
+        mode === "fitted" ? "320px" : "",
+        "a fitted lane uses its measured override, while popover uses the fallback",
+      );
+      assert.equal(
+        parseFloat(
+          view.style.getPropertyValue("--information-reading-shift") || "0",
+        ),
+        mode === "fitted" ? 98 : 0,
+      );
+      assert.equal(inner.getBoundingClientRect().width, readingWidth);
       await act(async () => information.click());
-      const inner = document.querySelector<HTMLElement>(".messages-inner")!;
       const history = inner.querySelector<HTMLElement>(
         ":scope > .transcript-history",
       );
