@@ -326,6 +326,8 @@ export function Combobox({
   label,
   disabled = false,
   autoFocus = false,
+  unavailableValueLabel,
+  descriptionId,
 }: {
   value: string;
   onValueChange(value: string): void;
@@ -333,6 +335,8 @@ export function Combobox({
   label: string;
   disabled?: boolean;
   autoFocus?: boolean;
+  unavailableValueLabel?: string;
+  descriptionId?: string;
 }) {
   useTranslation("panels");
   const [open, setOpen] = useState(false);
@@ -342,6 +346,7 @@ export function Combobox({
   const [cursor, setCursor] = useState(0);
   const id = useId();
   const items = choices(children);
+  const selected = items.find((item) => item.value === value);
   const filtered = items.filter(
     (item) =>
       !item.disabled &&
@@ -372,10 +377,14 @@ export function Combobox({
           disabled={disabled}
           aria-label={label}
           title={
-            items.find((item) => item.value === value)?.title ??
-            choiceText(items.find((item) => item.value === value)?.label)
+            selected?.title ??
+            (selected
+              ? choiceText(selected.label)
+              : (unavailableValueLabel ?? ""))
           }
-          aria-describedby={`${id}-value`}
+          aria-describedby={
+            descriptionId ? `${id}-value ${descriptionId}` : `${id}-value`
+          }
           aria-haspopup="listbox"
           onKeyDown={(event) => {
             if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -387,7 +396,8 @@ export function Combobox({
           }}
         >
           <span id={`${id}-value`}>
-            {items.find((item) => item.value === value)?.label ??
+            {selected?.label ??
+              unavailableValueLabel ??
               (value
                 ? i18n.t("panels:unavailableSelection")
                 : i18n.t("panels:choose"))}

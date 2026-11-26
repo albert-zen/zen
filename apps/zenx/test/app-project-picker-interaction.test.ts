@@ -5160,6 +5160,109 @@ async function mountThreadApp(
   );
 }
 
+test("cached sidebar navigation keeps delayed image results with their originating draft", async () => {
+  const first = liveThread();
+  const second = {
+    ...liveThread(),
+    id: "thread-2",
+    sessionId: "thread-2",
+    name: "Thread two",
+  };
+  const projects = oneProject();
+  projects.projects[0]!.threadIds = [first.id, second.id];
+  const failed = deferred<ZenXImageDraft[]>();
+  const successful = deferred<ZenXImageDraft[]>();
+  let picks = 0;
+  let sends = 0;
+  const harness = await mountThreadApp({
+    models: [
+      { ...wireModel("fake", true), inputModalities: ["text", "image"] },
+    ],
+    projectsGet: async () => projects,
+    threads: async (archived) =>
+      archived ? [] : [summary(false), summary(false, second.id, second.name)],
+    pickImages: async () =>
+      ++picks === 1 ? failed.promise : successful.promise,
+    request: async (method, params) => {
+      if (method === "zen/thread/resume")
+        return resumed(
+          (params as { threadId: string }).threadId === first.id
+            ? first
+            : second,
+        );
+      if (method === "zen/thread/questions/list") return { questions: [] };
+      if (method === "zen/turn/send") sends += 1;
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  });
+  const select = async (thread: Thread) => {
+    const row = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        `.thread-row-shell[data-thread-id="${thread.id}"] .thread-row`,
+      ),
+    );
+    await act(async () => row.click());
+    return await waitFor(() =>
+      row.getAttribute("aria-current") === "page"
+        ? document.querySelector<HTMLTextAreaElement>("#thread-composer")
+        : null,
+    );
+  };
+  const pick = async () => {
+    const button = await waitFor(() => exactButtonByAria("Add images"));
+    await act(async () => button.click());
+  };
+  const view = () => document.querySelector(".thread-view");
+  const notice = () =>
+    document.querySelector(".composer [role=alert]")?.textContent ?? null;
+  const image = () => document.querySelector('[aria-label="Remove late.png"]');
+
+  try {
+    await setTextareaValue(await select(first), "Draft A");
+    await setTextareaValue(await select(second), "Draft B");
+    assert.equal((await select(first)).value, "Draft A");
+    const retained = view();
+    assert.ok(retained);
+    await pick();
+    assert.equal((await select(second)).value, "Draft B");
+    assert.equal(view(), retained);
+
+    await act(async () => failed.reject(new Error("Synthetic A picker error")));
+    assert.equal(notice(), null);
+    assert.equal((await select(first)).value, "Draft A");
+    assert.equal(view(), retained);
+    assert.equal(notice(), "Synthetic A picker error");
+
+    await pick();
+    assert.equal((await select(second)).value, "Draft B");
+    assert.equal(view(), retained);
+    await act(async () =>
+      successful.resolve([
+        {
+          id: "late-image",
+          name: "late.png",
+          attachment: {
+            type: "attachment",
+            sha256: "a".repeat(64),
+            mediaType: "image/png",
+            byteLength: 4,
+            width: 1,
+            height: 1,
+          },
+        },
+      ]),
+    );
+    assert.equal(image(), null);
+    assert.equal((await select(first)).value, "Draft A");
+    assert.ok(image());
+    assert.equal(notice(), null);
+    assert.equal(picks, 2);
+    assert.equal(sends, 0);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 async function selectedComposer(): Promise<HTMLTextAreaElement> {
   const row = await waitFor(() =>
     document.querySelector<HTMLButtonElement>(".thread-row"),

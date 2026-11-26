@@ -61,6 +61,37 @@ test("renders strong, emphasis, and list item inline syntax", () => {
   assert.match(html, /<li><em>second<\/em><\/li>/u);
 });
 
+test("renders emphasis at CJK punctuation without changing literal markers", () => {
+  const text = [
+    "需要**“确认”**以后再继续。",
+    "请看*（说明）*再决定。",
+    "English **warning** is still emphasized.",
+    "转义：\\*\\*不加粗\\*\\*。",
+    "命令：`TaskHandle`、`JobResult`。",
+    "`**“文本”**`",
+    "```text",
+    "需要**“确认”**以后再继续。",
+    "```",
+  ].join("\n\n");
+  for (const streaming of [false, true]) {
+    const source = streaming ? text + "\n\n```text\npartial" : text;
+    const html = renderToStaticMarkup(
+      createElement(Markdown, { text: source }),
+    );
+    assert.match(html, /需要<strong>“确认”<\/strong>以后再继续。/u);
+    assert.match(html, /请看<em>（说明）<\/em>再决定。/u);
+    assert.match(html, /English <strong>warning<\/strong>/u);
+    assert.match(html, /转义：\*\*不加粗\*\*。/u);
+    assert.match(
+      html,
+      /命令：<code>TaskHandle<\/code>、<code>JobResult<\/code>。/u,
+    );
+    assert.match(html, /<code>\*\*“文本”\*\*<\/code>/u);
+    assert.match(html, /需要\*\*“确认”\*\*以后再继续。/u);
+    assert.equal(html.includes('class="markdown-code streaming"'), streaming);
+  }
+});
+
 test("renders Markdown images and preserves fence contents", () => {
   const source = [
     "![remote](https://evil.example/x.png)",

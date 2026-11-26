@@ -56,14 +56,16 @@ test("Composer model menu groups Providers and manages keyboard focus", async ()
             modelError: null,
             models: [
               model(selected, "Alpha Text", ["low", "medium"], true),
-              model(key("beta", "beta-vision"), "Beta Vision", ["high"]),
+              model(key("beta", "vendor/beta-vision-v2"), "Beta Vision", [
+                "high",
+              ]),
               model(key("alpha", "hidden"), "Hidden", ["medium"], false, true),
             ],
             onModelChange: (value: string) => modelChanges.push(value),
             onReasoningChange: (value: string) => reasoningChanges.push(value),
             providerProfiles: [
               provider("alpha", "Alpha Cloud", ["alpha-text", "hidden"]),
-              provider("beta", "Beta Local", ["beta-vision"]),
+              provider("beta", "Beta Local", ["vendor/beta-vision-v2"]),
             ],
             selectedModel: selected,
             selectedReasoningEffort: "medium",
@@ -118,12 +120,45 @@ test("Composer model menu groups Providers and manages keyboard focus", async ()
     );
     assert.equal(document.body.textContent?.includes("Hidden"), false);
 
+    const search = requiredElement<HTMLInputElement>(".composer-model-search");
+    const setSearch = async (value: string) => {
+      const propsKey = Object.keys(search).find((key) =>
+        key.startsWith("__reactProps$"),
+      );
+      assert.ok(propsKey);
+      const props = Reflect.get(search, propsKey) as {
+        onChange(event: { target: { value: string } }): void;
+      };
+      await act(async () => props.onChange({ target: { value } }));
+      assert.equal(search.value, value);
+      assert.equal(document.activeElement, search);
+    };
+    const matchingModels = () =>
+      Array.from(
+        document.querySelectorAll('[role="menuitemradio"] strong'),
+      ).map((label) => label.textContent);
+    for (const query of [
+      "vendor/beta-vision-v2",
+      "BETA-VISION-V2",
+      "Beta Vision",
+      "Beta Local",
+    ]) {
+      await setSearch(query);
+      assert.deepEqual(matchingModels(), ["Beta Vision"], query);
+    }
+    for (const query of ["hidden", key("beta", "vendor/beta-vision-v2")]) {
+      await setSearch(query);
+      assert.deepEqual(matchingModels(), [], query);
+    }
+    assert.deepEqual(modelChanges, []);
+    await setSearch("");
+
     const beta = Array.from(
       document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
     ).find((button) => button.textContent?.includes("Beta Vision"));
     assert.ok(beta);
     await act(async () => beta.click());
-    assert.deepEqual(modelChanges, [key("beta", "beta-vision")]);
+    assert.deepEqual(modelChanges, [key("beta", "vendor/beta-vision-v2")]);
     assert.equal(document.querySelector('[role="menu"]'), null);
     assert.equal(
       document.activeElement === trigger,
@@ -275,6 +310,114 @@ test("Composer model menu groups Providers and manages keyboard focus", async ()
       IS_REACT_ACT_ENVIRONMENT: undefined,
     });
     dom.window.close();
+  }
+});
+
+test("same-name versions expose their provider IDs without changing model selection", async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: "http://localhost" });
+  const previous = {
+    document: globalThis.document,
+    HTMLElement: globalThis.HTMLElement,
+    Node: globalThis.Node,
+    window: globalThis.window,
+  };
+  Object.assign(globalThis, {
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    window: dom.window,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const root = createRoot(requiredElement("#root"));
+  const versions = [
+    "vendor/text-stable-2026-10-01",
+    "vendor/text-stable-2026-11-15",
+  ];
+  const [first, second] = versions.map((id) => key("alpha", id));
+  assert.ok(first && second);
+  const changes: string[] = [];
+  try {
+    await act(async () =>
+      root.render(
+        createElement(ComposerModelMenu, {
+          disabled: false,
+          modelError: null,
+          models: [
+            model(first, "Example", [], false),
+            model(second, "Example", [], false),
+            model(key("alpha", "unique"), "Unique", [], false),
+            model(key("alpha", "hidden"), "Unique", [], false, true),
+            model(key("beta", "example"), "Example", [], false),
+          ],
+          providerProfiles: [
+            provider("alpha", "Alpha Cloud", [...versions, "unique", "hidden"]),
+            provider("beta", "Beta Local", ["example"]),
+          ],
+          onModelChange: (value: string) => changes.push(value),
+          onReasoningChange: () => undefined,
+          selectedModel: first,
+          selectedReasoningEffort: null,
+          switching: false,
+        }),
+      ),
+    );
+    const trigger = requiredButton(".composer-model-trigger");
+    await act(async () => trigger.click());
+    await act(async () => requiredButton('[role="menuitem"]').click());
+    const rows = () =>
+      Array.from(
+        document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+      );
+    const versionsInRows = () =>
+      rows().map(
+        (row) =>
+          row.querySelector(".composer-model-version")?.textContent ?? null,
+      );
+    assert.deepEqual(versionsInRows(), [...versions, null, null]);
+    assert.deepEqual(
+      rows().map((row) => row.getAttribute("aria-checked")),
+      ["true", "false", "false", "false"],
+    );
+    const search = requiredElement<HTMLInputElement>(".composer-model-search");
+    assert.equal(document.activeElement, search);
+    await act(async () => search.dispatchEvent(keydown(dom, "ArrowDown")));
+    const back = requiredButton(".composer-menu-back");
+    assert.equal(document.activeElement, back);
+    await act(async () => back.dispatchEvent(keydown(dom, "ArrowDown")));
+    const firstVersion = rows()[0];
+    assert.equal(document.activeElement, firstVersion);
+    await act(async () =>
+      firstVersion?.dispatchEvent(keydown(dom, "ArrowDown")),
+    );
+    assert.equal(document.activeElement, rows()[1]);
+    assert.deepEqual(
+      changes,
+      [],
+      "keyboard browsing must not select a version",
+    );
+    await act(async () => search.focus());
+    const propsKey = Object.keys(search).find((key) =>
+      key.startsWith("__reactProps$"),
+    );
+    assert.ok(propsKey);
+    const props = Reflect.get(search, propsKey) as {
+      onChange(event: { target: { value: string } }): void;
+    };
+    await act(async () =>
+      props.onChange({ target: { value: versions[1] ?? "" } }),
+    );
+    assert.deepEqual(versionsInRows(), [versions[1]]);
+    const match = rows()[0];
+    assert.ok(match);
+    assert.deepEqual(changes, [], "filtering must not change the selection");
+    await act(async () => match.click());
+    assert.deepEqual(changes, [second]);
+    assert.equal(document.activeElement, trigger);
+    assert.equal(trigger.getAttribute("aria-expanded"), "false");
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+    Object.assign(globalThis, previous);
   }
 });
 

@@ -6,12 +6,14 @@ import {
   isValidElement,
   memo,
   useContext,
+  useReducer,
   useState,
   type ReactNode,
 } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
-import type { PluggableList } from "unified";
+import type { PluggableList, Processor } from "unified";
 import remarkGfm from "remark-gfm";
+import { cjkFriendlyExtension } from "micromark-extension-cjk-friendly";
 import type { Parent, Root } from "mdast";
 import type {
   Root as HtmlRoot,
@@ -24,9 +26,43 @@ import { MarkdownImage } from "./MarkdownImage.js";
 import { classifyImageSource } from "../../image-source.js";
 import { classifyMessageLink } from "../../external-link-policy.js";
 
+// Adjust emphasis parsing without rewriting the source or fenced code.
+function remarkCjkEmphasis(this: Processor) {
+  const data = this.data() as {
+    micromarkExtensions?: ReturnType<typeof cjkFriendlyExtension>[];
+  };
+  (data.micromarkExtensions ??= []).push(cjkFriendlyExtension());
+}
+
 export const MessageLinkContext = createContext<
   ((target: { kind: "file" | "browser"; value: string }) => void) | null
 >(null);
+
+// The ThreadView owns this ephemeral store, not the virtual message row.
+export function createMessageCodeWrapChoices() {
+  const entries = new Map<string, string>();
+  return {
+    has(key: string, fence: string) {
+      return entries.get(key) === fence;
+    },
+    set(key: string, fence: string, wrapped: boolean) {
+      entries.delete(key);
+      if (!wrapped) return;
+      // Bound both the number and size of explicitly changed fences.
+      if (entries.size >= 128) {
+        const oldest = entries.keys().next().value;
+        if (oldest !== undefined) entries.delete(oldest);
+      }
+      entries.set(key, fence);
+    },
+  };
+}
+
+export const MessageCodeWrapContext = createContext<ReturnType<
+  typeof createMessageCodeWrapChoices
+> | null>(null);
+
+type CodeWrapChoice = { wrapped: boolean; set(wrapped: boolean): void };
 
 export type MarkdownBlock =
   | { type: "paragraph"; text: string }
@@ -46,12 +82,15 @@ export interface MarkdownInlineToken {
 export const Markdown = memo(function Markdown({
   text,
   inlineTokens = [],
+  wrapMessageId,
 }: {
   text: string;
   inlineTokens?: readonly MarkdownInlineToken[];
+  wrapMessageId?: string;
 }) {
   useTranslation("panels");
   const onOpen = useContext(MessageLinkContext);
+  const wrapChoices = useContext(MessageCodeWrapContext);
   const renderText = (value: string): ReactNode => {
     if (!inlineTokens.length) return value;
     const output: ReactNode[] = [];
@@ -119,35 +158,7 @@ export const Markdown = memo(function Markdown({
   const components: Components = {
     ...markdownComponents,
     a: messageAnchor(onOpen),
-    pre: ({ children, node }) => {
-      const child = Children.only(children);
-      if (isValidElement(child)) {
-        const props = child.props as {
-          className?: string;
-          children?: unknown;
-        };
-        const language = props.className?.match(/language-(\S+)/u)?.[1] ?? "";
-        return (
-          <CodeBlock
-            block={{
-              type: "code",
-              language,
-              text: String(props.children ?? "").replace(/\n$/u, ""),
-              closed: true,
-            }}
-            renderText={renderText}
-            copyText={copyText}
-            filePathAllowed={
-              closedTopLevelFence(text, node) &&
-              !inlineTokens.some((token) =>
-                String(props.children ?? "").includes(token.marker),
-              )
-            }
-          />
-        );
-      }
-      return <pre>{children}</pre>;
-    },
+    pre: MessageCodePre,
     ...(inlineTokens.length
       ? ({
           span: ({ node, children }) => {
@@ -257,12 +268,51 @@ export const Markdown = memo(function Markdown({
   const streamingFence =
     streamingBlock === null ? null : findUnclosedFence(text);
 
+  const codeRender = {
+    text,
+    inlineTokens,
+    renderText,
+    copyText,
+    wrapChoices,
+    wrapMessageId,
+  };
+
   if (streamingFence !== null && streamingBlock !== null) {
     return (
+      <CodeRenderContext.Provider value={codeRender}>
+        <div className="markdown-body">
+          <ReactMarkdown
+            remarkPlugins={[
+              remarkGfm,
+              remarkCjkEmphasis,
+              remarkBareAutolinkResidue,
+              inlineWebLinks,
+              ...localPathPlugins,
+              ...(inlineTokens.length ? [referenceSyntaxPlugin] : []),
+            ]}
+            components={components}
+            rehypePlugins={inlineTokens.length ? [inlinePlugin] : []}
+            urlTransform={safeUrlTransform}
+          >
+            {prepareMarkdown(streamingFence.prefix)}
+          </ReactMarkdown>
+          <CodeBlock
+            block={streamingBlock}
+            renderText={renderText}
+            copyText={copyText}
+          />
+        </div>
+      </CodeRenderContext.Provider>
+    );
+  }
+
+  return (
+    <CodeRenderContext.Provider value={codeRender}>
       <div className="markdown-body">
         <ReactMarkdown
           remarkPlugins={[
             remarkGfm,
+            remarkCjkEmphasis,
             remarkBareAutolinkResidue,
             inlineWebLinks,
             ...localPathPlugins,
@@ -272,36 +322,84 @@ export const Markdown = memo(function Markdown({
           rehypePlugins={inlineTokens.length ? [inlinePlugin] : []}
           urlTransform={safeUrlTransform}
         >
-          {prepareMarkdown(streamingFence.prefix)}
+          {prepareMarkdown(text)}
         </ReactMarkdown>
-        <CodeBlock
-          block={streamingBlock}
-          renderText={renderText}
-          copyText={copyText}
-        />
       </div>
-    );
-  }
-
-  return (
-    <div className="markdown-body">
-      <ReactMarkdown
-        remarkPlugins={[
-          remarkGfm,
-          remarkBareAutolinkResidue,
-          inlineWebLinks,
-          ...localPathPlugins,
-          ...(inlineTokens.length ? [referenceSyntaxPlugin] : []),
-        ]}
-        components={components}
-        rehypePlugins={inlineTokens.length ? [inlinePlugin] : []}
-        urlTransform={safeUrlTransform}
-      >
-        {prepareMarkdown(text)}
-      </ReactMarkdown>
-    </div>
+    </CodeRenderContext.Provider>
   );
 });
+
+// Stable component identity preserves local code controls during message updates.
+// This context is render-only data scoped to one Markdown instance, not storage.
+const CodeRenderContext = createContext({
+  text: "",
+  inlineTokens: [] as readonly MarkdownInlineToken[],
+  renderText: (value: string): ReactNode => value,
+  copyText: (value: string): string => value,
+  wrapChoices: null as React.ContextType<typeof MessageCodeWrapContext>,
+  wrapMessageId: undefined as string | undefined,
+});
+
+const MessageCodePre: NonNullable<Components["pre"]> = ({ children, node }) => {
+  const {
+    text,
+    inlineTokens,
+    renderText,
+    copyText,
+    wrapChoices,
+    wrapMessageId,
+  } = useContext(CodeRenderContext);
+  const [, refreshWrap] = useReducer((value: number) => value + 1, 0);
+  const child = Children.only(children);
+  if (isValidElement(child)) {
+    const props = child.props as {
+      className?: string;
+      children?: unknown;
+    };
+    const language = props.className?.match(/language-(\S+)/u)?.[1] ?? "";
+    const lines = sourceLines(text);
+    const wrapAllowed = closedCodeFence(lines, node);
+    const start = node?.position?.start.line;
+    const end = node?.position?.end.line;
+    let wrapChoice: CodeWrapChoice | undefined;
+    if (wrapAllowed && wrapChoices && wrapMessageId && start && end) {
+      // Exact source keeps an edited replacement from inheriting an older
+      // choice. Appends and Markdown link preparation do not change line IDs.
+      const fence = lines.slice(start - 1, end).join("\n");
+      if (fence.length <= 65_536) {
+        const key = JSON.stringify([wrapMessageId, start]);
+        wrapChoice = {
+          wrapped: wrapChoices.has(key, fence),
+          set(wrapped) {
+            wrapChoices.set(key, fence, wrapped);
+            refreshWrap();
+          },
+        };
+      }
+    }
+    return (
+      <CodeBlock
+        block={{
+          type: "code",
+          language,
+          text: String(props.children ?? "").replace(/\n$/u, ""),
+          closed: true,
+        }}
+        renderText={renderText}
+        copyText={copyText}
+        wrapAllowed={wrapAllowed}
+        wrapChoice={wrapChoice}
+        filePathAllowed={
+          closedTopLevelFence(text, node) &&
+          !inlineTokens.some((token) =>
+            String(props.children ?? "").includes(token.marker),
+          )
+        }
+      />
+    );
+  }
+  return <pre>{children}</pre>;
+};
 
 const markdownComponents: Components = {
   a: messageAnchor(null),
@@ -481,6 +579,28 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
 // Only a source-confirmed, top-level closed fence may expose a file action.
 // ReactMarkdown also renders unfinished nested fences; their existence is not
 // evidence that the model has finished emitting the path.
+function sourceLines(source: string): string[] {
+  return source.replace(/\r\n?/gu, "\n").split("\n");
+}
+
+// Conservative boundary: only source-confirmed, closed top-level fences.
+// Nested/indented blocks retain their existing horizontal-scroll behavior.
+function closedCodeFence(
+  lines: string[],
+  node: HtmlElement | undefined,
+): boolean {
+  const start = node?.position?.start.line;
+  const end = node?.position?.end.line;
+  if (!start || !end || end <= start) return false;
+  const opening = /^ {0,3}(`{3,}|~{3,})[^\r\n]*$/u.exec(lines[start - 1] ?? "");
+  if (!opening) return false;
+  const marker = opening[1]!;
+  return new RegExp(
+    `^ {0,3}${escapeRegExp(marker[0]!)}{${marker.length},}\\s*$`,
+    "u",
+  ).test(lines[end - 1] ?? "");
+}
+
 function closedTopLevelFence(
   source: string,
   node: HtmlElement | undefined,
@@ -505,11 +625,15 @@ function CodeBlock({
   renderText = (value) => value,
   copyText = (value) => value,
   filePathAllowed = false,
+  wrapAllowed = false,
+  wrapChoice,
 }: {
   block: Extract<MarkdownBlock, { type: "code" }>;
   renderText?(value: string): ReactNode;
   copyText?(value: string): string;
   filePathAllowed?: boolean;
+  wrapAllowed?: boolean;
+  wrapChoice?: CodeWrapChoice;
 }) {
   useTranslation("panels");
   const onOpen = useContext(MessageLinkContext);
@@ -529,13 +653,18 @@ function CodeBlock({
         )
       : null;
   const [copied, setCopied] = useState(false);
+  const [localWrapped, setLocalWrapped] = useState(false);
+  const wrapped = wrapChoice?.wrapped ?? localWrapped;
   const copy = async () => {
     await navigator.clipboard.writeText(copyText(block.text));
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1_500);
   };
   return (
-    <div className={`markdown-code${block.closed ? "" : " streaming"}`}>
+    <div
+      className={`markdown-code${block.closed ? "" : " streaming"}`}
+      data-wrapped={wrapped ? "true" : "false"}
+    >
       <div className="markdown-code-header">
         <span>{block.language || "text"}</span>
         <span className="markdown-code-actions">
@@ -544,9 +673,27 @@ function CodeBlock({
               {i18n.t("panels:openMessageFile")}
             </button>
           )}
-          <button type="button" onClick={() => void copy()}>
+          <button
+            type="button"
+            className="markdown-code-copy"
+            onClick={() => void copy()}
+          >
             {copied ? i18n.t("panels:copied") : i18n.t("panels:copy")}
           </button>
+          {block.closed && wrapAllowed && (
+            <button
+              type="button"
+              className="markdown-code-wrap"
+              aria-pressed={wrapped}
+              onClick={() =>
+                wrapChoice
+                  ? wrapChoice.set(!wrapped)
+                  : setLocalWrapped(!wrapped)
+              }
+            >
+              {i18n.t("panels:wrapCodeLines")}
+            </button>
+          )}
         </span>
       </div>
       <pre>

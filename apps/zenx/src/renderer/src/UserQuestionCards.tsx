@@ -174,22 +174,22 @@ function QuestionCard({
           {t(`questionState.${status}`)}
         </p>
       )}
-      {question.specification.questions.map((q, index) => {
+      {question.specification.questions.map((q) => {
         const answer = draft.answers.find((a) => a.questionId === q.id);
-        const choiceHintId = q.options?.length
-          ? `${hintId}-${index}`
-          : undefined;
         return (
           <fieldset
             key={q.id}
             disabled={unavailable}
-            aria-describedby={choiceHintId}
+            aria-describedby={
+              q.options?.length ? `${hintId}-${q.id}` : undefined
+            }
           >
             <legend>{q.prompt}</legend>
             {q.options?.length ? (
               <p
-                id={choiceHintId}
+                id={`${hintId}-${q.id}`}
                 className="user-question-choice-hint user-question-draft-note"
+                style={{ margin: "0 0 6px" }}
               >
                 {t(
                   q.multiSelect

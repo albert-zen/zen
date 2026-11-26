@@ -2,6 +2,36 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { JSDOM } from "jsdom";
+import postcss from "postcss";
+
+function assertTraceImport(styles) {
+  const root = postcss.parse(styles);
+  const imports = [];
+  root.walkAtRules("import", (rule) => {
+    if (
+      /^(?:"\.\/TraceInspector\.css"|'\.\/TraceInspector\.css')(?:\s|$)/u.test(
+        rule.params,
+      )
+    )
+      imports.push(rule);
+  });
+  assert.equal(
+    imports.length,
+    1,
+    "Trace stylesheet must be imported exactly once",
+  );
+  const rule = imports[0];
+  assert.equal(rule.parent, root, "Trace import must be top-level");
+  for (const previous of root.nodes.slice(0, root.nodes.indexOf(rule))) {
+    assert.ok(
+      previous.type === "comment" ||
+        (previous.type === "atrule" &&
+          ["charset", "import", "layer"].includes(previous.name) &&
+          !previous.nodes),
+      "Trace import must precede style rules and blocks",
+    );
+  }
+}
 
 test("read-only Trace controls retain coarse targets and scoped CSS", async () => {
   const css = await readFile(
@@ -15,7 +45,7 @@ test("read-only Trace controls retain coarse targets and scoped CSS", async () =
     new URL("../src/renderer/src/styles.css", import.meta.url),
     "utf8",
   );
-  assert(styles.startsWith('@import "./TraceInspector.css";'));
+  assertTraceImport(styles);
   assert.match(styles, /transition-duration:\s*0s !important/u);
 });
 
