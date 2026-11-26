@@ -7,6 +7,7 @@ import {
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
+import { cjkFriendlyExtension } from "micromark-extension-cjk-friendly";
 import type { RootContent } from "mdast";
 import type { TriggerHistoryEntry } from "../../main/trigger-types.js";
 import {
@@ -56,10 +57,11 @@ export function transcriptFindMatchId(match: TranscriptFindMatch): string {
 export const normalizeFindText = (value: string) =>
   value.replace(/\s+/gu, " ").trim();
 
-/** CommonMark + GFM text, using the same parser family as ReactMarkdown. No DOM/history mount. */
+/** Index rendered Markdown text without mounting the DOM or history. */
 export function markdownFindBlocks(source: string): string[] {
   const root = fromMarkdown(source, {
-    extensions: [gfm()],
+    // Keep CJK emphasis in sync with Markdown.tsx, including literal stars in code.
+    extensions: [gfm(), cjkFriendlyExtension()],
     mdastExtensions: [gfmFromMarkdown()],
   });
   const blocks: string[] = [];
