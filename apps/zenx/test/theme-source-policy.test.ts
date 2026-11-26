@@ -22,6 +22,9 @@ const dynamicProductTokens = new Set([
   "--composer-column-width",
   // ThreadView measures the transcript column center for its history-return control.
   "--conversation-return-center",
+  // ThreadView owns the measured Information clearance and its card dimension.
+  "--information-reading-shift",
+  "--information-reading-card-width",
   // ThreadView owns pending tray alignment with the transcript column.
   "--pending-tray-gutter",
   "--pending-tray-left",
@@ -77,7 +80,11 @@ test("history-return center is one measured geometry seam, not a palette or toke
   );
   assert.match(
     owner,
-    /const center = `\$\{rect\.left \+ rect\.width \/ 2 - view\.getBoundingClientRect\(\)\.left\}px`;/u,
+    /const center = `\$\{rect\.left \+ rect\.width \/ 2 - viewportLeft\}px`;/u,
+  );
+  assert.match(
+    owner,
+    /const viewportLeft = view\?\.getBoundingClientRect\(\)\.left \?\? 0;/u,
   );
   assert.match(
     owner,

@@ -6308,7 +6308,7 @@ test("message source reads and opens its exact canonical thread without sending,
     request: async (method, params) => {
       calls.push({ method, params });
       if (method === "zen/thread/read")
-        return { thread: { id: "exact/source", archived: false } };
+        return { thread: { id: "exact/source", archived: false, items: [] } };
       if (method === "zen/thread/resume")
         return resumed(
           (params as { threadId: string }).threadId === "thread-1"
@@ -6411,7 +6411,9 @@ for (const failure of [
 }
 
 test("repeated source clicks share one read and a newer Settings navigation wins over its late reply", async () => {
-  const pending = deferred<{ thread: { id: string; archived: boolean } }>();
+  const pending = deferred<{
+    thread: { id: string; archived: boolean; items: [] };
+  }>();
   const resumes: string[] = [];
   let reads = 0;
   const harness = await mountThreadApp({
@@ -6441,7 +6443,9 @@ test("repeated source clicks share one read and a newer Settings navigation wins
       document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
     );
     await act(async () =>
-      pending.resolve({ thread: { id: "exact/source", archived: false } }),
+      pending.resolve({
+        thread: { id: "exact/source", archived: false, items: [] },
+      }),
     );
     assert.deepEqual(resumes, ["thread-1"]);
     assert.equal(document.querySelector(".message-source-link"), null);
@@ -6626,7 +6630,7 @@ test("side conversation message source stays in the side panel and preserves the
     request: async (method, params) => {
       const id = (params as { threadId: string }).threadId;
       if (method === "zen/thread/read")
-        return { thread: { id, archived: false } };
+        return { thread: { id, archived: false, items: [] } };
       if (method === "zen/thread/resume") {
         resumes.push(id);
         const value =
@@ -6691,8 +6695,12 @@ test("side conversation message source stays in the side panel and preserves the
 });
 for (const olderFirst of [true, false]) {
   test(`newer message source intent wins when older request finishes ${olderFirst ? "first" : "last"}`, async () => {
-    const first = deferred<{ thread: { id: string; archived: boolean } }>();
-    const second = deferred<{ thread: { id: string; archived: boolean } }>();
+    const first = deferred<{
+      thread: { id: string; archived: boolean; items: [] };
+    }>();
+    const second = deferred<{
+      thread: { id: string; archived: boolean; items: [] };
+    }>();
     const resumes: string[] = [];
     const thread = sourceNavigationThread();
     const original = thread.turns[0]!.items[0]! as any;
@@ -6729,9 +6737,13 @@ for (const olderFirst of [true, false]) {
       await act(async () => links[0]!.click());
       await act(async () => links[1]!.click());
       const finishFirst = () =>
-        first.resolve({ thread: { id: "exact/source", archived: false } });
+        first.resolve({
+          thread: { id: "exact/source", archived: false, items: [] },
+        });
       const finishSecond = () =>
-        second.resolve({ thread: { id: "second/source", archived: false } });
+        second.resolve({
+          thread: { id: "second/source", archived: false, items: [] },
+        });
       await act(async () => (olderFirst ? finishFirst() : finishSecond()));
       await act(async () => (olderFirst ? finishSecond() : finishFirst()));
       assert.equal(
@@ -6987,8 +6999,14 @@ test("same-title side conversations retain identity, drafts and reading position
     );
     assert.ok(tab("thread:child-b"));
     assert.equal(tab("thread:child-b").getAttribute("aria-selected"), "true");
-    assert.equal(tab("thread:child-a").textContent, "Same child title");
-    assert.equal(tab("thread:child-b").textContent, "Same child title");
+    assert.equal(
+      tab("thread:child-a").getAttribute("aria-label"),
+      "Same child title",
+    );
+    assert.equal(
+      tab("thread:child-b").getAttribute("aria-label"),
+      "Same child title",
+    );
     const selectedTranscript = sideMessages("child-b");
     const selectedDraft = await sideComposer("child-b");
     // Rename inactive A through the real Sidebar action, keeping B selected.
@@ -7006,12 +7024,16 @@ test("same-title side conversations retain identity, drafts and reading position
     await setInputValue(titleInput, "Renamed child A");
     await invokeFormSubmit(titleInput.form!);
     await waitFor(
-      () => tab("thread:child-a").textContent === "Renamed child A",
+      () =>
+        tab("thread:child-a").getAttribute("aria-label") === "Renamed child A",
     );
     assert.deepEqual(renames, [
       { threadId: "child-a", title: "Renamed child A" },
     ]);
-    assert.equal(tab("thread:child-b").textContent, "Same child title");
+    assert.equal(
+      tab("thread:child-b").getAttribute("aria-label"),
+      "Same child title",
+    );
     assert.equal(tab("thread:child-b").getAttribute("aria-selected"), "true");
     assert.equal(await sideComposer("child-b"), selectedDraft);
     assert.equal(selectedDraft.value, "Draft B");
@@ -7035,7 +7057,10 @@ test("same-title side conversations retain identity, drafts and reading position
     await openChild(1);
     assert.equal((await sideComposer("child-b")).value, "Draft B");
     assert.equal(sideMessages("child-b").scrollTop, 650);
-    assert.equal(tab("thread:child-a").textContent, "Renamed child A");
+    assert.equal(
+      tab("thread:child-a").getAttribute("aria-label"),
+      "Renamed child A",
+    );
     await openChild(1);
     assert.equal(
       document.querySelectorAll('[id="aux-tab-thread:child-b"]').length,
@@ -7053,7 +7078,10 @@ test("same-title side conversations retain identity, drafts and reading position
     await click(parent);
     assert.equal((await sideComposer("child-b")).value, "Draft B");
     assert.ok(tab("thread:child-a"));
-    assert.equal(tab("thread:child-a").textContent, "Renamed child A");
+    assert.equal(
+      tab("thread:child-a").getAttribute("aria-label"),
+      "Renamed child A",
+    );
     assert.equal(sideMessages("child-b").scrollTop, 650);
     assert.equal(
       document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,

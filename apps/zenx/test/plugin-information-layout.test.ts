@@ -288,7 +288,14 @@ test("Board uses one toggle, measures Browser coexistence and retires hidden own
         new dom.window.MouseEvent("pointerover", { bubbles: true }),
       );
     });
-    assert.equal(wideCard.style.width, "340px");
+    assert.equal(
+      wideCard.style.width,
+      "var(--information-reading-card-width, 340px)",
+    );
+    assert.equal(
+      wideCard.style.getPropertyValue("--information-reading-card-width"),
+      "",
+    );
     assert.notEqual(
       anchorElement.style.left,
       oldAnchorLeft,
@@ -359,8 +366,14 @@ test("Board uses one toggle, measures Browser coexistence and retires hidden own
     const sameProvider = document.querySelector("[data-theme-receipt]");
     assert.equal(
       (sameCard as HTMLElement).style.width,
-      "276px",
+      "var(--information-reading-card-width, 276px)",
       "card cannot cross the conversation divider",
+    );
+    assert.equal(
+      (sameCard as HTMLElement).style.getPropertyValue(
+        "--information-reading-card-width",
+      ),
+      "",
     );
     await act(async () => {
       resourcePanelWidth = 520;
@@ -381,7 +394,10 @@ test("Board uses one toggle, measures Browser coexistence and retires hidden own
       sameProvider,
       "resize does not remount provider drafts",
     );
-    assert.equal((sameCard as HTMLElement).style.width, "236px");
+    assert.equal(
+      (sameCard as HTMLElement).style.width,
+      "var(--information-reading-card-width, 236px)",
+    );
     assert.notEqual(
       document.body.style.pointerEvents,
       "none",
