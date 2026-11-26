@@ -1,0 +1,7 @@
+# Paste text and an image together into a draft
+
+Actual Ctrl+V using Chromium's Clipboard API and a trusted browser paste event on the production ThreadView composer. Linux Chromium 131.0.6778.0, 1280×800, DPR 1, light, zh-CN. Synthetic clipboard has one PNG (64×44), plain text and HTML with the same text followed by its image. The synthetic attachment callback records imports and supplies the image bytes, no Host, account, real clipboard contents or QQ/WeChat run. The candidate is exact production renderer source 3163e53, identical to #761 @ 97dbc73. The baseline is the same renderer with only the production hunk of 974db08 reverse-applied, not a historical full build.
+
+Both received the same 933-byte PNG and created exactly one decoded thumbnail. The initial draft selected only `【替换这里】`. Baseline blocks default text insertion; the draft stays `前缀【替换这里】后缀`. Candidate preserves the ordinary text insertion and the image; draft becomes `前缀请看这张合成截图后缀`. Ctrl+Z in the candidate restores the original draft text; this is a text undo check, not an assertion that the image was undone. No browser errors or external requests.
+
+[T3 Code #40909](https://github.com/pingdotgg/t3code/pull/40909) supplies a closely matched author-recorded comparison for a synthetic WeChat/QQ-style payload. Its compared baseline lost the picture rather than the text; its fixed composer retains both. The author used a dispatched event, not actual QQ/WeChat. No native macOS/Windows clipboard coverage or new score claimed. PNGs are originals.
