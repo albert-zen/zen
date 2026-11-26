@@ -339,13 +339,16 @@ export function VirtualTranscriptFind({
                 ? rect.bottom - bottom + margin
                 : 0;
           if (delta && current()) node.scrollTop += delta;
-          const pre = range.startContainer.parentElement?.closest("pre");
-          if (pre && current()) {
-            const box = pre.getBoundingClientRect();
+          const horizontalScroller =
+            range.startContainer.parentElement?.closest<HTMLElement>(
+              "pre, .markdown-table-wrap",
+            );
+          if (horizontalScroller && current()) {
+            const box = horizontalScroller.getBoundingClientRect();
             if (rect.left < box.left)
-              pre.scrollLeft += rect.left - box.left - 16;
+              horizontalScroller.scrollLeft += rect.left - box.left - 16;
             else if (rect.right > box.right)
-              pre.scrollLeft += rect.right - box.right + 16;
+              horizontalScroller.scrollLeft += rect.right - box.right + 16;
           }
           if (current()) pauseFollowing(); // Save the exact final reading position without taking focus.
         },
