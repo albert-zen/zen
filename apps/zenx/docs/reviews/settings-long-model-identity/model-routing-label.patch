@@ -1,0 +1,15 @@
+--- a/apps/zenx/src/renderer/src/styles.css
++++ b/apps/zenx/src/renderer/src/styles.css
+@@ -3853,6 +3853,12 @@
+   background: var(--surface);
+   border-radius: 10px;
+ }
++/* Show the full stored model identity in the routing card only.
++   Do not change compact selects or the shared option/keyboard behavior. */
++.model-routing-card .model-reference-field .ui-select > span:first-child {
++  white-space: normal;
++  overflow-wrap: anywhere;
++}
+ .model-routing-card .settings-note {
+   margin: 14px 0 0;
+ }
