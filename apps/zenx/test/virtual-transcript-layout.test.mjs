@@ -178,3 +178,47 @@ test("desktop background commands share the measured Composer lane, not Informat
   });
   assert.equal(matched, 1);
 });
+
+test("shell breakpoint does not change reply prose metrics or the paused-reader inset", () => {
+  const prose = postcss.parse(css);
+  const selectors = [
+    ".thread-view .agent-copy .markdown-body p",
+    ".thread-view .agent-copy .markdown-body h3",
+    ".thread-view .agent-copy .markdown-body ol",
+    ".thread-view .agent-copy .markdown-body table",
+  ];
+  const unconditional = new Set();
+  prose.walkRules((rule) => {
+    for (const selector of postcss.list.comma(rule.selector)) {
+      if (selectors.includes(selector) && rule.parent.type === "root") {
+        unconditional.add(selector);
+      }
+    }
+    if (rule.selector !== ".thread-view") return;
+    rule.walkDecls("--conversation-width", () => {
+      assert.equal(rule.parent.type, "root");
+      unconditional.add(rule.selector);
+    });
+  });
+  assert.deepEqual(unconditional, new Set([".thread-view", ...selectors]));
+
+  const returnCss = readFileSync(
+    new URL(
+      "../src/renderer/src/conversation-reading-position.css",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const clearance = [
+    '.thread-view[data-reading-earlier="true"]',
+    '.thread-view[data-reading-earlier="true"] > .messages',
+    '.thread-view[data-reading-earlier="true"] .virtual-transcript-footer:empty',
+  ];
+  const shared = new Set();
+  postcss.parse(returnCss).walkRules((rule) => {
+    if (!clearance.includes(rule.selector)) return;
+    if (rule.parent.type === "root") shared.add(rule.selector);
+    else assert.doesNotMatch(rule.parent.params, /\b96[01]px\b/);
+  });
+  assert.deepEqual(shared, new Set(clearance));
+});
