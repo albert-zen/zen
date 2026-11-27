@@ -4,30 +4,44 @@
 .conversation-reading-position {
   display: none;
 }
+/* Both arrow variants occupy an overlay. Keep the paused inset continuous
+   when the shell switches between them. */
+.thread-view[data-reading-earlier="true"] {
+  --history-return-clearance: 48px;
+}
+.thread-view[data-reading-earlier="true"] > .messages {
+  padding-bottom: calc(
+    var(--bottom-zone-height, 0px) + var(--history-return-clearance) + 24px
+  );
+  scroll-padding-bottom: calc(
+    var(--bottom-zone-height, 0px) + var(--history-return-clearance) + 24px
+  );
+}
+.thread-view[data-reading-earlier="true"] .virtual-transcript-footer {
+  padding-bottom: calc(
+    var(--bottom-zone-height, 0px) + var(--history-return-clearance) + 24px
+  );
+}
+.thread-view[data-reading-earlier="true"] .virtual-transcript-footer:empty {
+  padding-bottom: calc(
+    var(--bottom-zone-height, 0px) + var(--history-return-clearance)
+  );
+}
+@media (max-width: 640px) {
+  .thread-view[data-reading-earlier="true"] .virtual-transcript-footer:empty {
+    padding-bottom: calc(
+      var(--bottom-zone-height, 0px) + var(--history-return-clearance) + 4px
+    );
+  }
+}
+@media (any-pointer: coarse) {
+  .thread-view[data-reading-earlier="true"] {
+    --history-return-clearance: 56px;
+  }
+}
 @media (min-width: 961px) {
   .thread-view > .back-live {
     display: none;
-  }
-  .thread-view[data-reading-earlier="true"] {
-    --history-return-clearance: 48px;
-  }
-  .thread-view[data-reading-earlier="true"] > .messages {
-    padding-bottom: calc(
-      var(--bottom-zone-height, 0px) + var(--history-return-clearance) + 24px
-    );
-    scroll-padding-bottom: calc(
-      var(--bottom-zone-height, 0px) + var(--history-return-clearance) + 24px
-    );
-  }
-  .thread-view[data-reading-earlier="true"] .virtual-transcript-footer {
-    padding-bottom: calc(
-      var(--bottom-zone-height, 0px) + var(--history-return-clearance) + 24px
-    );
-  }
-  .thread-view[data-reading-earlier="true"] .virtual-transcript-footer:empty {
-    padding-bottom: calc(
-      var(--bottom-zone-height, 0px) + var(--history-return-clearance)
-    );
   }
   .conversation-reading-position {
     position: absolute;
@@ -57,9 +71,6 @@
   }
 }
 @media (min-width: 961px) and (any-pointer: coarse) {
-  .thread-view[data-reading-earlier="true"] {
-    --history-return-clearance: 56px;
-  }
   .conversation-reading-position button {
     width: 44px;
     height: 44px;
