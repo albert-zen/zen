@@ -4,14 +4,17 @@ import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 const root = fileURLToPath(new URL("../", import.meta.url));
 // This test exercises the checked-in source CLI, so the supported TS loader is explicit.
 const project = root.endsWith(`${path.sep}dist${path.sep}`)
   ? path.resolve(root, "..")
   : root;
 const script = path.join(project, "scripts", "migrate-itemlist-trace.mjs");
-const loader = path.join(project, "node_modules", "tsx", "dist", "loader.mjs");
+// --import interprets native Windows drive paths as URL schemes, not file paths.
+const loader = pathToFileURL(
+  path.join(project, "node_modules", "tsx", "dist", "loader.mjs"),
+).href;
 function cli(directory: string, apply = false) {
   return spawnSync(
     process.execPath,
@@ -45,6 +48,13 @@ async function setup() {
   await writeFile(path.join(root, "threads", "t.jsonl"), bytes);
   return { root, bytes };
 }
+test("CLI --import loader is a file URL on every platform", () => {
+  assert.equal(new URL(loader).protocol, "file:");
+  assert.equal(
+    fileURLToPath(loader),
+    path.join(project, "node_modules", "tsx", "dist", "loader.mjs"),
+  );
+});
 test("CLI read-only preflight leaves no lock/Trace and apply is repeatable", async () => {
   const { root, bytes } = await setup();
   const before = cli(root);
