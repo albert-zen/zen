@@ -13,8 +13,44 @@ export function assertSteerGeometry(geometry, count, scene) {
     geometry.normal.text.trim(),
     `${scene}: exact body retained`,
   );
+  assert.equal(
+    typeof geometry.desktop,
+    "boolean",
+    `${scene}: missing media observation`,
+  );
+  let bodyRight = geometry.normal.bubble.right;
+  let imageRight = geometry.normal.images.at(-1).right;
+  if (geometry.desktop) {
+    const { tray, composer } = geometry;
+    assert.ok(
+      tray?.rect && composer,
+      `${scene}: missing desktop frame observations`,
+    );
+    for (const edge of ["left", "right"])
+      assert.ok(
+        Number.isFinite(tray.rect[edge]) &&
+          Number.isFinite(composer[edge]) &&
+          Math.abs(tray.rect[edge] - composer[edge]) <= 1,
+        `${scene}: pending outer frame differs from Composer ${edge}`,
+      );
+    assert.ok(
+      Number.isFinite(tray.clientLeft) &&
+        tray.clientLeft >= 0 &&
+        Number.isFinite(tray.clientWidth) &&
+        tray.clientWidth > 0 &&
+        Number.isFinite(tray.offsetWidth) &&
+        tray.offsetWidth > 0 &&
+        tray.clientLeft + tray.clientWidth <= tray.offsetWidth &&
+        Math.abs(tray.offsetWidth - tray.rect.width) <= 1,
+      `${scene}: invalid desktop client rail`,
+    );
+    // Desktop intentionally aligns the outer frames. Native borders and the
+    // real scrollbar remain inside that frame; never infer an offset from rows.
+    bodyRight = imageRight =
+      tray.rect.left + tray.clientLeft + tray.clientWidth;
+  }
   assert.ok(
-    Math.abs(geometry.pending.bubble.right - geometry.normal.bubble.right) <= 2,
+    Math.abs(geometry.pending.bubble.right - bodyRight) <= 2,
     `${scene}: body right edges differ: ${JSON.stringify(geometry)}`,
   );
   assert.equal(geometry.pending.images.length, count);
@@ -32,10 +68,7 @@ export function assertSteerGeometry(geometry, count, scene) {
     );
   }
   assert.ok(
-    Math.abs(
-      geometry.pending.images.at(-1).right -
-        geometry.normal.images.at(-1).right,
-    ) <= 2,
+    Math.abs(geometry.pending.images.at(-1).right - imageRight) <= 2,
     `${scene}: image right edges differ`,
   );
 }
@@ -71,7 +104,19 @@ export function measureSteerComparison(root) {
         : null,
     };
   };
+  const tray = pending?.closest(".pending-tray");
   return {
+    desktop:
+      root.defaultView.matchMedia?.("(min-width: 961px)").matches ?? null,
+    tray: tray
+      ? {
+          rect: rect(tray),
+          clientLeft: tray.clientLeft,
+          clientWidth: tray.clientWidth,
+          offsetWidth: tray.offsetWidth,
+        }
+      : null,
+    composer: rect(root.querySelector(".bottom-zone > .composer")),
     normal: measure(normal, false),
     pending: measure(pending, true),
     overflow:

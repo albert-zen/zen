@@ -43,9 +43,9 @@ async function evaluate(expression) {
   if (!reply.ok) throw Error(reply.error);
   return reply.value;
 }
-async function until(check, label) {
+async function until(check, label, attempts = 300) {
   result.waitingFor = label;
-  for (let i = 0; i < 300; i++) {
+  for (let i = 0; i < attempts; i++) {
     if (await check()) {
       delete result.waitingFor;
       return;
@@ -69,7 +69,12 @@ async function resizeWindow(width, height) {
     return evaluate(`window.innerWidth === ${contentWidth}`);
   }, "native resize delivered to renderer");
 }
-async function click(selector, label = selector, systemPointer = false) {
+async function click(
+  selector,
+  label = selector,
+  systemPointer = false,
+  scrollTarget = true,
+) {
   window.show();
   window.focus();
   window.webContents.focus();
@@ -84,7 +89,7 @@ async function click(selector, label = selector, systemPointer = false) {
   // missing pre-dispatch targets may wait; unknown dispatched input never retries.
   await until(async () => {
     point = await evaluate(
-      `(()=>{const e=${query(selector)};if(!e)return null;e.scrollIntoView({block:'center',inline:'nearest'});const r=e.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;if(e.disabled||!r.width||!r.height||!e.contains(document.elementFromPoint(x,y)))throw Error('Obscured/disabled native target: '+${JSON.stringify(label)}+' '+JSON.stringify({r:{x:r.x,y:r.y,width:r.width,height:r.height},hits:document.elementsFromPoint(x,y).map(n=>n.className).slice(0,5)}));e.addEventListener('click',event=>{if(event.isTrusted)window.__informationNativeClick=${acknowledgedClick}},{capture:true,once:true});return {x:Math.round(x),y:Math.round(y)}})()`,
+      `(()=>{const e=${query(selector)};if(!e)return null;if(${scrollTarget})e.scrollIntoView({block:'center',inline:'nearest'});const r=e.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;if(e.disabled||!r.width||!r.height||!e.contains(document.elementFromPoint(x,y)))throw Error('Obscured/disabled native target: '+${JSON.stringify(label)}+' '+JSON.stringify({r:{x:r.x,y:r.y,width:r.width,height:r.height},hits:document.elementsFromPoint(x,y).map(n=>n.className).slice(0,5)}));e.addEventListener('click',event=>{if(event.isTrusted)window.__informationNativeClick=${acknowledgedClick}},{capture:true,once:true});return {x:Math.round(x),y:Math.round(y)}})()`,
     );
     return point !== null;
   }, label + " target prepared before input");
@@ -139,7 +144,7 @@ async function verifyInformationOsInput() {
       "Open maximized main information with actual OS pointer",
       true,
     );
-    await capture(`16-${repeat}-os-main-information`, "dock");
+    await capture(`16-${repeat}-os-main-information`, "overlay");
     await click(
       ".information-toolbar button",
       "Close maximized main information with actual OS pointer",
@@ -272,47 +277,301 @@ async function screenshot(name) {
     (await window.webContents.capturePage()).toPNG(),
   );
 }
+// Check the known title without changing the screenshot's current reading position.
+// Earlier interactions may intentionally have scrolled it above the card viewport.
+async function inspectInformationHeading(selector) {
+  return evaluate(`(()=>{
+    const e=document.querySelector(${JSON.stringify(selector)});
+    if(!e)throw Error('Missing information heading');
+    const ancestors=[];
+    for(let p=e.parentElement;p;p=p.parentElement) ancestors.push({node:p,top:p.scrollTop,left:p.scrollLeft});
+    const before=e.getBoundingClientRect();
+    let observation;
+    try {
+      e.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});
+      const r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);
+      observation={text:e.textContent,top:r.top,bottom:r.bottom,originalTop:before.top,hitClass:hit?.className,unoccluded:e.contains(hit)};
+    } finally {
+      for(const {node,top,left} of ancestors) node.scrollTo({top,left,behavior:'instant'});
+    }
+    observation.scrollRestored=ancestors.every(({node,top,left})=>node.scrollTop===top&&node.scrollLeft===left);
+    return observation;
+  })()`);
+}
+// Read a stable user-authored anchor, not the active Turn's changing timer/body.
+async function informationReadingSnapshot() {
+  return evaluate(`(()=>{
+    const scroll=document.querySelector('.thread-view .messages');
+    const anchor=window.__informationReadingAnchor;
+    if(!scroll || !anchor?.isConnected) throw Error('Missing controlled reading anchor');
+    const rect=e=>{const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}};
+    return {scrollTop:scroll.scrollTop,maxTop:scroll.scrollHeight-scroll.clientHeight,
+      viewport:rect(scroll),anchor:rect(anchor),
+      id:anchor.closest('[data-sent-message-id]').dataset.sentMessageId,
+      text:anchor.textContent,window:{width:innerWidth,height:innerHeight}};
+  })()`);
+}
+async function prepareInformationReadingCamera() {
+  const prepared = await evaluate(`(()=>{
+    const scroll=document.querySelector('.thread-view .messages');
+    const r=scroll.getBoundingClientRect();
+    window.__informationReadingWheel=null;
+    scroll.addEventListener('wheel',e=>{window.__informationReadingWheel={trusted:e.isTrusted,deltaY:e.deltaY}}, {once:true});
+    return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/3),scrollTop:scroll.scrollTop};
+  })()`);
+  window.webContents.sendInputEvent({
+    type: "mouseWheel",
+    x: prepared.x,
+    y: prepared.y,
+    deltaX: 0,
+    deltaY: 320,
+    canScroll: true,
+    hasPreciseScrollingDeltas: true,
+  });
+  await until(
+    () =>
+      evaluate(
+        `(()=>{const s=document.querySelector('.thread-view .messages'),w=window.__informationReadingWheel;return w?.trusted&&w.deltaY<0&&s.scrollTop<${prepared.scrollTop}&&s.scrollHeight-s.clientHeight-s.scrollTop>100})()`,
+      ),
+    "native wheel pauses tail following and moves to earlier reading",
+  );
+  await evaluate(`(()=>{
+    const scroll=document.querySelector('.thread-view .messages'),r=scroll.getBoundingClientRect();
+    const bottom=document.querySelector('.bottom-zone').getBoundingClientRect().top;
+    window.__informationReadingAnchor=[...scroll.querySelectorAll('[data-sent-message-id] .user-bubble')].find(e=>{const a=e.getBoundingClientRect();return a.bottom>r.top+40&&a.top<bottom-40});
+    if(!window.__informationReadingAnchor) throw Error('No visible named user message for controlled camera');
+    return true;
+  })()`);
+  let previous;
+  let stable = 0;
+  result.readingCamera = {
+    input: "trusted Electron native wheel; no DOM scroll assignment",
+    wheel: await evaluate("window.__informationReadingWheel"),
+    samples: [],
+  };
+  await until(async () => {
+    const sample = await informationReadingSnapshot();
+    result.readingCamera.samples.push(sample);
+    // This is an observed non-tail anchor barrier, not an assumed sleep. New
+    // rows may arrive below it; maxTop is therefore diagnostic, not frozen.
+    const signature = JSON.stringify({ ...sample, maxTop: undefined });
+    stable = signature === previous ? stable + 1 : 0;
+    previous = signature;
+    return stable >= 2 && sample.maxTop - sample.scrollTop > 100;
+  }, "same visible reading anchor and viewport across consecutive observations");
+  result.readingCamera.before = await informationReadingSnapshot();
+}
+function assertInformationReadingUnchanged(before, after, shift) {
+  assert.deepEqual(
+    after.window,
+    before.window,
+    "opening Information preserves viewport dimensions",
+  );
+  assert.deepEqual(
+    after.viewport,
+    before.viewport,
+    "opening Information preserves transcript scrollport",
+  );
+  assert.equal(
+    after.scrollTop,
+    before.scrollTop,
+    "opening Information preserves explicit non-tail scrollTop",
+  );
+  assert.equal(after.id, before.id, "same named visible message");
+  assert.equal(after.text, before.text, "same immutable user message contents");
+  for (const edge of ["top", "bottom", "width", "height"])
+    assert.equal(
+      after.anchor[edge],
+      before.anchor[edge],
+      `opening Information preserves anchor.${edge}`,
+    );
+  for (const edge of ["left", "right"])
+    assert.ok(
+      Math.abs(before.anchor[edge] - after.anchor[edge] - shift) <= 0.5,
+      `anchor.${edge} follows measured lane`,
+    );
+}
+// The fit is based on actual DOM coordinates, not a fixed window breakpoint.
+function informationFitProbe({ left, right, width, viewportLeft }) {
+  const shift = Math.max(0, left + width + 16 - (right - 320));
+  return { shift, clearance: left - shift - viewportLeft - 24 };
+}
+async function captureInformationFitBoundary() {
+  const originalSize = window.getSize();
+  const original = await informationReadingSnapshot();
+  const measure = () =>
+    evaluate(`(()=>{
+    const view=document.querySelector('.thread-view'),column=view.querySelector('.virtual-transcript-header, .messages-inner'),toolbar=document.querySelector('.information-toolbar');
+    const r=column.getBoundingClientRect(),composer=document.querySelector('#thread-composer');
+    return {left:r.left,right:Number(toolbar.dataset.clearanceRight),width:r.width,viewportLeft:view.getBoundingClientRect().left,
+      resourceOpen:document.querySelector('.auxiliary-panel')?.dataset.open==='true',lane:view.dataset.informationLane==='true',
+      draft:composer.value,composerIdentity:composer===window.__informationComposer};
+  })()`);
+  await click(
+    ".information-toolbar button",
+    "Close Information before measured fit-boundary camera",
+  );
+  await until(
+    () =>
+      evaluate(
+        "!document.querySelector('.information-popover') && document.querySelector('.thread-view')?.dataset.informationLane!=='true'",
+      ),
+    "Information closed for boundary measurement",
+  );
+  const initial = await measure();
+  assert.equal(
+    initial.resourceOpen,
+    false,
+    "fit-boundary camera must keep right workspace closed",
+  );
+  const boundary = Math.round(
+    originalSize[0] -
+      (initial.right - initial.viewportLeft - initial.width - 360),
+  );
+  result.fitBoundary = { originalSize, boundary, initial, cases: [] };
+  for (const [suffix, delta, fits] of [
+    ["fits", 2, true],
+    ["floats", -2, false],
+  ]) {
+    await resizeWindow(boundary + delta, originalSize[1]);
+    await evaluate(
+      "new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))",
+    );
+    const closed = await measure();
+    const probe = informationFitProbe(closed);
+    const receipt = { suffix, closed, probe };
+    result.fitBoundary.cases.push(receipt);
+    assert.equal(closed.resourceOpen, false);
+    assert.equal(
+      probe.clearance >= 0,
+      fits,
+      "measured DOM must straddle the actual fit threshold",
+    );
+    const before = await informationReadingSnapshot();
+    assert.equal(
+      before.id,
+      original.id,
+      "resize retains the same paused message",
+    );
+    assert.equal(before.text, original.text);
+    assert.equal(
+      before.anchor.width,
+      original.anchor.width,
+      "boundary camera does not rewrap the anchor",
+    );
+    assert.ok(
+      before.anchor.bottom > before.viewport.top &&
+        before.anchor.top < before.viewport.bottom,
+      "same anchor remains visible",
+    );
+    Object.assign(receipt, { before });
+    await screenshot(`01a-${suffix}-closed.png`);
+    await click(
+      ".information-toolbar button",
+      `Open Information at measured ${suffix} width`,
+    );
+    await capture(`01a-${suffix}-open`, "overlay");
+    const opened = await measure();
+    const after = await informationReadingSnapshot();
+    Object.assign(receipt, { opened, after });
+    assert.equal(
+      opened.lane,
+      fits,
+      "presentation follows measured fit, not split-pane fallback",
+    );
+    assert.equal(opened.resourceOpen, false);
+    assert.equal(opened.draft, closed.draft);
+    assert.equal(opened.composerIdentity, true);
+    assertInformationReadingUnchanged(before, after, fits ? probe.shift : 0);
+    await click(
+      ".information-toolbar button",
+      `Close measured ${suffix} camera`,
+    );
+    await until(
+      () =>
+        evaluate(
+          "!document.querySelector('.information-popover') && document.querySelector('.thread-view')?.dataset.informationLane!=='true'",
+        ),
+      "boundary card closed",
+    );
+  }
+  await resizeWindow(...originalSize);
+  await click(
+    ".information-toolbar button",
+    "Restore original wide Information camera",
+  );
+  await until(
+    () =>
+      evaluate(
+        "document.querySelector('.thread-view')?.dataset.informationLane==='true'",
+      ),
+    "original fitted lane restored",
+  );
+}
 async function capture(name, mode) {
   await until(
     () =>
       evaluate(
-        `Boolean(document.querySelector(${JSON.stringify(mode === "dock" ? ".information-dock" : mode === "overlay" ? ".information-popover" : ".information-toolbar button[aria-pressed=false]")}))`,
+        `Boolean(document.querySelector(${JSON.stringify(mode === "overlay" ? ".information-popover" : ".information-toolbar button[aria-pressed=false]")}))`,
       ),
     name + " presentation",
   );
   await pause(250);
   const geometry = await evaluate(
-    `(()=>{const rect=s=>{const e=document.querySelector(s);if(!e)return null;const r=e.getBoundingClientRect(),c=getComputedStyle(e);return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height,display:c.display,visibility:c.visibility,color:c.color,background:c.backgroundColor}};return {chat:rect('.agent-surface'),composer:rect('#thread-composer'),card:rect('.information-dock'),popover:rect('.information-popover'),workspace:rect('.workspace'),resource:rect('.auxiliary-panel'),titlebar:rect('.window-titlebar-session'),resourceHeading:document.querySelector('.auxiliary-panel')?.dataset.open==='true'?rect('.auxiliary-heading'):null,resourceExpanded:document.querySelector('.auxiliary-panel')?.dataset.expanded,primaryActive:document.querySelector('.auxiliary-panel')?.dataset.primaryActive,informationSlot:rect('.auxiliary-information-slot'),informationEntryHidden:document.querySelector('.information-toolbar')?.hidden,informationToggle:rect('.information-toolbar button'),workspaceToggle:rect('.auxiliary-close-button'),expanded:document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded'),overflow:document.documentElement.scrollWidth>innerWidth,composerIdentity:window.__informationComposer===document.querySelector('#thread-composer'),draft:document.querySelector('#thread-composer')?.value}})()`,
+    `(()=>{const rect=s=>{const e=document.querySelector(s);if(!e)return null;const r=e.getBoundingClientRect(),c=getComputedStyle(e);return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height,display:c.display,visibility:c.visibility,color:c.color,background:c.backgroundColor}};return {reading:rect('.thread-view .virtual-transcript-header, .thread-view .messages-inner'),lane:document.querySelector('.thread-view')?.dataset.informationLane==='true',shift:parseFloat(document.querySelector('.thread-view')?.style.getPropertyValue('--information-reading-shift')||'0'),resourceOpen:document.querySelector('.auxiliary-panel')?.dataset.open==='true',chat:rect('.agent-surface'),composer:rect('#thread-composer'),composerShell:rect('.bottom-zone > .composer'),commandStrip:rect('.bottom-zone > .background-shell-status'),card:rect('.information-popover'),popoverCount:document.querySelectorAll('.information-popover').length,legacyDockCount:document.querySelectorAll('.information-dock').length,popover:rect('.information-popover'),workspace:rect('.workspace'),resource:rect('.auxiliary-panel'),titlebar:rect('.window-titlebar-session'),resourceHeading:document.querySelector('.auxiliary-panel')?.dataset.open==='true'?rect('.auxiliary-heading'):null,resourceExpanded:document.querySelector('.auxiliary-panel')?.dataset.expanded,primaryActive:document.querySelector('.auxiliary-panel')?.dataset.primaryActive,informationSlot:rect('.auxiliary-information-slot'),informationEntryHidden:document.querySelector('.information-toolbar')?.hidden,informationToggle:rect('.information-toolbar button'),workspaceToggle:rect('.auxiliary-close-button'),expanded:document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded'),overflow:document.documentElement.scrollWidth>innerWidth,composerIdentity:window.__informationComposer===document.querySelector('#thread-composer'),draft:document.querySelector('#thread-composer')?.value}})()`,
   );
-  if (mode === "dock") {
+  if (mode === "overlay") {
+    assert.equal(
+      geometry.popoverCount,
+      1,
+      "exactly one floating Information card",
+    );
+    assert.equal(geometry.legacyDockCount, 0, "no reserved information dock");
     assert.ok(
-      geometry.chat.right <= geometry.card.left,
-      "docked card cannot overlap the main conversation",
+      geometry.card.width > 0 && geometry.card.width <= 341,
+      "floating card is bounded to 340px",
     );
     assert.ok(
-      geometry.composer.right <= geometry.card.left,
-      "docked card cannot overlap Composer",
+      geometry.card.left >= geometry.chat.left + 11,
+      "card stays inside conversation leading clearance",
     );
     assert.ok(
-      geometry.chat.width >= 550,
-      "conversation retains a usable allocation",
+      Math.abs(geometry.card.right - (geometry.chat.right - 12)) <= 1,
+      "card follows conversation trailing edge",
     );
     assert.ok(
       geometry.card.bottom <= geometry.workspace.bottom + 1,
       "card remains within workspace height",
     );
-    const visibleHeaders = [geometry.titlebar, geometry.resourceHeading].filter(
-      (rect) => rect && rect.visibility !== "hidden" && rect.display !== "none",
-    );
     assert.ok(
-      visibleHeaders.every((rect) => geometry.card.top >= rect.bottom + 11),
-      "card clears actual visible conversation/workspace headings on every platform",
+      geometry.card.top >= geometry.informationToggle.bottom,
+      "card sits below chat controls",
     );
+    if (geometry.resourceHeading && geometry.resourceExpanded === "false") {
+      assert.ok(
+        geometry.card.right <= geometry.resource.left,
+        "split resource remains outside the card",
+      );
+      assert.ok(
+        Math.abs(geometry.chat.right - geometry.resource.left) <= 1,
+        "no third column beside split conversation",
+      );
+    } else {
+      assert.ok(
+        Math.abs(geometry.chat.right - geometry.workspace.right) <= 1,
+        "floating information reserves no conversation width",
+      );
+    }
     // Accepted questions are above component settings. With multiple questions,
     // the settings toolbar is legitimately below the fold, not occluded.
     // Check the first real heading in DOM order and retain the hit-test evidence.
-    geometry.firstCardHeading = await evaluate(
-      "(()=>{const e=document.querySelector('.information-dock .user-question-attention > header, .information-dock .room-question-attention > header, .information-dock .information-settings-toolbar');if(!e)throw Error('Missing information heading');const r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return {text:e.textContent,top:r.top,bottom:r.bottom,hitClass:hit?.className,unoccluded:e.contains(hit)}})()",
+    geometry.firstCardHeading = await inspectInformationHeading(
+      ".information-popover .user-question-attention > header, .information-popover .room-question-attention > header, .information-popover .information-settings-toolbar",
+    );
+    assert.equal(
+      geometry.firstCardHeading.scrollRestored,
+      true,
+      "heading check restores every scroll position",
     );
     assert.equal(
       geometry.firstCardHeading.unoccluded,
@@ -342,6 +601,23 @@ async function capture(name, mode) {
     );
     assert.equal(resizeState.focusUnchanged, true);
     result.fullscreenSplitResizer = resizeState;
+  }
+  if (mode === "closed") {
+    assert.equal(
+      geometry.popoverCount,
+      0,
+      "closed information has no floating card",
+    );
+    assert.equal(geometry.legacyDockCount, 0);
+    if (
+      geometry.resourceExpanded === "true" &&
+      geometry.primaryActive !== "true"
+    )
+      assert.equal(
+        geometry.informationEntryHidden,
+        true,
+        "resource-only fullscreen has no Information entry",
+      );
   }
   assert.equal(geometry.overflow, false, "no page-level horizontal overflow");
   if (mode !== "closed") {
@@ -394,6 +670,89 @@ async function capture(name, mode) {
       "shared active foreground",
     );
   }
+  if (geometry.lane) {
+    assert.equal(mode, "overlay", "lane requires an open Information card");
+    assert.ok(
+      !geometry.resourceOpen ||
+        (geometry.resourceExpanded === "true" &&
+          geometry.primaryActive === "true"),
+      "lane never moves a conversation with an adjacent resource",
+    );
+    assert.ok(geometry.reading, "lane measures the real reading column");
+    assert.ok(
+      geometry.card.left - geometry.reading.right >= 15.5,
+      "Information lane leaves at least 16px reading clearance (0.5px rounding tolerance)",
+    );
+    assert.ok(
+      geometry.reading.left >= geometry.chat.left + 23.5,
+      "lane retains the conversation leading gutter",
+    );
+  } else {
+    assert.equal(
+      geometry.shift,
+      0,
+      "floating fallback never displaces the reading column",
+    );
+  }
+  if (name.startsWith("01-")) {
+    assert.ok(
+      geometry.composerShell && geometry.commandStrip,
+      "wide camera includes the active background command strip",
+    );
+    for (const edge of ["left", "right"])
+      assert.ok(
+        Math.abs(geometry.commandStrip[edge] - geometry.composerShell[edge]) <=
+          0.5,
+        `background command strip shares Composer.${edge}`,
+      );
+    const after = await informationReadingSnapshot();
+    result.readingCamera.after = after;
+    assertInformationReadingUnchanged(
+      result.readingCamera.before,
+      after,
+      geometry.shift,
+    );
+    const baseline = await evaluate("window.__informationLayoutBaseline");
+    for (const edge of ["left", "right", "top", "bottom", "width", "height"])
+      assert.equal(
+        geometry.chat[edge],
+        baseline.chat[edge],
+        `opening Information preserves outer chat.${edge}`,
+      );
+    for (const key of ["composer", "reading"])
+      for (const edge of ["top", "bottom", "width", "height"])
+        assert.equal(
+          geometry[key][edge],
+          baseline[key][edge],
+          `opening Information preserves ${key}.${edge}`,
+        );
+    // This camera is intentionally wide with workspace closed. A floating
+    // fallback here would hide a regression in the newly chosen lane design.
+    assert.equal(
+      geometry.lane,
+      true,
+      "wide camera must activate the Information lane",
+    );
+    const displacement = baseline.reading.left - geometry.reading.left;
+    assert.ok(
+      displacement > 0,
+      "wide reading column moves into existing left whitespace",
+    );
+    assert.ok(
+      Math.abs(displacement - geometry.shift) <= 0.5,
+      "measured reading displacement matches the owned shift",
+    );
+    for (const edge of ["left", "right"])
+      assert.ok(
+        Math.abs(
+          baseline.composer[edge] - geometry.composer[edge] - displacement,
+        ) <= 0.5,
+        `composer.${edge} follows exactly the unchanged-width reading column`,
+      );
+    assert.equal(geometry.draft, baseline.draft);
+    assert.equal(geometry.composerIdentity, true);
+    geometry.closedBaseline = baseline;
+  }
   await screenshot(name + ".png");
   result.cases.push({ name, mode, geometry });
 }
@@ -413,6 +772,249 @@ const networkReady = app.whenReady().then(() =>
     callback({ cancel: !allowed });
   }),
 );
+async function captureMarkdownRemount() {
+  const priorWindowSize = window.getSize();
+  const priorAppearance = nativeTheme.themeSource;
+  try {
+    await resizeWindow(1200, 860);
+    nativeTheme.themeSource = "dark";
+    await until(
+      () =>
+        evaluate(
+          "document.documentElement.dataset.appearance==='dark' && document.documentElement.dataset.themePreset==='graphite'",
+        ),
+      "Graphite dark for independent Markdown history",
+    );
+    const markdownRow =
+      '.thread-view:has(#thread-composer) [data-read-message-id="information-markdown-wrap-turn-15-answer"]';
+    const targetThread =
+      '.thread-row-shell[data-thread-id="information-markdown-wrap"] > button.thread-row';
+    await click(targetThread, "Open synthetic Markdown history");
+    await until(
+      () =>
+        evaluate(
+          `${query(targetThread)}?.getAttribute("aria-current")==="page"`,
+        ),
+      "Independent Markdown history is the selected Thread",
+    );
+    if (
+      await evaluate(
+        "Boolean(document.querySelector('.workspace > .auxiliary-panel[data-open=true]'))",
+      )
+    ) {
+      await click(
+        ".workspace > .auxiliary-panel[data-open=true] .auxiliary-close-button",
+        "Close active right workspace before Markdown camera",
+      );
+    }
+    if (
+      await evaluate("Boolean(document.querySelector('.information-popover'))")
+    ) {
+      await click(
+        ".information-toolbar button",
+        "Dismiss active Information before Markdown camera",
+      );
+    }
+    await until(
+      () =>
+        evaluate(
+          "!document.querySelector('.workspace > .auxiliary-panel[data-open=true], .information-popover')",
+        ),
+      "Independent Markdown capture has no right overlay or workspace allocation",
+    );
+    await until(
+      () =>
+        evaluate(
+          "document.querySelectorAll(" +
+            JSON.stringify(markdownRow + " .markdown-code-wrap") +
+            ").length === 2",
+        ),
+      "Two identical completed Markdown fences in newest synthetic row",
+    );
+    await click(
+      "#thread-composer",
+      "Focus independent Markdown draft",
+      false,
+      false,
+    );
+    await insertComposerText(
+      "Keep this synthetic draft while reading older messages.",
+    );
+    await until(
+      () =>
+        evaluate(`(async()=>{
+        const measure=()=>{
+          const row=${query(markdownRow)}, composer=document.querySelector("#thread-composer");
+          const view=row?.closest(".thread-view"), scroll=row?.closest(".messages");
+          if(${query(targetThread)}?.getAttribute("aria-current")!=="page" ||
+            !view || composer!==view.querySelector("#thread-composer") ||
+            !scroll || !row.closest("[data-transcript-row-key]") ||
+            !scroll.querySelector(".virtual-transcript-content") ||
+            scroll.scrollHeight-scroll.clientHeight-scroll.scrollTop>2) return null;
+          const buttons=row.querySelectorAll(".markdown-code-wrap");
+          if(buttons.length!==2) return null;
+          const button=buttons[0], r=button.getBoundingClientRect();
+          const x=r.left+r.width/2,y=r.top+r.height/2;
+          if(!r.width||!r.height||!button.contains(document.elementFromPoint(x,y))) return null;
+          return {row,scroll,composer,button,x,y,top:scroll.scrollTop};
+        };
+        const first=measure();
+        if(!first)return false;
+        await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+        const next=measure();
+        if(!next || ["row","scroll","composer","button","x","y","top"].some(key=>first[key]!==next[key]))
+          return false;
+        window.__markdownObserved={row:next.row,scroll:next.scroll,composer:next.composer};
+        return true;
+      })()`),
+      "Stable selected Markdown Thread, virtual tail, and visible first Wrap control",
+    );
+    await click(
+      markdownRow + " .markdown-code-wrap",
+      "Wrap the first closed fence",
+      false,
+      false,
+    );
+    const markdownSnapshot = () =>
+      evaluate(
+        "(()=>{" +
+          "const o=window.__markdownObserved,row=document.querySelector(" +
+          JSON.stringify(markdownRow) +
+          "),s=o.scroll;" +
+          "if(!row)return null;" +
+          "const box=e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};};" +
+          "return {id:row.getAttribute('data-read-message-id'),sameNode:row===o.row,originalConnected:o.row.isConnected," +
+          "composerSame:document.querySelector('#thread-composer')===o.composer,draft:o.composer.value," +
+          "top:s.scrollTop,tail:s.scrollHeight-s.clientHeight-s.scrollTop,viewport:box(s),width:innerWidth,height:innerHeight," +
+          "appearance:document.documentElement.dataset.appearance,preset:document.documentElement.dataset.themePreset," +
+          "blocks:[...row.querySelectorAll('.markdown-code')].map(b=>{const pre=b.querySelector('pre'),btn=b.querySelector('.markdown-code-wrap');" +
+          "return {wrapped:b.dataset.wrapped,pressed:btn.getAttribute('aria-pressed'),text:pre.textContent," +
+          "box:box(b),header:box(btn),scrollWidth:pre.scrollWidth,clientWidth:pre.clientWidth};})};})()",
+      );
+    await until(
+      () =>
+        evaluate(
+          "document.querySelector(" +
+            JSON.stringify(markdownRow + " .markdown-code-wrap") +
+            ").getAttribute('aria-pressed')==='true'",
+        ),
+      "Trusted Wrap toggles only the first actual fence",
+    );
+    await settleScreenshotFrame();
+    const markdownBefore = await markdownSnapshot();
+    assert.equal(markdownBefore.preset, "graphite");
+    assert.equal(markdownBefore.appearance, "dark");
+    assert.equal(markdownBefore.blocks.length, 2);
+    assert.deepEqual(
+      markdownBefore.blocks.map((b) => b.pressed),
+      ["true", "false"],
+    );
+    assert.equal(markdownBefore.blocks[0].text, markdownBefore.blocks[1].text);
+    assert.ok(
+      markdownBefore.blocks[0].scrollWidth <=
+        markdownBefore.blocks[0].clientWidth + 1,
+    );
+    assert.ok(
+      markdownBefore.blocks[1].scrollWidth >
+        markdownBefore.blocks[1].clientWidth,
+    );
+    await screenshot("markdown-wrap-before-scroll-away.png");
+    const focusCheck = await evaluate(
+      "(()=>{const o=window.__markdownObserved,s=o.scroll,top=s.scrollTop;" +
+        "getSelection()?.removeAllRanges();o.composer.focus({preventScroll:true});return {top,next:s.scrollTop,focused:document.activeElement===o.composer};})()",
+    );
+    assert.equal(focusCheck.focused, true);
+    assert.equal(focusCheck.next, focusCheck.top);
+    const wheelReceipts = [];
+    for (let attempt = 0; attempt < 12; attempt++) {
+      if (await evaluate("!window.__markdownObserved.row.isConnected")) break;
+      const point = await evaluate(
+        "(()=>{const o=window.__markdownObserved,s=o.scroll,r=s.getBoundingClientRect();" +
+          "const y=Math.floor(r.top+r.height/3),x=[r.left+4,r.right-24,r.left+r.width/2].map(Math.floor).find(px=>{const hit=document.elementFromPoint(px,y);return s.contains(hit)&&!hit.closest('pre');});" +
+          "if(x===undefined)throw Error('No reachable transcript wheel target outside code');" +
+          "o.wheel=null;s.addEventListener('wheel',e=>{o.wheel={trusted:e.isTrusted,deltaY:e.deltaY};},{once:true});return {x,y};})()",
+      );
+      window.webContents.sendInputEvent({
+        type: "mouseWheel",
+        ...point,
+        deltaX: 0,
+        deltaY: 640,
+        canScroll: true,
+        hasPreciseScrollingDeltas: true,
+      });
+      await until(
+        () =>
+          evaluate(
+            "window.__markdownObserved.wheel?.trusted && window.__markdownObserved.wheel.deltaY<0",
+          ),
+        "Trusted upward transcript wheel",
+      );
+      wheelReceipts.push(await evaluate("window.__markdownObserved.wheel"));
+      await settleScreenshotFrame();
+    }
+    assert.equal(
+      await evaluate("!window.__markdownObserved.row.isConnected"),
+      true,
+      "Actual source row unmounted, not merely outside viewport",
+    );
+    assert.ok(wheelReceipts.length > 0);
+    assert.equal(
+      await evaluate(
+        "document.querySelector(" + JSON.stringify(markdownRow) + ")===null",
+      ),
+      true,
+    );
+    const returnControl =
+      ".thread-view:has(#thread-composer) .conversation-reading-position button";
+    await click(
+      returnControl,
+      "Return through the native reading-position arrow",
+      false,
+      false,
+    );
+    await until(
+      () =>
+        evaluate(
+          "(()=>{const o=window.__markdownObserved,row=document.querySelector(" +
+            JSON.stringify(markdownRow) +
+            ");return row!==null&&row!==o.row&&!o.row.isConnected&&o.scroll.scrollHeight-o.scroll.clientHeight-o.scroll.scrollTop<=2;})()",
+        ),
+      "Fresh newest row after native return to latest",
+    );
+    await settleScreenshotFrame();
+    const markdownAfter = await markdownSnapshot();
+    assert.equal(markdownAfter.sameNode, false);
+    assert.equal(markdownAfter.originalConnected, false);
+    assert.equal(markdownAfter.id, markdownBefore.id);
+    assert.equal(markdownAfter.composerSame, true);
+    assert.equal(markdownAfter.draft, markdownBefore.draft);
+    assert.equal(markdownAfter.blocks.length, 2);
+    assert.deepEqual(
+      markdownAfter.blocks.map((b) => b.text),
+      markdownBefore.blocks.map((b) => b.text),
+    );
+    assert.equal(markdownAfter.blocks[1].pressed, "false");
+    for (const b of markdownAfter.blocks) assert.equal(b.wrapped, b.pressed);
+    assert.equal(markdownAfter.width, markdownBefore.width);
+    assert.equal(markdownAfter.height, markdownBefore.height);
+    await screenshot("markdown-wrap-after-native-return.png");
+    result.markdownWrapRemount = {
+      before: markdownBefore,
+      after: markdownAfter,
+      wheelReceipts,
+      files: [
+        "markdown-wrap-before-scroll-away.png",
+        "markdown-wrap-after-native-return.png",
+      ],
+      input:
+        "Chromium-trusted control clicks and wheel; no programmatic scroll assignment; focus-only handoff with preventScroll",
+    };
+  } finally {
+    await evaluate("delete window.__markdownObserved").catch(() => {});
+    nativeTheme.themeSource = priorAppearance;
+    await resizeWindow(...priorWindowSize);
+  }
+}
 async function run() {
   await networkReady;
   await until(async () => {
@@ -544,6 +1146,184 @@ async function run() {
   await evaluate(
     "(()=>{window.__informationComposer=document.querySelector('#thread-composer');return true})()",
   );
+  await screenshot("00-live-before-controlled-reading.png");
+  // Take the actual main window across the Graphite color seam with no card
+  // or adjacent resource. Preserve the same draft and the native theme.
+  const originalShellSize = window.getSize();
+  assert.equal(window.webContents.getZoomFactor(), 1);
+  result.graphiteShell = [];
+  for (const appearance of ["light", "dark"]) {
+    nativeTheme.themeSource = appearance;
+    await until(
+      () =>
+        evaluate(
+          `document.documentElement.dataset.appearance === ${JSON.stringify(appearance)} && document.documentElement.dataset.themePreset === 'graphite'`,
+        ),
+      `Graphite ${appearance} before palette capture`,
+    );
+    for (const width of [961, 960]) {
+      await resizeWindow(width, 820);
+      await settleScreenshotFrame();
+      const shell = await evaluate(
+        "(()=>{const bg=s=>getComputedStyle(document.querySelector(s)).backgroundColor;return {width:innerWidth,height:innerHeight,dpr:devicePixelRatio,wide:matchMedia('(min-width: 961px)').matches,sidebar:bg('.sidebar'),main:bg('.workspace'),composer:bg('.bottom-zone > .composer'),sameComposer:document.querySelector('#thread-composer')===window.__informationComposer,draft:document.querySelector('#thread-composer').value,independent:!document.querySelector('.information-popover, .auxiliary-panel[data-open=true]')}})()",
+      );
+      assert.equal(shell.width, width);
+      assert.equal(shell.wide, width >= 961);
+      assert.equal(shell.independent, true);
+      assert.equal(shell.sameComposer, true);
+      assert.equal(
+        shell.draft,
+        "Synthetic draft must survive information and workspace toggles.",
+      );
+      const file = `graphite-${appearance}-${width}.png`;
+      await screenshot(file);
+      result.graphiteShell.push({
+        file,
+        ...shell,
+        outerSize: window.getSize(),
+        contentSize: window.getContentSize(),
+        zoomFactor: window.webContents.getZoomFactor(),
+      });
+    }
+  }
+  await resizeWindow(...originalShellSize);
+  nativeTheme.themeSource = "light";
+  await until(
+    () => evaluate("document.documentElement.dataset.appearance === 'light'"),
+    "restore light after Graphite palette capture",
+  );
+  result.readingReturn = [];
+  for (const width of [961, 960]) {
+    await resizeWindow(width, 820);
+    const selector =
+      width === 961 ? ".conversation-reading-position button" : ".back-live";
+    await prepareInformationReadingCamera();
+    const control = await evaluate(
+      `(()=>{const b=${query(selector)},r=b.getBoundingClientRect();return {width:innerWidth,height:innerHeight,dpr:devicePixelRatio,button:{x:r.x,y:r.y,width:r.width,height:r.height,text:b.textContent.trim(),label:b.getAttribute('aria-label')},draft:document.querySelector('#thread-composer')===window.__informationComposer}})()`,
+    );
+    assert.equal(control.width, width);
+    assert.equal(control.draft, true);
+    assert.ok(control.button.width > 0);
+    const file = `reading-return-light-${width}.png`;
+    await screenshot(file);
+    if (width === 961) {
+      await click(selector, "Return to latest by pointer at 961px");
+    } else {
+      result.readingReturnKeyboard = [];
+      await evaluate(`(()=>{
+        const editor=document.querySelector('#thread-composer');
+        const view=editor?.closest('.thread-view'),button=view?.querySelector('.back-live');
+        if(!document.hasFocus()||!button?.getBoundingClientRect().width) throw Error('Paused primary thread must be active');
+        editor.focus({preventScroll:true});
+        if(document.activeElement!==editor) throw Error('Could not start at the primary Composer');
+        window.__returnTab=null;
+        document.addEventListener('keydown',function capture(e){
+          if(e.key!=='Tab') return;
+          if(!e.shiftKey||!e.isTrusted) return;
+          const previous=e.target;
+          setTimeout(()=>{window.__returnTab={trusted:true,prevented:e.defaultPrevented,editor:previous===editor}},0);
+        },{capture:true,signal:(window.__returnTabAbort=new AbortController()).signal});
+        return true;
+      })()`);
+      try {
+        for (let step = 0; step < 8; step++) {
+          await evaluate("window.__returnTab=null");
+          for (const type of ["keyDown", "keyUp"]) {
+            window.webContents.sendInputEvent({
+              type,
+              keyCode: "Tab",
+              modifiers: ["shift"],
+            });
+          }
+          await until(
+            () => evaluate("Boolean(window.__returnTab)"),
+            "Trusted Shift+Tab reached the primary Chrome renderer",
+          );
+          await settleScreenshotFrame();
+          const sample = await evaluate(`(()=>{
+            const e=document.querySelector('#thread-composer'),v=e.closest('.thread-view');
+            const b=v.querySelector('.back-live'),s=v.querySelector('.messages'),a=document.activeElement;
+            return {key:window.__returnTab,hit:Boolean(b&&a===b),visible:Boolean(b?.getBoundingClientRect().width),
+              inThread:v.contains(a),inBottom:Boolean(a?.closest('.bottom-zone')),tag:a?.tagName,
+              tailDistance:s.scrollHeight-s.clientHeight-s.scrollTop};
+          })()`);
+          result.readingReturnKeyboard.push(sample);
+          if (sample.hit) break;
+          if (!sample.visible || !sample.inThread) break;
+        }
+      } finally {
+        await evaluate("window.__returnTabAbort.abort()");
+      }
+      assert.equal(
+        result.readingReturnKeyboard.at(-1)?.hit,
+        true,
+        "Native Shift+Tab from the Composer must reach the visible arrow",
+      );
+      await evaluate(`(()=>{
+        const b=${query(selector)};
+        if(document.activeElement!==b) throw Error('Enter target must be the focused return button');
+        window.__readingEnter={keydown:false,keypress:false,click:false};
+        b.addEventListener('keydown',e=>{if(e.isTrusted&&e.key==='Enter')setTimeout(()=>{window.__readingEnter.keydown=true;window.__readingEnter.prevented=e.defaultPrevented},0)},{once:true});
+        b.addEventListener('keypress',e=>{window.__readingEnter.keypress=e.isTrusted&&e.charCode===13},{once:true});
+        b.addEventListener('click',e=>{window.__readingEnter.click=e.isTrusted&&e.detail===0},{once:true});
+        return true;
+      })()`);
+      // Electron sends raw keydown; Blink activates a button on Enter's CR keypress.
+      const enterInput = window.webContents;
+      enterInput.sendInputEvent({ type: "keyDown", keyCode: "Enter" });
+      try {
+        await until(
+          () => evaluate("window.__readingEnter.keydown"),
+          "Trusted Enter keydown reached the narrow return button",
+        );
+        assert.equal(
+          await evaluate(
+            `!window.__readingEnter.prevented && document.activeElement===${query(selector)}`,
+          ),
+          true,
+          "Return button still owns Enter before its character event",
+        );
+        enterInput.sendInputEvent({ type: "char", keyCode: "\r" });
+        await until(
+          () =>
+            evaluate(
+              "window.__readingEnter.keypress && window.__readingEnter.click",
+            ),
+          "Trusted carriage return activated the narrow return button",
+        );
+      } finally {
+        enterInput.sendInputEvent({ type: "keyUp", keyCode: "Enter" });
+        result.readingReturnEnter = await evaluate("window.__readingEnter");
+      }
+    }
+    await until(
+      () =>
+        evaluate(
+          `(()=>{const s=document.querySelector('.thread-view .messages'),c=document.querySelector('#thread-composer');return !${query(selector)}&&s.scrollHeight-s.clientHeight-s.scrollTop<4&&c===window.__informationComposer&&c.value==='Synthetic draft must survive information and workspace toggles.'})()`,
+        ),
+      `Back at latest with the original Composer draft at ${width}px`,
+    );
+    if (width === 960) {
+      assert.deepEqual(
+        await evaluate(
+          "(()=>{const s=document.querySelector('#thread-composer').closest('.thread-view').querySelector('.messages');return {trustedKeyClick:window.__readingEnter.click,transcriptFocus:document.activeElement===s}})()",
+        ),
+        { trustedKeyClick: true, transcriptFocus: true },
+      );
+    }
+    result.readingReturn.push({
+      file,
+      ...control,
+      zoomFactor: window.webContents.getZoomFactor(),
+      method: width === 961 ? "pointer" : "Shift+Tab then Enter",
+    });
+  }
+  await resizeWindow(...originalShellSize);
+  await prepareInformationReadingCamera();
+  await evaluate(
+    "(()=>{if(document.querySelector('.information-popover, .information-dock'))throw Error('Opening baseline requires closed information');const rect=s=>{const r=document.querySelector(s).getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}};window.__informationLayoutBaseline={reading:rect('.thread-view .virtual-transcript-header, .thread-view .messages-inner'),chat:rect('.agent-surface'),composer:rect('#thread-composer'),draft:document.querySelector('#thread-composer').value};return true})()",
+  );
+  await screenshot("00-wide-closed-baseline.png");
   await click(".information-toolbar button", "Open wide information card");
   await until(
     () =>
@@ -552,7 +1332,8 @@ async function run() {
       ),
     "real trigger, lineage and command cards",
   );
-  await capture("01-wide-light", "dock");
+  await capture("01-wide-light", "overlay");
+  await captureInformationFitBoundary();
   await until(
     () =>
       evaluate(
@@ -1021,7 +1802,7 @@ async function run() {
     ".information-toolbar button",
     "Open information in maximized main conversation",
   );
-  await capture("04-maximized-main-dock", "dock");
+  await capture("04-maximized-main-overlay", "overlay");
   assert.equal(result.cases.at(-1).geometry.composerIdentity, true);
   assert.equal(
     result.cases.at(-1).geometry.draft,
@@ -1032,7 +1813,7 @@ async function run() {
     () => evaluate("document.documentElement.dataset.appearance==='dark'"),
     "actual app dark appearance",
   );
-  await capture("05-maximized-main-dark", "dock");
+  await capture("05-maximized-main-dark", "overlay");
   await click(
     '[data-tab-id="file:fixture.txt"] [role="tab"]',
     "Switch maximized workspace to its file resource",
@@ -1058,15 +1839,15 @@ async function run() {
   );
   await capture("08-narrow-reopened", "overlay");
   await resizeWindow(1600, 1000);
-  await capture("08a-open-overlay-to-dock", "dock");
+  await capture("08a-open-overlay-resize-wide", "overlay");
   assert.equal(result.cases.at(-1).geometry.composerIdentity, true);
   await resizeWindow(1000, 820);
-  await capture("08b-open-dock-to-overlay", "overlay");
-  // Native layout at our exact responsive boundary, not only a spacious window.
+  await capture("08b-open-overlay-resize-narrow", "overlay");
+  // Both sides of the former dock breakpoint retain full conversation width.
   await resizeWindow(1184, 820);
-  await capture("08c-920px-allocation-dock", "dock");
+  await capture("08c-920px-allocation-overlay", "overlay");
   assert.equal(result.cases.at(-1).geometry.workspace.width, 920);
-  assert.equal(result.cases.at(-1).geometry.chat.width, 556);
+  assert.equal(result.cases.at(-1).geometry.chat.width, 920);
   assert.ok(result.cases.at(-1).geometry.composer.width >= 480);
   await resizeWindow(1183, 820);
   await capture("08d-919px-allocation-overlay", "overlay");
@@ -1103,11 +1884,255 @@ async function run() {
     "Switch to a different synthetic conversation",
   );
   await capture("09-switch-owner-closed", "closed");
+  // Same ordinary Room-sourced message on both builds, read from the real journal.
+  const hostRow =
+    '.thread-view:has(#thread-composer) .host-message-row:has(.host-message-actions time[datetime="2026-11-01T12:01:00.000Z"])';
+  const hoverHostCapture = async (selector) => {
+    const point = await evaluate(`(()=>{
+      const e=${query(selector)},r=e.getBoundingClientRect();
+      const x=Math.floor(r.left+r.width/2),y=Math.floor(r.top+r.height/2);
+      if(!e.contains(document.elementFromPoint(x,y))) throw Error('Native pointer cannot reach capture target');
+      window.__hostCaptureMove=false;
+      e.addEventListener('mousemove',ev=>{window.__hostCaptureMove=ev.isTrusted},{once:true,capture:true});
+      return {x,y};
+    })()`);
+    window.webContents.sendInputEvent({ type: "mouseMove", ...point });
+    await until(
+      () => evaluate("window.__hostCaptureMove"),
+      "Trusted Room provenance pointer position",
+    );
+    await pause(180);
+  };
+  await until(
+    () =>
+      evaluate(
+        `document.querySelectorAll(${JSON.stringify(hostRow)}).length===1`,
+      ),
+    "unique ordinary Room provenance in the primary transcript",
+  );
+  const provenanceSnapshot = () =>
+    evaluate(`(()=>{
+    const host=${query(hostRow)},source=host.querySelector('.host-message-source');
+    return {light:document.documentElement.dataset.appearance==='light',
+      preset:document.documentElement.dataset.themePreset,width:innerWidth,height:innerHeight,dpr:devicePixelRatio,
+      hovered:host.matches(':hover'),fine:matchMedia('(hover:hover) and (pointer:fine)').matches,
+      source:source.textContent.trim(),sourceTitle:source.getAttribute('title'),
+      actions:getComputedStyle(host.querySelector('.host-message-actions')).opacity,
+      copy:getComputedStyle(host.querySelector('.host-message-actions > .message-copy')).opacity,
+      hostTime:host.querySelector('time')?.dateTime,
+      replyTime:host.closest('.thread-view').querySelector('.assistant-message-actions time')?.dateTime,
+      expanded:host.querySelector('.host-message-toggle').getAttribute('aria-expanded'),
+      sourceIdVisible:host.querySelector('.host-message-source-id')?.textContent.includes('synthetic-room-brief')??false};
+  })()`);
+  await hoverHostCapture("#thread-composer");
+  const rest = await provenanceSnapshot();
+  assert.equal(rest.hovered, false);
+  assert.equal(rest.light, false);
+  assert.equal(rest.preset, "graphite");
+  assert.equal(rest.expanded, "false");
+  assert.equal(rest.sourceTitle, null);
+  assert.equal(rest.actions, "1");
+  assert.equal(rest.copy, rest.fine ? "0" : "1");
+  assert.equal(rest.hostTime, "2026-11-01T12:01:00.000Z");
+  assert.equal(rest.replyTime, "2026-11-01T12:05:00.000Z");
+  await screenshot("host-provenance-rest.png");
+  await hoverHostCapture(hostRow + " .host-message-source");
+  const hover = await provenanceSnapshot();
+  assert.equal(hover.hovered, true);
+  assert.equal(hover.actions, "1");
+  assert.equal(hover.copy, "1");
+  await screenshot("host-provenance-hover.png");
+  await click(
+    hostRow + " .host-message-toggle",
+    "Open Room source details explicitly",
+  );
+  const details = await provenanceSnapshot();
+  assert.equal(details.expanded, "true");
+  assert.equal(details.sourceIdVisible, true);
+  assert.equal(
+    await evaluate(
+      `${query(hostRow)}.querySelector('pre[data-thread-find-item-id="synthetic-provenance-host"]')?.textContent`,
+    ),
+    "Room handoff: leave the draft open and keep the reading area clear for the review.",
+  );
+  await screenshot("host-provenance-details.png");
+  await click(
+    hostRow + " .host-message-toggle",
+    "Restore closed Room source details",
+  );
+  result.hostProvenance = {
+    rest,
+    hover,
+    details,
+    zoomFactor: window.webContents.getZoomFactor(),
+  };
+  // Capture the same completed synthetic reply on both sides of the layout
+  // breakpoint. The earlier Graphite frames contain active tool output.
+  const answer =
+    '.agent-copy[data-read-message-id="information-other-turn-answer"]';
+  const readCompletedGraphite = () =>
+    evaluate(`(()=>{
+      const editor=document.querySelector('#thread-composer');
+      const view=editor?.closest('.thread-view'), reply=view?.querySelector(${JSON.stringify(answer)});
+      const body=reply?.querySelector(':scope > [data-message-quote-body]');
+      const actions=reply?.querySelector(':scope > .assistant-message-actions');
+      const scroll=reply?.closest('.messages'), column=view?.querySelector('.virtual-transcript-header, .messages-inner');
+      const composer=view?.querySelector(':scope > .bottom-zone > .composer');
+      const host=${query(hostRow)};
+      const rect=e=>{const r=e?.getBoundingClientRect();return r?.width&&r?.height?
+        {left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height}:null;};
+      const paragraphs=[...(body?.querySelectorAll('.markdown-body > p')??[])].map(p=>{
+        const range=document.createRange();range.selectNodeContents(p);
+        const lines=[...range.getClientRects()].filter(r=>r.width&&r.height);
+        return {rect:rect(p),lineCount:new Set(lines.map(r=>Math.round(r.top))).size};
+      });
+      return {
+        width:innerWidth,height:innerHeight,dpr:devicePixelRatio,
+        wide:matchMedia('(min-width: 961px)').matches,
+        appearance:document.documentElement.dataset.appearance,
+        preset:document.documentElement.dataset.themePreset,
+        independent:!document.querySelector('.information-popover, .auxiliary-panel[data-open=true]'),
+        roomDetailsClosed:host?.querySelector('.host-message-toggle')?.getAttribute('aria-expanded')==='false',
+        focusOnRoomToggle:document.activeElement===host?.querySelector('.host-message-toggle'),
+        readyBody:Boolean(body?.textContent.startsWith('The information card should sit beside this conversation')),
+        answerId:reply?.dataset.readMessageId,
+        answerTime:actions?.querySelector('time')?.dateTime,
+        hovered:reply?.matches(':hover'),focused:reply?.matches(':focus-within'),
+        tailDistance:scroll?scroll.scrollHeight-scroll.clientHeight-scroll.scrollTop:null,
+        draft:editor?.value,
+        reply:rect(reply),body:rect(body),actions:rect(actions),column:rect(column),composer:rect(composer),viewport:rect(scroll),paragraphs,
+        paddingInlineStart:body?getComputedStyle(body).paddingInlineStart:null,
+        paddingInlineEnd:body?getComputedStyle(body).paddingInlineEnd:null,
+      };
+    })()`);
+  const originalCompletedSize = window.getSize();
+  const originalCompleted = await readCompletedGraphite();
+  const completedReady = (s, appearance = "dark") =>
+    s.appearance === appearance &&
+    s.preset === "graphite" &&
+    s.independent &&
+    s.roomDetailsClosed &&
+    s.readyBody &&
+    s.answerId === "information-other-turn-answer" &&
+    s.answerTime === "2026-11-01T12:05:00.000Z" &&
+    s.draft === originalCompleted.draft &&
+    s.focusOnRoomToggle === originalCompleted.focusOnRoomToggle &&
+    s.tailDistance !== null &&
+    Math.abs(s.tailDistance) <= 1 &&
+    s.reply &&
+    s.body &&
+    s.actions &&
+    s.column &&
+    s.composer &&
+    s.viewport &&
+    s.paragraphs.length === 2 &&
+    s.paragraphs.every(
+      (p) =>
+        p.lineCount &&
+        p.rect.top >= s.viewport.top &&
+        p.rect.bottom <= s.composer.top,
+    );
+  const captureCompletedGraphite = async (appearance, samples, twins) => {
+    for (const width of [961, 960]) {
+      const twin = twins?.find((sample) => sample.width === width);
+      if (twins) assert.ok(twin);
+      await resizeWindow(width, 820);
+      await hoverHostCapture("#thread-composer");
+      await until(
+        async () => {
+          const sample = await readCompletedGraphite();
+          return (
+            sample.width === width &&
+            (!twin || sample.height === twin.height) &&
+            completedReady(sample, appearance) &&
+            !sample.hovered &&
+            !sample.focused
+          );
+        },
+        `completed Graphite body at the pinned tail, ${width}px`,
+        twin ? 100 : undefined,
+      );
+      await settleScreenshotFrame();
+      const sample = await readCompletedGraphite();
+      assert.equal(sample.width, width);
+      assert.equal(sample.wide, width >= 961);
+      if (twin) {
+        assert.equal(sample.height, twin.height);
+      }
+      assert.ok(
+        completedReady(sample, appearance) &&
+          !sample.hovered &&
+          !sample.focused,
+      );
+      const file = `graphite-completed-${appearance}-${width}.png`;
+      await screenshot(file);
+      samples.push({
+        file,
+        ...sample,
+        outerSize: window.getSize(),
+        contentSize: window.getContentSize(),
+        zoomFactor: window.webContents.getZoomFactor(),
+      });
+    }
+  };
+  result.graphiteCompletedReply = [];
+  assert.equal(window.webContents.getZoomFactor(), 1);
+  try {
+    await captureCompletedGraphite("dark", result.graphiteCompletedReply);
+  } finally {
+    await resizeWindow(...originalCompletedSize);
+    await hoverHostCapture(hostRow + " .host-message-toggle");
+  }
+  await until(async () => {
+    const restored = await readCompletedGraphite();
+    return (
+      restored.width === originalCompleted.width && completedReady(restored)
+    );
+  }, "completed Graphite capture restored the original closed conversation");
+  // The light twin is optional; keep the required dark evidence and later cases.
+  const originalThemeSource = nativeTheme.themeSource;
+  const lightSamples = [];
+  try {
+    nativeTheme.themeSource = "light";
+    await captureCompletedGraphite(
+      "light",
+      lightSamples,
+      result.graphiteCompletedReply,
+    );
+    result.graphiteCompletedReplyLight = lightSamples;
+  } catch {
+    delete result.waitingFor;
+    for (const width of [961, 960]) {
+      await fs
+        .rm(path.join(directory, `graphite-completed-light-${width}.png`), {
+          force: true,
+        })
+        .catch(() => {});
+    }
+    result.graphiteCompletedReplyLight = [];
+  } finally {
+    nativeTheme.themeSource = originalThemeSource;
+    await resizeWindow(...originalCompletedSize);
+    await hoverHostCapture(hostRow + " .host-message-toggle");
+    if (originalCompleted.focusOnRoomToggle) {
+      await evaluate(
+        `${query(hostRow + " .host-message-toggle")}.focus({preventScroll:true})`,
+      );
+    }
+    await until(async () => {
+      const restored = await readCompletedGraphite();
+      return (
+        restored.width === originalCompleted.width &&
+        restored.height === originalCompleted.height &&
+        completedReady(restored, originalCompleted.appearance)
+      );
+    }, "restore original theme, viewport and focus after optional light capture");
+  }
   await click(
     ".information-toolbar button",
     "Open second conversation information",
   );
-  await capture("10-second-owner", "dock");
+  await capture("10-second-owner", "overlay");
   assert.ok(
     !(await evaluate(
       "document.querySelector('.information-content')?.textContent.includes('Daily synthetic review')",
@@ -1129,12 +2154,8 @@ async function run() {
       ),
     "original owner's remembered open state is restored",
   );
-  // A restored resource Tab uses an overlay; the main Tab uses the dock.
-  // Owner visibility must survive either independently restored workspace view.
-  const restoredMode = await evaluate(
-    "(()=>{const p=document.querySelector('.auxiliary-panel');return p?.dataset.open==='true' && p.dataset.expanded==='true' && p.dataset.primaryActive!=='true' ? 'overlay' : 'dock'})()",
-  );
-  await capture("10a-original-owner-restored", restoredMode);
+  // The selected main conversation restores the same floating presentation.
+  await capture("10a-original-owner-restored", "overlay");
   assert.equal(
     await evaluate(
       "document.querySelector('.information-toolbar button').getAttribute('aria-expanded')",
@@ -1655,7 +2676,7 @@ async function run() {
   const captureInformationCrop = async (name) => {
     await settleScreenshotFrame();
     const rectangle = await evaluate(
-      "(()=>{const e=document.querySelector('.information-dock,.information-popover'),r=e.getBoundingClientRect();return {x:Math.ceil(r.x),y:Math.ceil(r.y),width:Math.floor(r.width),height:Math.floor(r.height)}})()",
+      "(()=>{const e=document.querySelector('.information-popover'),r=e.getBoundingClientRect();return {x:Math.ceil(r.x),y:Math.ceil(r.y),width:Math.floor(r.width),height:Math.floor(r.height)}})()",
     );
     await fs.writeFile(
       path.join(directory, name),
@@ -1777,6 +2798,17 @@ async function run() {
     }
   }
   result.ok = true;
+  try {
+    await captureMarkdownRemount();
+    result.markdownWrapRemount.status = "captured";
+  } catch (error) {
+    result.markdownWrapRemount = {
+      status: "failed",
+      waitingFor: result.waitingFor,
+      reason: String(error.stack || error),
+    };
+    delete result.waitingFor;
+  }
 }
 void import(pathToFileURL(path.join(__dirname, "../out/main/index.js")).href)
   .then(run)

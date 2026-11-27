@@ -276,6 +276,16 @@ test("Trigger input uses a full bubble while other Host sources retain compact p
         language === "en" ? ["Host", "Room"] : ["宿主", "房间"],
       );
       assert.ok(rows.every((row) => !row.textContent!.includes("private-")));
+      assert.ok(
+        rows.every(
+          (row) =>
+            !row.querySelector(".host-message-source")!.hasAttribute("title"),
+        ),
+        "the compact Host/Room source does not expose identifiers on hover",
+      );
+      assert.ok(
+        rows.every((row) => !row.querySelector(".host-message-source-id")),
+      );
       const trigger = dom.window.document.querySelector(
         ".trigger-message-row",
       )!;

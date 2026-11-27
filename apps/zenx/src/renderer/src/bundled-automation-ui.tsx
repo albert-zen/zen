@@ -1820,6 +1820,19 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const revisions = sharedDrafts?.revisions ?? localRevisions;
   const refreshSequence = useRef(0);
   const [feedback, setFeedback] = useState<Record<string, string>>({});
+  const deliveryChecks = useRef(new Map<string, symbol>());
+  const deliveryCheckKey = (roomId: string, operationId: string) =>
+    JSON.stringify([roomId, operationId]);
+  const clearDeliveryCheck = (roomId: string, operationId: string) => {
+    const key = deliveryCheckKey(roomId, operationId);
+    deliveryChecks.current.delete(key);
+    setFeedback((current) => {
+      if (!(key in current)) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  };
   const [deliveries, setDeliveries] = useState<
     Record<string, RoomDeliveryResult>
   >({});
@@ -1834,8 +1847,12 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   }, [panel]);
   const dialog = useRef<HTMLElement>(null);
   const dialogInvoker = useRef<HTMLElement>(null);
+  const emptyRoomEntry = useRef<HTMLButtonElement>(null);
+  const roomRailEntry = useRef<HTMLButtonElement>(null);
+  const roomsMain = useRef<HTMLElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [roomsReadError, setRoomsReadError] = useState<string | null>(null);
   useEffect(() => {
     if (!primaryNavigation) return;
     selectedRef.current = initialRoomId;
@@ -1979,10 +1996,11 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     roomId: string,
     entry: RoomPendingSend,
     result: RoomDeliveryResult,
+    preserveRoomError = false,
   ) => {
     if (result.state !== "saved" || (!result.messageId && !result.wakeupId))
       return;
-    setRoomErrors((current) => ({ ...current, [roomId]: "" }));
+    if (!preserveRoomError) setRoomErrors((current) => ({ ...current, [roomId]: "" }));
     refreshSequence.current += 1;
     const revision =
       entry.revision ?? intentRevisions.current[entry.id]?.revision;
@@ -1994,7 +2012,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       setRoomPending(roomId, null);
     delete intentRevisions.current[entry.id];
     // Successful sends settle silently; only failures and uncertainty need a rail.
-    setFeedback((current) => ({ ...current, [roomId]: "" }));
+    clearDeliveryCheck(roomId, entry.id);
     await sdk.commands
       .execute("ack-operation", { roomId, operationId: entry.id })
       .catch((reason: unknown) =>
@@ -2004,6 +2022,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       );
   };
   const finishCancelled = (roomId: string, entry: RoomPendingSend) => {
+    clearDeliveryCheck(roomId, entry.id);
     if (pendingRef.current[roomId]?.id === entry.id)
       setRoomPending(roomId, null);
     const revision =
@@ -2014,13 +2033,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     }
     delete intentRevisions.current[entry.id];
   };
-  const refresh = async () => {
-    if (olderRequest.current?.roomId === selectedRef.current) {
-      refreshAfterOlder.current = true;
-      return;
-    }
-    const sequence = ++refreshSequence.current;
-    const epoch = viewEpoch.current;
+  const readRooms = async (sequence: number, epoch: number) => {
     const next: RoomListResult = { rooms: [] };
     let cursor: number | null = 0;
     while (cursor !== null && next.rooms.length < 128) {
@@ -2184,7 +2197,27 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
         }),
       );
     }
+    if (sequence !== refreshSequence.current || epoch !== viewEpoch.current)
+      return;
+    setRoomsReadError(null);
     setLoading(false);
+  };
+  const refresh = async () => {
+    if (olderRequest.current?.roomId === selectedRef.current) {
+      refreshAfterOlder.current = true;
+      return;
+    }
+    const sequence = ++refreshSequence.current;
+    const epoch = viewEpoch.current;
+    try {
+      await readRooms(sequence, epoch);
+    } catch (reason) {
+      if (sequence === refreshSequence.current && epoch === viewEpoch.current) {
+        setRoomsReadError(describeError(reason));
+        setLoading(false);
+      }
+      throw reason;
+    }
   };
   useEffect(() => {
     selectedRef.current = selected;
@@ -2195,23 +2228,22 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       .list()
       .then(setThreads)
       .catch((reason: unknown) => setError(describeError(reason)));
-    void refresh().catch((reason: unknown) => {
-      setLoading(false);
-      setError(describeError(reason));
-    });
-    const timer = setInterval(
-      () =>
-        void refresh().catch((reason: unknown) =>
-          setError(describeError(reason)),
-        ),
-      3000,
-    );
+    void refresh().catch(() => {});
+    const timer = setInterval(() => void refresh().catch(() => {}), 3000);
     return () => clearInterval(timer);
   }, [sdk]);
   useEffect(() => {
     if (panel === "rename") dialog.current?.querySelector("input")?.focus();
     else if (panel !== null) dialogClose.current?.focus();
   }, [panel, assistantMode, assistantProjectPicker]);
+  const openRoomCreation = (event: React.MouseEvent<HTMLButtonElement>) => {
+    dialogInvoker.current = event.currentTarget;
+    setAssistantMode(false);
+    setName("");
+    setMemberName("");
+    setThreadId("");
+    setPanel("create");
+  };
   const closeDialog = () => {
     if (panel === "create" && assistantMode && greetingAdmission.current)
       greetingAdmission.current.cancelled = true;
@@ -2223,7 +2255,30 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           ? `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: selected })}`
           : ROOMS_ROUTE,
       );
-    requestAnimationFrame(() => dialogInvoker.current?.focus());
+    const epoch = viewEpoch.current;
+    requestAnimationFrame(() => {
+      if (epoch !== viewEpoch.current || !roomsMain.current?.isConnected)
+        return;
+      const sidebarEntry = primaryNavigation
+        ? document
+            .getElementById("sidebar-room-conversations")
+            ?.closest(".room-conversation-group")
+            ?.querySelector<HTMLButtonElement>(".room-conversation-create")
+        : null;
+      const target = [
+        dialogInvoker.current,
+        emptyRoomEntry.current,
+        roomRailEntry.current,
+        sidebarEntry,
+        roomsMain.current,
+      ].find(
+        (element) =>
+          element?.isConnected &&
+          !element.matches(":disabled") &&
+          !element.closest('[hidden], [inert], [aria-hidden="true"]'),
+      );
+      target?.focus();
+    });
   };
   const room = data.rooms.find((entry) => entry.id === selected);
   const assistantThread = threads.find(
@@ -2716,12 +2771,21 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     entry: RoomPendingSend,
     resume: boolean,
   ) => {
-    setRoomErrors((current) => ({ ...current, [roomId]: "" }));
+    const key = deliveryCheckKey(roomId, entry.id);
+    const token = Symbol();
+    if (resume) deliveryChecks.current.delete(key);
+    else deliveryChecks.current.set(key, token);
+    const isCurrent = () =>
+      resume || deliveryChecks.current.get(key) === token;
+    const show = (message: string) =>
+      setFeedback((current) => ({ ...current, [key]: message }));
+    if (resume) setRoomErrors((current) => ({ ...current, [roomId]: "" }));
     try {
       let state = (await sdk.commands.execute("operation", {
         roomId,
         operationId: entry.id,
       })) as RoomDeliveryResult;
+      if (!isCurrent()) return;
       if (state.state === "prepared" && resume) {
         if (!state.text)
           throw new Error(
@@ -2744,22 +2808,34 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           operationId: entry.id,
         })) as RoomDeliveryResult;
       }
+      if (!isCurrent()) return;
       if (state.state === "saved" && (state.messageId || state.wakeupId))
-        await finishSaved(roomId, entry, state);
-      else if (state.state === "cancelled") {
+        await finishSaved(roomId, entry, state, !resume);
+      else if (state.state === "cancelled")
         finishCancelled(roomId, entry);
-        setFeedback((current) => ({ ...current, [roomId]: "" }));
-      } else
-        setFeedback((current) => ({
-          ...current,
-          [roomId]: i18n.t("panels:messageHasNotBeenSentChooseSend"),
-        }));
-      await refresh();
+      else
+        show(
+          i18n.t(
+            state.state === "prepared"
+              ? (state.kind ?? entry.kind) === "assistantIntroduction"
+                ? "panels:roomIntroductionNotStarted"
+                : "panels:messageHasNotBeenSentChooseSend"
+              : "panels:roomDeliveryStillUnconfirmed",
+          ),
+        );
+      // Refresh can fail even after the exact operation result is known.
+      void refresh().catch(() => {});
     } catch (reason) {
-      setRoomErrors((current) => ({
-        ...current,
-        [roomId]: `Delivery remains unconfirmed. ${describeError(reason)}`,
-      }));
+      if (!isCurrent()) return;
+      if (resume)
+        setRoomErrors((current) => ({
+          ...current,
+          [roomId]: `Delivery remains unconfirmed. ${describeError(reason)}`,
+        }));
+      else
+        show(i18n.t("panels:roomDeliveryStillUnconfirmed"));
+    } finally {
+      if (!resume && isCurrent()) deliveryChecks.current.delete(key);
     }
   };
   const cancelPrepared = async (roomId: string, entry: RoomPendingSend) => {
@@ -2793,7 +2869,6 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       if (result.state !== "cancelled")
         throw new Error(i18n.t("panels:cancellationNotConfirmedCheckDelivery"));
       finishCancelled(roomId, entry);
-      setFeedback((current) => ({ ...current, [roomId]: "" }));
       await refresh();
     } catch (reason) {
       // A lost cancel result is never permission to drop a possibly saved send.
@@ -2888,15 +2963,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           <div className="rooms-chat-list-head">
             <strong>{i18n.t("panels:rooms")}</strong>
             <button
+              ref={roomRailEntry}
               type="button"
-              onClick={(event) => {
-                dialogInvoker.current = event.currentTarget;
-                setAssistantMode(false);
-                setName("");
-                setMemberName("");
-                setThreadId("");
-                setPanel("create");
-              }}
+              onClick={openRoomCreation}
             >
               <Icon name="plus" size={15} /> {i18n.t("panels:new")}
             </button>
@@ -2941,15 +3010,43 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           ))}
         </nav>
       ) : null}
-      <main className="rooms-chat-main" hidden={inlineSetup}>
+      <main
+        ref={roomsMain}
+        className="rooms-chat-main"
+        hidden={inlineSetup}
+        tabIndex={-1}
+        aria-label={i18n.t("panels:rooms")}
+      >
         {loading ? (
           <p className="rooms-chat-empty" role="status">
             {i18n.t("panels:loadingRooms")}
           </p>
+        ) : room === undefined && (roomsReadError || initialRoomId) ? (
+          <div className="rooms-chat-empty" role="alert">
+            <h3>{i18n.t("panels:roomsAreUnavailable")}</h3>
+            {roomsReadError ? <p>{roomsReadError}</p> : null}
+          </div>
         ) : room === undefined ? (
           <div className="rooms-chat-empty">
             <h3>{i18n.t("panels:aPlaceToWorkTogether")}</h3>
-            <p>{i18n.t("panels:createARoomToBringYourAgents")}</p>
+            <p>
+              {i18n.t(
+                data.rooms.length === 0
+                  ? "panels:createARoomToBringYourAgents"
+                  : "panels:selectARoomToContinue",
+              )}
+            </p>
+            {data.rooms.length === 0 ? (
+              <button
+                type="button"
+                className="primary-button"
+                ref={emptyRoomEntry}
+                onClick={openRoomCreation}
+              >
+                {i18n.t("panels:newRoom")}
+              </button>
+            ) : null}
+            {error && panel === null ? <p role="alert">{error}</p> : null}
           </div>
         ) : (
           <>
@@ -3020,7 +3117,6 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
             ) : null}
             {error ||
             roomErrors[room.id] ||
-            feedback[room.id] ||
             pending ||
             (room.operations ?? []).some(
               (entry) => entry.id !== pendingByRoom[room.id]?.id,
@@ -3035,20 +3131,22 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     {roomErrors[room.id] || error}
                   </p>
                 ) : null}
-                {feedback[room.id] ? (
-                  <p role="status">{feedback[room.id]}</p>
-                ) : null}
                 {pending ? (
-                  <div role="status" className="room-send-pending">
+                  <div
+                    role="status"
+                    className="room-send-pending"
+                    data-operation-id={pending.id}
+                  >
                     {pending.cancelled
                       ? i18n.t("panels:sendCancelledNoMessageWasSent")
                       : pending.wakeupId
                         ? i18n.t("panels:pawWelcomeAlreadyStarted")
                         : pending.messageId
                           ? i18n.t("panels:messageSavedCheckItsDeliveryStatus")
-                          : i18n.t(
+                          : (feedback[deliveryCheckKey(room.id, pending.id)] ??
+                            i18n.t(
                               "panels:deliveryUnconfirmedCheckItsStatusBeforeSending",
-                            )}{" "}
+                            ))}{" "}
                     <button
                       type="button"
                       onClick={() =>
@@ -3093,6 +3191,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     <div
                       className="room-send-pending"
                       key={operation.id}
+                      data-operation-id={operation.id}
                       role="status"
                     >
                       {i18n.t(
@@ -3100,7 +3199,12 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                           ? "panels:pawIntroductionPreview"
                           : "panels:pendingMessage",
                       )}{" "}
-                      {operationStateLabel(operation)} ·{" "}
+                      {(!operation.cancelled &&
+                        !operation.messageId &&
+                        !operation.wakeupId
+                        ? feedback[deliveryCheckKey(room.id, operation.id)]
+                        : undefined) ?? operationStateLabel(operation)}{" "}
+                      ·{" "}
                       {operation.kind === "assistantIntroduction"
                         ? ""
                         : Array.from(operation.text).slice(0, 70).join("")}{" "}
@@ -4191,7 +4295,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 ) : null}
               </details>
             ) : null}
-            {error ? <p role="alert">{error}</p> : null}
+            {error || roomsReadError ? (
+              <p role="alert">{error || roomsReadError}</p>
+            ) : null}
           </section>
         </div>
       ) : null}

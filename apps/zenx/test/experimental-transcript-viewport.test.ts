@@ -4,6 +4,11 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
+import {
+  createMessageCodeWrapChoices,
+  Markdown,
+  MessageCodeWrapContext,
+} from "../src/renderer/src/Markdown.js";
 import type { LegendListRef } from "@legendapp/list/react";
 import {
   ExperimentalTranscriptViewport,
@@ -96,38 +101,68 @@ test("real Legend viewport bounds mounted rows and cancels a reveal when unmount
     scroll: { top: 0, following: false },
     virtualAnchor: null,
   };
-  const rows = Array.from({ length: 1000 }, (_, index) => ({
-    key: `turn-${index}`,
-    content: React.createElement(
-      "div",
-      null,
-      `Answer ${index}`,
-      React.createElement("button", null, `Control ${index}`),
-    ),
-  }));
+  const codeChoices = createMessageCodeWrapChoices();
+  const makeRows = (letter = "a", itemId = "reply-0", append = "") =>
+    Array.from({ length: 1000 }, (_, index) => ({
+      key: `turn-${index}`,
+      content: React.createElement(
+        "div",
+        null,
+        `Answer ${index}`,
+        React.createElement("button", null, `Control ${index}`),
+        index === 0
+          ? React.createElement(Markdown, {
+              wrapMessageId: itemId,
+              text:
+                [
+                  "```ts",
+                  letter.repeat(220),
+                  "```",
+                  "",
+                  "Prose.",
+                  "",
+                  // Deliberately byte-identical to the first fence on the
+                  // baseline: content alone is not a fence identifier.
+                  "```ts",
+                  "a".repeat(220),
+                  "```",
+                ].join("\n") + append,
+            })
+          : null,
+      ),
+    }));
+  const rows = makeRows();
   const root = createRoot(document.getElementById("root")!);
   const errors: string[] = [];
   const originalError = console.error;
   console.error = (...values) => {
     errors.push(values.map(String).join(" "));
   };
-  const renderWithFooter = (footer: React.ReactNode) =>
-    React.createElement(ExperimentalTranscriptViewport, {
-      rows,
-      header: null,
-      footer,
-      viewport,
-      controller,
-      listRef,
-      position,
-      className: "messages",
-      onViewportScroll(_node, correction) {
-        scrollKinds.push(correction);
-      },
-      onContentSettled() {
-        contentSettled++;
-      },
-    });
+  const renderWithFooter = (
+    footer: React.ReactNode,
+    nextRows = rows,
+    store = codeChoices,
+  ) =>
+    React.createElement(
+      MessageCodeWrapContext.Provider,
+      { value: store },
+      React.createElement(ExperimentalTranscriptViewport, {
+        rows: nextRows,
+        header: null,
+        footer,
+        viewport,
+        controller,
+        listRef,
+        position,
+        className: "messages",
+        onViewportScroll(_node, correction) {
+          scrollKinds.push(correction);
+        },
+        onContentSettled() {
+          contentSettled++;
+        },
+      }),
+    );
   const pendingFooter = React.createElement(
     "p",
     { "data-pending": "true" },
@@ -219,6 +254,14 @@ test("real Legend viewport bounds mounted rows and cancels a reveal when unmount
     const firstRow = node.querySelector<HTMLElement>(
       "[data-transcript-row-key]",
     )!;
+    const wrapButtons = () =>
+      node
+        .querySelector('[data-transcript-row-key="turn-0"]')
+        ?.querySelectorAll<HTMLButtonElement>(".markdown-code-wrap");
+    const wrap = wrapButtons()?.[0];
+    assert.ok(wrap);
+    await act(async () => wrap.click());
+    assert.equal(wrap.getAttribute("aria-pressed"), "true");
     const button = firstRow.querySelector<HTMLButtonElement>("button")!;
     await act(async () => button.focus());
     await act(async () => {
@@ -305,6 +348,67 @@ test("real Legend viewport bounds mounted rows and cancels a reveal when unmount
       scrollKinds.includes(false),
       "real reader scroll is not hidden as layout correction",
     );
+    const userScroll = (top: number) =>
+      act(async () => {
+        node.dispatchEvent(
+          new dom.window.WheelEvent("wheel", {
+            deltaY: top - node.scrollTop,
+            bubbles: true,
+          }),
+        );
+        node.scrollTop = top;
+        node.dispatchEvent(new dom.window.Event("scroll"));
+        await new Promise((resolve) => setTimeout(resolve, 550));
+      });
+    await userScroll(0);
+    const [returned, second] = wrapButtons() ?? [];
+    assert.ok(returned);
+    assert.notEqual(returned, wrap, "old wrap button was physically unmounted");
+    assert.equal(returned.getAttribute("aria-pressed"), "true");
+    assert.equal(
+      second?.getAttribute("aria-pressed"),
+      "false",
+      "the identical second fence remains independent after remount",
+    );
+    const firstChoice = () => wrapButtons()?.[0]?.getAttribute("aria-pressed");
+    const renderRows = (nextRows = rows, store = codeChoices) =>
+      act(async () =>
+        root.render(renderWithFooter(pendingFooter, nextRows, store)),
+      );
+    await act(async () => returned.focus());
+    await renderRows(makeRows("a", undefined, "\n\n```js\nstreaming()"));
+    assert.equal(
+      document.activeElement,
+      returned,
+      "append preserves focused toggle",
+    );
+    assert.equal(firstChoice(), "true");
+    await renderRows(makeRows("a", "different-item"));
+    assert.equal(
+      firstChoice(),
+      "false",
+      "same source cannot leak to a different item",
+    );
+    await renderRows(makeRows("b"));
+    assert.equal(firstChoice(), "false", "replacement source starts unwrapped");
+    await renderRows(rows, createMessageCodeWrapChoices());
+    assert.equal(
+      firstChoice(),
+      "false",
+      "another conversation starts unwrapped",
+    );
+    await renderRows();
+    assert.equal(firstChoice(), "true");
+    await act(async () => {
+      returned.click();
+      returned.blur();
+    });
+    assert.equal(firstChoice(), "false");
+    await userScroll(145000);
+    assert.equal(wrapButtons(), undefined);
+    await userScroll(0);
+    assert.equal(firstChoice(), "false");
+    await userScroll(145000);
     const actualScrollToIndex = listRef.current!.scrollToIndex;
     listRef.current!.scrollToIndex = () => new Promise<void>(() => {});
     const protectedRow = node.querySelector<HTMLElement>(

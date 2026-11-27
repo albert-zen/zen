@@ -248,3 +248,49 @@ test("duplicate footnote definitions use the first body like the actual Markdown
   );
   dom.window.close();
 });
+
+test("Find matches displayed CJK text across bold punctuation without indexing Markdown delimiters", async () => {
+  const React = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { Markdown } = await import("../src/renderer/src/Markdown.js");
+  const source =
+    "需要**“确认”**以后再继续。\n\n保留\\*字面星号\\*，以及 `**代码**`。";
+  const query = "确认”以后";
+  const markup = renderToStaticMarkup(
+    React.createElement(
+      "main",
+      null,
+      React.createElement(
+        "section",
+        { "data-thread-find-item-id": "answer" },
+        React.createElement(Markdown, { text: source }),
+      ),
+    ),
+  );
+  const dom = new JSDOM(markup);
+  try {
+    const viewport = dom.window.document.querySelector("main")!;
+    assert.equal(viewport.querySelector("strong")?.textContent, "“确认”");
+    const blocks = markdownFindBlocks(source);
+    const entries = [
+      {
+        turnId: "t",
+        itemId: "answer",
+        field: "body" as const,
+        blocks,
+        disclosures: [],
+      },
+    ];
+    const matches = searchTranscript(entries, query);
+    assert.equal(matches.length, 1);
+    const range = transcriptFindRange(viewport, matches[0]!, query);
+    assert.equal(range?.toString(), query);
+    assert.equal(range?.startContainer.parentElement?.tagName, "STRONG");
+    assert.equal(range?.endContainer.parentElement?.tagName, "P");
+    assert.equal(searchTranscript(entries, "**“确认”**").length, 0);
+    assert.equal(searchTranscript(entries, "*字面星号*").length, 1);
+    assert.equal(searchTranscript(entries, "**代码**").length, 1);
+  } finally {
+    dom.window.close();
+  }
+});

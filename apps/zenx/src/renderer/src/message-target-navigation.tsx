@@ -14,6 +14,7 @@ export interface MessageTargetRequest {
   itemId: string;
   requestId: number;
   excerpt?: string;
+  sourceTool?: boolean;
 }
 export const MessageTargetNavigationContext = createContext<{
   request: MessageTargetRequest | null;
@@ -41,7 +42,10 @@ export function useMessageTargetNavigation(
     if (!request || request.threadId !== thread?.id) return;
     const identity = JSON.stringify([request.threadId, request.requestId]);
     if (consumed.current === identity || retired.current.has(identity)) return;
-    if (request.excerpt !== undefined && navigateQuote) {
+    if (
+      (request.sourceTool || request.excerpt !== undefined) &&
+      navigateQuote
+    ) {
       let active = true;
       // Virtual materialization uses flushSync and must run outside React's layout commit.
       queueMicrotask(() => {
@@ -50,7 +54,8 @@ export function useMessageTargetNavigation(
           navigateQuote({
             threadId: request.threadId,
             id: request.itemId,
-            excerpt: request.excerpt!,
+            // Empty excerpt requests the identity-verified whole tool item.
+            excerpt: request.excerpt ?? "",
           })
         ) {
           consumed.current = identity;

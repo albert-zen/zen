@@ -129,3 +129,18 @@ export function resolveDeliveredMessage(
   );
   return delivered ? { itemId: delivered.id } : "pending";
 }
+
+/** Resolve sender provenance against the exact local canonical tool, never names or prose. */
+export function resolveSourceTool(
+  items: readonly CanonicalItem[],
+  threadId: string,
+  source: { itemId: string; callId: string },
+): { itemId: string } | undefined {
+  if (!source.itemId || !source.callId) return undefined;
+  const item = items.find((item) => item.id === source.itemId);
+  return item?.type === "tool_call" &&
+    item.threadId === threadId &&
+    item.callId === source.callId
+    ? { itemId: item.id }
+    : undefined;
+}

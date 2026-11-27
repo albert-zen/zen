@@ -335,6 +335,68 @@ try {
       true,
       "Cancel returns focus to originating provider Edit",
     );
+    // Record chooser focus before claiming any restoration behavior. The
+    // baseline may legitimately report BODY; do not assert a destination.
+    receipt.discoveryKeyboard = [];
+    for (const action of ["cancel", "add"]) {
+      await navigate(false, false, true);
+      await waitFor("!document.querySelector('.provider-editor')");
+      await clickSelector(".provider-profile-actions button:first-child", 3);
+      await waitFor(
+        "document.querySelectorAll('.provider-model-row').length===12",
+      );
+      await evaluate(
+        `(() => { const name = document.querySelector('.provider-editor input[id$="-displayName"]'); name.focus(); name.select(); })()`,
+      );
+      await send("Input.insertText", { text: "Synthetic unsaved provider" });
+      await clickSelector(".model-catalog-head button");
+      await waitFor(
+        "document.querySelectorAll('.available-model-option input').length===2",
+      );
+      await clickSelector(".available-model-option input", 1);
+      assert.equal(
+        await evaluate(
+          "document.activeElement === document.querySelectorAll('.available-model-option input')[1]",
+        ),
+        true,
+        "The selected checkbox is the keyboard starting point",
+      );
+      await key("Tab", "Tab", 9);
+      if (action === "add") await key("Tab", "Tab", 9);
+      const control = action === "add" ? ".primary-button" : ".quiet-button";
+      assert.equal(
+        await evaluate(
+          `document.activeElement === document.querySelector(${JSON.stringify(".available-model-actions " + control)})`,
+        ),
+        true,
+        "Tab reaches the expected chooser action",
+      );
+      const scrollBefore = await evaluate(
+        "document.querySelector('.page-scroll').scrollTop",
+      );
+      await key("Enter", "Enter", 13);
+      await waitFor("!document.querySelector('.available-model-picker')");
+      await waitFor(
+        `document.querySelectorAll('.provider-model-row').length===${action === "add" ? 13 : 12}`,
+      );
+      const state = await evaluate(`(() => {
+        const active = document.activeElement;
+        const model = [...document.querySelectorAll('.provider-model-row input')].find(e=>e.value==='catalog-unknown');
+        const rect = e => e?.getBoundingClientRect().toJSON() ?? null;
+        return {active:active.tagName,focusVisible:active.matches(':focus-visible'),
+          activeIsDiscovery:active===document.querySelector('.model-catalog-head button'),
+          activeIsAddedModel:active===model,activeRect:rect(active),modelRect:rect(model),
+          scrollViewport:rect(document.querySelector('.page-scroll')),scrollTop:document.querySelector('.page-scroll').scrollTop,
+          draft:document.querySelector('.provider-editor input[id$="-displayName"]').value,
+          added:!!model,deferredSaveCalls:window.__settingsAudit.calls.filter(x=>x==='synthetic-deferred-edit').length};
+      })()`);
+      assert.equal(state.draft, "Synthetic unsaved provider");
+      assert.equal(state.added, action === "add");
+      assert.equal(state.deferredSaveCalls, 0);
+      receipt.discoveryKeyboard.push({ action, scrollBefore, ...state });
+      await capture(`discovery-keyboard-after-${action}`);
+    }
+
     // Real Chromium disables focused native controls unlike DOM-only harnesses.
     for (const newerNavigation of [false, true]) {
       await navigate(false, false, true);

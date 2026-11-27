@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import {
   Popover,
   PopoverAnchor,
@@ -52,6 +52,44 @@ function intentIcon(intent: ComposerIntent): IconName {
         : intent === "replace"
           ? "reload"
           : "send";
+}
+
+// The Send surface is a nonmodal dialog, not a cycling menu. Radix Popover's
+// internal FocusScope loops even in nonmodal mode, so handle only its two Tab
+// boundaries and leave interior/nested Select keyboard handling untouched.
+function sendTabStops(root: ParentNode): HTMLElement[] {
+  return Array.from(
+    root.querySelectorAll<HTMLElement>(
+      'button, a[href], input, select, textarea, [tabindex], [contenteditable="true"]',
+    ),
+  )
+    .filter((element) => {
+      if (
+        element.tabIndex < 0 ||
+        element.matches(':disabled, input[type="hidden"]') ||
+        element.closest("[hidden], [inert], [data-radix-focus-guard]")
+      )
+        return false;
+      for (
+        let current: HTMLElement | null = element;
+        current;
+        current = current.parentElement
+      ) {
+        const style = getComputedStyle(current);
+        if (
+          style.display === "none" ||
+          style.visibility === "hidden" ||
+          style.visibility === "collapse"
+        )
+          return false;
+      }
+      return true;
+    })
+    .sort(
+      (left, right) =>
+        (left.tabIndex > 0 ? left.tabIndex : Infinity) -
+        (right.tabIndex > 0 ? right.tabIndex : Infinity),
+    );
 }
 
 /** Presentation only: sending and saving preferences keep their existing owners. */
@@ -142,6 +180,20 @@ export function ComposerSendControl({
       focusFirstAction();
     }
   };
+  // Presence retains the closed surface during its exit animation. Return focus
+  // at logical close, not at eventual animation unmount, so a later Tab cannot
+  // be stolen by delayed auto-focus.
+  useLayoutEffect(() => {
+    if (!open && focusRequest.current === "return") {
+      const target = primary.current?.disabled
+        ? anchor.current
+        : primary.current;
+      target?.focus();
+      // A still-mounted nested Select may trap this attempt. Only consume a
+      // successful return; otherwise its unmount still owns the handoff below.
+      if (document.activeElement === target) focusRequest.current = null;
+    }
+  }, [open]);
   useEffect(() => () => clearTimeout(timer.current), []);
   // A changed turn/context invalidates the old action surface, never the draft.
   useEffect(() => {
@@ -239,6 +291,15 @@ export function ComposerSendControl({
           <ComposerAction
             ref={primary}
             mode={primaryMode}
+            icon={
+              running &&
+              hasDraft &&
+              !compact &&
+              primaryMode === sendIntent &&
+              (sendIntent === "batch-next" || sendIntent === "queue")
+                ? intentIcon(sendIntent)
+                : undefined
+            }
             label={primaryLabel}
             aria-describedby={`${id}-hint`}
             aria-keyshortcuts="ArrowUp ArrowDown"
@@ -253,6 +314,9 @@ export function ComposerSendControl({
       <PopoverContent
         id={`${id}-panel`}
         ref={panel}
+        // Keep the exit animation visible, but remove its retained DOM from
+        // native Tab, pointer activation and the accessibility tree immediately.
+        inert={!open}
         className="composer-send-popover"
         align="end"
         side="top"
@@ -282,18 +346,53 @@ export function ComposerSendControl({
         }}
         onCloseAutoFocus={(event) => {
           event.preventDefault();
-          panelOwnsFocus.current = false;
+          const active = document.activeElement;
           if (focusRequest.current === "return") {
-            (primary.current?.disabled
-              ? anchor.current
-              : primary.current
-            )?.focus();
+            // A later outside interaction wins over a deferred nested handoff.
+            if (
+              !active ||
+              active === document.body ||
+              panel.current?.contains(active) ||
+              panelOwnsFocus.current
+            )
+              (primary.current?.disabled
+                ? anchor.current
+                : primary.current
+              )?.focus();
             focusRequest.current = null;
           }
+          panelOwnsFocus.current = false;
         }}
         onFocusOutside={(event) => {
           if (anchor.current?.contains(event.target as Node))
             event.preventDefault();
+        }}
+        onKeyDown={(event) => {
+          if (
+            event.key !== "Tab" ||
+            event.altKey ||
+            event.ctrlKey ||
+            event.metaKey ||
+            !panel.current?.contains(event.target as Node)
+          )
+            return;
+          const stops = sendTabStops(panel.current);
+          const edge = event.shiftKey ? stops[0] : stops.at(-1);
+          if (event.target !== edge) return;
+          const origin = primary.current?.disabled
+            ? anchor.current
+            : primary.current;
+          if (!origin) return;
+          const outside = sendTabStops(document).filter(
+            (element) => !panel.current?.contains(element),
+          );
+          const originIndex = outside.indexOf(origin);
+          const destination = event.shiftKey
+            ? origin
+            : (outside[originIndex + 1] ?? outside[0] ?? origin);
+          event.preventDefault();
+          close();
+          destination.focus();
         }}
         onEscapeKeyDown={() => {
           close(true);

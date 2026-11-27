@@ -206,6 +206,33 @@ app
       boundary:
         "Production Queue editor over synthetic human input; native save is stubbed, open/close and actual rendered dialog checked",
     });
+    // Capture the product defaults at rest, without sending the draft or
+    // reusing the older shelf-only frames (which do not set a theme preset).
+    window.setContentSize(1440, 900);
+    for (const [busy, expectedAction] of [
+      ["hard", "stop"],
+      ["queue", "queue"],
+      ["batch", "batch-next"],
+    ]) {
+      await window.loadFile(path.join(temporary, "queue-steer-visual.html"), {
+        query: { lang: "en", theme: "dark", busy },
+      });
+      await until(
+        `Boolean(document.querySelector(".composer-send-control .action-orb.${expectedAction}"))`,
+      );
+      const composer = await evaluate(
+        "(()=>{const e=document.querySelector('#thread-composer'),b=document.querySelector('.composer-send-control .action-orb');return {width:innerWidth,height:innerHeight,preset:document.documentElement.dataset.themePreset,draft:e.value,placeholder:e.placeholder,action:b.getAttribute('aria-label'),icon:b.querySelector('svg')?.innerHTML}})()",
+      );
+      assert.equal(composer.preset, "graphite");
+      assert.equal(
+        composer.draft,
+        busy === "hard" ? "" : "Check the new wording and keep this draft.",
+      );
+      assert.ok(composer.action && composer.icon);
+      const name = `busy-composer-${busy}-dark`;
+      await screenshot(name);
+      result.cases.push({ name, composer });
+    }
     window.setContentSize(800, 500);
     await window.loadFile(path.join(temporary, "pending-send-visual.html"));
     await until(

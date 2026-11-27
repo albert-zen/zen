@@ -43,11 +43,32 @@ import type { Thread } from "../../src/protocol-client/index.js";
 import type { NativeThreadSummary } from "../../../../src/thread-summary.js";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
+import {
+  DEFAULT_APPEARANCE_PREFERENCE,
+  applyResolvedAppearance,
+  resolveAppearance,
+} from "../../src/renderer/src/appearance.js";
 Object.assign(globalThis, { React });
 const params = new URLSearchParams(location.search);
 const zh = params.get("lang") !== "en";
 void i18n.changeLanguage(zh ? "zh-CN" : "en");
 document.documentElement.dataset.appearance = params.get("theme") ?? "light";
+const busy = params.get("busy");
+const composerMode =
+  busy === "queue" || busy === "batch" || busy === "hard" ? busy : "soft";
+if (busy) {
+  applyResolvedAppearance(
+    document,
+    resolveAppearance(
+      DEFAULT_APPEARANCE_PREFERENCE,
+      params.get("theme") === "dark",
+    ),
+  );
+}
+const busyDraft =
+  composerMode === "queue" || composerMode === "batch"
+    ? "Check the new wording and keep this draft."
+    : "";
 const idle = params.has("idle");
 const title = zh ? "发布前检查" : "Release checks";
 let initial: Thread = {
@@ -407,6 +428,7 @@ function Fixture() {
   const view = selectedThreadId === initial.id ? thread : sourceThread;
   const [composer, setComposer] = useState(() => ({
     ...emptyComposerState(),
+    draft: { text: busyDraft, images: [] },
     ...(params.has("local")
       ? {
           pendingSends: [
@@ -512,7 +534,7 @@ function Fixture() {
                   view.id === initial.id ? composer : emptyComposerState()
                 }
                 approvals={[]}
-                composerSendMode="soft"
+                composerSendMode={composerMode}
                 onDraftChange={(text) =>
                   setComposer((value) => ({
                     ...value,

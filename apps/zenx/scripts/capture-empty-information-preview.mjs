@@ -46,6 +46,21 @@ await withPreviewBrowser(
         "!document.querySelector('.editable-information-panel[data-busy=\"true\"]')",
       );
     };
+    const boardSelector =
+      '.information-toolbar [aria-label="Information board"]';
+    const closeBoard = async () => {
+      await click(`${boardSelector}[aria-expanded="true"]`);
+      await wait(
+        "!document.querySelector('.information-popover') && !document.querySelector('.editable-information-panel')",
+      );
+      assert.equal(
+        await evaluate(
+          `document.activeElement===document.querySelector(${JSON.stringify(boardSelector)}) && document.activeElement.getAttribute('aria-expanded')==='false'`,
+        ),
+        true,
+        "closing with the single Information toggle restores focus",
+      );
+    };
     const count =
       "[...document.querySelectorAll('.information-widget')].filter(e=>e.getBoundingClientRect().height>0).length";
     let navigation = 0;
@@ -58,7 +73,7 @@ await withPreviewBrowser(
       await wait(
         `location.href===${JSON.stringify(target)} && window.__informationFixture?.navigationToken===${JSON.stringify(token)}`,
       );
-      await click('[aria-label="Information board"]');
+      await click(boardSelector);
       await wait("!!document.querySelector('.editable-information-panel')");
       await delay(150);
     };
@@ -193,12 +208,7 @@ await withPreviewBrowser(
     cases.push(
       "Explicit Hide persists across content changes; Manage/Show restores the chosen card",
     );
-    await click('[aria-label="Close information"]');
-    await wait("!document.querySelector('.editable-information-panel')");
-    assert.equal(
-      await evaluate("document.activeElement?.getAttribute('aria-label')"),
-      "Information board",
-    );
+    await closeBoard();
     await send("Emulation.setDeviceMetricsOverride", {
       width: 760,
       height: 960,
@@ -210,14 +220,9 @@ await withPreviewBrowser(
     await wait(`${count}===1`);
     await screenshot("04-narrow-dark-popover.png");
     await exerciseToggle("07-narrow-dark-toggle");
-    await click('[aria-label="Close information"]');
-    await wait("!document.querySelector('.information-popover')");
-    assert.equal(
-      await evaluate("document.activeElement?.getAttribute('aria-label')"),
-      "Information board",
-    );
+    await closeBoard();
     cases.push(
-      "Narrow dark popover renders only available content; visible Close restores trigger focus",
+      "Narrow dark popover renders only available content; the same toggle closes it and retains focus",
     );
     await send("Emulation.setDeviceMetricsOverride", {
       width: 1440,

@@ -2,7 +2,7 @@ import { AttachmentImage } from "./ImagePresentation.js";
 import type { AttachmentRef } from "../../../../../src/attachment.js";
 import { parseSkillDraft } from "./skill-draft.js";
 import { UserMessageContent } from "./UserMessageContent.js";
-import { memo, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { PendingSendPresentation } from "./composer-state.js";
 
@@ -23,23 +23,10 @@ export const PendingSendRows = memo(function PendingSendRows({
   ): void;
   onRecover?(clientId: string): void;
   onDismiss?(clientId: string): void;
-  onCheck?(): Promise<void>;
+  /** Only a usable authoritative read returns checked; it is not a delivery receipt. */
+  onCheck?(): Promise<"checked" | "unavailable">;
 }) {
   const { t } = useTranslation("shell");
-  const [checking, setChecking] = useState(false);
-  const [checkError, setCheckError] = useState<string | null>(null);
-  const check = async () => {
-    if (checking || onCheck === undefined) return;
-    setChecking(true);
-    setCheckError(null);
-    try {
-      await onCheck();
-    } catch (error) {
-      setCheckError(String(error));
-    } finally {
-      setChecking(false);
-    }
-  };
   return messages.map((message) => {
     const draft = parseSkillDraft(message.draft.text);
     return (
@@ -130,17 +117,87 @@ export const PendingSendRows = memo(function PendingSendRows({
         )}
         {(message.status === "unconfirmed" || message.status === "admitted") &&
           onCheck && (
-            <button
-              type="button"
-              className="quiet-button"
-              disabled={checking}
-              onClick={() => void check()}
-            >
-              {t("pendingSendCheck")}
-            </button>
+            <PendingSendCheck
+              key={message.status}
+              status={message.status}
+              onCheck={onCheck}
+            />
           )}
-        {checkError && <p role="alert">{checkError}</p>}
       </article>
     );
   });
 });
+
+/** Disposable feedback owned by this exact input and its current admission state. */
+function PendingSendCheck({
+  status,
+  onCheck,
+}: {
+  status: "unconfirmed" | "admitted";
+  onCheck(): Promise<"checked" | "unavailable">;
+}) {
+  const { t } = useTranslation("shell");
+  const [feedback, setFeedback] = useState<
+    | { phase: "idle" | "checking" | "completed" | "unavailable" }
+    | { phase: "failed"; error: string }
+  >({ phase: "idle" });
+  const request = useRef<object | null>(null);
+  useEffect(
+    () => () => {
+      request.current = null;
+    },
+    [],
+  );
+  const check = async () => {
+    // The ref also fences repeated activation before React commits disabled.
+    if (request.current !== null) return;
+    const token = {};
+    request.current = token;
+    setFeedback({ phase: "checking" });
+    try {
+      const result = await onCheck();
+      if (request.current === token)
+        setFeedback({
+          phase: result === "checked" ? "completed" : "unavailable",
+        });
+    } catch (error) {
+      if (request.current === token)
+        setFeedback({ phase: "failed", error: String(error) });
+    } finally {
+      if (request.current === token) request.current = null;
+    }
+  };
+  return (
+    <>
+      <button
+        type="button"
+        className="quiet-button"
+        disabled={feedback.phase === "checking"}
+        onClick={() => void check()}
+      >
+        {t("pendingSendCheck")}
+      </button>
+      {feedback.phase !== "idle" && (
+        <p
+          className="pending-send-check-feedback"
+          data-check-state={feedback.phase}
+          role={feedback.phase === "failed" ? "alert" : "status"}
+          aria-atomic="true"
+        >
+          {t(
+            feedback.phase === "checking"
+              ? "pendingSendChecking"
+              : feedback.phase === "unavailable"
+                ? "pendingSendCheckUnavailable"
+                : feedback.phase === "failed"
+                  ? "pendingSendCheckFailed"
+                  : status === "admitted"
+                    ? "pendingSendCheckedAdmitted"
+                    : "pendingSendCheckedUnconfirmed",
+          )}
+          {feedback.phase === "failed" && <> {feedback.error}</>}
+        </p>
+      )}
+    </>
+  );
+}
