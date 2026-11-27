@@ -1,3 +1,5 @@
+import { informationReadingClearance } from "./information-reading-clearance.js";
+import { projectForkBoundary } from "./thread-fork-boundary.js";
 import { AppShotButton } from "./AppShotButton.js";
 import {
   ThreadHistoryContext,
@@ -58,7 +60,7 @@ import {
   triggerMessagePresentation,
 } from "./trigger-message-presentation.js";
 import { InlineComposerEditor } from "./InlineComposerEditor.js";
-import type { ComposerInput } from "./composer-input.js";
+import { composerInputElement, type ComposerInput } from "./composer-input.js";
 import { normalizeInlineReferences } from "./reference-draft.js";
 import { InlineReferenceContent } from "./InlineReferenceContent.js";
 import { ReferenceToken } from "./ReferenceToken.js";
@@ -116,6 +118,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
 
@@ -187,7 +190,12 @@ import {
 } from "./queued-message-images.js";
 import { PermissionSelect } from "./PermissionSelect.js";
 import type { FilePermissionMode } from "../../protocol-client/types.js";
-import { Markdown, MessageLinkContext } from "./Markdown.js";
+import {
+  createMessageCodeWrapChoices,
+  Markdown,
+  MessageCodeWrapContext,
+  MessageLinkContext,
+} from "./Markdown.js";
 import {
   AttachmentImage,
   ImagePreview,
@@ -398,6 +406,7 @@ interface ThreadViewProps {
   models?: readonly ModelSummary[];
   permissionLabel?: string | null;
   permissionMode?: FilePermissionMode;
+  permissionDisplayOnly?: boolean;
   permissionError?: string | null;
   switchingPermission?: boolean;
   onPermissionChange?(mode: FilePermissionMode): void;
@@ -415,7 +424,7 @@ interface ThreadViewProps {
   pluginUiRegistry?: PluginUiRegistry | null;
   onRecoverPendingSend?(clientId: string): void;
   onDismissPendingSend?(clientId: string): void;
-  onCheckPendingSends?(): Promise<void>;
+  onCheckPendingSends?(): Promise<"checked" | "unavailable">;
   onDraftChange(draft: string): void;
   onOpenMessageLink?(target: { kind: "file" | "browser"; value: string }): void;
   onImportImages?(files: readonly File[]): Promise<void>;
@@ -592,6 +601,11 @@ function HistoryThreadView(props: ThreadViewProps) {
   // separate media refresh/payload read is pending. A newer canonical snapshot
   // also removes old references synchronously; never merge stale Host results.
 
+  const threadId = props.thread?.id;
+  const codeWrapChoices = useMemo(
+    () => (threadId ? createMessageCodeWrapChoices() : null),
+    [threadId],
+  );
   return (
     <ThreadReadingContext.Provider value={readingState}>
       <MessageSourceViewportContext.Provider value={props.thread?.id ?? null}>
@@ -613,15 +627,17 @@ function HistoryThreadView(props: ThreadViewProps) {
               onReadAttachment={props.onReadAttachment}
             />
           ) : (
-            <ThreadViewContent
-              {...props}
-              thread={queueThread}
-              pendingSteer={pendingSteer}
-              threadAttachments={attachments}
-              canonicalPresentation={presentation}
-              sourceThreadId={sourceThreadId}
-              isForkCurrent={isForkCurrent}
-            />
+            <MessageCodeWrapContext.Provider value={codeWrapChoices}>
+              <ThreadViewContent
+                {...props}
+                thread={queueThread}
+                pendingSteer={pendingSteer}
+                threadAttachments={attachments}
+                canonicalPresentation={presentation}
+                sourceThreadId={sourceThreadId}
+                isForkCurrent={isForkCurrent}
+              />
+            </MessageCodeWrapContext.Provider>
           )}
         </div>
       </MessageSourceViewportContext.Provider>
@@ -669,6 +685,7 @@ function ThreadViewContent({
   models = [],
   permissionLabel = i18n.t("shell:fullAccess"),
   permissionMode = "danger-full-access",
+  permissionDisplayOnly = false,
   permissionError,
   switchingPermission,
   onPermissionChange,
@@ -878,7 +895,35 @@ function ThreadViewContent({
     setCancelConfirmation(null);
     setCancelNotice(null);
   }, [thread?.id]);
-  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const attachmentOwner = JSON.stringify([composerId, thread?.id ?? null]);
+  const attachmentRequests = useRef(new Map<string, symbol>());
+  const [attachmentErrors, setAttachmentErrors] = useState(
+    () => new Map<string, string>(),
+  );
+  const attachmentError = attachmentErrors.get(attachmentOwner) ?? null;
+  const setAttachmentError = (owner: string, error: string | null) => {
+    setAttachmentErrors((errors) => {
+      if ((errors.get(owner) ?? null) === error) return errors;
+      const next = new Map(errors);
+      if (error === null) next.delete(owner);
+      else next.set(owner, error);
+      return next;
+    });
+  };
+  const importComposerImages = (action: () => Promise<void>) => {
+    const request = Symbol();
+    attachmentRequests.current.set(attachmentOwner, request);
+    setAttachmentError(attachmentOwner, null);
+    void action()
+      .catch((error: unknown) => {
+        if (attachmentRequests.current.get(attachmentOwner) === request)
+          setAttachmentError(attachmentOwner, describeError(error));
+      })
+      .finally(() => {
+        if (attachmentRequests.current.get(attachmentOwner) === request)
+          attachmentRequests.current.delete(attachmentOwner);
+      });
+  };
   const [draggingImages, setDraggingImages] = useState(false);
   const [preview, setPreview] = useState<{
     attachment: AttachmentRef;
@@ -1041,6 +1086,9 @@ function ThreadViewContent({
   const viewRef = useRef<HTMLDivElement>(null);
   const bottomZoneRef = useRef<HTMLDivElement>(null);
   const pendingTrayRef = useRef<HTMLDivElement>(null);
+  const pendingTrayId = useId();
+  const [queueReadingBridgeHost, setQueueReadingBridgeHost] =
+    useState<HTMLDivElement | null>(null);
   // Align the shared content box, not its border or native scrollbar, with
   // the real transcript column. Both groups keep one scrolling owner.
   useLayoutEffect(() => {
@@ -1051,15 +1099,86 @@ function ThreadViewContent({
       ?.querySelector<HTMLElement>(
         ".virtual-transcript-header, .messages-inner",
       );
-    if (!tray || !zone || !column) return;
+    if (!zone || !column) return;
+    const view = viewRef.current;
+    const scrollport = column.closest<HTMLElement>(".messages");
+    const workspace = view?.closest<HTMLElement>(".workspace");
+    // A retained side-chat transcript is not the primary card's layout owner.
+    const information = view?.closest(".auxiliary-panel")
+      ? undefined
+      : workspace?.querySelector<HTMLElement>(":scope > .information-toolbar");
     const measure = () => {
-      const rect = column.getBoundingClientRect();
-      if (rect.width <= 0 || tray.offsetWidth <= 0) return;
-      const origin =
+      let rect = column.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      // Reuse the existing column read. Add back our own previous displacement
+      // so resize/open/close cannot feed the shifted coordinate into itself.
+      const previousShift = parseFloat(
+        view?.style.getPropertyValue("--information-reading-shift") || "0",
+      );
+      const laneRequested = information?.dataset.clearanceOpen === "true";
+      const contentId = laneRequested
+        ? information
+            ?.querySelector("button[aria-controls]")
+            ?.getAttribute("aria-controls")
+        : undefined;
+      const popover = contentId
+        ? view?.ownerDocument.getElementById(contentId)
+        : null;
+      const viewportLeft = view?.getBoundingClientRect().left ?? 0;
+      const fit =
+        view && popover
+          ? informationReadingClearance({
+              viewportLeft,
+              cardRight: Number(information?.dataset.clearanceRight),
+              unshiftedReadingLeft: rect.left + previousShift,
+              readingWidth: rect.width,
+              resourceOpen:
+                information?.dataset.clearanceResourceBeside === "true",
+              direction: getComputedStyle(view).direction,
+              open: true,
+            })
+          : { cardWidth: undefined, shift: 0 };
+      if (view) {
+        const laneActive = String(fit.cardWidth !== undefined);
+        if (view.dataset.informationLane !== laneActive)
+          view.dataset.informationLane = laneActive;
+        if (previousShift !== fit.shift) {
+          view.style.setProperty(
+            "--information-reading-shift",
+            `${fit.shift}px`,
+          );
+          rect = column.getBoundingClientRect();
+        }
+      }
+      if (popover) {
+        if (fit.cardWidth)
+          popover.style.setProperty(
+            "--information-reading-card-width",
+            `${fit.cardWidth}px`,
+          );
+        else popover.style.removeProperty("--information-reading-card-width");
+      }
+      const contentOrigin =
         zone.getBoundingClientRect().left +
         zone.clientLeft +
-        parseFloat(getComputedStyle(zone).paddingLeft) +
-        tray.clientLeft;
+        parseFloat(getComputedStyle(zone).paddingLeft);
+      // The transcript centers inside its native scrollbar-reduced viewport.
+      // Align the Composer to that measured column, not the wider bottom zone.
+      if (view) {
+        const center = `${rect.left + rect.width / 2 - viewportLeft}px`;
+        if (
+          view.style.getPropertyValue("--conversation-return-center") !== center
+        )
+          view.style.setProperty("--conversation-return-center", center);
+      }
+      const composerGeometry = steerPreviewColumn(rect, contentOrigin, 0);
+      for (const [name, value] of Object.entries(composerGeometry)) {
+        const pixel = `${value}px`;
+        if (zone.style.getPropertyValue(`--composer-column-${name}`) !== pixel)
+          zone.style.setProperty(`--composer-column-${name}`, pixel);
+      }
+      if (!tray || tray.offsetWidth <= 0) return;
+      const origin = contentOrigin + tray.clientLeft;
       const geometry = steerPreviewColumn(
         rect,
         origin,
@@ -1075,17 +1194,74 @@ function ThreadViewContent({
       }
     };
     measure();
-    if (typeof ResizeObserver === "undefined") return;
+    // The card is portalled; opening it does not resize the fixed-width column.
+    // Observe only its toolbar presentation, not transcript mutations.
+    const informationObserver =
+      typeof MutationObserver === "undefined"
+        ? undefined
+        : new MutationObserver(measure);
+    if (information)
+      informationObserver?.observe(information, {
+        attributes: true,
+        attributeFilter: [
+          "data-clearance-open",
+          "data-clearance-right",
+          "data-clearance-resource-beside",
+        ],
+        subtree: true,
+        childList: true,
+      });
+    if (typeof ResizeObserver === "undefined")
+      return () => {
+        informationObserver?.disconnect();
+        view?.style.removeProperty("--conversation-return-center");
+      };
     const observer = new ResizeObserver(measure);
     observer.observe(column);
     // A fixed-width column can move when its scrollport gains a native gutter.
-    const scrollport = column.closest(".messages");
     if (scrollport) observer.observe(scrollport);
     observer.observe(zone);
-    observer.observe(tray);
-    return () => observer.disconnect();
+    if (tray) observer.observe(tray);
+    return () => {
+      observer.disconnect();
+      informationObserver?.disconnect();
+      view?.style.removeProperty("--conversation-return-center");
+    };
   });
+  // Preserve displacement across render-time measurement observer refreshes.
+  // Only remove the geometry owner on actual unmount.
+  useLayoutEffect(() => {
+    const view = viewRef.current;
+    return () => {
+      view?.style.removeProperty("--information-reading-shift");
+      if (view) delete view.dataset.informationLane;
+    };
+  }, []);
   const composerTextareaRef = useRef<ComposerInput>(null);
+  const composerHasFocus = () =>
+    composerInputElement(composerTextareaRef.current)?.contains(
+      document.activeElement,
+    ) === true;
+  const preserveComposerOnMouseDown = (
+    event: ReactMouseEvent<HTMLButtonElement>,
+  ) => {
+    if (event.button === 0 && composerHasFocus()) event.preventDefault();
+  };
+  const returnToLive = (event: ReactMouseEvent<HTMLButtonElement>) => {
+    const scroll = scrollRef.current;
+    if (scroll === null) return;
+    if (event.detail === 0 || !composerHasFocus()) {
+      // The viewport's focus handler pauses following; restore it after focus.
+      scroll.focus({ preventScroll: true });
+      document.getSelection()?.removeAllRanges();
+    }
+    shouldFollowRef.current = true;
+    scroll.scrollTo({ top: scroll.scrollHeight, behavior: "auto" });
+    observedScrollTop.current = scroll.scrollTop;
+    setAtLive(true);
+    saveReadingPosition();
+  };
+
   const pastedSelection = useRef<{ scope: string; caret: number } | null>(null);
   useLayoutEffect(() => {
     const pending = pastedSelection.current;
@@ -1205,9 +1381,19 @@ function ThreadViewContent({
     () => indexTranscriptOrder(displayedThread?.canonicalItems),
     [displayedThread?.canonicalItems],
   );
+  const forkBoundary = useMemo(
+    () => projectForkBoundary(displayedThread),
+    [displayedThread],
+  );
   const transcriptRows = useMemo(
-    () => buildTranscriptRows(turns, transcriptOrder, contextCompactions),
-    [contextCompactions, transcriptOrder, turns],
+    () =>
+      buildTranscriptRows(
+        turns,
+        transcriptOrder,
+        contextCompactions,
+        forkBoundary,
+      ),
+    [contextCompactions, transcriptOrder, turns, forkBoundary],
   );
   const pendingApprovals = useMemo(
     () =>
@@ -1228,6 +1414,13 @@ function ThreadViewContent({
   const submitting =
     composer.submission?.status === "pending" ||
     (compactRequested && composer.compaction?.status === "pending");
+  // A promoted first draft keeps its existing submission until admission.
+  // Do not reuse this cue for local creation or ordinary immediate Send rows.
+  const firstMessageSending =
+    thread !== null &&
+    composer.submission?.status === "pending" &&
+    composer.submission.intent === "start" &&
+    composer.submission.immediateFeedback !== true;
   const hasDraft = composerDraftHasContent(composer.draft);
   const blockedByImageCapability =
     !compactRequested &&
@@ -1273,9 +1466,22 @@ function ThreadViewContent({
     saveReadingPosition();
   }, [pauseFollowing, saveReadingPosition]);
 
+  const handleVirtualContentSettled = useCallback(() => {
+    const scroll = scrollRef.current;
+    if (!scroll) return;
+    if (shouldFollowRef.current) {
+      followBottom();
+      return;
+    }
+    // A resize may change the distance from the tail with no scroll event.
+    setAtLive(
+      scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 1,
+    );
+  }, [followBottom]);
+
   // The Composer overlays the bottom of the full-height transcript scroll
   // area. Publish its live height so the list reserves matching virtual
-  // space and Back to live can float just above it. This is geometry only;
+  // space. The desktop history-return control has its own lane above it. This is geometry only;
   // publishing a height never changes the reader's follow intent. Re-publish
   // on identity changes too: cached App navigation reuses this same DOM.
   useLayoutEffect(() => {
@@ -1456,7 +1662,10 @@ function ThreadViewContent({
             )
               return;
             if (!found) {
-              setAttachmentError(i18n.t("shell:referenceSourceUnavailable"));
+              setAttachmentError(
+                attachmentOwner,
+                i18n.t("shell:referenceSourceUnavailable"),
+              );
               return;
             }
             const target = resolveQuoteSource(quote);
@@ -1592,6 +1801,18 @@ function ThreadViewContent({
     runningTurn !== null,
     composerSendMode,
   );
+  const composerPlaceholder =
+    sendIntent === "start"
+      ? i18n.t(
+          watching
+            ? "shell:sendAMessageToWakeThisThread"
+            : "shell:askZenxAnything",
+        )
+      : sendIntent === "replace"
+        ? i18n.t("shell:interruptCurrentReplyAndSend")
+        : sendIntent === "steer"
+          ? i18n.t("shell:steerTheCurrentRun")
+          : i18n.t("shell:messageForTheNextTurn");
   const primaryMode =
     runningTurn === null ? "send" : !hasDraft ? "stop" : sendIntent;
   const intentLabel = (intent: ComposerIntent) =>
@@ -2047,14 +2268,23 @@ function ThreadViewContent({
         composer.focus({ preventScroll: true });
     });
   };
-  const composerError =
+  const composerBlockingError =
     interruptError ??
     attachmentError ??
-    (blockedByImageCapability ? imageCapabilityError : null) ??
-    (composer.submission?.draftRevision === composer.draftRevision
+    (blockedByImageCapability ? imageCapabilityError : null);
+  const submissionError =
+    composer.submission?.draftRevision === composer.draftRevision
       ? composer.submission.error
-      : null) ??
-    modelError;
+      : null;
+  const showSubmissionError =
+    composerBlockingError === null && submissionError != null;
+  const composerError = composerBlockingError ?? submissionError ?? modelError;
+  const firstMessageNeedsAttention =
+    thread !== null &&
+    showSubmissionError &&
+    composer.submission?.status === "failed" &&
+    composer.submission.intent === "start" &&
+    composer.submission.immediateFeedback !== true;
 
   // Composer updates reuse the actual transcript elements, not just TurnBlock bodies.
   const renderedTranscriptRows = useMemo(
@@ -2087,12 +2317,17 @@ function ThreadViewContent({
               row.turn.id,
             )!}
             sourceThreadId={sourceThreadId}
+            displayedThreadId={displayedThread?.id}
             isForkCurrent={isForkCurrent}
             imageCwd={displayedThread?.cwd}
             onOpenImage={onOpenImage}
             onReadAttachment={onReadAttachment}
             pluginSnapshot={pluginSnapshot}
             pluginUiRegistry={pluginUiRegistry}
+          />
+        ) : row.type === "fork" ? (
+          <ForkHistoryBoundary
+            key={JSON.stringify([displayedThread?.id, row.itemId])}
           />
         ) : (
           <ContextCompactionEvent
@@ -2116,6 +2351,7 @@ function ThreadViewContent({
       canonicalPresentation,
       sourceThreadId,
       isForkCurrent,
+      displayedThread?.id,
       displayedThread?.cwd,
       onOpenImage,
       onReadAttachment,
@@ -2131,7 +2367,11 @@ function ThreadViewContent({
             key: JSON.stringify([
               displayedThread?.id,
               row.type,
-              row.type === "turn" ? row.turn.id : row.compaction.item.id,
+              row.type === "turn"
+                ? row.turn.id
+                : row.type === "fork"
+                  ? row.itemId
+                  : row.compaction.item.id,
             ]),
             content: renderedTranscriptRows[index],
           }))
@@ -2148,6 +2388,9 @@ function ThreadViewContent({
     <div
       className={`thread-view${draggingImages ? " image-dragging" : ""}`}
       ref={viewRef}
+      data-reading-earlier={
+        !atLive && transcriptRows.length > 0 ? "true" : undefined
+      }
       onDragEnter={(event) => {
         if (composerDisabled || submitting) return;
         if (hasImageFiles(event.dataTransfer.files)) setDraggingImages(true);
@@ -2169,10 +2412,7 @@ function ThreadViewContent({
         setDraggingImages(false);
         if (files.length === 0) return;
         event.preventDefault();
-        setAttachmentError(null);
-        void onImportImages(files).catch((error: unknown) =>
-          setAttachmentError(describeError(error)),
-        );
+        importComposerImages(() => onImportImages(files));
       }}
     >
       {virtualTranscript &&
@@ -2219,8 +2459,9 @@ function ThreadViewContent({
                   ) : null}
                 </>
               }
-              onContentSettled={followBottom}
+              onContentSettled={handleVirtualContentSettled}
               className="messages"
+              tabIndex={-1}
               style={{ overflowAnchor: atLive ? "none" : undefined }}
               onWheel={(event) => {
                 if (isNestedTranscriptScroll(event.target, event.currentTarget))
@@ -2308,9 +2549,28 @@ function ThreadViewContent({
                 />
                 {transcriptRows.length === 0 ? (
                   (emptyContent ?? (
-                    <div className="thread-empty">
-                      <h2>{i18n.t("shell:startANewThread")}</h2>
-                      <p>{i18n.t("shell:describeOutcome")}</p>
+                    <div
+                      className="thread-empty"
+                      role={firstMessageSending ? "status" : undefined}
+                    >
+                      <h2>
+                        {i18n.t(
+                          firstMessageSending
+                            ? "shell:pendingSendSending"
+                            : firstMessageNeedsAttention
+                              ? "shell:firstSendNeedsAttention"
+                              : "shell:startANewThread",
+                        )}
+                      </h2>
+                      <p>
+                        {i18n.t(
+                          firstMessageSending
+                            ? "shell:firstSendAwaitingConfirmation"
+                            : firstMessageNeedsAttention
+                              ? "shell:firstSendReviewError"
+                              : "shell:describeOutcome",
+                        )}
+                      </p>
                     </div>
                   ))
                 ) : (
@@ -2359,24 +2619,35 @@ function ThreadViewContent({
           });
         }}
       />
-      {atLive ? null : (
+      {atLive || transcriptRows.length === 0 ? null : (
         <button
           className="back-live"
           type="button"
-          onClick={() => {
-            const scroll = scrollRef.current;
-            if (scroll === null) return;
-            shouldFollowRef.current = true;
-            document.getSelection()?.removeAllRanges();
-            scroll.scrollTo({ top: scroll.scrollHeight, behavior: "auto" });
-            observedScrollTop.current = scroll.scrollTop;
-            setAtLive(true);
-            saveReadingPosition();
-          }}
+          aria-label={i18n.t("shell:backToLive")}
+          title={i18n.t("shell:backToLive")}
+          onMouseDown={preserveComposerOnMouseDown}
+          onClick={returnToLive}
         >
-          <Icon name="arrow-down" size={14} />
-          {i18n.t("shell:backToLive")}
+          <Icon name="arrow-down" size={18} />
         </button>
+      )}
+
+      {atLive || transcriptRows.length === 0 ? null : (
+        <div
+          className="conversation-reading-position"
+          role="group"
+          aria-label={i18n.t("shell:readingEarlierMessages")}
+        >
+          <button
+            type="button"
+            aria-label={i18n.t("shell:backToLive")}
+            title={i18n.t("shell:backToLive")}
+            onMouseDown={preserveComposerOnMouseDown}
+            onClick={returnToLive}
+          >
+            <Icon name="arrow-down" size={18} />
+          </button>
+        </div>
       )}
 
       <div
@@ -2400,6 +2671,7 @@ function ThreadViewContent({
           <MessageQuoteSourceContext.Provider value={navigateQuoteSource}>
             <div
               className="pending-tray"
+              id={pendingTrayId}
               ref={pendingTrayRef}
               role="region"
               aria-label={i18n.t("shell:pendingTray")}
@@ -2468,6 +2740,8 @@ function ThreadViewContent({
               {thread ? (
                 <QueuedMessages
                   integrated
+                  viewportId={pendingTrayId}
+                  readingBridgeHost={queueReadingBridgeHost}
                   threadId={thread.id}
                   messages={(thread.queuedMessages ?? []).map((message) => ({
                     ...message,
@@ -2642,6 +2916,10 @@ function ThreadViewContent({
                 />
               ) : null}
             </div>
+            <div
+              className="queue-reading-bridge-host"
+              ref={setQueueReadingBridgeHost}
+            />
           </MessageQuoteSourceContext.Provider>
         </MessageLinkContext.Provider>
         {composer.compaction?.status === "failed" ||
@@ -2791,11 +3069,12 @@ function ThreadViewContent({
                     ? imageFiles(event.clipboardData.files)
                     : [];
                   if (files.length === 0) return;
-                  event.preventDefault();
-                  setAttachmentError(null);
-                  void onImportImages(files).catch((error: unknown) =>
-                    setAttachmentError(describeError(error)),
-                  );
+                  if (
+                    !clipboardHasImageAlongsideText(event.clipboardData, files)
+                  ) {
+                    event.preventDefault();
+                  }
+                  importComposerImages(() => onImportImages(files));
                 }}
                 onKeyDown={(event) => {
                   if (
@@ -2827,16 +3106,7 @@ function ThreadViewContent({
                       ),
                     );
                 }}
-                placeholder={
-                  runningTurn === null
-                    ? watching
-                      ? i18n.t("shell:sendAMessageToWakeThisThread")
-                      : i18n.t("shell:askZenxAnything")
-                    : composerSendMode === "queue" ||
-                        composerSendMode === "batch"
-                      ? i18n.t("shell:messageForTheNextTurn")
-                      : i18n.t("shell:steerTheCurrentRun")
-                }
+                placeholder={composerPlaceholder}
               />
             </MessageLinkContext.Provider>
           ) : (
@@ -2854,7 +3124,6 @@ function ThreadViewContent({
               }
               onSelect={(event) => selector.select(event.currentTarget)}
               onBlur={() => selector.dismiss()}
-
               disabled={composerDisabled}
               onChange={(event) => {
                 selector.reopen();
@@ -2895,11 +3164,12 @@ function ThreadViewContent({
                 }
                 const files = imageFiles(event.clipboardData.files);
                 if (files.length === 0) return;
-                event.preventDefault();
-                setAttachmentError(null);
-                void onImportImages(files).catch((error: unknown) =>
-                  setAttachmentError(describeError(error)),
-                );
+                if (
+                  !clipboardHasImageAlongsideText(event.clipboardData, files)
+                ) {
+                  event.preventDefault();
+                }
+                importComposerImages(() => onImportImages(files));
               }}
               onKeyDown={(event) => {
                 if (handleComposerSuggestionKey(event, selector)) return;
@@ -2915,15 +3185,7 @@ function ThreadViewContent({
                   ),
                 );
               }}
-              placeholder={
-                runningTurn === null
-                  ? watching
-                    ? i18n.t("shell:sendAMessageToWakeThisThread")
-                    : i18n.t("shell:askZenxAnything")
-                  : composerSendMode === "queue" || composerSendMode === "batch"
-                    ? i18n.t("shell:messageForTheNextTurn")
-                    : i18n.t("shell:steerTheCurrentRun")
-              }
+              placeholder={composerPlaceholder}
               textareaRef={composerTextareaRef}
               rows={1}
               value={skillDraft.text}
@@ -2938,10 +3200,7 @@ function ThreadViewContent({
                 title={i18n.t("shell:addImages")}
                 disabled={composerDisabled || submitting}
                 onClick={() => {
-                  setAttachmentError(null);
-                  void onPickImages().catch((error: unknown) =>
-                    setAttachmentError(describeError(error)),
-                  );
+                  importComposerImages(onPickImages);
                 }}
               >
                 <Icon name="paperclip" />
@@ -2995,6 +3254,7 @@ function ThreadViewContent({
                     permissionLabel === i18n.t("shell:approvalRequired")
                   }
                   value={permissionMode}
+                  displayOnly={permissionDisplayOnly}
                   disabled={
                     runningTurn !== null ||
                     composerDisabled ||
@@ -3032,7 +3292,18 @@ function ThreadViewContent({
               />
             </div>
           </div>
-          {composerError !== null ? (
+          {showSubmissionError ? (
+            <div
+              className="composer-error composer-submission-error"
+              id={modelError === null ? undefined : `${composerId}-model-error`}
+            >
+              <p role="alert">{i18n.t("shell:composerSendError")}</p>
+              <details className="composer-error-details">
+                <summary>{i18n.t("shell:technicalDetails")}</summary>
+                <pre tabIndex={0}>{submissionError}</pre>
+              </details>
+            </div>
+          ) : composerError !== null ? (
             <p
               className="composer-error"
               id={modelError === null ? undefined : `${composerId}-model-error`}
@@ -3284,7 +3555,21 @@ function ThreadViewContent({
   );
 }
 
+function ForkHistoryBoundary() {
+  const { t } = useTranslation("shell");
+  return (
+    <div
+      className="fork-history-boundary"
+      role="separator"
+      aria-label={t("copiedHistoryEndsHere")}
+    >
+      <span aria-hidden="true">{t("copiedHistoryEndsHere")}</span>
+    </div>
+  );
+}
+
 type TranscriptRow =
+  | { type: "fork"; itemId: string; order: number }
   | { type: "turn"; turn: Turn; index: number; order: number }
   | {
       type: "compaction";
@@ -3307,6 +3592,7 @@ function buildTranscriptRows(
   turns: readonly Turn[],
   { fallbackStart, turnEnds }: ReturnType<typeof indexTranscriptOrder>,
   compactions: readonly ContextCompactionProjection[],
+  forkBoundary: ReturnType<typeof projectForkBoundary>,
 ): TranscriptRow[] {
   const rows: TranscriptRow[] = turns.map((turn, index) => ({
     type: "turn",
@@ -3328,7 +3614,31 @@ function buildTranscriptRows(
           : Math.max(compaction.canonicalIndex, turnEnd) + 0.25,
     });
   }
-  return rows.sort((left, right) => left.order - right.order);
+  rows.sort((left, right) => left.order - right.order);
+  if (forkBoundary) {
+    // Snapshot closures can move ANY copied Turn after the final inherited
+    // start, so place the boundary after all inherited rendered rows.
+    const inherited = (row: TranscriptRow) =>
+      row.type === "turn"
+        ? forkBoundary.inheritedTurnIds.has(row.turn.id)
+        : row.type === "compaction" &&
+          (row.compaction.canonicalIndex < forkBoundary.canonicalIndex ||
+            (row.compaction.item.provenance === "agentic" &&
+              forkBoundary.inheritedTurnIds.has(row.compaction.item.turnId)));
+    const boundaryIndex = rows.findLastIndex(inherited);
+    // Never label mixed/unknown history as a clean branch boundary.
+    if (
+      boundaryIndex >= 0 &&
+      rows.slice(0, boundaryIndex + 1).every(inherited)
+    ) {
+      rows.splice(boundaryIndex + 1, 0, {
+        type: "fork",
+        itemId: forkBoundary.item.id,
+        order: rows[boundaryIndex]!.order,
+      });
+    }
+  }
+  return rows;
 }
 
 function ContextCompactionProgress({
@@ -3479,6 +3789,38 @@ function transcriptHasSelection(element: Element | null): boolean {
   );
 }
 
+type TranscriptInputItem = Extract<
+  ThreadItem,
+  { type: "userMessage" | "threadMessage" | "hostMessage" }
+>;
+
+function transcriptInputTimestamp(
+  item: TranscriptInputItem,
+  canonical: readonly CanonicalItem[] | undefined,
+  threadId: string | undefined,
+  turnId: string,
+): number | null {
+  const entry = canonical?.[0];
+  if (
+    canonical?.length !== 1 ||
+    entry === undefined ||
+    entry.id !== item.id ||
+    entry.threadId !== threadId ||
+    (entry.turnId !== undefined && entry.turnId !== turnId) ||
+    entry.type !== CANONICAL_TRANSCRIPT_INPUT_TYPE[item.type]
+  ) {
+    return null;
+  }
+  const milliseconds = Date.parse(entry.createdAt);
+  return Number.isFinite(milliseconds) ? milliseconds / 1_000 : null;
+}
+
+const CANONICAL_TRANSCRIPT_INPUT_TYPE = {
+  userMessage: "user_message",
+  threadMessage: "thread_message",
+  hostMessage: "host_message",
+} as const satisfies Record<TranscriptInputItem["type"], CanonicalItem["type"]>;
+
 const TurnBlock = memo(function TurnBlock({
   turn,
   compactionPending,
@@ -3491,6 +3833,7 @@ const TurnBlock = memo(function TurnBlock({
   wakeups,
   canonicalPresentation,
   sourceThreadId,
+  displayedThreadId,
   isForkCurrent,
   imageCwd,
   onOpenImage,
@@ -3511,6 +3854,7 @@ const TurnBlock = memo(function TurnBlock({
   wakeups: readonly TriggerHistoryEntry[];
   canonicalPresentation: TurnCanonicalPresentation;
   sourceThreadId: string | null;
+  displayedThreadId: string | undefined;
   isForkCurrent(itemId: string): boolean;
   imageCwd: string | undefined;
   onOpenImage(
@@ -3596,16 +3940,22 @@ const TurnBlock = memo(function TurnBlock({
     approvals.length === 0 &&
     ((activity.phase === "requested" && activity.active > 0) ||
       activity.phase === "thinking");
-  const renderInputItem = (
-    item: Extract<
-      ThreadItem,
-      { type: "userMessage" | "threadMessage" | "hostMessage" }
-    >,
-  ) => {
+  const renderInputItem = (item: TranscriptInputItem) => {
+    const timestamp = transcriptInputTimestamp(
+      item,
+      canonicalPresentation.quoteItems.get(item.id),
+      displayedThreadId,
+      turn.id,
+    );
     const wakeup = findInputWakeup(item, wakeups);
     if (item.type === "hostMessage")
       return (
-        <WakeupCard key={item.id} item={item} entry={wakeup} turn={turn} />
+        <WakeupCard
+          key={item.id}
+          item={item}
+          entry={wakeup}
+          timestamp={timestamp}
+        />
       );
     return wakeup === undefined ? (
       <InputMessage
@@ -3614,7 +3964,7 @@ const TurnBlock = memo(function TurnBlock({
         key={item.id}
         onOpenImage={onOpenImage}
         onReadAttachment={onReadAttachment}
-        turn={turn}
+        timestamp={timestamp}
         answeredQuestion={canonicalPresentation.answeredQuestions?.get(item.id)}
       />
     ) : (
@@ -3623,7 +3973,7 @@ const TurnBlock = memo(function TurnBlock({
         sourceId={wakeup.triggerId}
         findItemId={item.id}
         key={item.id}
-        turn={turn}
+        timestamp={timestamp}
       />
     );
   };
@@ -4780,14 +5130,14 @@ function InputMessage({
   answeredQuestion,
   item,
   attachments,
-  turn,
+  timestamp,
   onOpenImage,
   onReadAttachment,
 }: {
   answeredQuestion?: AnsweredQuestionPresentation;
   item: Extract<ThreadItem, { type: "userMessage" | "threadMessage" }>;
   attachments: readonly AttachmentRef[];
-  turn: Turn;
+  timestamp: number | null;
   onOpenImage(
     attachment: AttachmentRef,
     name: string,
@@ -4834,7 +5184,12 @@ function InputMessage({
             kind: "thread",
             id: item.sender.threadId,
             ...(item.sender.deviceId === undefined
-              ? {}
+              ? {
+                  sourceTool: {
+                    itemId: item.sender.toolCallId,
+                    callId: item.sender.callId,
+                  },
+                }
               : {
                   deviceId: item.sender.deviceId,
                   itemId: item.id,
@@ -4898,7 +5253,7 @@ function InputMessage({
             : "shell:copiedUserMessage",
         )}
         text={text}
-        turn={turn}
+        timestamp={timestamp}
       />
     </article>
   );
@@ -4951,6 +5306,30 @@ function DraftImage({
   );
 }
 
+// Keep the editor's own paste and undo behavior for a message copied with an
+// image. An image-only or filename clipboard keeps the existing attachment path.
+function clipboardHasImageAlongsideText(
+  clipboard: DataTransfer | null,
+  images: readonly File[],
+): boolean {
+  if (typeof clipboard?.getData !== "function") return false;
+  const plain = clipboard.getData("text/plain").trim();
+  if (!plain || images.some((image) => image.name === plain)) return false;
+  const html = clipboard.getData("text/html");
+  if (!html) return false;
+  // Inspect an inert fragment only; never render markup or read any image URL.
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  for (const node of template.content.querySelectorAll(
+    "script, style, [hidden]",
+  ))
+    node.remove();
+  return Boolean(
+    template.content.querySelector("img") &&
+    template.content.textContent?.trim(),
+  );
+}
+
 function imageFiles(files: FileList): File[] {
   return Array.from(files).filter((file) =>
     ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.type),
@@ -4987,7 +5366,7 @@ function AgentMessage({
       tabIndex={-1}
     >
       <div data-message-quote-body data-thread-find-item-id={item.id}>
-        <Markdown text={item.text} />
+        <Markdown text={item.text} wrapMessageId={item.id} />
       </div>
       {item.text.length === 0 ? <span className="stream-cursor" /> : null}
       {showActions ? (
@@ -4996,7 +5375,7 @@ function AgentMessage({
           copyLabel={i18n.t("shell:copyAssistantMessage")}
           copiedLabel={i18n.t("shell:copiedAssistantMessage")}
           text={item.text}
-          turn={turn}
+          timestamp={turn.completedAt}
           usage={usage}
           forkTarget={forkTarget}
         />
@@ -5010,7 +5389,7 @@ function MessageActions({
   copyLabel,
   copiedLabel,
   text,
-  turn,
+  timestamp,
   usage,
   forkTarget,
 }: {
@@ -5018,7 +5397,7 @@ function MessageActions({
   copyLabel: string;
   copiedLabel: string;
   text: string;
-  turn: Turn;
+  timestamp: number | null;
   usage?: ModelUsageAggregate;
   forkTarget?: MessageForkTarget;
 }) {
@@ -5034,12 +5413,12 @@ function MessageActions({
   };
   return (
     <div className={`message-actions ${className}`}>
-      {turn.completedAt === null ? null : (
+      {timestamp === null || !Number.isFinite(timestamp) ? null : (
         <time
           className="message-time"
-          dateTime={new Date(turn.completedAt * 1_000).toISOString()}
+          dateTime={new Date(timestamp * 1_000).toISOString()}
         >
-          {formatCompletedAt(turn.completedAt)}
+          {formatCompletedAt(timestamp)}
         </time>
       )}
       {usage === undefined ? null : (
@@ -5112,7 +5491,12 @@ function MessageForkButton({ target }: { target: MessageForkTarget }) {
         onClick={() => void run()}
       >
         {pending ? (
-          <span className="mini-spinner" aria-hidden="true" />
+          <>
+            <span className="mini-spinner" aria-hidden="true" />
+            <span className="message-fork-label">
+              {i18n.t("shell:forking")}
+            </span>
+          </>
         ) : (
           <Icon name="fork" size={14} />
         )}
@@ -5131,12 +5515,12 @@ function TriggerMessageBubble({
   text,
   sourceId,
   findItemId,
-  turn,
+  timestamp,
 }: {
   text: string;
   sourceId?: string;
   findItemId?: string;
-  turn: Turn;
+  timestamp: number | null;
 }) {
   const presentation = triggerMessagePresentation(text, sourceId);
   return (
@@ -5154,7 +5538,7 @@ function TriggerMessageBubble({
         copyLabel={i18n.t("shell:copyHostMessage")}
         copiedLabel={i18n.t("shell:copiedHostMessage")}
         text={presentation.text}
-        turn={turn}
+        timestamp={timestamp}
       />
     </article>
   );
@@ -5166,18 +5550,18 @@ function WakeupCard(
     | {
         item: Extract<ThreadItem, { type: "hostMessage" }>;
         entry?: TriggerHistoryEntry;
-        turn: Turn;
+        timestamp: number | null;
       },
 ) {
   if ("item" in props) {
-    const { item, entry, turn } = props;
+    const { item, entry, timestamp } = props;
     if (item.source === "trigger")
       return (
         <TriggerMessageBubble
           text={item.text}
           sourceId={item.sourceId}
           findItemId={item.id}
-          turn={turn}
+          timestamp={timestamp}
         />
       );
     return (
@@ -5196,7 +5580,7 @@ function WakeupCard(
           copyLabel={i18n.t("shell:copyHostMessage")}
           copiedLabel={i18n.t("shell:copiedHostMessage")}
           text={item.text}
-          turn={turn}
+          timestamp={timestamp}
         />
       </article>
     );

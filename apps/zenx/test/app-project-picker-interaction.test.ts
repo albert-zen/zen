@@ -5160,6 +5160,109 @@ async function mountThreadApp(
   );
 }
 
+test("cached sidebar navigation keeps delayed image results with their originating draft", async () => {
+  const first = liveThread();
+  const second = {
+    ...liveThread(),
+    id: "thread-2",
+    sessionId: "thread-2",
+    name: "Thread two",
+  };
+  const projects = oneProject();
+  projects.projects[0]!.threadIds = [first.id, second.id];
+  const failed = deferred<ZenXImageDraft[]>();
+  const successful = deferred<ZenXImageDraft[]>();
+  let picks = 0;
+  let sends = 0;
+  const harness = await mountThreadApp({
+    models: [
+      { ...wireModel("fake", true), inputModalities: ["text", "image"] },
+    ],
+    projectsGet: async () => projects,
+    threads: async (archived) =>
+      archived ? [] : [summary(false), summary(false, second.id, second.name)],
+    pickImages: async () =>
+      ++picks === 1 ? failed.promise : successful.promise,
+    request: async (method, params) => {
+      if (method === "zen/thread/resume")
+        return resumed(
+          (params as { threadId: string }).threadId === first.id
+            ? first
+            : second,
+        );
+      if (method === "zen/thread/questions/list") return { questions: [] };
+      if (method === "zen/turn/send") sends += 1;
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  });
+  const select = async (thread: Thread) => {
+    const row = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        `.thread-row-shell[data-thread-id="${thread.id}"] .thread-row`,
+      ),
+    );
+    await act(async () => row.click());
+    return await waitFor(() =>
+      row.getAttribute("aria-current") === "page"
+        ? document.querySelector<HTMLTextAreaElement>("#thread-composer")
+        : null,
+    );
+  };
+  const pick = async () => {
+    const button = await waitFor(() => exactButtonByAria("Add images"));
+    await act(async () => button.click());
+  };
+  const view = () => document.querySelector(".thread-view");
+  const notice = () =>
+    document.querySelector(".composer [role=alert]")?.textContent ?? null;
+  const image = () => document.querySelector('[aria-label="Remove late.png"]');
+
+  try {
+    await setTextareaValue(await select(first), "Draft A");
+    await setTextareaValue(await select(second), "Draft B");
+    assert.equal((await select(first)).value, "Draft A");
+    const retained = view();
+    assert.ok(retained);
+    await pick();
+    assert.equal((await select(second)).value, "Draft B");
+    assert.equal(view(), retained);
+
+    await act(async () => failed.reject(new Error("Synthetic A picker error")));
+    assert.equal(notice(), null);
+    assert.equal((await select(first)).value, "Draft A");
+    assert.equal(view(), retained);
+    assert.equal(notice(), "Synthetic A picker error");
+
+    await pick();
+    assert.equal((await select(second)).value, "Draft B");
+    assert.equal(view(), retained);
+    await act(async () =>
+      successful.resolve([
+        {
+          id: "late-image",
+          name: "late.png",
+          attachment: {
+            type: "attachment",
+            sha256: "a".repeat(64),
+            mediaType: "image/png",
+            byteLength: 4,
+            width: 1,
+            height: 1,
+          },
+        },
+      ]),
+    );
+    assert.equal(image(), null);
+    assert.equal((await select(first)).value, "Draft A");
+    assert.ok(image());
+    assert.equal(notice(), null);
+    assert.equal(picks, 2);
+    assert.equal(sends, 0);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 async function selectedComposer(): Promise<HTMLTextAreaElement> {
   const row = await waitFor(() =>
     document.querySelector<HTMLButtonElement>(".thread-row"),
@@ -6205,7 +6308,7 @@ test("message source reads and opens its exact canonical thread without sending,
     request: async (method, params) => {
       calls.push({ method, params });
       if (method === "zen/thread/read")
-        return { thread: { id: "exact/source", archived: false } };
+        return { thread: { id: "exact/source", archived: false, items: [] } };
       if (method === "zen/thread/resume")
         return resumed(
           (params as { threadId: string }).threadId === "thread-1"
@@ -6308,7 +6411,9 @@ for (const failure of [
 }
 
 test("repeated source clicks share one read and a newer Settings navigation wins over its late reply", async () => {
-  const pending = deferred<{ thread: { id: string; archived: boolean } }>();
+  const pending = deferred<{
+    thread: { id: string; archived: boolean; items: [] };
+  }>();
   const resumes: string[] = [];
   let reads = 0;
   const harness = await mountThreadApp({
@@ -6338,7 +6443,9 @@ test("repeated source clicks share one read and a newer Settings navigation wins
       document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
     );
     await act(async () =>
-      pending.resolve({ thread: { id: "exact/source", archived: false } }),
+      pending.resolve({
+        thread: { id: "exact/source", archived: false, items: [] },
+      }),
     );
     assert.deepEqual(resumes, ["thread-1"]);
     assert.equal(document.querySelector(".message-source-link"), null);
@@ -6523,7 +6630,7 @@ test("side conversation message source stays in the side panel and preserves the
     request: async (method, params) => {
       const id = (params as { threadId: string }).threadId;
       if (method === "zen/thread/read")
-        return { thread: { id, archived: false } };
+        return { thread: { id, archived: false, items: [] } };
       if (method === "zen/thread/resume") {
         resumes.push(id);
         const value =
@@ -6588,8 +6695,12 @@ test("side conversation message source stays in the side panel and preserves the
 });
 for (const olderFirst of [true, false]) {
   test(`newer message source intent wins when older request finishes ${olderFirst ? "first" : "last"}`, async () => {
-    const first = deferred<{ thread: { id: string; archived: boolean } }>();
-    const second = deferred<{ thread: { id: string; archived: boolean } }>();
+    const first = deferred<{
+      thread: { id: string; archived: boolean; items: [] };
+    }>();
+    const second = deferred<{
+      thread: { id: string; archived: boolean; items: [] };
+    }>();
     const resumes: string[] = [];
     const thread = sourceNavigationThread();
     const original = thread.turns[0]!.items[0]! as any;
@@ -6626,9 +6737,13 @@ for (const olderFirst of [true, false]) {
       await act(async () => links[0]!.click());
       await act(async () => links[1]!.click());
       const finishFirst = () =>
-        first.resolve({ thread: { id: "exact/source", archived: false } });
+        first.resolve({
+          thread: { id: "exact/source", archived: false, items: [] },
+        });
       const finishSecond = () =>
-        second.resolve({ thread: { id: "second/source", archived: false } });
+        second.resolve({
+          thread: { id: "second/source", archived: false, items: [] },
+        });
       await act(async () => (olderFirst ? finishFirst() : finishSecond()));
       await act(async () => (olderFirst ? finishSecond() : finishFirst()));
       assert.equal(
@@ -6884,8 +6999,14 @@ test("same-title side conversations retain identity, drafts and reading position
     );
     assert.ok(tab("thread:child-b"));
     assert.equal(tab("thread:child-b").getAttribute("aria-selected"), "true");
-    assert.equal(tab("thread:child-a").textContent, "Same child title");
-    assert.equal(tab("thread:child-b").textContent, "Same child title");
+    assert.equal(
+      tab("thread:child-a").getAttribute("aria-label"),
+      "Same child title",
+    );
+    assert.equal(
+      tab("thread:child-b").getAttribute("aria-label"),
+      "Same child title",
+    );
     const selectedTranscript = sideMessages("child-b");
     const selectedDraft = await sideComposer("child-b");
     // Rename inactive A through the real Sidebar action, keeping B selected.
@@ -6903,12 +7024,16 @@ test("same-title side conversations retain identity, drafts and reading position
     await setInputValue(titleInput, "Renamed child A");
     await invokeFormSubmit(titleInput.form!);
     await waitFor(
-      () => tab("thread:child-a").textContent === "Renamed child A",
+      () =>
+        tab("thread:child-a").getAttribute("aria-label") === "Renamed child A",
     );
     assert.deepEqual(renames, [
       { threadId: "child-a", title: "Renamed child A" },
     ]);
-    assert.equal(tab("thread:child-b").textContent, "Same child title");
+    assert.equal(
+      tab("thread:child-b").getAttribute("aria-label"),
+      "Same child title",
+    );
     assert.equal(tab("thread:child-b").getAttribute("aria-selected"), "true");
     assert.equal(await sideComposer("child-b"), selectedDraft);
     assert.equal(selectedDraft.value, "Draft B");
@@ -6932,7 +7057,10 @@ test("same-title side conversations retain identity, drafts and reading position
     await openChild(1);
     assert.equal((await sideComposer("child-b")).value, "Draft B");
     assert.equal(sideMessages("child-b").scrollTop, 650);
-    assert.equal(tab("thread:child-a").textContent, "Renamed child A");
+    assert.equal(
+      tab("thread:child-a").getAttribute("aria-label"),
+      "Renamed child A",
+    );
     await openChild(1);
     assert.equal(
       document.querySelectorAll('[id="aux-tab-thread:child-b"]').length,
@@ -6950,7 +7078,10 @@ test("same-title side conversations retain identity, drafts and reading position
     await click(parent);
     assert.equal((await sideComposer("child-b")).value, "Draft B");
     assert.ok(tab("thread:child-a"));
-    assert.equal(tab("thread:child-a").textContent, "Renamed child A");
+    assert.equal(
+      tab("thread:child-a").getAttribute("aria-label"),
+      "Renamed child A",
+    );
     assert.equal(sideMessages("child-b").scrollTop, 650);
     assert.equal(
       document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
@@ -11996,7 +12127,7 @@ test("unsubscribed private Thread question edges discover and remove Asking with
   }
 });
 
-for (const mode of ["dock", "popover"] as const) {
+for (const mode of ["fitted", "popover"] as const) {
   test(`real App ${mode} pending Send keeps historical rows in one stable grid`, async () => {
     const admission = deferred<unknown>();
     const priorResizeObserver = globalThis.ResizeObserver;
@@ -12033,8 +12164,26 @@ for (const mode of ["dock", "popover"] as const) {
       });
       const composer = await selectedComposer();
       const workspace = document.querySelector<HTMLElement>(".workspace")!;
+      const right = mode === "fitted" ? 1600 : 856;
+      const unshiftedLeft = mode === "fitted" ? 550 : 288;
+      const readingWidth = mode === "fitted" ? 800 : 530;
+      const view = workspace.querySelector<HTMLElement>(".thread-view")!;
+      const inner = view.querySelector<HTMLElement>(".messages-inner")!;
       workspace.getBoundingClientRect = () =>
-        ({ top: 44, width: mode === "dock" ? 1600 : 856 }) as DOMRect;
+        ({ top: 44, left: 264, right, width: right - 264 }) as DOMRect;
+      view.getBoundingClientRect = workspace.getBoundingClientRect;
+      view.style.direction = "ltr";
+      inner.getBoundingClientRect = () => {
+        const shift = parseFloat(
+          view.style.getPropertyValue("--information-reading-shift") || "0",
+        );
+        const left = unshiftedLeft - shift;
+        return {
+          left,
+          right: left + readingWidth,
+          width: readingWidth,
+        } as DOMRect;
+      };
       await act(async () => {
         for (const measurement of measurements) {
           if (measurement.target === workspace) measurement.deliver();
@@ -12044,13 +12193,30 @@ for (const mode of ["dock", "popover"] as const) {
         ".information-toolbar button",
       )!;
       await act(async () => information.click());
-      assert.equal(
-        Boolean(document.querySelector(`.information-${mode}`)),
-        true,
-        "exercise the measured information layout rather than infer its mode",
+      await act(async () => {
+        for (const measurement of measurements) {
+          if (measurement.target === inner) measurement.deliver();
+        }
+      });
+      const card = document.querySelector<HTMLElement>(".information-popover")!;
+      assert.ok(
+        card,
+        "both width regimes open the same nonmodal information card",
       );
+      assert.equal(view.dataset.informationLane, String(mode === "fitted"));
+      assert.equal(
+        card.style.getPropertyValue("--information-reading-card-width"),
+        mode === "fitted" ? "320px" : "",
+        "a fitted lane uses its measured override, while popover uses the fallback",
+      );
+      assert.equal(
+        parseFloat(
+          view.style.getPropertyValue("--information-reading-shift") || "0",
+        ),
+        mode === "fitted" ? 98 : 0,
+      );
+      assert.equal(inner.getBoundingClientRect().width, readingWidth);
       await act(async () => information.click());
-      const inner = document.querySelector<HTMLElement>(".messages-inner")!;
       const history = inner.querySelector<HTMLElement>(
         ":scope > .transcript-history",
       );

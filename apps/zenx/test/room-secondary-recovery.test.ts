@@ -363,3 +363,98 @@ test("Secondary recovery keeps exact draft identity and unsettled remount does n
   await multiplePrepareRecovery(true);
   await unsettledRemount();
 });
+
+test("Room delivery checks show the exact operation's result", async () => {
+  const retained = ["check-a", "check-b"].map((id) => ({
+    id,
+    text: "Two retained operations may have identical text",
+    messageId: null,
+    createdAt: 0,
+  }));
+  const requests: Array<{ roomId: string; operationId: string }> = [];
+  const waiting = new Map<
+    string,
+    { resolve: (value: unknown) => void; reject: (reason: Error) => void }
+  >();
+  const mutations: string[] = [];
+  const s = await setup(async (command, input) => {
+    switch (command) {
+      case "list":
+        return {
+          rooms: [
+            {
+              ...structuredClone(baseRoom),
+              pendingCount: retained.length,
+              operations: [],
+            },
+          ],
+        };
+      case "operations":
+        return { operations: structuredClone(retained), nextCursor: null };
+      case "operation":
+        requests.push({
+          roomId: input.roomId,
+          operationId: input.operationId,
+        });
+        return new Promise((resolve, reject) => {
+          waiting.set(input.operationId, { resolve, reject });
+        });
+      default:
+        mutations.push(command);
+        throw Error(command);
+    }
+  });
+  const row = (id: string) => {
+    const element = document.querySelector<HTMLElement>(
+      `[data-operation-id="${id}"]`,
+    );
+    assert.ok(element, `expected row for ${id}`);
+    return element;
+  };
+  const check = async (id: string) =>
+    act(async () => {
+      const button = [...row(id).querySelectorAll("button")].find(
+        (control) => control.textContent === "Check delivery",
+      );
+      assert.ok(button);
+      button.click();
+    });
+  try {
+    await edit(s.dom, "A separate unsent draft");
+    const editor =
+      document.querySelector<HTMLTextAreaElement>("#room-chat-input")!;
+    await check("check-a");
+    await check("check-b");
+    await act(async () => {
+      waiting.get("check-b")!.resolve({ state: "prepared" });
+    });
+    assert.match(row("check-b").textContent!, /Message has not been sent/);
+    assert.doesNotMatch(row("check-a").textContent!, /Message has not been sent/);
+    await act(async () => {
+      waiting.get("check-a")!.resolve({ state: "unknown" });
+    });
+    assert.match(row("check-a").textContent!, /Delivery is still unconfirmed/);
+    assert.doesNotMatch(row("check-a").textContent!, /Message has not been sent/);
+    assert.match(row("check-b").textContent!, /Message has not been sent/);
+    assert.doesNotMatch(
+      row("check-b").textContent!,
+      /Delivery is still unconfirmed/,
+    );
+    await check("check-a");
+    await act(async () => {
+      waiting.get("check-a")!.reject(Error("lookup unavailable"));
+    });
+    assert.match(row("check-a").textContent!, /Delivery is still unconfirmed/);
+    assert.match(row("check-b").textContent!, /Message has not been sent/);
+    assert.deepEqual(requests, [
+      { roomId: "room", operationId: "check-a" },
+      { roomId: "room", operationId: "check-b" },
+      { roomId: "room", operationId: "check-a" },
+    ]);
+    assert.deepEqual(mutations, []);
+    assert.equal(document.querySelector("#room-chat-input"), editor);
+    assert.equal(editor.value, "A separate unsent draft");
+  } finally {
+    await s.close();
+  }
+});

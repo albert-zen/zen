@@ -188,6 +188,12 @@ test("idle upward wheel within the old 80px threshold stays paused through resiz
         560,
         "equivalent snapshot cannot steal manual position",
       );
+      const returnButton =
+        document.querySelector<HTMLButtonElement>(".back-live")!;
+      assert.ok(returnButton.getAttribute("aria-label"));
+      assert.equal(returnButton.title, returnButton.getAttribute("aria-label"));
+      assert.equal(returnButton.textContent?.trim(), "");
+      assert.equal(returnButton.closest(".bottom-zone"), null);
       await h.click(".back-live");
       assert.equal(element.scrollTop, 1000);
     });

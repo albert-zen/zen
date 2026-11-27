@@ -1,3 +1,5 @@
+import type { SelectedThreadSettings } from "./model-settings.js";
+
 import type { Thread } from "../../protocol-client/index.js";
 import type { ClientSendObservation } from "../../../../../src/client-observation.js";
 import {
@@ -23,6 +25,10 @@ export interface SideChatDraft<Boundary = unknown> {
   boundary: Boundary;
   /** Read-only opening snapshot, discarded with this local draft. */
   contextPreview?: Thread;
+  inheritedPermissions?: Pick<
+    SelectedThreadSettings,
+    "permissionMode" | "approvalPolicy"
+  >;
   inheritedModel?: string;
   inheritedEffort?: string | null;
   model?: string;
@@ -62,6 +68,7 @@ export class SideChatDrafts<Boundary = unknown> {
       roomId?: string;
       model?: string;
       effort?: string;
+      inheritedPermissions?: SideChatDraft["inheritedPermissions"];
       inheritedModel?: string;
       inheritedEffort?: string | null;
     } = {},
@@ -71,6 +78,9 @@ export class SideChatDrafts<Boundary = unknown> {
       parentThreadId,
       boundary,
       ...options,
+      inheritedPermissions: options.inheritedPermissions
+        ? { ...options.inheritedPermissions }
+        : undefined,
       composer: emptyComposerState(),
       sending: false,
     };

@@ -1,5 +1,17 @@
 // Settings UI copy. Keep keys stable across locales; product data and user content stay unchanged.
 export const en = {
+  "settingsView.modelCount_one": "{{count}} model",
+  "settingsView.modelCount_other": "{{count}} models",
+  "settingsView.modelCountForProvider_one": "{{count}} model for {{name}}",
+  "settingsView.modelCountForProvider_other": "{{count}} models for {{name}}",
+  "settingsView.moreModelCount_one": "{{count}} more",
+  "settingsView.moreModelCount_other": "{{count}} more",
+  "settingsView.noConfiguredModels": "No models configured",
+  "settingsView.appearanceModeSystem": "System",
+  "settingsView.appearanceModeLight": "Light",
+  "settingsView.appearanceModeDark": "Dark",
+  "settingsView.appearanceContrastStandard": "Standard",
+  "settingsView.appearanceContrastHigh": "High",
   "settingsView.finishProviderEditBeforeSwitching":
     "Save or cancel the current provider edit before editing or deleting another provider. Your changes stay in this editor until then.",
   "settingsView.importConversations": "Import conversations",
@@ -343,6 +355,7 @@ export const en = {
   "settingsView.connectYourChatgptSubscriptionToUseItsModels":
     "Connect your ChatGPT subscription to use its models.",
   "settingsView.signOut": "Sign out",
+  "settingsView.signingOut": "Signing out…",
   "settingsView.modelsProviders": "Models & providers",
   "settingsView.connectYourProvidersAndChooseTheModelsYouWant":
     "Connect your providers and choose the models you want to work with.",
@@ -448,9 +461,15 @@ export const en = {
   "settingsView.guideTheCurrentReplyDefault":
     "Guide the current reply (default)",
   "settingsView.interruptAndSend": "Interrupt and send",
-  "settingsView.enterAndTheSendButtonUseThisChoiceCmd":
-    "Enter and the send button use this choice. Cmd/Ctrl+Enter guides the current reply when a queue option is selected, or queues messages together otherwise. Shift+Enter adds a new line. This setting does not change messages already queued.",
+  "settingsView.sendModeGuidance":
+    "Enter and the send button use this choice. Messages already queued stay unchanged.",
+  "settingsView.keyboardShortcuts": "Keyboard shortcuts",
+  "settingsView.shortcutGuideCurrentReply": "Guide the current reply",
+  "settingsView.shortcutQueueTogether": "Queue messages together",
+  "settingsView.shortcutNewLine": "Add a new line",
   "settingsView.foregroundComputerControl": "Foreground computer control",
+  "settingsView.foregroundControlOn": "On",
+  "settingsView.foregroundControlOff": "Off",
   "nativeCrossDeviceTools.title": "Native cross-device tools",
   "nativeCrossDeviceTools.description":
     "Let agents discover and directly call native tools on paired ZenX devices, subject to the target device's separate tools grant.",
@@ -856,8 +875,9 @@ export const en = {
   "settingsView.notSignedIn": "Not signed in",
   "settingsView.accountConnected": "Account connected",
   "settingsView.connectAnAccount": "Connect an account",
+  "settingsView.openModelSettings": "Open model settings",
   "settingsView.addAnOpenaiSubscriptionInModelsProviderToGet":
-    "Add an OpenAI subscription in Models & provider to get started.",
+    "Add an OpenAI subscription in Models & providers to get started.",
   "settingsView.yourSignInDetailsAreStoredSecurelyOnThis":
     "Your sign-in details are stored securely on this device.",
   "settingsView.signInToConnectYourSubscription":
@@ -1099,7 +1119,7 @@ export const en = {
     "Check application status below before making another change.",
   "rtkSettingsCard.offByDefaultChangesTakeEffectNextLaunchRunning":
     "Off by default. Changes take effect next launch; running tasks keep their current behavior.",
-  "settingsView.modelsProvider": "Models & provider",
+  "settingsView.modelsProvider": "Models & providers",
   "settingsView.contextCompaction": "Context compaction",
   "settingsView.skills": "Skills",
   "settingsView.workflows": "Workflows",
@@ -1357,6 +1377,18 @@ export const en = {
 } as const;
 
 export const zhCN: Record<keyof typeof en, string> = {
+  "settingsView.modelCount_one": "{{count}} 个模型",
+  "settingsView.modelCount_other": "{{count}} 个模型",
+  "settingsView.modelCountForProvider_one": "{{name}} 的 {{count}} 个模型",
+  "settingsView.modelCountForProvider_other": "{{name}} 的 {{count}} 个模型",
+  "settingsView.moreModelCount_one": "另有 {{count}} 个",
+  "settingsView.moreModelCount_other": "另有 {{count}} 个",
+  "settingsView.noConfiguredModels": "尚未配置模型",
+  "settingsView.appearanceModeSystem": "跟随系统",
+  "settingsView.appearanceModeLight": "浅色",
+  "settingsView.appearanceModeDark": "深色",
+  "settingsView.appearanceContrastStandard": "标准",
+  "settingsView.appearanceContrastHigh": "高",
   "settingsView.finishProviderEditBeforeSwitching":
     "请先保存或取消当前服务商的编辑，再编辑或删除其他服务商。在此之前，修改会保留在当前编辑器中。",
   "settingsView.importConversations": "导入会话",
@@ -1684,6 +1716,7 @@ export const zhCN: Record<keyof typeof en, string> = {
   "settingsView.connectYourChatgptSubscriptionToUseItsModels":
     "连接您的ChatGPT 订阅以使用其模型。",
   "settingsView.signOut": "退出登录",
+  "settingsView.signingOut": "正在退出登录…",
   "settingsView.modelsProviders": "模型与服务商",
   "settingsView.connectYourProvidersAndChooseTheModelsYouWant":
     "连接您的服务商并选择您想要使用的模型。",
@@ -1786,9 +1819,15 @@ export const zhCN: Record<keyof typeof en, string> = {
   "settingsView.runEachQueuedMessageSeparately": "分别运行每个排队的消息",
   "settingsView.guideTheCurrentReplyDefault": "引导当前回复（默认）",
   "settingsView.interruptAndSend": "中断并发送",
-  "settingsView.enterAndTheSendButtonUseThisChoiceCmd":
-    "Enter键和发送按钮使用此选项。Cmd/Ctrl + Enter在选择队列选项时引导当前回复，否则将消息排在一起。Shift + Enter可添加新行。此设置不会更改已排队的消息。",
+  "settingsView.sendModeGuidance":
+    "Enter 键和发送按钮使用此选项。已排队的消息保持不变。",
+  "settingsView.keyboardShortcuts": "键盘快捷键",
+  "settingsView.shortcutGuideCurrentReply": "引导当前回复",
+  "settingsView.shortcutQueueTogether": "将消息一起排队",
+  "settingsView.shortcutNewLine": "添加新行",
   "settingsView.foregroundComputerControl": "前台电脑控制",
+  "settingsView.foregroundControlOn": "开启",
+  "settingsView.foregroundControlOff": "关闭",
   "nativeCrossDeviceTools.title": "原生跨端工具调用",
   "nativeCrossDeviceTools.description":
     "允许智能体发现并直接调用已配对 ZenX 设备上的原生工具，仍需目标设备单独授予工具权限。",
@@ -2172,6 +2211,7 @@ export const zhCN: Record<keyof typeof en, string> = {
   "settingsView.notSignedIn": "未登录",
   "settingsView.accountConnected": "账号已关联",
   "settingsView.connectAnAccount": "关联账号",
+  "settingsView.openModelSettings": "打开模型设置",
   "settingsView.addAnOpenaiSubscriptionInModelsProviderToGet":
     "在模型和服务商中添加OpenAI 订阅以开始使用。",
   "settingsView.yourSignInDetailsAreStoredSecurelyOnThis":

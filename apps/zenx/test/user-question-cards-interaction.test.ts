@@ -215,7 +215,7 @@ for (const boundary of ["disabled", "thread", "room", "unmount"] as const) {
   });
 }
 
-test("question cards avoid repeated open headings and distinguish optional details from a free answer", async () => {
+test("question cards avoid repeated open headings and explain typed answers without adding duplicate labels", async () => {
   const dom = new JSDOM('<div id="root"></div>', { url: "http://localhost" });
   const previous = { window: globalThis.window, document: globalThis.document };
   Object.assign(globalThis, {
@@ -276,7 +276,22 @@ test("question cards avoid repeated open headings and distinguish optional detai
     );
     const fields = [...document.querySelectorAll("textarea")];
     assert.equal(fields.length, 2);
-    assert.match(fields[0]!.getAttribute("aria-label")!, /^Which format\? · /);
+    assert.equal(
+      fields[0]!.getAttribute("aria-label"),
+      "Which format? · Write an answer or add details",
+    );
+    const hintId = fields[0]!
+      .closest("fieldset")!
+      .getAttribute("aria-describedby");
+    assert.ok(hintId);
+    assert.equal(
+      document.getElementById(hintId)?.textContent,
+      "Choose one or write an answer.",
+    );
+    assert.equal(
+      fields[1]!.closest("fieldset")!.hasAttribute("aria-describedby"),
+      false,
+    );
     assert.equal(
       fields[1]!.getAttribute("aria-label"),
       "When should it arrive?",

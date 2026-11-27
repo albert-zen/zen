@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import postcss from "postcss";
 const css = readFileSync(
   new URL("../src/renderer/src/styles.css", import.meta.url),
   "utf8",
@@ -60,7 +61,7 @@ test("empty virtual footer compensates only the final row gap at each breakpoint
   );
   // The rendered DOM decides emptiness, including a Fragment whose pending
   // component returns []; pending/progress footer children keep their own gap.
-  assert.doesNotMatch(wide + narrow, /:has\(/);
+  assertFooterSelectorsAvoidHas(css);
   for (const [gap, minimum] of [
     [24, 38],
     [20, 28],
@@ -95,10 +96,7 @@ test("fullscreen tab changes retain hidden conversation geometry", () => {
   )?.[1];
   assert.ok(geometry, "geometry must apply to every fullscreen tab");
   assert.match(geometry, /display:\s*grid;/);
-  assert.match(
-    geometry,
-    /width:\s*calc\(100% - var\(--information-dock-reserved-width, 0px\)\);/,
-  );
+  assert.match(geometry, /width:\s*100%;/);
   assert.match(
     geometry,
     /padding-top:\s*var\(--native-titlebar-height, 44px\);/,
@@ -110,4 +108,117 @@ test("fullscreen tab changes retain hidden conversation geometry", () => {
   assert.ok(selected);
   assert.match(selected, /visibility:\s*visible;/);
   assert.doesNotMatch(selected, /display:|width:|padding-top:/);
+});
+
+// Inspect every CSS rule, including earlier/nested rules, not unrelated later CSS.
+function assertFooterSelectorsAvoidHas(source) {
+  postcss.parse(source).walkRules((rule) => {
+    let selectors = [""];
+    for (let context = rule; context; context = context.parent) {
+      if (context.type !== "rule") continue;
+      selectors = selectors.flatMap((child) =>
+        postcss.list
+          .comma(context.selector)
+          .map((parent) => parent + " " + child),
+      );
+    }
+    for (const selector of selectors) {
+      // Strings/comments are not class or pseudo-class tokens.
+      const tokens = selector.replace(
+        /\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g,
+        "",
+      );
+      if (/\.virtual-transcript-footer(?![\w-])/.test(tokens))
+        assert.doesNotMatch(
+          tokens,
+          /:has\(/i,
+          "footer uses rendered emptiness, not :has",
+        );
+    }
+  });
+}
+test("footer guard ignores unrelated selectors but rejects footer and ancestor :has rules anywhere", () => {
+  assertFooterSelectorsAvoidHas(
+    '.virtual-transcript-footer, .information-popover:has(.content) {color:red} [data-example=".virtual-transcript-footer:has(.x)"] {color:red}',
+  );
+  for (const rule of [
+    ".virtual-transcript-footer:has(.pending) {padding:0}",
+    ".thread:has(.pending) .virtual-transcript-footer {padding:0}",
+    ".thread:has(.pending) { & .virtual-transcript-footer {padding:0} }",
+  ])
+    for (const source of [rule + css, css + rule])
+      assert.throws(
+        () => assertFooterSelectorsAvoidHas(source),
+        /footer uses rendered emptiness/,
+      );
+});
+
+test("desktop background commands share the measured Composer lane, not Information card styling", () => {
+  const tree = postcss.parse(css);
+  const selectors = [
+    ".thread-view .bottom-zone > .composer",
+    ".thread-view .bottom-zone > .background-shell-status",
+    ".thread-view .bottom-zone > .approval-request-card",
+  ];
+  let matched = 0;
+  tree.walkRules((rule) => {
+    if (!postcss.list.comma(rule.selector).includes(selectors[1])) return;
+    matched++;
+    assert.deepEqual(postcss.list.comma(rule.selector), selectors);
+    assert.equal(rule.parent.type, "atrule");
+    assert.equal(rule.parent.params, "(min-width: 961px)");
+    const declarations = Object.fromEntries(
+      rule.nodes.map(({ prop, value }) => [prop, value]),
+    );
+    assert.equal(declarations.position, "relative");
+    assert.equal(declarations.left, "var(--composer-column-left, 0px)");
+    assert.equal(declarations.width, "var(--composer-column-width, 100%)");
+    assert.equal(declarations["margin-inline"], "0");
+    assert.equal(declarations["max-width"], "var(--conversation-width)");
+  });
+  assert.equal(matched, 1);
+});
+
+test("shell breakpoint does not change reply prose metrics or the paused-reader inset", () => {
+  const prose = postcss.parse(css);
+  const selectors = [
+    ".thread-view .agent-copy .markdown-body p",
+    ".thread-view .agent-copy .markdown-body h3",
+    ".thread-view .agent-copy .markdown-body ol",
+    ".thread-view .agent-copy .markdown-body table",
+  ];
+  const unconditional = new Set();
+  prose.walkRules((rule) => {
+    for (const selector of postcss.list.comma(rule.selector)) {
+      if (selectors.includes(selector) && rule.parent.type === "root") {
+        unconditional.add(selector);
+      }
+    }
+    if (rule.selector !== ".thread-view") return;
+    rule.walkDecls("--conversation-width", () => {
+      assert.equal(rule.parent.type, "root");
+      unconditional.add(rule.selector);
+    });
+  });
+  assert.deepEqual(unconditional, new Set([".thread-view", ...selectors]));
+
+  const returnCss = readFileSync(
+    new URL(
+      "../src/renderer/src/conversation-reading-position.css",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const clearance = [
+    '.thread-view[data-reading-earlier="true"]',
+    '.thread-view[data-reading-earlier="true"] > .messages',
+    '.thread-view[data-reading-earlier="true"] .virtual-transcript-footer:empty',
+  ];
+  const shared = new Set();
+  postcss.parse(returnCss).walkRules((rule) => {
+    if (!clearance.includes(rule.selector)) return;
+    if (rule.parent.type === "root") shared.add(rule.selector);
+    else assert.doesNotMatch(rule.parent.params, /\b96[01]px\b/);
+  });
+  assert.deepEqual(shared, new Set(clearance));
 });

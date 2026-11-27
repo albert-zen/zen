@@ -12,6 +12,7 @@ import {
 import type { ZenXProviderProfile } from "../../main/host-profile.js";
 import type { ModelSummary } from "../../protocol-client/index.js";
 import { Icon } from "./icons.js";
+import { decodeModelKey } from "../../../../../src/protocol/model-key.js";
 import {
   canSendWithModel,
   groupedModelOptions,
@@ -53,15 +54,30 @@ export function ComposerModelMenu({
   const [query, setQuery] = useState("");
   const selected = models.find((model) => model.id === selectedModel);
   const available = canSendWithModel(models, selectedModel);
+  const searchTerm = query.toLocaleLowerCase();
   const groups = groupedModelOptions(models, providerProfiles)
-    .map((group) => ({
-      ...group,
-      models: group.models.filter((model) =>
-        `${model.displayName} ${group.displayName}`
-          .toLocaleLowerCase()
-          .includes(query.toLocaleLowerCase()),
-      ),
-    }))
+    .map((group) => {
+      const duplicateNames = new Set<string>();
+      const names = new Set<string>();
+      for (const model of group.models) {
+        const name = model.displayName.trim().toLocaleLowerCase();
+        if (names.has(name)) duplicateNames.add(name);
+        names.add(name);
+      }
+      return {
+        ...group,
+        duplicateNames,
+        models: group.models.filter(
+          (model) =>
+            `${model.displayName} ${group.displayName}`
+              .toLocaleLowerCase()
+              .includes(searchTerm) ||
+            decodeModelKey(model.id)
+              .modelId.toLocaleLowerCase()
+              .includes(searchTerm),
+        ),
+      };
+    })
     .filter((group) => group.models.length > 0);
   const efforts = reasoningOptions(models, selectedModel);
   const currentModelLabel =
@@ -243,6 +259,13 @@ export function ComposerModelMenu({
                       >
                         <span>
                           <strong>{model.displayName}</strong>
+                          {group.duplicateNames.has(
+                            model.displayName.trim().toLocaleLowerCase(),
+                          ) ? (
+                            <small className="composer-model-version">
+                              {decodeModelKey(model.id).modelId}
+                            </small>
+                          ) : null}
                           <small>{capabilityLabel(model)}</small>
                         </span>
                         {model.id === selectedModel ? (

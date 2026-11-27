@@ -106,6 +106,211 @@ test("paste and drop preserve file order while image-only send remains available
   });
 });
 
+test("mixed clipboard in the default composer keeps plain text available to paste as well as importing the image", async () => {
+  await withDom(async (dom, root) => {
+    const imports: string[][] = [];
+    let draftChanges = 0;
+    let submissions = 0;
+    await act(async () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer: editComposer(emptyComposerState(), "Independent draft."),
+          thread: emptyThread(),
+          onDraftChange: () => {
+            draftChanges++;
+          },
+          onImportImages: async (files: readonly File[]) => {
+            imports.push(files.map((file) => file.name));
+          },
+          onInterrupt: async () => undefined,
+          onRespondToApproval: async () => undefined,
+          onSubmit: async () => {
+            submissions++;
+          },
+        }),
+      ),
+    );
+    const textarea = required<HTMLTextAreaElement>("textarea");
+    await act(async () => {
+      textarea.focus();
+      textarea.setSelectionRange(5, 8);
+    });
+    const bytes = await readFile(
+      new URL(
+        "./fixtures/assets/queue-images/queue-image-1.png",
+        import.meta.url,
+      ),
+    );
+    const png = new dom.window.File([new Uint8Array(bytes)], "fixture.png", {
+      type: "image/png",
+    });
+    const paste = async (html: string, plain: string, files: File[]) => {
+      const event = new dom.window.Event("paste", {
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(event, "clipboardData", {
+        value: {
+          files,
+          getData: (type: string) =>
+            type === "text/html" ? html : type === "text/plain" ? plain : "",
+        },
+      });
+      await act(async () => textarea.dispatchEvent(event));
+      return event.defaultPrevented;
+    };
+    assert.equal(
+      await paste(
+        '<div>Look at this screenshot<img src="about:blank" /></div>',
+        "Look at this screenshot",
+        [png],
+      ),
+      false,
+      "preserve the browser's normal paste of the selected text",
+    );
+    assert.deepEqual(imports, [["fixture.png"]]);
+    assert.equal(await paste('<img src="about:blank" />', "", [png]), true);
+    assert.equal(await paste("<p>Only text</p>", "Only text", []), false);
+    assert.equal(
+      await paste(
+        '<img src="about:blank" /><span hidden>non-visible metadata</span>',
+        "Screenshot",
+        [png],
+      ),
+      true,
+    );
+    assert.equal(
+      await paste('<img src="about:blank" />', "fixture.png", [png]),
+      true,
+    );
+    assert.deepEqual(
+      imports,
+      Array.from({ length: 4 }, () => ["fixture.png"]),
+    );
+    assert.equal(document.activeElement, textarea);
+    assert.equal(textarea.value, "Independent draft.");
+    assert.deepEqual([textarea.selectionStart, textarea.selectionEnd], [5, 8]);
+    assert.equal(draftChanges, 0);
+    assert.equal(submissions, 0);
+  });
+});
+
+test("mixed clipboard with large HTML preserves quoted text and the editor’s undo", async () => {
+  const { EditorView } = await import("@codemirror/view");
+  const { undo } = await import("@codemirror/commands");
+  const { withSkillDraft, parseSkillDraft } =
+    await import("../src/renderer/src/skill-draft.js");
+  await withDom(async (dom, root) => {
+    const reference = {
+      kind: "file" as const,
+      name: "plan.txt",
+      cwd: "/synthetic",
+      path: "plan.txt",
+      position: 10,
+    };
+    const initial = editComposer(
+      emptyComposerState(),
+      withSkillDraft("Keep OLD. \uFFFC", [], [reference]),
+    );
+    let latest = initial;
+    const imports: string[][] = [];
+    const thread = emptyThread();
+    function ControlledThread() {
+      const [composer, setComposer] = React.useState(initial);
+      latest = composer;
+      return createElement(ThreadView, {
+        approvals: [],
+        composer,
+        thread,
+        onDraftChange: (text: string) =>
+          setComposer((prev) => editComposer(prev, text)),
+        onImportImages: async (files: readonly File[]) => {
+          imports.push(files.map((f) => f.name));
+          await Promise.resolve();
+          setComposer((prev) =>
+            addComposerImages(prev, [
+              {
+                id: "mixed-clipboard-image",
+                name: "fixture.png",
+                attachment: ref,
+              },
+            ]),
+          );
+        },
+        onInterrupt: async () => undefined,
+        onRespondToApproval: async () => undefined,
+        onReadAttachment: async () => new Uint8Array([1, 2, 3, 4]),
+        onSubmit: async () => assert.fail("pasting must not send"),
+      });
+    }
+    await act(async () => root.render(createElement(ControlledThread)));
+    const view = EditorView.findFromDOM(
+      required<HTMLElement>("#thread-composer"),
+    )!;
+    assert.ok(view);
+    await act(async () => {
+      view.focus();
+      view.dispatch({ selection: { anchor: 5, head: 8 } });
+    });
+    const bytes = await readFile(
+      new URL(
+        "./fixtures/assets/queue-images/queue-image-1.png",
+        import.meta.url,
+      ),
+    );
+    const png = new dom.window.File([new Uint8Array(bytes)], "fixture.png", {
+      type: "image/png",
+    });
+    const event = new dom.window.Event("paste", {
+      bubbles: true,
+      cancelable: true,
+    });
+    const message = "请看这张图\n第二行也要保留";
+    // Model a large clipboard document without checking a second PNG into the
+    // repository; the editor should not drop the suffix after a size cutoff.
+    const prefix = `<!--${" ".repeat(300 * 1024)}-->`;
+    Object.defineProperty(event, "clipboardData", {
+      value: {
+        files: [png],
+        getData: (type: string) => {
+          return type === "text/plain"
+            ? message
+            : type === "text/html"
+              ? `${prefix}<div>${message.replace("\n", "<br>")}<img src="data:image/png;base64,${bytes.toString("base64")}"></div>`
+              : "";
+        },
+      },
+    });
+    await act(async () => view.contentDOM.dispatchEvent(event));
+    assert.deepEqual(imports, [["fixture.png"]]);
+    assert.equal(view.state.doc.toString(), `Keep ${message}. \uFFFC`);
+    assert.deepEqual(
+      [view.state.selection.main.from, view.state.selection.main.to],
+      [5 + message.length, 5 + message.length],
+    );
+    assert.ok(document.querySelector('[aria-label="Preview fixture.png"]'));
+    assert.ok(
+      parseSkillDraft(latest.draft.text).references.some(
+        (entry) => entry.kind === "file" && entry.path === "plan.txt",
+      ),
+    );
+    assert.equal(document.activeElement, view.contentDOM);
+    await act(async () => assert.equal(undo(view), true));
+    assert.equal(view.state.doc.toString(), "Keep OLD. \uFFFC");
+    assert.ok(
+      parseSkillDraft(latest.draft.text).references.some(
+        (entry) => entry.kind === "file" && entry.path === "plan.txt",
+      ),
+    );
+    assert.ok(
+      document.querySelector('[aria-label="Preview fixture.png"]'),
+      "image attachment stays independently removable as before",
+    );
+    assert.deepEqual(imports, [["fixture.png"]]);
+  });
+});
+
 test("image preview closes with Escape and returns focus to its named trigger", async () => {
   await withDom(async (_dom, root) => {
     const composer = addComposerImages(emptyComposerState(), [
