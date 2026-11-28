@@ -1,0 +1,14 @@
+# Add or cancel discovered models without losing keyboard focus
+
+Exact #761 (`9e65c3493b668e25d34c3942974716b7360b2e7e`) and the same production Settings renderer with a local focus-only candidate. Chromium 131.0.6778.0, Linux, DPR 1, offline. This is Settings in a browser scaffold with a synthetic saved provider and synthetic discovery, not a native Electron or Host capture. The eight PNGs are original viewport screenshots.
+
+| Window | Enter on Add: already merged | Enter on Add: local candidate | Enter on Cancel: already merged | Enter on Cancel: local candidate |
+|---|---|---|---|---|
+| Light 1280 × 800 | [PNG](light-base-add.png) | [PNG](light-candidate-add.png) | [PNG](light-base-cancel.png) | [PNG](light-candidate-cancel.png) |
+| Dark 960 × 820 | [PNG](dark-base-add.png) | [PNG](dark-candidate-add.png) | [PNG](dark-base-cancel.png) | [PNG](dark-candidate-cancel.png) |
+
+1. Edit Synthetic Provider 4. Leave an unsaved rename in Model 2. From Get available models, press Enter, then Tab to Search available models. Search for `catalog-unknown`, Tab to its checkbox and Space to check it. In both builds Tab can reach Search. The baseline briefly drops focus to the document body while fetching; the local candidate keeps focus on the opener and exposes its temporary disabled state without permitting a duplicate fetch.
+2. Use separate fresh runs for Add and Cancel. After trusted keyboard Enter on Add, both builds append exactly Model 13. In the merged build focus lands on the body, the view stays around the start of the list, and the next Tab lands on Model 1. The candidate brings the new row into view and puts a visible focus ring on its ID. Two Tabs and Enter reach and open its capabilities; the synthetic context input can then be edited. The earlier rename survives and no Save or image probe is called.
+3. Cancel does not append anything. The merged build loses visible focus; the candidate restores visible focus to Get available models without moving the scroll pane. No changes to discovery, inferred model metadata, Save, or provider requests. The existing Fetch → select → Add → configure order stays intact.
+
+[W3C APG focus guidance](https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/#keyboardinteraction) describes returning to an opener on dismissal and going to the first cell of the newly added row when editing follows. ZenX keeps its inline picker; this is a focus precedent, not a modal redesign. [Cherry Studio's provider guide](https://github.com/CherryHQ/cherry-studio-docs/blob/main/pre-basic/settings/providers.md#添加模型) describes fetching then explicitly adding to the model list. It does not document this keyboard state or use ZenX's multi-select draft/save sequence. No matched reference runtime capture, native keyboard acceptance, independent score, or product code in this archive.
